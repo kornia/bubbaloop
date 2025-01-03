@@ -2,7 +2,7 @@
     tasks: [
         (
             id: "cam0",
-            type: "crate::cu29_tasks::VideoCapture",
+            type: "crate::cu29::tasks::V4L2Camera",
             config: {
                 "camera_id": 0,
                 "res_rows": 480,
@@ -10,18 +10,25 @@
                 "fps": 30,
             }
         ),
+        // (
+        //     id: "cam1",
+        //     type: "crate::cu29::tasks::RTSPCamera",
+        //     config: {
+        //         "url": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
+        //     }
+        // ),
         (
-            id: "writer",
-            type: "crate::cu29_tasks::VideoWriter",
+            id: "rerun",
+            type: "crate::cu29::tasks::RerunLogger",
             config: {
-                "res_rows": 480,
-                "res_cols": 640,
-                "fps": 30,
+                "ip": "192.168.1.144",
+                "port": 9876,
+                "path": "/home/nvidia/",
             }
         )
     ],
     cnx: [
-        (src: "cam0", dst: "writer", msg: "crate::cu29_tasks::ImageRGBU8Msg"),
+        (src: "cam0", dst: "rerun", msg: "crate::cu29::msgs::ImageRGBU8Msg"),
     ]
     ,
     logging: (

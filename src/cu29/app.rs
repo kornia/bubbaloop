@@ -1,7 +1,7 @@
 use cu29::prelude::*;
 use cu29_helpers::basic_copper_setup;
 
-const SLAB_SIZE: Option<usize> = Some(1500 * 1024 * 1024);
+const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
 
 #[copper_runtime(config = "bubbaloop.ron")]
 struct CopperApp {}
@@ -10,8 +10,9 @@ pub struct CopperPipeline(pub CopperApp);
 
 impl CopperPipeline {
     pub fn new() -> CuResult<Self> {
-        let tmp_dir = tempfile::TempDir::new().expect("could not create a tmp dir");
-        let logger_path = tmp_dir.path().join("bubbaloop.copper");
+        // NOTE: this is a temporary solution to store the logger in the user's home directory
+        let logger_dir = std::path::PathBuf::from(&format!("/home/{}", whoami::username()));
+        let logger_path = logger_dir.join("bubbaloop.copper");
         debug!("Logger path: {}", path = &logger_path);
 
         let copper_ctx = basic_copper_setup(&logger_path, SLAB_SIZE, true, None)?;

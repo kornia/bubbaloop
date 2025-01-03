@@ -132,7 +132,7 @@ pub async fn start_pipeline(
     }
 
     // create the pipeline if it does not exist
-    let mut app = match cu29::CopperPipeline::new() {
+    let mut app = match cu29::app::CopperPipeline::new() {
         Ok(app) => app,
         Err(e) => {
             log::error!("Failed to create pipeline: {}", e);

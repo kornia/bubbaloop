@@ -1,0 +1,5 @@
+[build]
+default-target = "aarch64-unknown-linux-gnu"
+
+[target.aarch64-unknown-linux-gnu]
+dockerfile = "docker/aarch64.Dockerfile"
