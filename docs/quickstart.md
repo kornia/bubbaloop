@@ -60,7 +60,7 @@ Repeat the process about in a remote machine (e.g. in Nvidia Jetson) and give a 
 just serve 192.168.1.154 3000
 ```
 
-## Use the CLI
+## Use the Rust CLI :crab:
 
 ```bash
 just help

@@ -12,7 +12,7 @@ just pipeline-start HOST IP PIPE_NAME
 
 ```bash
 Result: {
-  "message": "Pipeline started"
+  "message": "Pipeline 'PIPE_NAME' started"
 }
 ```
 
@@ -26,7 +26,7 @@ just pipeline-stop HOST IP PIPE_NAME
 
 ```bash
 Result: {
-  "message": "Pipeline bubbaloop stopped"
+  "message": "Pipeline 'PIPE_NAME' stopped"
 }
 ```
 
@@ -42,8 +42,7 @@ just pipeline-list HOST IP
 Result: [
   {
     "id": "bubbaloop",
-    "status": "Running",
-    "thread_name": ""
+    "status": "Running"
   }
 ]
 ```

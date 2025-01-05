@@ -28,7 +28,7 @@ Supports only `jpg | jpeg | png`  formats for now.
 {% endhint %}
 
 ```
-just compute-mean-std 0.0.0.0 3000 /path/to/images -n 4
+just compute-mean-std 0.0.0.0 3000 /path/to/images
 ```
 
 From server side you should see something like
