@@ -4,29 +4,37 @@ description: Get started with serving Bubbaloop platform
 
 # 🚀 Quickstart
 
-## Setup
+## Setup the project
 
-#### Step 1: Install pre-requisites
+{% stepper %}
+{% step %}
+#### Install pre-requisites
 
 {% hint style="info" %}
 you need to install `cargo` in order to fetch and build necessary packages. If you don't have `cargo`, you can install it by following the instructions on the [official Rust website](https://www.rust-lang.org/tools/install).
 {% endhint %}
 
 Install `justfile`: [https://github.com/casey/just?tab=readme-ov-file#linux](https://github.com/casey/just?tab=readme-ov-file#linux)
+{% endstep %}
 
-#### Step 2: Install Dependencies
+{% step %}
+#### Install Dependencies
 
 To get started, ensure all necessary system dependencies
 
 ```
 just install_deps
 ```
+{% endstep %}
 
-#### Step 3: Install the project
+{% step %}
+#### Install the project
 
-```bash
+```
 git clone git@github.com:kornia/bubbaloop.git
 ```
+{% endstep %}
+{% endstepper %}
 
 ## Serve in local
 
@@ -46,7 +54,7 @@ You might observe something like this:
 
 ## Serve remotely
 
-Give a `HOST`and an `IP` to serve remotely
+Repeat the process about in a remote machine (e.g. in Nvidia Jetson) and give a `HOST`and an `IP` to serve remotely.
 
 ```bash
 just serve 192.168.1.154 3000
