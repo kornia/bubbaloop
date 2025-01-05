@@ -1,6 +1,6 @@
 # 🦄 Bubbaloop
 
-## :earth\_africa: Serve local models for Spatial and AI Robotics Openly.
+:earth\_africa: Serve local models for Spatial and AI Robotics Openly.
 
 * :robot: **AI & Robotics Ready**: Ideal for integrated AI, Robotics, and IoT applications.
 * :rocket: **REST API**: Effortlessly manage data pipelines for recording and inference.
