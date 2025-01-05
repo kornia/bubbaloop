@@ -35,7 +35,6 @@ impl CopperPipeline {
 ///
 /// * `pipeline_id` - The id of the pipeline
 /// * `stop_signal` - The stop signal to stop the pipeline
-/// * `ron_config` - The ron config string to create the pipeline
 ///
 /// # Returns
 ///
