@@ -1,1 +1,1 @@
-bubbaloop/docs/README.md
+./docs/README.md
