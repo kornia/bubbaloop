@@ -1,3 +1,6 @@
+@_default:
+    just --list
+
 build:
     cargo build --release
 
@@ -19,7 +22,7 @@ install_deps:
 help:
     cargo run --release --bin bubbaloop -- --help
 
-serve HOST PORT:
+serve HOST="0.0.0.0" PORT="3000":
     RUST_LOG=debug cargo run --release --bin serve -- -h {{HOST}} -p {{PORT}}
 
 whoami HOST PORT:
@@ -36,3 +39,6 @@ pipeline-stop HOST PORT ID:
 
 pipeline-list HOST PORT:
     RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} pipeline list
+
+pipeline-config HOST PORT:
+    RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} pipeline config

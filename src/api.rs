@@ -29,6 +29,7 @@ impl ApiServer {
             .route("/api/v0/pipeline/start", post(pipeline::start_pipeline))
             .route("/api/v0/pipeline/stop", post(pipeline::stop_pipeline))
             .route("/api/v0/pipeline/list", get(pipeline::list_pipelines))
+            .route("/api/v0/pipeline/config", get(pipeline::get_config))
             .with_state(store);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;

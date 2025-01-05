@@ -1,11 +1,16 @@
-use axum::extract::State;
-use axum::response::{IntoResponse, Json};
+use ::cu29::read_configuration;
+use axum::{
+    extract::State,
+    response::{IntoResponse, Json},
+};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::atomic::AtomicBool,
+    sync::{Arc, Mutex},
+};
 
 use crate::cu29;
 
@@ -37,14 +42,19 @@ impl PipelineStore {
     /// Unregister a pipeline from the store and stop it
     pub fn unregister_pipeline(&self, name: &str) -> bool {
         let mut map = self.0.lock().unwrap();
-        let pipeline = map.remove(name);
-        if let Some(pipeline) = pipeline {
-            pipeline
-                .stop_signal
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            return true;
-        }
-        false
+        map.remove(name)
+            .map(|pipeline| {
+                pipeline
+                    .stop_signal
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+
+                pipeline
+                    .handle
+                    .join()
+                    .map_err(|_| log::error!("Failed to join pipeline {}", name))
+                    .is_ok()
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -76,8 +86,9 @@ pub struct PipelineHandle {
 
 #[derive(Debug, Serialize)]
 struct PipelineInfo {
+    // the id of the pipeline
     id: String,
-    thread_name: String,
+    // the status of the pipeline
     status: PipelineStatus,
 }
 
@@ -103,10 +114,13 @@ pub async fn start_pipeline(
     State(store): State<PipelineStore>,
     Json(request): Json<PipelineStartRequest>,
 ) -> impl IntoResponse {
+    // TODO: create a pipeline factory so that from the REST API we can register
+    //       a new pipeline and start it
     // NOTE: for now we only support one pipeline ["bubbaloop"]
-    if request.pipeline_id != "bubbaloop" {
+    const SUPPORTED_PIPELINES: [&str; 2] = ["bubbaloop", "recording"];
+    if !SUPPORTED_PIPELINES.contains(&request.pipeline_id.as_str()) {
         log::error!(
-            "Pipeline {} not supported. Try 'bubbaloop' instead",
+            "Pipeline {} not supported. Try 'bubbaloop' or 'recording' instead",
             request.pipeline_id
         );
         return (
@@ -131,49 +145,26 @@ pub async fn start_pipeline(
         );
     }
 
-    // create the pipeline if it does not exist
-    let mut app = match cu29::CopperPipeline::new() {
-        Ok(app) => app,
-        Err(e) => {
-            log::error!("Failed to create pipeline: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Failed to create pipeline" })),
-            );
-        }
-    };
-
     // the stop signal to kill the pipeline thread
     let stop_signal = Arc::new(AtomicBool::new(false));
 
-    let handle = std::thread::spawn({
-        let pipeline_id = pipeline_id.clone();
-        let stop_signal = stop_signal.clone();
-        move || -> PipelineResult {
-            // create the pipeline and start the tasks
-            app.start_all_tasks()?;
-
-            while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
-                // we run the pipeline iteration step by step
-                app.run_one_iteration()?;
-
-                // NOTE: is this really needed?
-                std::thread::sleep(std::time::Duration::from_millis(30));
-            }
-
-            // stop the pipeline and wait for the tasks to finish
-            app.stop_all_tasks()?;
-            log::debug!("Pipeline {} stopped", pipeline_id);
-
-            Ok(())
+    let handle = match pipeline_id.as_str() {
+        "bubbaloop" => dummy_bubbaloop_thread(&pipeline_id, stop_signal.clone()),
+        "recording" => cu29::app::spawn_cu29_thread(&pipeline_id, stop_signal.clone()),
+        _ => {
+            log::error!("Pipeline {} not supported", pipeline_id);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Pipeline not supported" })),
+            );
         }
-    });
+    };
 
     // add the pipeline handle to the store
     pipeline_store.insert(
         pipeline_id.clone(),
         PipelineHandle {
-            id: pipeline_id,
+            id: pipeline_id.clone(),
             handle,
             status: PipelineStatus::Running,
             stop_signal,
@@ -183,7 +174,7 @@ pub async fn start_pipeline(
     (
         StatusCode::OK,
         Json(json!({
-            "message": "Pipeline started",
+            "message": format!("Pipeline {} started", pipeline_id),
         })),
     )
 }
@@ -216,9 +207,54 @@ pub async fn list_pipelines(State(store): State<PipelineStore>) -> impl IntoResp
         .values()
         .map(|pipeline| PipelineInfo {
             id: pipeline.id.clone(),
-            thread_name: pipeline.handle.thread().name().unwrap_or("").to_string(),
             status: pipeline.status.clone(),
         })
         .collect::<Vec<_>>();
     Json(pipelines)
+}
+
+/// Get the current configuration pipeline
+pub async fn get_config(State(_store): State<PipelineStore>) -> impl IntoResponse {
+    let copper_config = match read_configuration("bubbaloop.ron") {
+        Ok(config) => config,
+        Err(e) => {
+            log::error!("Failed to read configuration: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to read configuration" })),
+            );
+        }
+    };
+
+    let all_nodes = copper_config.get_all_nodes();
+
+    (StatusCode::OK, Json(json!(all_nodes)))
+}
+
+/// A dummy pipeline that runs indefinitely and prints a message every second
+fn dummy_bubbaloop_thread(
+    pipeline_id: &str,
+    stop_signal: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<PipelineResult> {
+    let pipeline_id = pipeline_id.to_string();
+    let signs = ["|", "/", "-", "\\", "|", "/", "-", "\\"];
+    let emojis = ["😊", "🚀", "🦀", "🎉", "✨", "🎸", "🌟", "🍕", "🎮", "🌈"];
+    std::thread::spawn(move || {
+        let mut counter = 0;
+        while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
+            log::debug!(
+                "{} Hello !! This is a Bubbaloop !!! {}",
+                signs[counter % signs.len()],
+                emojis[counter % emojis.len()]
+            );
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            counter += 1;
+        }
+        log::debug!(
+            "Pipeline {} stopped after {} iterations",
+            pipeline_id,
+            counter
+        );
+        Ok(())
+    })
 }
