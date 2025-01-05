@@ -1,5 +1,5 @@
 ---
-description: Example showing how to stream and log images from cameras
+description: Example showing how to stream data from cameras and log into rerun files
 ---
 
 # 📷 Camera Recording
@@ -32,15 +32,13 @@ You can open rerun in your local machine and you should get the image stream
 
 ## Get the logged data
 
-You can go to your home directory (or via ssh) copy the logged files and e.g reopen with Rerun to introspect.&#x20;
-
-Illustrative example assuming you did remote recording
+You can go to your home directory (or via ssh) copy the logged files into your computer.
 
 ```bash
 scp bubbaloop777:/home/nvidia/1735941642.rrd ~/data
 ```
 
-Open back with rerun
+Open back with rerun to introspect the recording
 
 ```bash
 rerun 1735941642.rrd

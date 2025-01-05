@@ -10,6 +10,5 @@
 
 Connect with like-minded innovators and developers!
 
-\
-💬 Discord Server: [https://discord.gg/z4BkbYHP](https://discord.gg/z4BkbYHP)\
-:book: Checkout our live [documentation](https://edgar-riba.gitbook.io/bubbaloop)&#x20;
+* 💬 Discord Server: [https://discord.gg/z4BkbYHP](https://discord.gg/z4BkbYHP)
+* :book: Checkout our live [documentation](https://edgar-riba.gitbook.io/bubbaloop)&#x20;

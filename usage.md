@@ -21,7 +21,11 @@ Result: {
 
 ### Compute mean and std of a local directory of images
 
-You can request to compute the mean and standard deviation over a dataset of images stored in the server. Supports only `jpg | jpeg | png`  formats.
+You can request to compute the mean and standard deviation over a dataset of images stored in the server.&#x20;
+
+{% hint style="info" %}
+Supports only `jpg | jpeg | png`  formats for now.
+{% endhint %}
 
 ```
 just compute-mean-std 0.0.0.0 3000 /path/to/images -n 4

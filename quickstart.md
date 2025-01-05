@@ -14,7 +14,7 @@ description: Get started with serving Bubbaloop platform
 you need to install `cargo` in order to fetch and build necessary packages. If you don't have `cargo`, you can install it by following the instructions on the [official Rust website](https://www.rust-lang.org/tools/install).
 {% endhint %}
 
-Install `justfile`: [https://github.com/casey/just?tab=readme-ov-file#linux](https://github.com/casey/just?tab=readme-ov-file#linux)
+Install **justfile**: [https://github.com/casey/just?tab=readme-ov-file#linux](https://github.com/casey/just?tab=readme-ov-file#linux)
 {% endstep %}
 
 {% step %}
@@ -31,7 +31,7 @@ just install_deps
 #### Install the project
 
 ```
-git clone git@github.com:kornia/bubbaloop.git
+git clone https://github.com/kornia/bubbaloop.git
 ```
 {% endstep %}
 {% endstepper %}
@@ -48,7 +48,7 @@ You might observe something like this:
 
 ```bash
 [2025-01-04T23:14:46Z INFO bubbaloop::api] 🚀 Starting the server
-[2025-01-04T23:14:46Z INFO bubbaloop::api] 🔥 Listening on: 192.168.1.154:3000
+[2025-01-04T23:14:46Z INFO bubbaloop::api] 🔥 Listening on: 0.0.0.0:3000
 [2025-01-04T23:14:46Z INFO bubbaloop::api] 🔧 Press Ctrl+C to stop the server
 ```
 
