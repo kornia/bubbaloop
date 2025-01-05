@@ -6,7 +6,10 @@
 * :rocket: **REST API**: Effortlessly manage data pipelines for recording and inference.
 * :crab: **Rust Framework**: Offers both efficiency and safety for diverse applications.
 
-## 👥 **Join Our Community**
+### 👥 **Join Our Community**
 
-Connect with like-minded innovators and developers!\
-💬 Discord Server: [https://discord.gg/z4BkbYHP](https://discord.gg/z4BkbYHP)
+Connect with like-minded innovators and developers!
+
+\
+💬 Discord Server: [https://discord.gg/z4BkbYHP](https://discord.gg/z4BkbYHP)\
+:book: Checkout our live [documentation](https://edgar-riba.gitbook.io/bubbaloop)&#x20;
