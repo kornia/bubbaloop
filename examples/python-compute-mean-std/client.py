@@ -27,7 +27,7 @@ async def main() -> None:
     async with httpx.AsyncClient(timeout=None) as client:
         try:
             response = await client.post(
-                "http://0.0.0.0:3000/api/v0/compute/mean-std", json=params
+                "http://0.0.0.0:3000/api/v0/compute/mean_std", json=params
             )
         except httpx.HTTPError as _:
             print("The request timed out. Please try again.")
