@@ -1,17 +1,16 @@
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    sync::atomic::AtomicBool,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, sync::atomic::AtomicBool, sync::Arc};
 
 /// Global store of all pipelines managed by the server
-#[derive(Clone)]
-pub struct PipelineStore(pub Arc<Mutex<HashMap<String, PipelineHandle>>>);
+pub struct PipelineStore(pub HashMap<String, PipelineHandle>);
 
 pub type PipelineResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
 impl PipelineStore {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
     /// Register a pipeline in the store and start it
     pub fn register_pipeline(
         &mut self,
@@ -19,7 +18,7 @@ impl PipelineStore {
         handle: std::thread::JoinHandle<PipelineResult>,
         stop_signal: Arc<AtomicBool>,
     ) {
-        self.0.lock().unwrap().insert(
+        self.0.insert(
             name.into(),
             PipelineHandle {
                 id: name.into(),
@@ -31,9 +30,9 @@ impl PipelineStore {
     }
 
     /// Unregister a pipeline from the store and stop it
-    pub fn unregister_pipeline(&self, name: &str) -> bool {
-        let mut map = self.0.lock().unwrap();
-        map.remove(name)
+    pub fn unregister_pipeline(&mut self, name: &str) -> bool {
+        self.0
+            .remove(name)
             .map(|pipeline| {
                 pipeline
                     .stop_signal
@@ -81,11 +80,6 @@ pub struct PipelineInfo {
     pub id: String,
     // the status of the pipeline
     pub status: PipelineStatus,
-}
-
-// initialize the pipeline store
-pub fn init_pipeline_store() -> PipelineStore {
-    PipelineStore(Arc::new(Mutex::new(HashMap::new())))
 }
 
 /// A dummy pipeline that runs indefinitely and prints a message every second

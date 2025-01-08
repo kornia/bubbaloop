@@ -1,4 +1,4 @@
 mod server;
-pub use server::ApiServer;
+pub use server::{ApiServer, ApiServerState};
 
 pub mod handles;

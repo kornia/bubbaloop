@@ -1,5 +1,5 @@
 use kornia::image::Image;
-
+use serde::Serialize;
 pub type ImageRGBU8 = Image<u8, 3>;
 
 #[derive(Clone)]
@@ -48,7 +48,7 @@ impl bincode::de::Decode for ImageRGBU8Msg {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct MeanStdMsg {
     pub mean: [f32; 3],
     pub std: [f32; 3],
