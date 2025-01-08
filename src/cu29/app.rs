@@ -1,9 +1,10 @@
 use cu29::prelude::*;
 use cu29_helpers::basic_copper_setup;
 use std::sync::{atomic::AtomicBool, Arc};
-const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
 
-pub type PipelineResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+use crate::pipeline::PipelineResult;
+
+const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
 
 // NOTE: this will use the default config file in the current directory during compilation
 // however, it will be overridden by the ron config string when the pipeline is started

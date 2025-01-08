@@ -47,7 +47,7 @@ fi
 
 # Build the release binary
 print_status "Building release binary for aarch64..."
-cross build --target $DEPLOY_ARCH --release --bin $BINARY_NAME || print_error "Build failed"
+cross build --target $DEPLOY_ARCH --release -v --bin $BINARY_NAME || print_error "Build failed"
 rsync -a target/$DEPLOY_ARCH/release/$BINARY_NAME $LOCAL_FOLDER
 
 # Check if binary exists
