@@ -42,3 +42,6 @@ pipeline-list HOST PORT:
 
 pipeline-config HOST PORT:
     RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} pipeline config
+
+pipeline-comms HOST PORT:
+    RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} pipeline comms
