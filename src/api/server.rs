@@ -4,10 +4,7 @@ use axum::{
 };
 
 use crate::stats;
-use crate::{
-    compute,
-    pipeline::{self, PipelineStore},
-};
+use crate::{api::handles, compute, pipeline::PipelineStore};
 
 #[derive(Default)]
 pub struct ApiServer;
@@ -26,11 +23,15 @@ impl ApiServer {
             .route("/", get(|| async { "Welcome to Bubbaloop!" }))
             .route("/api/v0/compute/mean_std", post(compute::compute_mean_std))
             .route("/api/v0/stats/whoami", get(stats::whoami))
-            .route("/api/v0/pipeline/start", post(pipeline::start_pipeline))
-            .route("/api/v0/pipeline/stop", post(pipeline::stop_pipeline))
-            .route("/api/v0/pipeline/list", get(pipeline::list_pipelines))
-            .route("/api/v0/pipeline/config", get(pipeline::get_config))
-            .with_state(store);
+            .nest(
+                "/api/v0/pipeline",
+                Router::new()
+                    .route("/start", post(handles::start_pipeline))
+                    .route("/stop", post(handles::stop_pipeline))
+                    .route("/list", get(handles::list_pipelines))
+                    .route("/config", get(handles::get_config))
+                    .with_state(store),
+            );
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(listener, app).await?;

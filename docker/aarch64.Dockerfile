@@ -1,16 +1,19 @@
 #FROM ghcr.io/cross-rs/aarch64-unknown-linux-gnu:edge-centos
 #FROM ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5
 #FROM ghcr.io/cross-rs/aarch64-unknown-linux-gnu@sha256:b4eff900bf2007cbcb54335a5826dedde6082f484bc8be7499d5ed071608ecf3
-FROM nvcr.io/nvidia/l4t-base:r35.2.1
+FROM nvcr.io/nvidia/l4t-base:r32.2.1
 
 RUN apt-get update && apt-get install --assume-yes \
     cmake \
     curl \
+    gdb \
     pkg-config \
     && \
     apt-get clean
 
 RUN dpkg --add-architecture arm64
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install --assume-yes \
     nasm \
