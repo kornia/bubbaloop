@@ -47,3 +47,30 @@ impl bincode::de::Decode for ImageRGBU8Msg {
         Ok(Self { image })
     }
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct MeanStdMsg {
+    pub mean: [f32; 3],
+    pub std: [f32; 3],
+}
+
+impl bincode::enc::Encode for MeanStdMsg {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        bincode::Encode::encode(&self.mean, encoder)?;
+        bincode::Encode::encode(&self.std, encoder)?;
+        Ok(())
+    }
+}
+
+impl bincode::de::Decode for MeanStdMsg {
+    fn decode<D: bincode::de::Decoder>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let mean = bincode::Decode::decode(decoder)?;
+        let std = bincode::Decode::decode(decoder)?;
+        Ok(Self { mean, std })
+    }
+}
