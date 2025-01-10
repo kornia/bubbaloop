@@ -5,9 +5,6 @@ use kornia::{core::CpuAllocator, image::Image, imgproc};
 
 use crate::cu29::msgs::{ImageRGBU8Msg, MeanStdMsg};
 
-const YOLOV8M_URL: &str =
-    "https://parcel.pyke.io/v2/cdn/assetdelivery/ortrsv2/ex_models/yolov8m.onnx";
-
 #[derive(Debug, Clone, Copy)]
 struct BoundingBox {
     x1: f32,
@@ -16,20 +13,6 @@ struct BoundingBox {
     y2: f32,
     score: f32,
     class_id: u32,
-}
-
-fn intersection(box1: &BoundingBox, box2: &BoundingBox) -> f32 {
-    let x1 = box1.x1.max(box2.x1);
-    let y1 = box1.y1.max(box2.y1);
-    let x2 = box1.x2.min(box2.x2);
-    let y2 = box1.y2.min(box2.y2);
-    (x2 - x1).max(0.0) * (y2 - y1).max(0.0)
-}
-
-fn union(box1: &BoundingBox, box2: &BoundingBox) -> f32 {
-    let area1 = (box1.x2 - box1.x1) * (box1.y2 - box1.y1);
-    let area2 = (box2.x2 - box2.x1) * (box2.y2 - box2.y1);
-    area1 + area2 - intersection(box1, box2)
 }
 
 struct OnnxEngine {
@@ -61,7 +44,7 @@ impl<'cl> CuTask<'cl> for ObjectDetection {
     where
         Self: Sized,
     {
-        let engine = OnnxEngine::new(&PathBuf::from("/home/edgar/Downloads/yolov8m.onnx"))
+        let engine = OnnxEngine::new(&PathBuf::from("/home/edgar/Downloads/model.onnx"))
             .expect("Failed to create onnx engine");
         Ok(Self { engine })
     }
@@ -86,24 +69,41 @@ impl<'cl> CuTask<'cl> for ObjectDetection {
         )
         .expect("Failed to resize image");
 
-        let img_t = kornia::core::Tensor4::from_shape_vec(
-            [1, 640, 640, 3],
-            img_resized.as_slice().to_vec(),
-            CpuAllocator,
+        let img_resized_f32 = img_resized
+            .cast_and_scale(1.0 / 255.0)
+            .expect("Failed to cast image");
+
+        let mut normalized_img = Image::from_size_val([640, 640].into(), 0f32).unwrap();
+        imgproc::normalize::normalize_mean_std(
+            &img_resized_f32,
+            &mut normalized_img,
+            &[0.485, 0.456, 0.406],
+            &[0.229, 0.224, 0.225],
         )
+        .expect("Failed to normalize image");
+
+        //let img_t = kornia::core::Tensor4::from_shape_vec(
+        //    [1, 640, 640, 3],
+        //    normalized_img.into_vec(),
+        //    CpuAllocator,
+        //)
+        //.expect("Failed to create onnx tensor");
+
+        let img_t = unsafe {
+            kornia::core::Tensor4::from_raw_parts(
+                [1, 640, 640, 3],
+                normalized_img.as_ptr(),
+                normalized_img.numel(),
+                CpuAllocator,
+            )
+        }
         .expect("Failed to create onnx tensor");
+        std::mem::forget(normalized_img);
 
-        let mut img_t_f32 =
-            kornia::core::Tensor4::<f32, CpuAllocator>::zeros([1, 640, 640, 3], CpuAllocator);
-        img_t
-            .as_slice()
-            .iter()
-            .zip(img_t_f32.as_slice_mut())
-            .for_each(|(a, b)| *b = *a as f32 / 255.0);
+        // convert from BHWC to BCHW
+        let img_t = img_t.permute_axes([0, 3, 1, 2]).as_contiguous();
 
-        let img_t_f32 = img_t_f32.permute_axes([0, 3, 1, 2]).as_contiguous();
-
-        let ort_tensor = ort::value::Tensor::from_array((img_t_f32.shape, img_t_f32.into_vec()))
+        let ort_tensor = ort::value::Tensor::from_array((img_t.shape, img_t.into_vec()))
             .expect("Failed to create onnx tensor");
 
         let outputs = self
@@ -111,48 +111,28 @@ impl<'cl> CuTask<'cl> for ObjectDetection {
             .model
             .run(
                 ort::inputs! {
-                    "images" => ort_tensor
+                    "pixel_values" => ort_tensor
                 }
                 .unwrap(),
             )
             .unwrap();
 
-        let _output = outputs["output0"].try_extract_raw_tensor::<f32>().unwrap();
-        println!("num_boxes: {}", _output.1.len());
+        let (axes, data) = outputs["pred_boxes"]
+            .try_extract_raw_tensor::<f32>()
+            .unwrap();
+        println!("axes: {:?}", axes);
+        println!("num_boxes: {}", data.len());
 
-        let mut bboxes = Vec::new();
-
-        _output.1.chunks_exact(6).for_each(|data| {
-            let score = data[4];
-            if score < 0.5 {
-                return;
-            }
-            let xc = data[0] / 640.0 * (img.cols() as f32);
-            let yc = data[1] / 640.0 * (img.rows() as f32);
-            let w = data[2] / 640.0 * (img.cols() as f32);
-            let h = data[3] / 640.0 * (img.rows() as f32);
-            let bbox = BoundingBox {
-                x1: xc - w / 2.0,
-                y1: yc - h / 2.0,
-                x2: xc + w / 2.0,
-                y2: yc + h / 2.0,
-                score,
-                class_id: data[5] as u32,
-            };
-            bboxes.push(bbox);
+        let bboxes = data.chunks_exact(4).map(|data| BoundingBox {
+            x1: data[0],
+            y1: data[1],
+            x2: data[2],
+            y2: data[3],
+            score: 0.0,
+            class_id: 0,
         });
 
-        bboxes.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-
-        let mut bboxes_filtered = Vec::new();
-        while !bboxes.is_empty() {
-            bboxes_filtered.push(bboxes[0]);
-            bboxes = bboxes
-                .iter()
-                .filter(|box1| intersection(&bboxes[0], &box1) / union(&bboxes[0], &box1) < 0.7)
-                .copied()
-                .collect();
-        }
+        let bboxes_filtered = bboxes.filter(|bbox| bbox.score > 0.5).collect::<Vec<_>>();
 
         println!("bboxes_filtered: {:?}", bboxes_filtered.len());
 

@@ -53,8 +53,6 @@
         (src: "object_detection", dst: "print", msg: "crate::cu29::msgs::MeanStdMsg"),
     ],
     logging: (
-        slab_size_mib: 1024, // Preallocates 1GiB of memory map file at a time
-        section_size_mib: 100, // Preallocates 100MiB of memory map per section for the main logger.
         enable_task_logging: false,
-    ),
+    )
 )

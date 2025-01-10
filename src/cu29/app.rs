@@ -11,7 +11,7 @@ use crate::pipeline::PipelineResult;
 use super::msgs::MeanStdMsg;
 
 //const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
-const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
+const SLAB_SIZE: Option<usize> = Some(15 * 4096);
 
 // NOTE: this will use the default config file in the current directory during compilation
 // however, it will be overridden by the ron config string when the pipeline is started
