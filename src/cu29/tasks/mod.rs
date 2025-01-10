@@ -1,6 +1,9 @@
 mod imgproc;
 pub use imgproc::*;
 
+mod object_detection;
+pub use object_detection::*;
+
 mod print;
 pub use print::*;
 

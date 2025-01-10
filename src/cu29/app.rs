@@ -10,6 +10,7 @@ use crate::pipeline::PipelineResult;
 
 use super::msgs::MeanStdMsg;
 
+//const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
 const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
 
 // NOTE: this will use the default config file in the current directory during compilation
@@ -43,7 +44,6 @@ impl CopperPipeline {
         // NOTE: this is a temporary solution to store the logger in the user's home directory
         let logger_dir = PathBuf::from(&format!("/home/{}", whoami::username()));
         let logger_path = logger_dir.join("bubbaloop.copper");
-        debug!("Logger path: {}", path = &logger_path);
 
         let copper_ctx = basic_copper_setup(&logger_path, SLAB_SIZE, true, None)?;
         let application = CopperAppBuilder::new().with_context(&copper_ctx).build()?;
