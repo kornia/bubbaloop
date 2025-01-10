@@ -50,8 +50,8 @@ impl bincode::de::Decode for ImageRGBU8Msg {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct MeanStdMsg {
-    pub mean: [f32; 3],
-    pub std: [f32; 3],
+    pub mean: [f64; 3],
+    pub std: [f64; 3],
 }
 
 impl bincode::enc::Encode for MeanStdMsg {

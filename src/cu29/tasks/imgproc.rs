@@ -31,13 +31,9 @@ impl<'cl> CuTask<'cl> for Imgproc {
         // TODO: upstream this to kornia to return arrays instead of vectors
         let (mean, std) = imgproc::core::std_mean(&msg.image);
 
-        let mean_array = [mean[0] as f32, mean[1] as f32, mean[2] as f32];
-        let std_array = [std[0] as f32, std[1] as f32, std[2] as f32];
+        let mean_std = MeanStdMsg { mean, std };
 
-        output.set_payload(MeanStdMsg {
-            mean: mean_array,
-            std: std_array,
-        });
+        output.set_payload(mean_std);
 
         Ok(())
     }
