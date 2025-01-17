@@ -89,6 +89,7 @@ enum PipelineMode {
     Stop(PipelineStopCommand),
     List(PipelineListCommand),
     Config(PipelineConfigCommand),
+    Comms(PipelineCommsCommand),
 }
 
 #[derive(FromArgs)]
@@ -118,6 +119,11 @@ struct PipelineListCommand {}
 #[argh(subcommand, name = "config")]
 /// Get the pipeline config
 struct PipelineConfigCommand {}
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "comms")]
+/// Get the pipeline comms
+struct PipelineCommsCommand {}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -197,6 +203,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             PipelineMode::Config(_pipeline_config_command) => {
                 let response = client
                     .get(format!("http://{}/api/v0/pipeline/config", addr))
+                    .send()
+                    .await?;
+
+                let result = response.json::<serde_json::Value>().await?;
+                println!("Result: {}", serde_json::to_string_pretty(&result)?);
+            }
+            PipelineMode::Comms(_pipeline_comms_command) => {
+                let response = client
+                    .get(format!("http://{}/api/v0/pipeline/comms", addr))
                     .send()
                     .await?;
 

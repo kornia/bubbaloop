@@ -1,29 +1,54 @@
 use cu29::prelude::*;
 use cu29_helpers::basic_copper_setup;
-use std::sync::{atomic::AtomicBool, Arc};
+use once_cell::sync::Lazy;
+use std::{
+    path::PathBuf,
+    sync::{atomic::AtomicBool, Arc, Mutex},
+};
 
 use crate::pipeline::PipelineResult;
 
-const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
+use super::msgs::MeanStdMsg;
+
+//const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
+const SLAB_SIZE: Option<usize> = Some(15 * 4096);
 
 // NOTE: this will use the default config file in the current directory during compilation
 // however, it will be overridden by the ron config string when the pipeline is started
 #[copper_runtime(config = "bubbaloop.ron")]
 struct CopperApp {}
 
-pub struct CopperPipeline(pub CopperApp);
+pub struct CopperPipeline {
+    pub app: CopperApp,
+}
+
+/// Global state for the pipeline to hold the computed variables
+///
+/// This is used to pass the computed variables to the API server
+pub struct CopperGlobalState {
+    pub mean_std_msg: Option<MeanStdMsg>,
+}
+
+impl CopperGlobalState {
+    pub fn new() -> Self {
+        Self { mean_std_msg: None }
+    }
+}
+
+/// Singleton global state for the pipeline
+pub static COPPER_GLOBAL_STATE: Lazy<Mutex<CopperGlobalState>> =
+    Lazy::new(|| Mutex::new(CopperGlobalState::new()));
 
 impl CopperPipeline {
     pub fn new() -> CuResult<Self> {
         // NOTE: this is a temporary solution to store the logger in the user's home directory
-        let logger_dir = std::path::PathBuf::from(&format!("/home/{}", whoami::username()));
+        let logger_dir = PathBuf::from(&format!("/home/{}", whoami::username()));
         let logger_path = logger_dir.join("bubbaloop.copper");
-        debug!("Logger path: {}", path = &logger_path);
 
         let copper_ctx = basic_copper_setup(&logger_path, SLAB_SIZE, true, None)?;
         let application = CopperAppBuilder::new().with_context(&copper_ctx).build()?;
 
-        Ok(Self(application))
+        Ok(Self { app: application })
     }
 }
 
@@ -59,7 +84,7 @@ pub fn spawn_cu29_thread(
                 app.run_one_iteration()?;
 
                 // NOTE: is this really needed?
-                std::thread::sleep(std::time::Duration::from_millis(30));
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
 
             // stop the pipeline and wait for the tasks to finish
@@ -76,12 +101,12 @@ impl std::ops::Deref for CopperPipeline {
     type Target = CopperApp;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.app
     }
 }
 
 impl std::ops::DerefMut for CopperPipeline {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.app
     }
 }

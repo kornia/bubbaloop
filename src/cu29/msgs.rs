@@ -1,5 +1,5 @@
 use kornia::image::Image;
-
+use serde::Serialize;
 pub type ImageRGBU8 = Image<u8, 3>;
 
 #[derive(Clone)]
@@ -45,5 +45,32 @@ impl bincode::de::Decode for ImageRGBU8Msg {
         let image = ImageRGBU8::new([rows, cols].into(), data)
             .map_err(|e| bincode::error::DecodeError::OtherString(e.to_string()))?;
         Ok(Self { image })
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct MeanStdMsg {
+    pub mean: [f64; 3],
+    pub std: [f64; 3],
+}
+
+impl bincode::enc::Encode for MeanStdMsg {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        bincode::Encode::encode(&self.mean, encoder)?;
+        bincode::Encode::encode(&self.std, encoder)?;
+        Ok(())
+    }
+}
+
+impl bincode::de::Decode for MeanStdMsg {
+    fn decode<D: bincode::de::Decoder>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let mean = bincode::Decode::decode(decoder)?;
+        let std = bincode::Decode::decode(decoder)?;
+        Ok(Self { mean, std })
     }
 }

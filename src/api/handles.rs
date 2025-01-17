@@ -11,9 +11,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
-    cu29,
-    pipeline::{self, PipelineHandle, PipelineInfo, PipelineStatus, PipelineStore},
+    cu29::{self, app::COPPER_GLOBAL_STATE},
+    pipeline::{self, PipelineHandle, PipelineInfo, PipelineStatus},
 };
+
+use super::server::ApiServerState;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PipelineStartRequest {
@@ -29,7 +31,7 @@ pub struct PipelineStopRequest {
 
 /// Start a pipeline given its id
 pub async fn start_pipeline(
-    State(store): State<PipelineStore>,
+    State(state): State<ApiServerState>,
     Json(request): Json<PipelineStartRequest>,
 ) -> impl IntoResponse {
     // TODO: create a pipeline factory so that from the REST API we can register
@@ -51,9 +53,9 @@ pub async fn start_pipeline(
 
     // check if the pipeline id is already in the store
     let pipeline_id = request.pipeline_id;
-    let mut pipeline_store = store.0.lock().expect("Failed to lock pipeline store");
+    let mut pipeline_store = state.store.lock().expect("Failed to lock pipeline store");
 
-    if pipeline_store.contains_key(&pipeline_id) {
+    if pipeline_store.0.contains_key(&pipeline_id) {
         log::error!("Pipeline {} already exists", pipeline_id);
         return (
             StatusCode::BAD_REQUEST,
@@ -79,7 +81,7 @@ pub async fn start_pipeline(
     };
 
     // add the pipeline handle to the store
-    pipeline_store.insert(
+    pipeline_store.0.insert(
         pipeline_id.clone(),
         PipelineHandle {
             id: pipeline_id.clone(),
@@ -99,11 +101,16 @@ pub async fn start_pipeline(
 
 // Stop a pipeline given its id
 pub async fn stop_pipeline(
-    State(store): State<PipelineStore>,
+    State(state): State<ApiServerState>,
     Json(request): Json<PipelineStopRequest>,
 ) -> impl IntoResponse {
     log::debug!("Request to stop pipeline: {}", request.pipeline_id);
-    if !store.unregister_pipeline(&request.pipeline_id) {
+    if !state
+        .store
+        .lock()
+        .expect("Failed to lock pipeline store")
+        .unregister_pipeline(&request.pipeline_id)
+    {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -119,9 +126,10 @@ pub async fn stop_pipeline(
 }
 
 // List all pipelines and return their status
-pub async fn list_pipelines(State(store): State<PipelineStore>) -> impl IntoResponse {
-    let store = store.0.lock().expect("Failed to lock pipeline store");
+pub async fn list_pipelines(State(state): State<ApiServerState>) -> impl IntoResponse {
+    let store = state.store.lock().expect("Failed to lock pipeline store");
     let pipelines = store
+        .0
         .values()
         .map(|pipeline| PipelineInfo {
             id: pipeline.id.clone(),
@@ -132,7 +140,7 @@ pub async fn list_pipelines(State(store): State<PipelineStore>) -> impl IntoResp
 }
 
 /// Get the current configuration pipeline
-pub async fn get_config(State(_store): State<PipelineStore>) -> impl IntoResponse {
+pub async fn get_config(State(_state): State<ApiServerState>) -> impl IntoResponse {
     let copper_config = match read_configuration("bubbaloop.ron") {
         Ok(config) => config,
         Err(e) => {
@@ -147,4 +155,20 @@ pub async fn get_config(State(_store): State<PipelineStore>) -> impl IntoRespons
     let all_nodes = copper_config.get_all_nodes();
 
     (StatusCode::OK, Json(json!(all_nodes)))
+}
+
+pub async fn get_comms(State(_state): State<ApiServerState>) -> impl IntoResponse {
+    let Some(msg) = COPPER_GLOBAL_STATE
+        .lock()
+        .expect("Failed to lock global state")
+        .mean_std_msg
+        .take()
+    else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Failed to receive message from pipeline comms" })),
+        );
+    };
+
+    (StatusCode::OK, Json(json!(msg)))
 }
