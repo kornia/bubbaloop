@@ -1,4 +1,4 @@
-use crate::cu29::msgs::ImageRGBU8Msg;
+use crate::cu29::msgs::ImageRgb8Msg;
 use cu29::prelude::*;
 use kornia::io::stream::video::{ImageFormat, VideoCodec, VideoWriter as KorniaVideoWriter};
 
@@ -14,7 +14,7 @@ pub struct VideoWriter {
 impl Freezable for VideoWriter {}
 
 impl<'cl> CuSinkTask<'cl> for VideoWriter {
-    type Input = input_msg!('cl, ImageRGBU8Msg);
+    type Input = input_msg!('cl, ImageRgb8Msg);
 
     fn new(config: Option<&ComponentConfig>) -> CuResult<Self>
     where
@@ -77,7 +77,7 @@ impl<'cl> CuSinkTask<'cl> for VideoWriter {
     }
 
     fn process(&mut self, _clock: &RobotClock, input: Self::Input) -> CuResult<()> {
-        let Some(ImageRGBU8Msg { image }) = input.payload() else {
+        let Some(image) = input.payload() else {
             return Ok(());
         };
 

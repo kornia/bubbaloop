@@ -15,7 +15,7 @@ just serve
 Send a HTTP request to the server to start the background task
 
 ```
-just pipeline-start 0.0.0.0 3000 bubbaloop
+just start-pipeline bubaloop 0.0.0.0 3000
 ```
 
 From the server side you will see the following
@@ -29,12 +29,12 @@ From the server side you will see the following
 [2025-01-05T15:51:38Z DEBUG bubbaloop::pipeline] / Hello !! This is a Bubbaloop !!! 🎉
 ```
 
-## Stop the recorder
+## Stop the task
 
-To stop the pipeline, use the `pipeline-stop` command:
+To stop the pipeline, use the `stop-pipeline` command:
 
 ```
-just pipeline-stop 0.0.0.0 3000 bubbaloop
+just stop-pipeline bubbaloop 0.0.0.0 3000
 ```
 
 From client
