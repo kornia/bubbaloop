@@ -17,12 +17,13 @@ For this reason we have to edit the `bubbaloop.ron` file located in the root of 
     tasks: [
         (
             id: "cam0",
-            type: "crate::cu29::tasks::V4L2Camera",
+            type: "crate::cu29::tasks::VideoCapture",
             config: {
-                "camera_id": 0,
-                "res_rows": 480,
-                "res_cols": 640,
-                "fps": 30,
+                "source_type": "v4l2",
+                "source_uri": "/dev/video0",
+                "source_fps": 30,
+                "image_cols": 640,
+                "image_rows": 480,
             }
         ),
         (
@@ -39,7 +40,7 @@ For this reason we have to edit the `bubbaloop.ron` file located in the root of 
         )
     ],
     cnx: [
-        (src: "cam0", dst: "rerun", msg: "crate::cu29::msgs::ImageRGBU8Msg"),
+        (src: "cam0", dst: "rerun", msg: "crate::cu29::msgs::ImageRgb8Msg"),
     ]
     ,
     logging: (
@@ -56,10 +57,11 @@ For this reason we have to edit the `bubbaloop.ron` file located in the root of 
     tasks: [
         (
             id: "cam0",
-            type: "crate::cu29::tasks::RTSPCamera",
+            type: "crate::cu29::tasks::VideoCapture",
             config: {
                 // URL of the RTSP camera
-                "url": "rtsp://<username>:<password>@<ip>:<port>/<stream>"
+                "source_type": "rtsp",
+                "source_uri": "rtsp://<username>:<password>@<ip>:<port>/<stream>"
             }
         ),
         (
@@ -76,7 +78,7 @@ For this reason we have to edit the `bubbaloop.ron` file located in the root of 
         )
     ],
     cnx: [
-        (src: "cam0", dst: "rerun", msg: "crate::cu29::msgs::ImageRGBU8Msg"),
+        (src: "cam0", dst: "rerun", msg: "crate::cu29::msgs::ImageRgb8Msg"),
     ]
     ,
     logging: (
@@ -88,14 +90,14 @@ For this reason we have to edit the `bubbaloop.ron` file located in the root of 
 {% endtab %}
 {% endtabs %}
 
-Then start server as usual `just server`
+Then start server as usual `just serve`
 
 ## Request start recording
 
 Start recording from the camera and log using [rerun.io](https://www.rerun.io).
 
 ```
-just pipeline-start 0.0.0.0 3000 recording
+just start-pipeline recording 0.0.0.0 3000
 ```
 
 {% hint style="info" %}
@@ -110,10 +112,10 @@ You can open rerun in your local machine and you should get the image stream
 
 ## Request Stop recording
 
-To stop the pipeline, use the `pipeline-stop` command:
+To stop the pipeline, use the `stop-pipeline` command:
 
 ```
-just pipeline-stop 0.0.0.0 3000 recording
+just stop-pipeline recording 0.0.0.0 3000
 ```
 
 ## Get the logged data

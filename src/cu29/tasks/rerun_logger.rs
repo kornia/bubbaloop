@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 
-use crate::cu29::msgs::{ImageRGBU8, ImageRGBU8Msg};
+use crate::cu29::msgs::ImageRgb8Msg;
 use cu29::prelude::*;
 
 pub struct RerunLogger {
@@ -12,7 +12,7 @@ pub struct RerunLogger {
 impl Freezable for RerunLogger {}
 
 impl<'cl> CuSinkTask<'cl> for RerunLogger {
-    type Input = input_msg!('cl, ImageRGBU8Msg);
+    type Input = input_msg!('cl, ImageRgb8Msg);
 
     fn new(config: Option<&ComponentConfig>) -> Result<Self, CuError>
     where
@@ -54,7 +54,7 @@ impl<'cl> CuSinkTask<'cl> for RerunLogger {
     }
 
     fn process(&mut self, _clock: &RobotClock, input: Self::Input) -> Result<(), CuError> {
-        let Some(ImageRGBU8Msg { image }) = input.payload() else {
+        let Some(image) = input.payload() else {
             return Ok(());
         };
 
@@ -73,7 +73,7 @@ impl<'cl> CuSinkTask<'cl> for RerunLogger {
 fn log_image_rgb(
     rec: &rerun::RecordingStream,
     name: &str,
-    img: &ImageRGBU8,
+    img: &ImageRgb8Msg,
 ) -> Result<(), CuError> {
     rec.log(
         name,

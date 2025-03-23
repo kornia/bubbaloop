@@ -7,7 +7,7 @@ Bubbaloop can serve local pipeline orchestrated by copper-rs[^1] which are defin
 Create and register a pipeline given its name. This will spawn a background task.
 
 ```
-just pipeline-start HOST IP PIPE_NAME
+just start-pipeline HOST IP PIPE_NAME
 ```
 
 ```bash
@@ -18,10 +18,10 @@ Result: {
 
 ## Stop pipeline
 
-To stop the pipeline, use the `pipeline-stop` command:
+To stop the pipeline, use the `stop-pipeline` command:
 
 ```
-just pipeline-stop HOST IP PIPE_NAME
+just stop-pipeline HOST IP PIPE_NAME
 ```
 
 ```bash
@@ -32,7 +32,7 @@ Result: {
 
 ## List pipelines
 
-To list all the registered pipelines and their status, use the `pipeline-list` command:
+To list all the registered pipelines and their status, use the `list-pipeline` command:
 
 ```
 just pipeline-list HOST IP
