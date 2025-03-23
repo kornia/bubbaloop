@@ -3,6 +3,8 @@
 # Stop the script if any command fails
 set -e
 
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
 # Parse command line arguments
 while getopts "r:u:" opt; do
   case $opt in
@@ -20,10 +22,10 @@ if [ -z "$TARGET_IP" ] || [ -z "$TARGET_USER" ]; then
 fi
 
 # Configuration
-TARGET_PATH="/home/$TARGET_USER/deploy"
 BINARY_NAME="serve"
-LOCAL_FOLDER="/tmp/deploy_serve"
 DEPLOY_ARCH="aarch64-unknown-linux-gnu"
+LOCAL_FOLDER="/tmp/deploy"
+TARGET_PATH="/home/$TARGET_USER/deploy"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -45,6 +47,9 @@ if ! command -v cross &> /dev/null; then
     print_error "cross is not installed. Install it with: cargo install cross"
 fi
 
+rm -rf $LOCAL_FOLDER
+mkdir -p $LOCAL_FOLDER
+
 # Build the release binary
 print_status "Building release binary for aarch64..."
 cross build --target $DEPLOY_ARCH --release -v --bin $BINARY_NAME || print_error "Build failed"
@@ -55,8 +60,13 @@ if [ ! -f "target/$DEPLOY_ARCH/release/$BINARY_NAME" ]; then
     print_error "Binary not found after build"
 fi
 
+# copy useful scripts
+cp -p scripts/run_serve.sh $LOCAL_FOLDER
+
 # Copy to remote machine
 print_status "Copying to $TARGET_USER@$TARGET_IP:$TARGET_PATH..."
-rsync -a $LOCAL_FOLDER $TARGET_USER@$TARGET_IP:$TARGET_PATH
+
+ssh $TARGET_USER@$TARGET_IP "mkdir -p $TARGET_PATH"
+rsync -a --delete $LOCAL_FOLDER $TARGET_USER@$TARGET_IP:~/
 
 print_status "Deploy completed successfully!"
