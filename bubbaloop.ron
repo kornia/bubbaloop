@@ -2,22 +2,24 @@
     tasks: [
         (
             id: "cam0",
-            type: "crate::cu29::tasks::V4L2Camera",
+            type: "crate::cu29::tasks::VideoCapture",
             config: {
-                "camera_id": 0,
-                "rows": 480,
-                "cols": 640,
-                "fps": 30,
+                "source_type": "v4l2",
+                "source_uri": "/dev/video0",
+                "source_fps": 30,
+                "image_cols": 640,
+                "image_rows": 480,
             }
         ),
         // NOTE: uncomment to use this camera
         // (
         //     id: "cam0",
-        //     type: "crate::cu29::tasks::RTSPCamera",
+        //     type: "crate::cu29::tasks::VideoCapture",
         //     config: {
+        //         "source_type": "rtsp",
         //         // URL of the RTSP camera
         //         // rtsp://<username>:<password>@<ip>:<port>/<stream>
-        //         "url": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
+        //         "source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
         //     }
         // ),
         (
@@ -34,7 +36,7 @@
         )
     ],
     cnx: [
-        (src: "cam0", dst: "rerun", msg: "crate::cu29::msgs::ImageRGBU8Msg"),
+        (src: "cam0", dst: "rerun", msg: "crate::cu29::msgs::ImageRgb8Msg"),
     ]
     ,
     logging: (

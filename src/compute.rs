@@ -58,9 +58,9 @@ pub async fn compute_mean_std(query: Json<MeanStdQuery>) -> impl IntoResponse {
                     .path()
                     .extension()
                     .map(|ext| {
-                        ext.to_ascii_lowercase() == "jpg"
-                            || ext.to_ascii_lowercase() == "jpeg"
-                            || ext.to_ascii_lowercase() == "png"
+                        ext.eq_ignore_ascii_case("jpg")
+                            || ext.eq_ignore_ascii_case("jpeg")
+                            || ext.eq_ignore_ascii_case("png")
                     })
                     .unwrap_or(false)
         })
