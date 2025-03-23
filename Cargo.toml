@@ -13,7 +13,7 @@ version = "0.0.1-rc.1"
 [dependencies]
 argh = "0.1"
 axum = "0.8"
-bincode = "2.0.0-rc.3"
+bincode = "2.0.0"
 env_logger = "0.11"
 indicatif = { version = "0.17", features = ["rayon"] }
 kornia = { version = "0.1.8", features = ["gstreamer"] }
@@ -28,5 +28,5 @@ tokio = { version = "1", features = ["full"] }
 walkdir = "2.5"
 whoami = "1.5"
 
-cu29 = { git = "https://github.com/copper-project/copper-rs.git", sha = "c6d2b1b5069057007e197faf858f932381ae260a" }
-cu29-helpers = { git = "https://github.com/copper-project/copper-rs.git", sha = "c6d2b1b5069057007e197faf858f932381ae260a" }
+cu29 = "0.7.0"
+cu29-helpers = "0.7.0"
