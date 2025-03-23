@@ -4,7 +4,6 @@ RUN apt-get update && apt-get install --assume-yes \
     cmake \
     curl \
     gdb \
-    openssl \
     pkg-config \
     && \
     apt-get clean
