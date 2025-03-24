@@ -57,9 +57,6 @@ pub fn spawn_inference_pipeline(
             while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
                 // we run the pipeline iteration step by step
                 app.run_one_iteration()?;
-
-                // NOTE: is this really needed?
-                std::thread::sleep(std::time::Duration::from_millis(30));
             }
 
             // stop the pipeline and wait for the tasks to finish
