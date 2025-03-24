@@ -1,3 +1,4 @@
+use crate::api::models::inference::InferenceResult;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -5,8 +6,6 @@ use std::{
     sync::atomic::AtomicBool,
     sync::{Arc, Mutex},
 };
-
-use crate::api::models::InferenceResult;
 
 pub static SERVER_GLOBAL_STATE: Lazy<ServerGlobalState> = Lazy::new(ServerGlobalState::default);
 

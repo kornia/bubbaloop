@@ -1,4 +1,4 @@
-use crate::api::models::InferenceResult;
+use crate::api::models::inference::InferenceResult;
 use crate::cu29::msgs::ImageRgb8Msg;
 use crate::pipeline::SERVER_GLOBAL_STATE;
 

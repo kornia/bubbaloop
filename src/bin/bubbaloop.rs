@@ -170,7 +170,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             PipelineMode::Start(pipeline_start_command) => {
                 let response = client
                     .post(format!("http://{}/api/v0/pipeline/start", addr))
-                    .json(&bubbaloop::api::handles::PipelineStartRequest {
+                    .json(&bubbaloop::api::models::pipeline::PipelineStartRequest {
                         pipeline_id: pipeline_start_command.id,
                     })
                     .send()
@@ -182,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             PipelineMode::Stop(pipeline_stop_command) => {
                 let response = client
                     .post(format!("http://{}/api/v0/pipeline/stop", addr))
-                    .json(&bubbaloop::api::handles::PipelineStopRequest {
+                    .json(&bubbaloop::api::models::pipeline::PipelineStopRequest {
                         pipeline_id: pipeline_stop_command.id,
                     })
                     .send()

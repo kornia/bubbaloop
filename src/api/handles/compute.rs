@@ -1,27 +1,8 @@
+use crate::api::models::compute::{ComputeResponse, MeanStdQuery, MeanStdResult};
 use axum::response::{IntoResponse, Json};
 use indicatif::ParallelProgressIterator;
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-
-use crate::api::models::MeanStdResult;
-
-// Query parameters for the mean and std computation
-#[derive(Debug, Deserialize)]
-pub struct MeanStdQuery {
-    // The directory containing the images
-    images_dir: PathBuf,
-    // The number of threads to use
-    num_threads: Option<usize>,
-}
-
-/// The response of the compute mean and std request
-#[derive(Debug, Serialize)]
-pub enum ComputeResponse {
-    Success(MeanStdResult),
-    Error { error: String },
-}
 
 /// Compute the mean and std of the images in the given directory
 pub async fn compute_mean_std(query: Json<MeanStdQuery>) -> impl IntoResponse {

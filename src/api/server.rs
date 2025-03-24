@@ -5,9 +5,7 @@ use axum::{
 
 use crate::{
     api::handles,
-    compute, inference,
     pipeline::{PipelineStore, ResultStore},
-    stats,
 };
 
 #[derive(Default)]
@@ -26,21 +24,24 @@ impl ApiServer {
 
         let app = Router::new()
             .route("/", get(|| async { "Welcome to Bubbaloop!" }))
-            .route("/api/v0/compute/mean_std", post(compute::compute_mean_std))
+            .route(
+                "/api/v0/compute/mean_std",
+                post(handles::compute::compute_mean_std),
+            )
             .nest(
                 "/api/v0/inference",
                 Router::new()
-                    .route("/result", get(inference::get_inference_result))
+                    .route("/result", get(handles::inference::get_inference_result))
                     .with_state(result_store),
             )
-            .route("/api/v0/stats/whoami", get(stats::whoami))
+            .route("/api/v0/stats/whoami", get(handles::stats::whoami))
             .nest(
                 "/api/v0/pipeline",
                 Router::new()
-                    .route("/start", post(handles::start_pipeline))
-                    .route("/stop", post(handles::stop_pipeline))
-                    .route("/list", get(handles::list_pipelines))
-                    .route("/config", get(handles::get_config))
+                    .route("/start", post(handles::pipeline::start_pipeline))
+                    .route("/stop", post(handles::pipeline::stop_pipeline))
+                    .route("/list", get(handles::pipeline::list_pipelines))
+                    .route("/config", get(handles::pipeline::get_config))
                     .with_state(pipeline_store),
             );
 
