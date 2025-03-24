@@ -7,25 +7,13 @@ use axum::{
     response::{IntoResponse, Json},
 };
 use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
+    api::models::pipeline::{PipelineStartRequest, PipelineStopRequest},
     cu29,
     pipeline::{self, PipelineHandle, PipelineInfo, PipelineStatus, PipelineStore},
 };
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PipelineStartRequest {
-    // the id of the pipeline to start
-    pub pipeline_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PipelineStopRequest {
-    // the id of the pipeline to stop
-    pub pipeline_id: String,
-}
 
 /// Start a pipeline given its id
 pub async fn start_pipeline(
