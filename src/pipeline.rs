@@ -1,3 +1,4 @@
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -5,11 +6,35 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::api::models::InferenceResult;
+
+pub static SERVER_GLOBAL_STATE: Lazy<ServerGlobalState> = Lazy::new(ServerGlobalState::default);
+
+pub type PipelineResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
 /// Global store of all pipelines managed by the server
 #[derive(Clone)]
 pub struct PipelineStore(pub Arc<Mutex<HashMap<String, PipelineHandle>>>);
 
-pub type PipelineResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+/// Global store of all results managed by the server
+#[derive(Clone)]
+pub struct ResultStore(pub Arc<Mutex<HashMap<String, InferenceResult>>>);
+
+/// Global state of the server
+#[derive(Clone)]
+pub struct ServerGlobalState {
+    pub pipeline_store: PipelineStore,
+    pub result_store: ResultStore,
+}
+
+impl Default for ServerGlobalState {
+    fn default() -> Self {
+        Self {
+            pipeline_store: init_pipeline_store(),
+            result_store: init_result_store(),
+        }
+    }
+}
 
 impl PipelineStore {
     /// Register a pipeline in the store and start it
@@ -88,12 +113,15 @@ pub fn init_pipeline_store() -> PipelineStore {
     PipelineStore(Arc::new(Mutex::new(HashMap::new())))
 }
 
+// initialize the result store
+pub fn init_result_store() -> ResultStore {
+    ResultStore(Arc::new(Mutex::new(HashMap::new())))
+}
+
 /// A dummy pipeline that runs indefinitely and prints a message every second
-pub(crate) fn dummy_bubbaloop_thread(
-    pipeline_id: &str,
+pub fn spawn_bubbaloop_thread(
     stop_signal: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<PipelineResult> {
-    let pipeline_id = pipeline_id.to_string();
     let signs = ["|", "/", "-", "\\", "|", "/", "-", "\\"];
     let emojis = ["😊", "🚀", "🦀", "🎉", "✨", "🎸", "🌟", "🍕", "🎮", "🌈"];
     std::thread::spawn(move || {
@@ -107,11 +135,7 @@ pub(crate) fn dummy_bubbaloop_thread(
             std::thread::sleep(std::time::Duration::from_secs(1));
             counter += 1;
         }
-        log::debug!(
-            "Pipeline {} stopped after {} iterations",
-            pipeline_id,
-            counter
-        );
+        log::debug!("Bubbaloop pipeline stopped after {} iterations", counter);
         Ok(())
     })
 }

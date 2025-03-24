@@ -24,14 +24,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // format the host and port
     let addr = format!("{}:{}", args.host, args.port);
 
-    // initialize the pipeline store to manage pipelines
-    let pipeline_store = bubbaloop::pipeline::init_pipeline_store();
+    let global_state = bubbaloop::pipeline::SERVER_GLOBAL_STATE.clone();
 
     // start the api server
     let api = bubbaloop::api::ApiServer;
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async move {
-        api.start(addr, pipeline_store).await.unwrap();
+        api.start(addr, global_state.pipeline_store, global_state.result_store)
+            .await
+            .unwrap();
     });
 
     Ok(())

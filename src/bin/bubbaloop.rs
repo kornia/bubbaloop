@@ -24,9 +24,15 @@ struct CLIArgs {
 #[argh(subcommand)]
 enum Commands {
     Compute(ComputeCommand),
+    Inference(InferenceCommand),
     Pipeline(PipelineCommand),
     Stats(StatsCommand),
 }
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "inference")]
+/// Execute inference on the server
+struct InferenceCommand {}
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "compute")]
@@ -204,6 +210,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Result: {}", serde_json::to_string_pretty(&result)?);
             }
         },
+        Commands::Inference(_inference_command) => {
+            let response = client
+                .get(format!("http://{}/api/v0/inference/result", addr))
+                .send()
+                .await?;
+
+            let result = response.json::<serde_json::Value>().await?;
+            println!("Result: {}", serde_json::to_string_pretty(&result)?);
+        }
     }
 
     Ok(())
