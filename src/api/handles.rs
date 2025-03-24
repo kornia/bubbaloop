@@ -35,7 +35,7 @@ pub async fn start_pipeline(
     // TODO: create a pipeline factory so that from the REST API we can register
     //       a new pipeline and start it
     // NOTE: for now we only support one pipeline ["bubbaloop"]
-    const SUPPORTED_PIPELINES: [&str; 2] = ["bubbaloop", "recording"];
+    const SUPPORTED_PIPELINES: [&str; 3] = ["bubbaloop", "recording", "inference"];
     if !SUPPORTED_PIPELINES.contains(&request.pipeline_id.as_str()) {
         log::error!(
             "Pipeline {} not supported. Try 'bubbaloop' or 'recording' instead",
@@ -44,7 +44,7 @@ pub async fn start_pipeline(
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "Pipeline not supported. Try 'bubbaloop' instead",
+                "error": "Pipeline not supported. Try 'bubbaloop', 'recording' or 'inference' instead",
             })),
         );
     }
@@ -67,8 +67,9 @@ pub async fn start_pipeline(
     let stop_signal = Arc::new(AtomicBool::new(false));
 
     let handle = match pipeline_id.as_str() {
-        "bubbaloop" => pipeline::dummy_bubbaloop_thread(&pipeline_id, stop_signal.clone()),
-        "recording" => cu29::app::spawn_cu29_thread(&pipeline_id, stop_signal.clone()),
+        "bubbaloop" => pipeline::spawn_bubbaloop_thread(stop_signal.clone()),
+        "recording" => cu29::pipelines::spawn_recording_pipeline(stop_signal.clone()),
+        "inference" => cu29::pipelines::spawn_inference_pipeline(stop_signal.clone()),
         _ => {
             log::error!("Pipeline {} not supported", pipeline_id);
             return (

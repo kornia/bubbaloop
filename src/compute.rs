@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::api::models::MeanStdResult;
+
 // Query parameters for the mean and std computation
 #[derive(Debug, Deserialize)]
 pub struct MeanStdQuery {
@@ -17,15 +19,8 @@ pub struct MeanStdQuery {
 /// The response of the compute mean and std request
 #[derive(Debug, Serialize)]
 pub enum ComputeResponse {
-    Success(ComputeMeanStdResult),
+    Success(MeanStdResult),
     Error { error: String },
-}
-
-/// The result of the compute mean and std request
-#[derive(Debug, Serialize)]
-pub struct ComputeMeanStdResult {
-    mean: [f64; 3],
-    std: [f64; 3],
 }
 
 /// Compute the mean and std of the images in the given directory
@@ -145,7 +140,7 @@ pub async fn compute_mean_std(query: Json<MeanStdQuery>) -> impl IntoResponse {
     log::debug!("🔥Total std: {:?}", total_std);
     log::debug!("🔥Total mean: {:?}", total_mean);
 
-    Json(ComputeResponse::Success(ComputeMeanStdResult {
+    Json(ComputeResponse::Success(MeanStdResult {
         mean: [
             total_mean[0] as f64,
             total_mean[1] as f64,
