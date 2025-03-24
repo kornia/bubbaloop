@@ -1,3 +1,9 @@
+mod model;
+pub use model::*;
+
+mod printer;
+pub use printer::*;
+
 mod rerun_logger;
 pub use rerun_logger::*;
 

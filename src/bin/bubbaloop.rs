@@ -24,9 +24,15 @@ struct CLIArgs {
 #[argh(subcommand)]
 enum Commands {
     Compute(ComputeCommand),
+    Inference(InferenceCommand),
     Pipeline(PipelineCommand),
     Stats(StatsCommand),
 }
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "inference")]
+/// Execute inference on the server
+struct InferenceCommand {}
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "compute")]
@@ -164,7 +170,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             PipelineMode::Start(pipeline_start_command) => {
                 let response = client
                     .post(format!("http://{}/api/v0/pipeline/start", addr))
-                    .json(&bubbaloop::api::handles::PipelineStartRequest {
+                    .json(&bubbaloop::api::models::pipeline::PipelineStartRequest {
                         pipeline_id: pipeline_start_command.id,
                     })
                     .send()
@@ -176,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             PipelineMode::Stop(pipeline_stop_command) => {
                 let response = client
                     .post(format!("http://{}/api/v0/pipeline/stop", addr))
-                    .json(&bubbaloop::api::handles::PipelineStopRequest {
+                    .json(&bubbaloop::api::models::pipeline::PipelineStopRequest {
                         pipeline_id: pipeline_stop_command.id,
                     })
                     .send()
@@ -204,6 +210,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Result: {}", serde_json::to_string_pretty(&result)?);
             }
         },
+        Commands::Inference(_inference_command) => {
+            let response = client
+                .get(format!("http://{}/api/v0/inference/result", addr))
+                .send()
+                .await?;
+
+            let result = response.json::<serde_json::Value>().await?;
+            println!("Result: {}", serde_json::to_string_pretty(&result)?);
+        }
     }
 
     Ok(())
