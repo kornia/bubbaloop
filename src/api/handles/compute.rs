@@ -1,32 +1,8 @@
+use crate::api::models::compute::{ComputeResponse, MeanStdQuery, MeanStdResult};
 use axum::response::{IntoResponse, Json};
 use indicatif::ParallelProgressIterator;
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-
-// Query parameters for the mean and std computation
-#[derive(Debug, Deserialize)]
-pub struct MeanStdQuery {
-    // The directory containing the images
-    images_dir: PathBuf,
-    // The number of threads to use
-    num_threads: Option<usize>,
-}
-
-/// The response of the compute mean and std request
-#[derive(Debug, Serialize)]
-pub enum ComputeResponse {
-    Success(ComputeMeanStdResult),
-    Error { error: String },
-}
-
-/// The result of the compute mean and std request
-#[derive(Debug, Serialize)]
-pub struct ComputeMeanStdResult {
-    mean: [f64; 3],
-    std: [f64; 3],
-}
 
 /// Compute the mean and std of the images in the given directory
 pub async fn compute_mean_std(query: Json<MeanStdQuery>) -> impl IntoResponse {
@@ -145,7 +121,7 @@ pub async fn compute_mean_std(query: Json<MeanStdQuery>) -> impl IntoResponse {
     log::debug!("🔥Total std: {:?}", total_std);
     log::debug!("🔥Total mean: {:?}", total_mean);
 
-    Json(ComputeResponse::Success(ComputeMeanStdResult {
+    Json(ComputeResponse::Success(MeanStdResult {
         mean: [
             total_mean[0] as f64,
             total_mean[1] as f64,

@@ -8,20 +8,22 @@ const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
 
 // NOTE: this will use the default config file in the current directory during compilation
 // however, it will be overridden by the ron config string when the pipeline is started
-#[copper_runtime(config = "bubbaloop.ron")]
-struct CopperApp {}
+#[copper_runtime(config = "src/cu29/pipelines/recording.ron")]
+struct RecordingApp {}
 
-pub struct CopperPipeline(pub CopperApp);
+pub struct RecordingPipeline(pub RecordingApp);
 
-impl CopperPipeline {
+impl RecordingPipeline {
     pub fn new() -> CuResult<Self> {
         // NOTE: this is a temporary solution to store the logger in the user's home directory
         let logger_dir = std::path::PathBuf::from(&format!("/home/{}", whoami::username()));
-        let logger_path = logger_dir.join("bubbaloop.copper");
+        let logger_path = logger_dir.join("recording.copper");
         debug!("Logger path: {}", path = &logger_path);
 
         let copper_ctx = basic_copper_setup(&logger_path, SLAB_SIZE, true, None)?;
-        let application = CopperAppBuilder::new().with_context(&copper_ctx).build()?;
+        let application = RecordingAppBuilder::new()
+            .with_context(&copper_ctx)
+            .build()?;
 
         Ok(Self(application))
     }
@@ -40,16 +42,14 @@ impl CopperPipeline {
 /// # Returns
 ///
 /// A handle to the thread that runs the pipeline
-pub fn spawn_cu29_thread(
-    pipeline_id: &str,
+pub fn spawn_recording_pipeline(
     stop_signal: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<PipelineResult> {
-    let pipeline_id = pipeline_id.to_string();
     std::thread::spawn({
         let stop_signal = stop_signal.clone();
         move || -> PipelineResult {
             // parse the ron config string and create the pipeline
-            let mut app = CopperPipeline::new()?;
+            let mut app = RecordingPipeline::new()?;
 
             // create the pipeline and start the tasks
             app.start_all_tasks()?;
@@ -65,22 +65,22 @@ pub fn spawn_cu29_thread(
             // stop the pipeline and wait for the tasks to finish
             app.stop_all_tasks()?;
 
-            log::debug!("Pipeline {} stopped", pipeline_id);
+            log::debug!("Recording pipeline stopped");
 
             Ok(())
         }
     })
 }
 
-impl std::ops::Deref for CopperPipeline {
-    type Target = CopperApp;
+impl std::ops::Deref for RecordingPipeline {
+    type Target = RecordingApp;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl std::ops::DerefMut for CopperPipeline {
+impl std::ops::DerefMut for RecordingPipeline {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
