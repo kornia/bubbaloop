@@ -1,3 +1,5 @@
+use serde::{ser::SerializeStruct, Deserialize, Serialize};
+
 type ImageRgb8 = kornia::image::Image<u8, 3>;
 type ImageGray8 = kornia::image::Image<u8, 1>;
 
@@ -50,6 +52,39 @@ impl<C> bincode::de::Decode<C> for ImageRgb8Msg {
         let image = ImageRgb8::new([rows, cols].into(), data)
             .map_err(|e| bincode::error::DecodeError::OtherString(e.to_string()))?;
         Ok(Self(image))
+    }
+}
+
+impl Serialize for ImageRgb8Msg {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut s = serializer.serialize_struct("ImageRgb8Msg", 3)?;
+        s.serialize_field("rows", &self.0.rows())?;
+        s.serialize_field("cols", &self.0.cols())?;
+        s.serialize_field("data", &self.0.as_slice())?;
+        s.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ImageRgb8Msg {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ImageData {
+            rows: usize,
+            cols: usize,
+            data: Vec<u8>,
+        }
+
+        let data = ImageData::deserialize(deserializer)?;
+        Ok(Self(
+            ImageRgb8::new([data.rows, data.cols].into(), data.data)
+                .map_err(serde::de::Error::custom)?,
+        ))
     }
 }
 
