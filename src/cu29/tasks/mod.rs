@@ -1,5 +1,5 @@
-mod model;
-pub use model::*;
+mod inference;
+pub use inference::*;
 
 mod printer;
 pub use printer::*;
