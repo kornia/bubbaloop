@@ -32,6 +32,7 @@ impl ApiServer {
                 "/api/v0/inference",
                 Router::new()
                     .route("/result", get(handles::inference::get_inference_result))
+                    .route("/image", get(handles::camera::get_camera_image))
                     .with_state(result_store),
             )
             .route("/api/v0/stats/whoami", get(handles::stats::whoami))

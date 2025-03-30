@@ -1,7 +1,9 @@
 use cu29::prelude::*;
 use kornia::io::stream::{CameraCapture, RTSPCameraConfig, V4L2CameraConfig};
 
-use crate::cu29::msgs::ImageRgb8Msg;
+use crate::{
+    api::models::camera::CameraResult, cu29::msgs::ImageRgb8Msg, pipeline::SERVER_GLOBAL_STATE,
+};
 
 pub struct VideoCapture(pub CameraCapture);
 
@@ -68,7 +70,7 @@ impl<'cl> CuSrcTask<'cl> for VideoCapture {
             .map_err(|e| CuError::new_with_cause("Failed to stop camera", e))
     }
 
-    fn process(&mut self, _clock: &RobotClock, output: Self::Output) -> Result<(), CuError> {
+    fn process(&mut self, clock: &RobotClock, output: Self::Output) -> Result<(), CuError> {
         let Some(img) = self
             .0
             .grab()
@@ -78,6 +80,13 @@ impl<'cl> CuSrcTask<'cl> for VideoCapture {
         };
 
         output.set_payload(ImageRgb8Msg(img));
+
+        if let Ok(mut image_store) = SERVER_GLOBAL_STATE.result_store.image.write() {
+            image_store.push_back(CameraResult {
+                timestamp_nanos: clock.now().as_nanos(),
+                image: output.payload().unwrap().clone(),
+            });
+        }
 
         Ok(())
     }

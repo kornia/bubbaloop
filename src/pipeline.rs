@@ -1,10 +1,11 @@
-use crate::api::models::inference::InferenceResult;
+use crate::api::models::{camera::CameraResult, inference::InferenceResult};
+use circular_buffer::CircularBuffer;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::atomic::AtomicBool,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 pub static SERVER_GLOBAL_STATE: Lazy<ServerGlobalState> = Lazy::new(ServerGlobalState::default);
@@ -12,27 +13,21 @@ pub static SERVER_GLOBAL_STATE: Lazy<ServerGlobalState> = Lazy::new(ServerGlobal
 pub type PipelineResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
 /// Global store of all pipelines managed by the server
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct PipelineStore(pub Arc<Mutex<HashMap<String, PipelineHandle>>>);
 
 /// Global store of all results managed by the server
-#[derive(Clone)]
-pub struct ResultStore(pub Arc<Mutex<HashMap<String, InferenceResult>>>);
+#[derive(Clone, Default)]
+pub struct ResultStore {
+    pub inference: Arc<RwLock<CircularBuffer<5, InferenceResult>>>,
+    pub image: Arc<RwLock<CircularBuffer<5, CameraResult>>>,
+}
 
 /// Global state of the server
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ServerGlobalState {
     pub pipeline_store: PipelineStore,
     pub result_store: ResultStore,
-}
-
-impl Default for ServerGlobalState {
-    fn default() -> Self {
-        Self {
-            pipeline_store: init_pipeline_store(),
-            result_store: init_result_store(),
-        }
-    }
 }
 
 impl PipelineStore {
@@ -105,16 +100,6 @@ pub struct PipelineInfo {
     pub id: String,
     // the status of the pipeline
     pub status: PipelineStatus,
-}
-
-// initialize the pipeline store
-pub fn init_pipeline_store() -> PipelineStore {
-    PipelineStore(Arc::new(Mutex::new(HashMap::new())))
-}
-
-// initialize the result store
-pub fn init_result_store() -> ResultStore {
-    ResultStore(Arc::new(Mutex::new(HashMap::new())))
 }
 
 /// A dummy pipeline that runs indefinitely and prints a message every second
