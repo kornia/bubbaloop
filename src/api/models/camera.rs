@@ -1,19 +1,19 @@
-use kornia_yolo::BoundingBox;
+use crate::cu29::msgs::ImageRgb8Msg;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize)]
-pub struct InferenceResult {
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct CameraResult {
     pub timestamp_nanos: u64,
-    pub detections: Vec<BoundingBox>,
+    pub image: ImageRgb8Msg,
 }
 
 /// The query for the inference request
 #[derive(Debug, Deserialize, Serialize)]
-pub struct InferenceQuery;
+pub struct CameraQuery;
 
 /// The response of the inference request
 #[derive(Debug, Serialize)]
-pub enum InferenceResponse {
-    Success(InferenceResult),
+pub enum CameraResponse {
+    Success(CameraResult),
     Error { error: String },
 }
