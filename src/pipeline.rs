@@ -16,18 +16,18 @@ pub type PipelineResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 pub struct PipelineStore(pub Arc<Mutex<HashMap<String, PipelineHandle>>>);
 
 #[derive(Clone)]
-pub struct SenderReceiver<T> {
+pub struct BroadcastChannel<T> {
     pub tx: Arc<tokio::sync::broadcast::Sender<T>>,
 }
 
-impl<T: Clone> SenderReceiver<T> {
+impl<T: Clone> BroadcastChannel<T> {
     pub fn new() -> Self {
         let (tx, _) = tokio::sync::broadcast::channel(5);
         Self { tx: Arc::new(tx) }
     }
 }
 
-impl<T: Clone> Default for SenderReceiver<T> {
+impl<T: Clone> Default for BroadcastChannel<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -36,15 +36,15 @@ impl<T: Clone> Default for SenderReceiver<T> {
 /// Global store of all results managed by the server
 #[derive(Clone)]
 pub struct ResultStore {
-    pub inference: SenderReceiver<InferenceResult>,
-    pub image: SenderReceiver<CameraResult>,
+    pub inference: BroadcastChannel<InferenceResult>,
+    pub image: BroadcastChannel<CameraResult>,
 }
 
 impl Default for ResultStore {
     fn default() -> Self {
         Self {
-            inference: SenderReceiver::new(),
-            image: SenderReceiver::new(),
+            inference: BroadcastChannel::new(),
+            image: BroadcastChannel::new(),
         }
     }
 }
