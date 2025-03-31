@@ -23,7 +23,7 @@ impl<'cl> CuTask<'cl> for Inference {
 
     fn process(
         &mut self,
-        _clock: &RobotClock,
+        clock: &RobotClock,
         input: Self::Input,
         output: Self::Output,
     ) -> Result<(), CuError> {
@@ -39,10 +39,10 @@ impl<'cl> CuTask<'cl> for Inference {
 
         log::debug!("bboxes: {:?}", bboxes);
 
-        output.set_payload(InferenceResultMsg {
-            timestamp_nanos: _clock.now().as_nanos(),
-            detections: bboxes.into_iter().map(BoundingBoxMsg).collect(),
-        });
+        output.set_payload(InferenceResultMsg(
+            bboxes.into_iter().map(BoundingBoxMsg).collect(),
+        ));
+        output.metadata.tov = clock.now().into();
 
         Ok(())
     }

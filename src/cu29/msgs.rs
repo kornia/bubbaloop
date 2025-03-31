@@ -184,18 +184,14 @@ impl<C> bincode::de::Decode<C> for BoundingBoxMsg {
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
-pub struct InferenceResultMsg {
-    pub timestamp_nanos: u64,
-    pub detections: Vec<BoundingBoxMsg>,
-}
+pub struct InferenceResultMsg(pub Vec<BoundingBoxMsg>);
 
 impl bincode::enc::Encode for InferenceResultMsg {
     fn encode<E: bincode::enc::Encoder>(
         &self,
         encoder: &mut E,
     ) -> Result<(), bincode::error::EncodeError> {
-        bincode::Encode::encode(&self.timestamp_nanos, encoder)?;
-        bincode::Encode::encode(&self.detections, encoder)?;
+        bincode::Encode::encode(&self.0, encoder)?;
         Ok(())
     }
 }
@@ -204,9 +200,6 @@ impl<C> bincode::de::Decode<C> for InferenceResultMsg {
     fn decode<D: bincode::de::Decoder<Context = C>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(Self {
-            timestamp_nanos: bincode::Decode::decode(decoder)?,
-            detections: bincode::Decode::decode(decoder)?,
-        })
+        Ok(Self(bincode::Decode::decode(decoder)?))
     }
 }

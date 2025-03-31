@@ -1,4 +1,4 @@
-use crate::{api::models::camera::CameraResult, cu29::msgs::InferenceResultMsg};
+use crate::api::models::{camera::CameraResult, inference::InferenceResult};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -36,7 +36,7 @@ impl<T: Clone> Default for SenderReceiver<T> {
 /// Global store of all results managed by the server
 #[derive(Clone)]
 pub struct ResultStore {
-    pub inference: SenderReceiver<InferenceResultMsg>,
+    pub inference: SenderReceiver<InferenceResult>,
     pub image: SenderReceiver<CameraResult>,
 }
 
