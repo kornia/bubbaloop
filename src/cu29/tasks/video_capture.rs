@@ -67,7 +67,7 @@ impl<'cl> CuSrcTask<'cl> for VideoCapture {
             .map_err(|e| CuError::new_with_cause("Failed to stop camera", e))
     }
 
-    fn process(&mut self, _clock: &RobotClock, output: Self::Output) -> Result<(), CuError> {
+    fn process(&mut self, clock: &RobotClock, output: Self::Output) -> Result<(), CuError> {
         let Some(img) = self
             .0
             .grab()
@@ -77,6 +77,7 @@ impl<'cl> CuSrcTask<'cl> for VideoCapture {
         };
 
         output.set_payload(ImageRgb8Msg(img));
+        output.metadata.tov = clock.now().into();
 
         Ok(())
     }

@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::Json;
 
-use crate::api::models::inference::InferenceResponse;
+use crate::api::models::inference::{InferenceResponse, InferenceResult};
 use crate::pipeline::ResultStore;
 
 pub async fn get_inference_result(State(store): State<ResultStore>) -> impl IntoResponse {
@@ -12,5 +12,8 @@ pub async fn get_inference_result(State(store): State<ResultStore>) -> impl Into
         });
     };
 
-    Json(InferenceResponse::Success(result.clone()))
+    Json(InferenceResponse::Success(InferenceResult {
+        timestamp_nanos: result.timestamp_nanos,
+        detections: result.detections,
+    }))
 }

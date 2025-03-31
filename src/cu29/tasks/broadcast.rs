@@ -1,9 +1,10 @@
 use crate::{
-    api::models::camera::CameraResult,
+    api::models::{camera::CameraResult, inference::InferenceResult},
     cu29::msgs::{ImageRgb8Msg, InferenceResultMsg},
     pipeline::SERVER_GLOBAL_STATE,
 };
 use cu29::prelude::*;
+use kornia_yolo::BoundingBox;
 
 pub struct Broadcast;
 
@@ -50,7 +51,14 @@ impl<'cl> CuSinkTask<'cl> for Broadcast {
                 .result_store
                 .inference
                 .tx
-                .send(inference_result.clone())
+                .send(InferenceResult {
+                    timestamp_nanos: clock.now().as_nanos(),
+                    detections: inference_result
+                        .0
+                        .iter()
+                        .map(|b| b.0)
+                        .collect::<Vec<BoundingBox>>(),
+                })
                 .map_err(|e| {
                     if matches!(e, tokio::sync::broadcast::error::SendError(_)) {
                         Ok(())
