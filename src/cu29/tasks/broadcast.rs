@@ -25,7 +25,7 @@ impl<'cl> CuSinkTask<'cl> for Broadcast {
 
         if let Some(img) = img_msg.payload() {
             // send the camera image to the global state
-            if SERVER_GLOBAL_STATE
+            SERVER_GLOBAL_STATE
                 .result_store
                 .image
                 .tx
@@ -35,13 +35,12 @@ impl<'cl> CuSinkTask<'cl> for Broadcast {
                     // TODO: not clone and send the reference
                     image: img.clone(),
                 })
-                .is_ok()
-            {}
+                .ok();
         }
 
         if let Some(inference_result) = inference_msg.payload() {
             // send the inference result to the global state
-            if SERVER_GLOBAL_STATE
+            SERVER_GLOBAL_STATE
                 .result_store
                 .inference
                 .tx
@@ -53,8 +52,7 @@ impl<'cl> CuSinkTask<'cl> for Broadcast {
                         .map(|b| b.0)
                         .collect::<Vec<BoundingBox>>(),
                 })
-                .is_ok()
-            {}
+                .ok();
         }
 
         Ok(())
