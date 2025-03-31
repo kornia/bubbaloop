@@ -1,5 +1,6 @@
 """Example of a client that requests the inference result from the server."""
 
+import argparse
 import asyncio
 import httpx
 import rerun as rr
@@ -41,6 +42,10 @@ def response_to_inference_result(response: dict) -> rr.Boxes2D:
 
 async def main() -> None:
     """Main function to receive the inference result from the server."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=3000)
+    args = parser.parse_args()
 
     rr.init("rerun_example_my_data", spawn=True)
 
@@ -50,7 +55,7 @@ async def main() -> None:
         # get the image from the server
         response = await get_api_response(
             client,
-            "http://0.0.0.0:3000/api/v0/inference/image",
+            f"http://{args.host}:{args.port}/api/v0/inference/image",
         )
         if response is not None and "Success" in response:
             rr.set_time_sequence("session", response["Success"]["timestamp_nanos"])
@@ -58,7 +63,7 @@ async def main() -> None:
 
         # get the inference result from the server
         response = await get_api_response(
-            client, "http://0.0.0.0:3000/api/v0/inference/result"
+            client, f"http://{args.host}:{args.port}/api/v0/inference/result"
         )
         if response is not None and "Success" in response:
             rr.set_time_sequence("session", response["Success"]["timestamp_nanos"])

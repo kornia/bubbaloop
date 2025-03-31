@@ -1,11 +1,5 @@
-use kornia_yolo::BoundingBox;
+use crate::cu29::msgs::InferenceResultMsg;
 use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, Serialize)]
-pub struct InferenceResult {
-    pub timestamp_nanos: u64,
-    pub detections: Vec<BoundingBox>,
-}
 
 /// The query for the inference request
 #[derive(Debug, Deserialize, Serialize)]
@@ -14,6 +8,6 @@ pub struct InferenceQuery;
 /// The response of the inference request
 #[derive(Debug, Serialize)]
 pub enum InferenceResponse {
-    Success(InferenceResult),
+    Success(InferenceResultMsg),
     Error { error: String },
 }

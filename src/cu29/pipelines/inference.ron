@@ -29,11 +29,17 @@
         (
             id: "inference",
             type: "crate::cu29::tasks::Inference",
-        )
+        ),
+        (
+            id: "broadcast",
+            type: "crate::cu29::tasks::Broadcast",
+        ),
     ],
     cnx: [
         (src: "cam0", dst: "printer", msg: "crate::cu29::msgs::ImageRgb8Msg"),
+        (src: "cam0", dst: "broadcast", msg: "crate::cu29::msgs::ImageRgb8Msg"),
         (src: "cam0", dst: "inference", msg: "crate::cu29::msgs::ImageRgb8Msg"),
+        (src: "inference", dst: "broadcast", msg: "crate::cu29::msgs::InferenceResultMsg"),
     ],
     logging: (
         slab_size_mib: 1024, // Preallocates 1GiB of memory map file at a time

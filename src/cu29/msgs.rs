@@ -1,3 +1,4 @@
+use kornia_yolo::BoundingBox;
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
 
 type ImageRgb8 = kornia::image::Image<u8, 3>;
@@ -133,5 +134,79 @@ impl<C> bincode::de::Decode<C> for ImageGray8Msg {
         let image = ImageGray8::new([rows, cols].into(), data)
             .map_err(|e| bincode::error::DecodeError::OtherString(e.to_string()))?;
         Ok(Self(image))
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BoundingBoxMsg(pub BoundingBox);
+
+impl Default for BoundingBoxMsg {
+    fn default() -> Self {
+        Self(BoundingBox {
+            xmin: 0.0,
+            ymin: 0.0,
+            xmax: 0.0,
+            ymax: 0.0,
+            confidence: 0.0,
+            class: 0,
+        })
+    }
+}
+
+impl bincode::enc::Encode for BoundingBoxMsg {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        bincode::Encode::encode(&self.0.xmin, encoder)?;
+        bincode::Encode::encode(&self.0.ymin, encoder)?;
+        bincode::Encode::encode(&self.0.xmax, encoder)?;
+        bincode::Encode::encode(&self.0.ymax, encoder)?;
+        bincode::Encode::encode(&self.0.confidence, encoder)?;
+        bincode::Encode::encode(&self.0.class, encoder)?;
+        Ok(())
+    }
+}
+
+impl<C> bincode::de::Decode<C> for BoundingBoxMsg {
+    fn decode<D: bincode::de::Decoder<Context = C>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        Ok(Self(BoundingBox {
+            xmin: bincode::Decode::decode(decoder)?,
+            ymin: bincode::Decode::decode(decoder)?,
+            xmax: bincode::Decode::decode(decoder)?,
+            ymax: bincode::Decode::decode(decoder)?,
+            confidence: bincode::Decode::decode(decoder)?,
+            class: bincode::Decode::decode(decoder)?,
+        }))
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct InferenceResultMsg {
+    pub timestamp_nanos: u64,
+    pub detections: Vec<BoundingBoxMsg>,
+}
+
+impl bincode::enc::Encode for InferenceResultMsg {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        bincode::Encode::encode(&self.timestamp_nanos, encoder)?;
+        bincode::Encode::encode(&self.detections, encoder)?;
+        Ok(())
+    }
+}
+
+impl<C> bincode::de::Decode<C> for InferenceResultMsg {
+    fn decode<D: bincode::de::Decoder<Context = C>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        Ok(Self {
+            timestamp_nanos: bincode::Decode::decode(decoder)?,
+            detections: bincode::Decode::decode(decoder)?,
+        })
     }
 }
