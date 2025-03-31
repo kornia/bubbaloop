@@ -1,11 +1,10 @@
-use crate::api::models::{camera::CameraResult, inference::InferenceResult};
-use circular_buffer::CircularBuffer;
+use crate::{api::models::camera::CameraResult, cu29::msgs::InferenceResultMsg};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::atomic::AtomicBool,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
 };
 
 pub static SERVER_GLOBAL_STATE: Lazy<ServerGlobalState> = Lazy::new(ServerGlobalState::default);
@@ -16,11 +15,38 @@ pub type PipelineResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 #[derive(Clone, Default)]
 pub struct PipelineStore(pub Arc<Mutex<HashMap<String, PipelineHandle>>>);
 
+#[derive(Clone)]
+pub struct SenderReceiver<T> {
+    pub tx: Arc<tokio::sync::broadcast::Sender<T>>,
+}
+
+impl<T: Clone> SenderReceiver<T> {
+    pub fn new() -> Self {
+        let (tx, _) = tokio::sync::broadcast::channel(5);
+        Self { tx: Arc::new(tx) }
+    }
+}
+
+impl<T: Clone> Default for SenderReceiver<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Global store of all results managed by the server
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ResultStore {
-    pub inference: Arc<RwLock<CircularBuffer<5, InferenceResult>>>,
-    pub image: Arc<RwLock<CircularBuffer<5, CameraResult>>>,
+    pub inference: SenderReceiver<InferenceResultMsg>,
+    pub image: SenderReceiver<CameraResult>,
+}
+
+impl Default for ResultStore {
+    fn default() -> Self {
+        Self {
+            inference: SenderReceiver::new(),
+            image: SenderReceiver::new(),
+        }
+    }
 }
 
 /// Global state of the server
