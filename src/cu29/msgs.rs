@@ -136,7 +136,7 @@ impl<C> bincode::de::Decode<C> for ImageGray8Msg {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, bincode::Encode, bincode::Decode)]
 pub struct BoundingBox {
     pub xmin: f32,
     pub ymin: f32,
@@ -146,7 +146,7 @@ pub struct BoundingBox {
     pub class: u32,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, bincode::Encode, bincode::Decode)]
 pub struct BoundingBoxMsg(pub BoundingBox);
 
 impl Default for BoundingBoxMsg {
@@ -162,60 +162,23 @@ impl Default for BoundingBoxMsg {
     }
 }
 
-impl bincode::enc::Encode for BoundingBoxMsg {
-    fn encode<E: bincode::enc::Encoder>(
-        &self,
-        encoder: &mut E,
-    ) -> Result<(), bincode::error::EncodeError> {
-        bincode::Encode::encode(&self.0.xmin, encoder)?;
-        bincode::Encode::encode(&self.0.ymin, encoder)?;
-        bincode::Encode::encode(&self.0.xmax, encoder)?;
-        bincode::Encode::encode(&self.0.ymax, encoder)?;
-        bincode::Encode::encode(&self.0.confidence, encoder)?;
-        bincode::Encode::encode(&self.0.class, encoder)?;
-        Ok(())
-    }
-}
-
-impl<C> bincode::de::Decode<C> for BoundingBoxMsg {
-    fn decode<D: bincode::de::Decoder<Context = C>>(
-        decoder: &mut D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(Self(BoundingBox {
-            xmin: bincode::Decode::decode(decoder)?,
-            ymin: bincode::Decode::decode(decoder)?,
-            xmax: bincode::Decode::decode(decoder)?,
-            ymax: bincode::Decode::decode(decoder)?,
-            confidence: bincode::Decode::decode(decoder)?,
-            class: bincode::Decode::decode(decoder)?,
-        }))
-    }
-}
-
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, bincode::Encode, bincode::Decode)]
 pub struct InferenceResultMsg {
     pub timestamp_nanos: u64,
     pub detections: Vec<BoundingBoxMsg>,
 }
 
-impl bincode::enc::Encode for InferenceResultMsg {
-    fn encode<E: bincode::enc::Encoder>(
-        &self,
-        encoder: &mut E,
-    ) -> Result<(), bincode::error::EncodeError> {
-        bincode::Encode::encode(&self.timestamp_nanos, encoder)?;
-        bincode::Encode::encode(&self.detections, encoder)?;
-        Ok(())
-    }
+#[derive(Clone, Debug, Serialize, bincode::Encode, bincode::Decode)]
+pub struct EncodedImage {
+    pub data: Vec<u8>,
+    pub encoding: String,
 }
 
-impl<C> bincode::de::Decode<C> for InferenceResultMsg {
-    fn decode<D: bincode::de::Decoder<Context = C>>(
-        decoder: &mut D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(Self {
-            timestamp_nanos: bincode::Decode::decode(decoder)?,
-            detections: bincode::Decode::decode(decoder)?,
-        })
+impl Default for EncodedImage {
+    fn default() -> Self {
+        Self {
+            data: vec![],
+            encoding: "".to_string(),
+        }
     }
 }

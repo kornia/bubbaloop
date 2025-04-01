@@ -5,6 +5,7 @@ import asyncio
 import httpx
 import rerun as rr
 import numpy as np
+import kornia_rs as kr
 
 
 async def get_api_response(client: httpx.AsyncClient, url: str) -> dict | None:
@@ -22,12 +23,11 @@ async def get_api_response(client: httpx.AsyncClient, url: str) -> dict | None:
 
 
 def response_to_image(response: dict) -> rr.Image:
+    # decode the image
+    decoder = kr.ImageDecoder()
     image_json = response["Success"]["image"]
-    cols = image_json["cols"]
-    rows = image_json["rows"]
-    image = np.array(image_json["data"])
-    image = image.reshape((rows, cols, 3))
-    return rr.Image(image)
+    data = decoder.decode(bytes(image_json["data"]))
+    return rr.Image(data)
 
 
 def response_to_inference_result(response: dict) -> rr.Boxes2D:
