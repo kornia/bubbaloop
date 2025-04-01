@@ -31,5 +31,3 @@ whoami = "1.5"
 
 cu29 = "0.7.0"
 cu29-helpers = "0.7.0"
-
-jpeg-encoder = "0.6.1"
