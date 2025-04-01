@@ -1,3 +1,5 @@
+use serde::{ser::SerializeStruct, Deserialize, Serialize};
+
 type ImageRgb8 = kornia::image::Image<u8, 3>;
 type ImageGray8 = kornia::image::Image<u8, 1>;
 
@@ -53,6 +55,39 @@ impl<C> bincode::de::Decode<C> for ImageRgb8Msg {
     }
 }
 
+impl Serialize for ImageRgb8Msg {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut s = serializer.serialize_struct("ImageRgb8Msg", 3)?;
+        s.serialize_field("rows", &self.0.rows())?;
+        s.serialize_field("cols", &self.0.cols())?;
+        s.serialize_field("data", &self.0.as_slice())?;
+        s.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ImageRgb8Msg {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ImageData {
+            rows: usize,
+            cols: usize,
+            data: Vec<u8>,
+        }
+
+        let data = ImageData::deserialize(deserializer)?;
+        Ok(Self(
+            ImageRgb8::new([data.rows, data.cols].into(), data.data)
+                .map_err(serde::de::Error::custom)?,
+        ))
+    }
+}
+
 #[derive(Clone)]
 pub struct ImageGray8Msg(pub ImageGray8);
 
@@ -98,5 +133,89 @@ impl<C> bincode::de::Decode<C> for ImageGray8Msg {
         let image = ImageGray8::new([rows, cols].into(), data)
             .map_err(|e| bincode::error::DecodeError::OtherString(e.to_string()))?;
         Ok(Self(image))
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BoundingBox {
+    pub xmin: f32,
+    pub ymin: f32,
+    pub xmax: f32,
+    pub ymax: f32,
+    pub confidence: f32,
+    pub class: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BoundingBoxMsg(pub BoundingBox);
+
+impl Default for BoundingBoxMsg {
+    fn default() -> Self {
+        Self(BoundingBox {
+            xmin: 0.0,
+            ymin: 0.0,
+            xmax: 0.0,
+            ymax: 0.0,
+            confidence: 0.0,
+            class: 0,
+        })
+    }
+}
+
+impl bincode::enc::Encode for BoundingBoxMsg {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        bincode::Encode::encode(&self.0.xmin, encoder)?;
+        bincode::Encode::encode(&self.0.ymin, encoder)?;
+        bincode::Encode::encode(&self.0.xmax, encoder)?;
+        bincode::Encode::encode(&self.0.ymax, encoder)?;
+        bincode::Encode::encode(&self.0.confidence, encoder)?;
+        bincode::Encode::encode(&self.0.class, encoder)?;
+        Ok(())
+    }
+}
+
+impl<C> bincode::de::Decode<C> for BoundingBoxMsg {
+    fn decode<D: bincode::de::Decoder<Context = C>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        Ok(Self(BoundingBox {
+            xmin: bincode::Decode::decode(decoder)?,
+            ymin: bincode::Decode::decode(decoder)?,
+            xmax: bincode::Decode::decode(decoder)?,
+            ymax: bincode::Decode::decode(decoder)?,
+            confidence: bincode::Decode::decode(decoder)?,
+            class: bincode::Decode::decode(decoder)?,
+        }))
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct InferenceResultMsg {
+    pub timestamp_nanos: u64,
+    pub detections: Vec<BoundingBoxMsg>,
+}
+
+impl bincode::enc::Encode for InferenceResultMsg {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        bincode::Encode::encode(&self.timestamp_nanos, encoder)?;
+        bincode::Encode::encode(&self.detections, encoder)?;
+        Ok(())
+    }
+}
+
+impl<C> bincode::de::Decode<C> for InferenceResultMsg {
+    fn decode<D: bincode::de::Decoder<Context = C>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        Ok(Self {
+            timestamp_nanos: bincode::Decode::decode(decoder)?,
+            detections: bincode::Decode::decode(decoder)?,
+        })
     }
 }

@@ -1,5 +1,8 @@
-mod model;
-pub use model::*;
+mod broadcast;
+pub use broadcast::*;
+
+mod inference;
+pub use inference::*;
 
 mod printer;
 pub use printer::*;

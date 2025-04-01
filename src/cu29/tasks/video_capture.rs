@@ -1,7 +1,6 @@
+use crate::cu29::msgs::ImageRgb8Msg;
 use cu29::prelude::*;
 use kornia::io::stream::{CameraCapture, RTSPCameraConfig, V4L2CameraConfig};
-
-use crate::cu29::msgs::ImageRgb8Msg;
 
 pub struct VideoCapture(pub CameraCapture);
 
