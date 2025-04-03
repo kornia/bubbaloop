@@ -24,27 +24,35 @@ impl<'cl> CuTask<'cl> for Inference {
         output: Self::Output,
     ) -> Result<(), CuError> {
         let (img_msg, text_msg) = input;
+        // clear the payload of the output message to avoid
+        // sending the same text message multiple times even if we do not receive a new image
+        output.clear_payload();
+
         let Some(img) = img_msg.payload() else {
-            log::debug!("no image");
             return Ok(());
         };
+
         let Some(text) = text_msg.payload() else {
-            log::debug!("no text");
             return Ok(());
         };
 
         // run inference of the model
-        let response = dummy_inference(&img, &text)
+        let response = dummy_inference(img, text)
             .map_err(|e| CuError::new_with_cause("Failed to run inference", e))?;
 
-        log::debug!("response: {:?}", response);
+        let response_msg = ChatTextMsg { text: response };
+        log::debug!("response: {:?}", response_msg);
 
-        output.set_payload(ChatTextMsg { text: response });
+        output.set_payload(response_msg);
 
         Ok(())
     }
 }
 
 fn dummy_inference(img: &ImageRgb8Msg, text: &ChatTextMsg) -> Result<String, CuError> {
-    Ok(format!("hello {}: {:?}", text.text, img.size()))
+    Ok(format!(
+        "dummy inference: {} -- image size: {:?}",
+        text.text,
+        img.size()
+    ))
 }

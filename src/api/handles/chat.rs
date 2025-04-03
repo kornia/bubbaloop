@@ -13,8 +13,6 @@ pub async fn post_chat_request(
         log::error!("Failed to send message to inference channel: {}", e);
     }
 
-    println!("waiting for response");
-
     let Ok(response) = result_store.inference.result.rx.lock().unwrap().recv() else {
         return Json(ChatResponse::Error {
             error: "Failed to receive message from inference channel".to_string(),
@@ -22,7 +20,6 @@ pub async fn post_chat_request(
     };
 
     let response = ChatResponse::Success(response);
-    println!("response: {:?}", response);
 
     Json(response)
 }

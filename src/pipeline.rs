@@ -40,6 +40,12 @@ pub struct SenderReceiver {
     pub tx: std::sync::mpsc::Sender<String>,
 }
 
+impl Default for SenderReceiver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SenderReceiver {
     pub fn new() -> Self {
         let (tx, rx) = std::sync::mpsc::channel();

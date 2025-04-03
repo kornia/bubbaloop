@@ -17,6 +17,11 @@ impl<'cl> CuSrcTask<'cl> for TextCapture {
     }
 
     fn process(&mut self, _clock: &RobotClock, output: Self::Output) -> Result<(), CuError> {
+        // clear the payload of the output message to avoid
+        // sending the same text message multiple times even if we do not receive a new image
+        output.clear_payload();
+
+        // receive the text message from the rest api
         let Ok(text) = SERVER_GLOBAL_STATE
             .result_store
             .inference
@@ -26,12 +31,10 @@ impl<'cl> CuSrcTask<'cl> for TextCapture {
             .unwrap()
             .try_recv()
         else {
-            log::debug!("no text");
             return Ok(());
         };
 
-        log::debug!("text: {:?}", text);
-
+        // forward the text message to the inference task
         output.set_payload(ChatTextMsg { text });
 
         Ok(())
