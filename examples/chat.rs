@@ -1,3 +1,4 @@
+use argh::FromArgs;
 use bubbaloop::api::models::chat::{ChatQuery, ChatResponse};
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -11,18 +12,40 @@ use ratatui::{
     Terminal,
 };
 
+const DEFAULT_HOST: &str = "localhost";
+const DEFAULT_PORT: u16 = 3000;
+
+#[derive(FromArgs)]
+#[argh(description = "Bubbaloop chat client")]
+struct CLIArgs {
+    #[argh(option, short = 'h', default = "DEFAULT_HOST.to_string()")]
+    /// the host to connect to
+    host: String,
+
+    #[argh(option, short = 'p', default = "DEFAULT_PORT")]
+    /// the port to connect to
+    port: u16,
+}
+
+struct ChatAppConfig {
+    host: String,
+    port: u16,
+}
+
 struct ChatApp {
     messages: Vec<String>,
     input: String,
     scroll: usize,
+    config: ChatAppConfig,
 }
 
 impl ChatApp {
-    fn new() -> Self {
+    fn new(config: ChatAppConfig) -> Self {
         Self {
             messages: Vec::new(),
             input: String::new(),
             scroll: 0,
+            config,
         }
     }
 
@@ -30,7 +53,10 @@ impl ChatApp {
     async fn process_message(&self, input: &str) -> Result<String, Box<dyn std::error::Error>> {
         let client = reqwest::Client::new();
         let response = client
-            .post("http://localhost:3000/api/v0/inference/chat")
+            .post(format!(
+                "http://{}:{}/api/v0/inference/chat",
+                self.config.host, self.config.port
+            ))
             .json(&ChatQuery {
                 message: input.to_string(),
             })
@@ -126,7 +152,12 @@ impl ChatApp {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut app = ChatApp::new();
+    let args: CLIArgs = argh::from_env();
+    let config = ChatAppConfig {
+        host: args.host,
+        port: args.port,
+    };
+    let mut app = ChatApp::new(config);
     app.run().await?;
     Ok(())
 }
