@@ -1,6 +1,6 @@
 use crate::{
     api::models::camera::CameraResult,
-    cu29::msgs::{EncodedImage, ImageRgb8Msg, InferenceResultMsg},
+    cu29::msgs::{ChatTextMsg, EncodedImage, ImageRgb8Msg},
     pipeline::SERVER_GLOBAL_STATE,
 };
 use cu29::prelude::*;
@@ -13,7 +13,7 @@ pub struct Broadcast {
 impl Freezable for Broadcast {}
 
 impl<'cl> CuSinkTask<'cl> for Broadcast {
-    type Input = input_msg!('cl, ImageRgb8Msg, InferenceResultMsg);
+    type Input = input_msg!('cl, ImageRgb8Msg, ChatTextMsg);
 
     fn new(_config: Option<&ComponentConfig>) -> Result<Self, CuError>
     where
@@ -59,24 +59,15 @@ impl<'cl> CuSinkTask<'cl> for Broadcast {
                 .ok();
         }
 
-        if let Some(inference_result) = inference_msg.payload() {
-            // send the inference result to the global state
+        if let Some(chat_result) = inference_msg.payload() {
+            // send the chat result to the global state
             SERVER_GLOBAL_STATE
                 .result_store
                 .inference
+                .result
                 .tx
-                .send(inference_result.clone())
-                .map_err(|e| {
-                    if matches!(e, tokio::sync::broadcast::error::SendError(_)) {
-                        Ok(())
-                    } else {
-                        Err(CuError::new_with_cause(
-                            "Failed to send inference result",
-                            e,
-                        ))
-                    }
-                })
-                .ok();
+                .send(chat_result.text.clone())
+                .map_err(|e| CuError::new_with_cause("Failed to send chat result", e))?;
         }
 
         Ok(())

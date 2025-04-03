@@ -1,4 +1,4 @@
-use crate::{api::models::camera::CameraResult, cu29::msgs::InferenceResultMsg};
+use crate::api::models::camera::CameraResult;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -16,35 +16,67 @@ pub type PipelineResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 pub struct PipelineStore(pub Arc<Mutex<HashMap<String, PipelineHandle>>>);
 
 #[derive(Clone)]
-pub struct SenderReceiver<T> {
+pub struct BroadcastSender<T> {
     pub tx: Arc<tokio::sync::broadcast::Sender<T>>,
 }
 
-impl<T: Clone> SenderReceiver<T> {
+impl<T: Clone> BroadcastSender<T> {
     pub fn new() -> Self {
         let (tx, _) = tokio::sync::broadcast::channel(5);
         Self { tx: Arc::new(tx) }
     }
 }
 
-impl<T: Clone> Default for SenderReceiver<T> {
+impl<T: Clone> Default for BroadcastSender<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A sender and receiver for a single message
+#[derive(Clone)]
+pub struct SenderReceiver {
+    pub rx: Arc<Mutex<std::sync::mpsc::Receiver<String>>>,
+    pub tx: std::sync::mpsc::Sender<String>,
+}
+
+impl SenderReceiver {
+    pub fn new() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Self {
+            rx: Arc::new(Mutex::new(rx)),
+            tx,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct InferenceSenderReceiver {
+    pub query: SenderReceiver,
+    pub result: SenderReceiver,
+}
+
+impl Default for InferenceSenderReceiver {
+    fn default() -> Self {
+        Self {
+            query: SenderReceiver::new(),
+            result: SenderReceiver::new(),
+        }
     }
 }
 
 /// Global store of all results managed by the server
 #[derive(Clone)]
 pub struct ResultStore {
-    pub inference: SenderReceiver<InferenceResultMsg>,
-    pub image: SenderReceiver<CameraResult>,
+    pub inference: InferenceSenderReceiver,
+    pub image: BroadcastSender<CameraResult>,
 }
 
 impl Default for ResultStore {
     fn default() -> Self {
         Self {
-            inference: SenderReceiver::new(),
-            image: SenderReceiver::new(),
+            inference: InferenceSenderReceiver::default(),
+            image: BroadcastSender::new(),
         }
     }
 }

@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // start the api server
     let api = bubbaloop::api::ApiServer;
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async move {
         api.start(addr, global_state.pipeline_store, global_state.result_store)
             .await

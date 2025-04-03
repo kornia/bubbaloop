@@ -15,3 +15,6 @@ pub use video_capture::*;
 
 mod video_writer;
 pub use video_writer::*;
+
+mod text_capture;
+pub use text_capture::*;

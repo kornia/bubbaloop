@@ -182,3 +182,16 @@ impl Default for EncodedImage {
         }
     }
 }
+
+#[derive(Clone, Debug, Serialize, bincode::Encode, bincode::Decode)]
+pub struct ChatTextMsg {
+    pub text: String,
+}
+
+impl Default for ChatTextMsg {
+    fn default() -> Self {
+        Self {
+            text: "".to_string(),
+        }
+    }
+}
