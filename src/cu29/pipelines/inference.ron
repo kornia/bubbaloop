@@ -19,13 +19,10 @@
                 "source_type": "rtsp",
                 // URL of the RTSP camera
                 // rtsp://<username>:<password>@<ip>:<port>/<stream>
-                "source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
+                //"source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
+                "source_uri": "rtsp://tapo_terrace:123456789@192.168.1.151:554/stream2",
             }
         ),
-        //(
-        //    id: "printer",
-        //    type: "crate::cu29::tasks::Printer",
-        //),
         (
             id: "inference",
             type: "crate::cu29::tasks::Inference",
@@ -44,7 +41,6 @@
         (src: "text0", dst: "inference", msg: "crate::cu29::msgs::ChatTextMsg"),
         (src: "cam0", dst: "broadcast", msg: "crate::cu29::msgs::ImageRgb8Msg"),
         (src: "inference", dst: "broadcast", msg: "crate::cu29::msgs::ChatTextMsg"),
-        //(src: "cam0", dst: "printer", msg: "crate::cu29::msgs::ImageRgb8Msg"),
     ],
     logging: (
         slab_size_mib: 1024, // Preallocates 1GiB of memory map file at a time
