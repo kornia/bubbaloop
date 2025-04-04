@@ -1,60 +1,68 @@
-//extern crate intel_mkl_src;
-
-use anyhow::{Error as E, Result};
+use super::PaligemmaError;
 use candle_core::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
-use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use candle_transformers::models::paligemma::{Config, Model};
-use hf_hub::{api::sync::Api, Repo, RepoType};
-use kornia::image::Image;
+use candle_transformers::models::paligemma::Model;
 use tokenizers::Tokenizer;
+
+pub struct TextGenerationConfig {
+    pub seed: u64,
+    pub temp: Option<f64>,
+    pub top_p: Option<f64>,
+    pub repeat_penalty: f32,
+    pub repeat_last_n: usize,
+}
 
 pub struct TextGeneration {
     model: Model,
     device: Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
-    repeat_penalty: f32,
-    repeat_last_n: usize,
+    config: TextGenerationConfig,
 }
 
 impl TextGeneration {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         model: Model,
         tokenizer: Tokenizer,
-        seed: u64,
-        temp: Option<f64>,
-        top_p: Option<f64>,
-        repeat_penalty: f32,
-        repeat_last_n: usize,
-        device: &Device,
+        device: Device,
+        config: TextGenerationConfig,
     ) -> Self {
-        let logits_processor = LogitsProcessor::new(seed, temp, top_p);
+        let logits_processor = LogitsProcessor::new(config.seed, config.temp, config.top_p);
         Self {
             model,
             tokenizer: TokenOutputStream::new(tokenizer),
             logits_processor,
-            repeat_penalty,
-            repeat_last_n,
-            device: device.clone(),
+            config,
+            device,
         }
     }
 
-    pub fn run(&mut self, image: &Tensor, prompt: &str, sample_len: usize) -> Result<String> {
+    #[inline]
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
+    pub fn run(
+        &mut self,
+        image: &Tensor,
+        prompt: &str,
+        sample_len: usize,
+    ) -> Result<String, PaligemmaError> {
         use std::io::Write;
         self.tokenizer.clear();
         let mut tokens = self
             .tokenizer
             .tokenizer()
             .encode(prompt, true)
-            .map_err(E::msg)?
+            .map_err(PaligemmaError::TokenizerError)?
             .get_ids()
             .to_vec();
+        let mut response = String::new();
         for &t in tokens.iter() {
             if let Some(t) = self.tokenizer.next_token(t)? {
-                print!("{t}")
+                print!("{t}");
+                response.push_str(&t);
             }
         }
         std::io::stdout().flush()?;
@@ -62,9 +70,8 @@ impl TextGeneration {
         let mut generated_tokens = 0usize;
         let eos_token = match self.tokenizer.get_token("<eos>") {
             Some(token) => token,
-            None => anyhow::bail!("cannot find the <eos> token"),
+            None => return Err(PaligemmaError::EosTokenNotFound),
         };
-        let mut response = String::new();
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
@@ -74,16 +81,16 @@ impl TextGeneration {
             let logits = if index > 0 {
                 self.model.forward(&input)?
             } else {
-                self.model.setup(&image, &input)?
+                self.model.setup(image, &input)?
             };
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-            let logits = if self.repeat_penalty == 1. {
+            let logits = if self.config.repeat_penalty == 1. {
                 logits
             } else {
-                let start_at = tokens.len().saturating_sub(self.repeat_last_n);
+                let start_at = tokens.len().saturating_sub(self.config.repeat_last_n);
                 candle_transformers::utils::apply_repeat_penalty(
                     &logits,
-                    self.repeat_penalty,
+                    self.config.repeat_penalty,
                     &tokens[start_at..],
                 )?
             };
@@ -101,7 +108,7 @@ impl TextGeneration {
             }
         }
         let dt = start_gen.elapsed();
-        if let Some(rest) = self.tokenizer.decode_rest().map_err(E::msg)? {
+        if let Some(rest) = self.tokenizer.decode_rest()? {
             print!("{rest}");
             response.push_str(&rest);
         }
@@ -110,6 +117,10 @@ impl TextGeneration {
             "\n{generated_tokens} tokens generated ({:.2} token/s)",
             generated_tokens as f64 / dt.as_secs_f64(),
         );
+
+        // postprocess the response by removing the prompt
+        let response = response[prompt.len()..].to_string();
+
         Ok(response)
     }
 }

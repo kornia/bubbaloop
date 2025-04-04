@@ -32,13 +32,12 @@ whoami = "1.5"
 cu29 = "0.7.0"
 cu29-helpers = "0.7.0"
 
-
-candle-core = { version = "0.8.4"}
-candle-transformers = { version = "0.8.4"}
+# TODO: port to kornia-dnn
+candle-core = { version = "0.8.4", features = ["cuda"] }
+candle-transformers = { version = "0.8.4", features = ["cuda"] }
 candle-examples = "0.8.4"
-candle-nn = { version = "0.8.4"}
+candle-nn = { version = "0.8.4", features = ["cuda"] }
 hf-hub = "0.4.2"
-anyhow = "1.0.97"
 tokenizers = "0.21.1"
 thiserror = "2.0.12"
 

@@ -19,7 +19,12 @@ impl<'cl> CuTask<'cl> for Inference {
     where
         Self: Sized,
     {
-        let paligemma = Paligemma::new(PaligemmaConfig::default())
+        let config = PaligemmaConfig {
+            use_cuda: true,
+            ..Default::default()
+        };
+
+        let paligemma = Paligemma::new(config)
             .map_err(|e| CuError::new_with_cause("Failed to create Paligemma", e))?;
 
         Ok(Self { paligemma })

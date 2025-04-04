@@ -1,13 +1,10 @@
+use super::{TextGeneration, TextGenerationConfig};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::paligemma::{Config, Model};
 use hf_hub::{Repo, RepoType};
 use kornia::image::Image;
 use tokenizers::Tokenizer;
-
-use crate::api::handles::pipeline;
-
-use super::TextGeneration;
 
 #[derive(thiserror::Error, Debug)]
 pub enum PaligemmaError {
@@ -18,18 +15,37 @@ pub enum PaligemmaError {
     CandleError(#[from] candle_core::Error),
 
     #[error(transparent)]
-    TokenizerError(#[from] Box<dyn std::error::Error + Send + Sync>),
+    ImageError(#[from] kornia::image::ImageError),
 
     #[error(transparent)]
-    ImageError(#[from] kornia::image::ImageError),
+    TokenizerError(#[from] tokenizers::Error),
+
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
+
+    #[error("Cannot find the <eos> token")]
+    EosTokenNotFound,
 }
 
 pub struct PaligemmaConfig {
-    seed: u64,
-    temp: Option<f64>,
-    top_p: Option<f64>,
-    repeat_penalty: f32,
-    repeat_last_n: usize,
+    pub seed: u64,
+    pub temp: Option<f64>,
+    pub top_p: Option<f64>,
+    pub repeat_penalty: f32,
+    pub repeat_last_n: usize,
+    pub use_cuda: bool,
+}
+
+impl From<PaligemmaConfig> for TextGenerationConfig {
+    fn from(config: PaligemmaConfig) -> Self {
+        TextGenerationConfig {
+            seed: config.seed,
+            temp: config.temp,
+            top_p: config.top_p,
+            repeat_penalty: config.repeat_penalty,
+            repeat_last_n: config.repeat_last_n,
+        }
+    }
 }
 
 impl Default for PaligemmaConfig {
@@ -40,37 +56,36 @@ impl Default for PaligemmaConfig {
             top_p: Some(0.9),
             repeat_penalty: 1.1,
             repeat_last_n: 64,
+            use_cuda: false,
         }
     }
 }
 
 pub struct Paligemma {
     pipeline: TextGeneration,
-    device: Device,
+    img_buf: Image<u8, 3>,
     dtype: DType,
-    config: PaligemmaConfig,
 }
 
 impl Paligemma {
     pub fn new(config: PaligemmaConfig) -> Result<Self, PaligemmaError> {
-        let device = Device::Cpu;
+        let device = if config.use_cuda {
+            Device::cuda_if_available(0).unwrap_or(Device::Cpu)
+        } else {
+            Device::Cpu
+        };
+        // TODO: experiment more with the dtype
+        //let dtype = DType::BF16;
         let dtype = DType::F32;
+
         let (model, tokenizer) = Self::load_model(dtype, &device)?;
-        let pipeline = TextGeneration::new(
-            model,
-            tokenizer,
-            config.seed,
-            config.temp,
-            config.top_p,
-            config.repeat_penalty,
-            config.repeat_last_n,
-            &device,
-        );
+        let img_buf = Image::from_size_val([224, 224].into(), 0)?;
+        let pipeline = TextGeneration::new(model, tokenizer, device, config.into());
+
         Ok(Self {
-            device,
-            dtype,
             pipeline,
-            config,
+            img_buf,
+            dtype,
         })
     }
 }
@@ -83,22 +98,21 @@ impl Paligemma {
         sample_len: usize,
     ) -> Result<String, PaligemmaError> {
         // resize image to 224x224
-        let mut img_224 = Image::from_size_val([224, 224].into(), 0)?;
         kornia::imgproc::resize::resize_fast(
             image,
-            &mut img_224,
+            &mut self.img_buf,
             kornia::imgproc::interpolation::InterpolationMode::Bilinear,
         )?;
 
         // convert to tensor with shape [1, 3, 224, 224]
         let image_t = Tensor::from_raw_buffer(
-            img_224.as_slice(),
+            self.img_buf.as_slice(),
             DType::U8,
-            &[img_224.rows(), img_224.cols(), 3],
-            &self.device,
+            &[self.img_buf.rows(), self.img_buf.cols(), 3],
+            self.pipeline.device(),
         )?
+        .to_dtype(self.dtype)?
         .permute((2, 0, 1))?
-        .to_dtype(DType::F32)?
         .affine(2. / 255., -1.)?
         .unsqueeze(0)?;
 
@@ -125,7 +139,7 @@ impl Paligemma {
         let tokenizer = Tokenizer::from_file(tokenizer_filename)?;
 
         let config = Config::paligemma_3b_224();
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
 
         let model = Model::new(&config, vb)?;
 
