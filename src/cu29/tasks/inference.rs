@@ -1,8 +1,13 @@
-use crate::cu29::msgs::{ChatTextMsg, ImageRgb8Msg};
+use crate::{
+    cu29::msgs::{ChatTextMsg, ImageRgb8Msg},
+    models::paligemma::{Paligemma, PaligemmaConfig},
+};
 use cu29::prelude::*;
 
 /// Task that runs inference on an image
-pub struct Inference;
+pub struct Inference {
+    paligemma: Paligemma,
+}
 
 impl Freezable for Inference {}
 
@@ -14,7 +19,10 @@ impl<'cl> CuTask<'cl> for Inference {
     where
         Self: Sized,
     {
-        Ok(Self)
+        let paligemma = Paligemma::new(PaligemmaConfig::default())
+            .map_err(|e| CuError::new_with_cause("Failed to create Paligemma", e))?;
+
+        Ok(Self { paligemma })
     }
 
     fn process(
@@ -37,7 +45,9 @@ impl<'cl> CuTask<'cl> for Inference {
         };
 
         // run inference of the model
-        let response = dummy_inference(img, text)
+        let response = self
+            .paligemma
+            .inference(&img.0, &text.text, 100)
             .map_err(|e| CuError::new_with_cause("Failed to run inference", e))?;
 
         let response_msg = ChatTextMsg { text: response };
@@ -47,12 +57,4 @@ impl<'cl> CuTask<'cl> for Inference {
 
         Ok(())
     }
-}
-
-fn dummy_inference(img: &ImageRgb8Msg, text: &ChatTextMsg) -> Result<String, CuError> {
-    Ok(format!(
-        "dummy inference: {} -- image size: {:?}",
-        text.text,
-        img.size()
-    ))
 }

@@ -32,6 +32,16 @@ whoami = "1.5"
 cu29 = "0.7.0"
 cu29-helpers = "0.7.0"
 
+
+candle-core = { version = "0.8.4"}
+candle-transformers = { version = "0.8.4"}
+candle-examples = "0.8.4"
+candle-nn = { version = "0.8.4"}
+hf-hub = "0.4.2"
+anyhow = "1.0.97"
+tokenizers = "0.21.1"
+thiserror = "2.0.12"
+
 [dev-dependencies]
 crossterm = "0.28.1"
 ratatui = "0.29.0"
