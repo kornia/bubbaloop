@@ -4,10 +4,10 @@ use crate::{
     pipeline::SERVER_GLOBAL_STATE,
 };
 use cu29::prelude::*;
-use kornia::io::jpeg::ImageEncoder;
+use kornia::io::jpegturbo::JpegTurboEncoder;
 
 pub struct Broadcast {
-    jpeg_encoder: ImageEncoder,
+    jpeg_encoder: JpegTurboEncoder,
 }
 
 impl Freezable for Broadcast {}
@@ -20,7 +20,7 @@ impl<'cl> CuSinkTask<'cl> for Broadcast {
         Self: Sized,
     {
         Ok(Self {
-            jpeg_encoder: ImageEncoder::new()
+            jpeg_encoder: JpegTurboEncoder::new()
                 .map_err(|e| CuError::new_with_cause("Failed to create jpeg encoder", e))?,
         })
     }
@@ -32,7 +32,7 @@ impl<'cl> CuSinkTask<'cl> for Broadcast {
             // encode the image to jpeg before broadcasting
             let encoded_image = self
                 .jpeg_encoder
-                .encode(img)
+                .encode_rgb8(img)
                 .map_err(|e| CuError::new_with_cause("Failed to encode image", e))?;
 
             // send the camera image to the global state

@@ -75,7 +75,7 @@ pub async fn compute_mean_std(query: Json<MeanStdQuery>) -> impl IntoResponse {
         .progress_with(pb.clone())
         .for_each(|image_path| {
             // read the image
-            let image = match kornia::io::functional::read_image_any(&image_path) {
+            let image = match kornia::io::functional::read_image_any_rgb8(&image_path) {
                 Ok(image) => image,
                 Err(_e) => {
                     log::trace!("Failed to read image: {}", image_path.display());

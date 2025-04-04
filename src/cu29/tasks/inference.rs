@@ -1,8 +1,6 @@
-use crate::{
-    cu29::msgs::{ChatTextMsg, ImageRgb8Msg},
-    models::paligemma::{Paligemma, PaligemmaConfig},
-};
+use crate::cu29::msgs::{ChatTextMsg, ImageRgb8Msg};
 use cu29::prelude::*;
+use kornia_paligemma::{Paligemma, PaligemmaConfig};
 
 /// Task that runs inference on an image
 pub struct Inference {
@@ -19,12 +17,7 @@ impl<'cl> CuTask<'cl> for Inference {
     where
         Self: Sized,
     {
-        let config = PaligemmaConfig {
-            use_cuda: true,
-            ..Default::default()
-        };
-
-        let paligemma = Paligemma::new(config)
+        let paligemma = Paligemma::new(PaligemmaConfig::default())
             .map_err(|e| CuError::new_with_cause("Failed to create Paligemma", e))?;
 
         Ok(Self { paligemma })

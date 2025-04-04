@@ -16,7 +16,9 @@ axum = "0.8"
 bincode = "2.0.0"
 env_logger = "0.11"
 indicatif = { version = "0.17", features = ["rayon"] }
-kornia = { version = "0.1.8", features = ["gstreamer", "jpegturbo"] }
+#kornia = { version = "0.1.8", features = ["gstreamer", "jpegturbo"] }
+kornia = { git = "https://github.com/kornia/kornia-rs.git", branch = "kornia-paligemma", features = ["gstreamer", "turbojpeg"] }
+kornia-paligemma = { git = "https://github.com/kornia/kornia-rs.git", branch = "kornia-paligemma", features = ["cuda"] }
 once_cell = "1.21"
 log = "0.4"
 rayon = "1.10"
@@ -31,15 +33,6 @@ whoami = "1.5"
 
 cu29 = "0.7.0"
 cu29-helpers = "0.7.0"
-
-# TODO: port to kornia-dnn
-candle-core = { version = "0.8.4", features = ["cuda"] }
-candle-transformers = { version = "0.8.4", features = ["cuda"] }
-candle-examples = "0.8.4"
-candle-nn = { version = "0.8.4", features = ["cuda"] }
-hf-hub = "0.4.2"
-tokenizers = "0.21.1"
-thiserror = "2.0.12"
 
 [dev-dependencies]
 crossterm = "0.28.1"
