@@ -6,10 +6,10 @@ use crate::{
     pipeline::SERVER_GLOBAL_STATE,
 };
 use cu29::prelude::*;
-use kornia::io::jpegturbo::JpegTurboEncoder;
+use kornia::io::jpeg::ImageEncoder;
 
 pub struct BroadcastImage {
-    jpeg_encoder: JpegTurboEncoder,
+    jpeg_encoder: ImageEncoder,
 }
 
 impl Freezable for BroadcastImage {}
@@ -22,7 +22,7 @@ impl<'cl> CuSinkTask<'cl> for BroadcastImage {
         Self: Sized,
     {
         Ok(Self {
-            jpeg_encoder: JpegTurboEncoder::new()
+            jpeg_encoder: ImageEncoder::new()
                 .map_err(|e| CuError::new_with_cause("Failed to create jpeg encoder", e))?,
         })
     }
@@ -35,7 +35,7 @@ impl<'cl> CuSinkTask<'cl> for BroadcastImage {
         // encode the image to jpeg before broadcasting
         let encoded_image = self
             .jpeg_encoder
-            .encode_rgb8(img_msg)
+            .encode(img_msg)
             .map_err(|e| CuError::new_with_cause("Failed to encode image", e))?;
 
         // get the acquisition time of the image
