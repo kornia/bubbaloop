@@ -35,7 +35,7 @@ impl<'cl> CuSinkTask<'cl> for BroadcastImage {
         // encode the image to jpeg before broadcasting
         let encoded_image = self
             .jpeg_encoder
-            .encode_rgb8(&img_msg)
+            .encode_rgb8(img_msg)
             .map_err(|e| CuError::new_with_cause("Failed to encode image", e))?;
 
         // get the acquisition time of the image

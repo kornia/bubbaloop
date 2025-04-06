@@ -56,7 +56,7 @@ pub async fn start_pipeline(
 
     let handle = match pipeline_id.as_str() {
         "bubbaloop" => pipeline::spawn_bubbaloop_thread(stop_signal.clone()),
-        //"recording" => cu29::pipelines::spawn_recording_pipeline(stop_signal.clone()),
+        "recording" => cu29::pipelines::spawn_recording_pipeline(stop_signal.clone()),
         "inference" => cu29::pipelines::spawn_inference_pipeline(stop_signal.clone()),
         _ => {
             log::error!("Pipeline {} not supported", pipeline_id);

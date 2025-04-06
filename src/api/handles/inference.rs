@@ -1,4 +1,4 @@
-use crate::api::models::inference::{InferenceQuery, InferenceResponse};
+use crate::api::models::inference::{InferenceResponse, InferenceSettingsQuery};
 use crate::pipeline::ResultStore;
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -16,7 +16,7 @@ pub async fn get_inference_result(State(store): State<ResultStore>) -> impl Into
 
 pub async fn post_inference_settings(
     State(store): State<ResultStore>,
-    Json(query): Json<InferenceQuery>,
+    Json(query): Json<InferenceSettingsQuery>,
 ) -> impl IntoResponse {
     let Ok(_) = store.inference_settings.tx.send(query.prompt) else {
         return Json(json!({

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// The query for the inference request
 #[derive(Debug, Deserialize, Serialize)]
-pub struct InferenceQuery {
+pub struct InferenceSettingsQuery {
     pub prompt: String,
 }
 

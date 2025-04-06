@@ -1,5 +1,5 @@
 mod inference;
-//mod recording;
+mod recording;
 
 pub use inference::spawn_inference_pipeline;
-//  pub use recording::spawn_recording_pipeline;
+pub use recording::spawn_recording_pipeline;

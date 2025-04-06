@@ -86,7 +86,7 @@ impl<'cl> CuSinkTask<'cl> for VideoWriter {
         };
 
         writer
-            .write(&image.0)
+            .write(image)
             .map_err(|e| CuError::new_with_cause("Failed to write image", e))?;
 
         Ok(())
