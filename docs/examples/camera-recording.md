@@ -6,9 +6,9 @@ description: Example showing how to stream data from cameras and log into rerun 
 
 ## Edit the pipeline file
 
-Copper requires the creation of static pipelines to optimize data orchestration efficiently. Bubbaloop leverages this approach to enhance data pipeline management.&#x20;
+Copper requires the creation of static pipelines to optimize data orchestration efficiently. Bubbaloop leverages this approach to enhance data pipeline management.
 
-For this reason we have to edit the `bubbaloop.ron` file located in the root of the GitHub project.
+For this reason we have to edit the `recording.ron` file located in `cu29/pipelines`
 
 {% tabs %}
 {% tab title="Webcam" %}
@@ -90,9 +90,13 @@ For this reason we have to edit the `bubbaloop.ron` file located in the root of 
 {% endtab %}
 {% endtabs %}
 
-Then start server as usual `just serve`
+## Start the server
 
-## Request start recording
+```
+just serve
+```
+
+## Start recording
 
 Start recording from the camera and log using [rerun.io](https://www.rerun.io).
 
@@ -110,7 +114,7 @@ You can open rerun in your local machine and you should get the image stream
 
 <figure><img src="../../.gitbook/assets/image.png" alt=""><figcaption></figcaption></figure>
 
-## Request Stop recording
+## Stop recording
 
 To stop the pipeline, use the `stop-pipeline` command:
 

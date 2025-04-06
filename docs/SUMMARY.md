@@ -9,3 +9,7 @@
 
 * [🌈 Hello World](examples/hello-world.md)
 * [📷 Camera Recording](examples/camera-recording.md)
+
+***
+
+* [⚡ Camera Inference](camera-inference.md)

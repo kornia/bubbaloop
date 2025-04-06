@@ -8,6 +8,14 @@ description: Get started with serving Bubbaloop platform
 
 {% stepper %}
 {% step %}
+#### Download the project
+
+```
+git clone https://github.com/kornia/bubbaloop.git
+```
+{% endstep %}
+
+{% step %}
 #### Install pre-requisites
 
 {% hint style="info" %}
@@ -24,14 +32,6 @@ To get started, ensure all necessary system dependencies
 
 ```
 just install_deps
-```
-{% endstep %}
-
-{% step %}
-#### Install the project
-
-```
-git clone https://github.com/kornia/bubbaloop.git
 ```
 {% endstep %}
 {% endstepper %}
