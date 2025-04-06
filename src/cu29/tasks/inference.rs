@@ -18,12 +18,8 @@ const DEFAULT_PROMPT: &str = "cap en";
 
 /// Task that runs inference on an image
 pub struct Inference {
-    //current_prompt: Arc<Mutex<String>>,
     current_prompt: String,
-    is_processing: Arc<Mutex<AtomicBool>>,
-    req_tx: Sender<(ImageRgb8Msg, String)>,
-    rep_rx: Receiver<PromptResponseMsg>,
-    inference_handle: Option<JoinHandle<Result<(), PaligemmaError>>>,
+    scheduler: InferenceScheduler,
 }
 
 impl Freezable for Inference {}
@@ -36,8 +32,76 @@ impl<'cl> CuTask<'cl> for Inference {
     where
         Self: Sized,
     {
-        let mut paligemma = Paligemma::new(PaligemmaConfig::default())
-            .map_err(|e| CuError::new_with_cause("Failed to create Paligemma", e))?;
+        let scheduler = InferenceScheduler::new()
+            .map_err(|e| CuError::new_with_cause("Failed to create Paligemma scheduler", e))?;
+
+        Ok(Self {
+            current_prompt: DEFAULT_PROMPT.to_string(),
+            scheduler,
+        })
+    }
+
+    fn process(
+        &mut self,
+        clock: &RobotClock,
+        input: Self::Input,
+        output: Self::Output,
+    ) -> Result<(), CuError> {
+        // clear the output payload to avoid any previous payload to be forwarded
+        output.clear_payload();
+
+        // check first if we should update the prompt
+        if let Ok(prompt) = SERVER_GLOBAL_STATE
+            .result_store
+            .inference_settings
+            .rx
+            .lock()
+            .unwrap()
+            .try_recv()
+        {
+            log::debug!("Updating prompt to: {}", prompt);
+            self.current_prompt = prompt;
+        }
+
+        // check if we are already processing an inference to not block the main thread
+        if self.scheduler.is_processing() {
+            return Ok(());
+        }
+
+        // check first if we have a response from the previous inference
+        if let Some(response_msg) = self.scheduler.try_poll_response() {
+            log::debug!(
+                "Received response from inference thread: {:?}",
+                response_msg
+            );
+
+            output.metadata.tov = clock.now().into();
+            output.set_payload(response_msg);
+        }
+
+        // check if we have a new image and schedule the inference
+        let Some(img) = input.payload() else {
+            return Ok(());
+        };
+
+        // send the request to the thread to schedule the inference
+        self.scheduler.schedule_inference(img, &self.current_prompt);
+
+        Ok(())
+    }
+}
+
+struct InferenceScheduler {
+    is_processing: Arc<Mutex<AtomicBool>>,
+    req_tx: Sender<(ImageRgb8Msg, String)>,
+    rep_rx: Receiver<PromptResponseMsg>,
+    inference_handle: Option<JoinHandle<Result<(), PaligemmaError>>>,
+}
+
+impl InferenceScheduler {
+    pub fn new() -> Result<Self, PaligemmaError> {
+        // NOTE: in future should be able to schedule multiple models
+        let mut paligemma = Paligemma::new(PaligemmaConfig::default())?;
 
         let (req_tx, req_rx) = std::sync::mpsc::channel::<(ImageRgb8Msg, String)>();
         let (rep_tx, rep_rx) = std::sync::mpsc::channel::<PromptResponseMsg>();
@@ -65,8 +129,6 @@ impl<'cl> CuTask<'cl> for Inference {
         });
 
         Ok(Self {
-            //current_prompt: Arc::new(Mutex::new(DEFAULT_PROMPT.to_string())),
-            current_prompt: DEFAULT_PROMPT.to_string(),
             is_processing,
             req_tx,
             rep_rx,
@@ -74,74 +136,33 @@ impl<'cl> CuTask<'cl> for Inference {
         })
     }
 
-    fn process(
-        &mut self,
-        clock: &RobotClock,
-        input: Self::Input,
-        output: Self::Output,
-    ) -> Result<(), CuError> {
-        // clear the output payload to avoid any previous payload to be forwarded
-        output.clear_payload();
-        // check first if we should update the prompt
-        if let Ok(prompt) = SERVER_GLOBAL_STATE
-            .result_store
-            .inference_settings
-            .rx
-            .lock()
-            .unwrap()
-            .try_recv()
-        {
-            log::debug!("Updating prompt to: {}", prompt);
-            //*self.current_prompt.lock().unwrap() = prompt;
-            self.current_prompt = prompt;
-        }
-
-        // check if we are already processing an inference to not block the main thread
-        if self
-            .is_processing
+    pub fn is_processing(&self) -> bool {
+        self.is_processing
             .lock()
             .unwrap()
             .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            return Ok(());
-        }
+    }
 
-        // check first if we have a response from the inference thread
-        if let Ok(response_msg) = self.rep_rx.try_recv() {
-            log::debug!(
-                "Received response from inference thread: {:?}",
-                response_msg
-            );
+    pub fn try_poll_response(&self) -> Option<PromptResponseMsg> {
+        self.rep_rx.try_recv().ok()
+    }
 
-            output.metadata.tov = clock.now().into();
-            output.set_payload(response_msg);
-        }
-
-        // check if we have an image and run the inference
-        let Some(img) = input.payload() else {
-            return Ok(());
-        };
-
-        // get the prompt set by the user
-        let prompt = self.current_prompt.clone();
-
-        // send the request to the thread to schedule the inference
-        let _ = self.req_tx.send((img.clone(), prompt));
-
+    pub fn schedule_inference(&self, img: &ImageRgb8Msg, prompt: &str) {
+        // TODO: verify that we are not doing a deep copy of the image
+        let _ = self.req_tx.send((img.clone(), prompt.to_string()));
         self.is_processing
             .lock()
             .unwrap()
             .store(true, std::sync::atomic::Ordering::Relaxed);
-
-        Ok(())
     }
+}
 
-    fn stop(&mut self, _clock: &RobotClock) -> Result<(), CuError> {
+impl Drop for InferenceScheduler {
+    fn drop(&mut self) {
         if let Some(handle) = self.inference_handle.take() {
             if let Err(_e) = handle.join() {
                 log::error!("Failed to join inference thread");
             }
         }
-        Ok(())
     }
 }
