@@ -48,10 +48,11 @@ impl<'cl> CuTask<'cl> for Inference {
             let is_processing = is_processing.clone();
             move || -> Result<(), PaligemmaError> {
                 while let Ok((img, prompt)) = req_rx.recv() {
-                    log::debug!("Scheduling a new inference");
+                    log::trace!("Scheduling a new inference");
+
                     let response = paligemma.inference(&img, &prompt, 50, false)?;
 
-                    log::debug!("Inference completed");
+                    log::trace!("Inference completed");
 
                     let _ = rep_tx.send(PromptResponseMsg { prompt, response });
                     is_processing

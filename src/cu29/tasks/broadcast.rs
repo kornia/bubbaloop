@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::{
     api::models::{camera::CameraResult, inference::InferenceResult},
     cu29::msgs::{EncodedImage, ImageRgb8Msg, PromptResponseMsg},
@@ -7,6 +5,7 @@ use crate::{
 };
 use cu29::prelude::*;
 use kornia::io::jpeg::ImageEncoder;
+use std::time::Duration;
 
 pub struct BroadcastImage {
     jpeg_encoder: ImageEncoder,
@@ -45,27 +44,17 @@ impl<'cl> CuSinkTask<'cl> for BroadcastImage {
         };
 
         // send the camera image to the global state
-        SERVER_GLOBAL_STATE
+        let _ = SERVER_GLOBAL_STATE
             .result_store
             .image
             .tx
             .send(CameraResult {
-                // TODO: not clone and send the reference
                 timestamp_nanos: acq_time.as_nanos() as u64,
-                // TODO: not clone and send the reference
                 image: EncodedImage {
                     data: encoded_image,
                     encoding: "jpeg".to_string(),
                 },
-            })
-            .map_err(|e| {
-                if matches!(e, tokio::sync::broadcast::error::SendError(_)) {
-                    Ok(())
-                } else {
-                    Err(CuError::new_with_cause("Failed to send camera image", e))
-                }
-            })
-            .ok();
+            });
 
         Ok(())
     }
@@ -97,24 +86,15 @@ impl<'cl> CuSinkTask<'cl> for BroadcastChat {
         };
 
         // send the chat result to the global state
-        SERVER_GLOBAL_STATE
+        let _ = SERVER_GLOBAL_STATE
             .result_store
             .inference
             .tx
             .send(InferenceResult {
-                //timestamp_nanos: clock.now().as_nanos(),
                 timestamp_nanos: acq_time.as_nanos() as u64,
                 prompt: chat_msg.prompt.clone(),
                 response: chat_msg.response.clone(),
-            })
-            .map_err(|e| {
-                if matches!(e, tokio::sync::broadcast::error::SendError(_)) {
-                    Ok(())
-                } else {
-                    Err(CuError::new_with_cause("Failed to send chat result", e))
-                }
-            })
-            .ok();
+            });
 
         Ok(())
     }
