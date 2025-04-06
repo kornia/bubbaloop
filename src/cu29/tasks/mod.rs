@@ -4,9 +4,6 @@ pub use broadcast::*;
 mod inference;
 pub use inference::*;
 
-mod printer;
-pub use printer::*;
-
 mod rerun_logger;
 pub use rerun_logger::*;
 

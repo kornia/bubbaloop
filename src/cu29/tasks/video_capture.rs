@@ -2,7 +2,9 @@ use crate::cu29::msgs::ImageRgb8Msg;
 use cu29::prelude::*;
 use kornia::io::stream::{CameraCapture, RTSPCameraConfig, V4L2CameraConfig};
 
-pub struct VideoCapture(pub CameraCapture);
+pub struct VideoCapture {
+    capture: CameraCapture,
+}
 
 impl Freezable for VideoCapture {}
 
@@ -25,7 +27,7 @@ impl<'cl> CuSrcTask<'cl> for VideoCapture {
             .get::<String>("source_uri")
             .ok_or(CuError::from("No source uri provided"))?;
 
-        let cam = match source_type.as_str() {
+        let capture = match source_type.as_str() {
             "rtsp" => RTSPCameraConfig::new()
                 .with_url(&source_uri)
                 .build()
@@ -52,30 +54,31 @@ impl<'cl> CuSrcTask<'cl> for VideoCapture {
             _ => return Err(CuError::from("Invalid source type")),
         };
 
-        Ok(Self(cam))
+        Ok(Self { capture })
     }
 
     fn start(&mut self, _clock: &RobotClock) -> Result<(), CuError> {
-        self.0
+        self.capture
             .start()
             .map_err(|e| CuError::new_with_cause("Failed to start camera", e))
     }
 
     fn stop(&mut self, _clock: &RobotClock) -> Result<(), CuError> {
-        self.0
+        self.capture
             .close()
             .map_err(|e| CuError::new_with_cause("Failed to stop camera", e))
     }
 
-    fn process(&mut self, _clock: &RobotClock, output: Self::Output) -> Result<(), CuError> {
+    fn process(&mut self, clock: &RobotClock, output: Self::Output) -> Result<(), CuError> {
         let Some(img) = self
-            .0
+            .capture
             .grab()
             .map_err(|e| CuError::new_with_cause("Failed to grab image", e))?
         else {
             return Ok(());
         };
 
+        output.metadata.tov = clock.now().into();
         output.set_payload(ImageRgb8Msg(img));
 
         Ok(())

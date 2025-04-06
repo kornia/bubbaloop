@@ -34,9 +34,9 @@ impl bincode::enc::Encode for ImageRgb8Msg {
         &self,
         encoder: &mut E,
     ) -> Result<(), bincode::error::EncodeError> {
-        bincode::Encode::encode(&self.0.rows(), encoder)?;
-        bincode::Encode::encode(&self.0.cols(), encoder)?;
-        bincode::Encode::encode(&self.0.as_slice(), encoder)?;
+        bincode::Encode::encode(&self.rows(), encoder)?;
+        bincode::Encode::encode(&self.cols(), encoder)?;
+        bincode::Encode::encode(&self.as_slice(), encoder)?;
         Ok(())
     }
 }
@@ -61,9 +61,9 @@ impl Serialize for ImageRgb8Msg {
         S: serde::Serializer,
     {
         let mut s = serializer.serialize_struct("ImageRgb8Msg", 3)?;
-        s.serialize_field("rows", &self.0.rows())?;
-        s.serialize_field("cols", &self.0.cols())?;
-        s.serialize_field("data", &self.0.as_slice())?;
+        s.serialize_field("rows", &self.rows())?;
+        s.serialize_field("cols", &self.cols())?;
+        s.serialize_field("data", &self.as_slice())?;
         s.end()
     }
 }
@@ -116,9 +116,9 @@ impl bincode::enc::Encode for ImageGray8Msg {
         &self,
         encoder: &mut E,
     ) -> Result<(), bincode::error::EncodeError> {
-        bincode::Encode::encode(&self.0.rows(), encoder)?;
-        bincode::Encode::encode(&self.0.cols(), encoder)?;
-        bincode::Encode::encode(&self.0.as_slice(), encoder)?;
+        bincode::Encode::encode(&self.rows(), encoder)?;
+        bincode::Encode::encode(&self.cols(), encoder)?;
+        bincode::Encode::encode(&self.as_slice(), encoder)?;
         Ok(())
     }
 }
@@ -137,38 +137,6 @@ impl<C> bincode::de::Decode<C> for ImageGray8Msg {
 }
 
 #[derive(Clone, Debug, Serialize, bincode::Encode, bincode::Decode)]
-pub struct BoundingBox {
-    pub xmin: f32,
-    pub ymin: f32,
-    pub xmax: f32,
-    pub ymax: f32,
-    pub confidence: f32,
-    pub class: u32,
-}
-
-#[derive(Clone, Debug, Serialize, bincode::Encode, bincode::Decode)]
-pub struct BoundingBoxMsg(pub BoundingBox);
-
-impl Default for BoundingBoxMsg {
-    fn default() -> Self {
-        Self(BoundingBox {
-            xmin: 0.0,
-            ymin: 0.0,
-            xmax: 0.0,
-            ymax: 0.0,
-            confidence: 0.0,
-            class: 0,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Default, Serialize, bincode::Encode, bincode::Decode)]
-pub struct InferenceResultMsg {
-    pub timestamp_nanos: u64,
-    pub detections: Vec<BoundingBoxMsg>,
-}
-
-#[derive(Clone, Debug, Serialize, bincode::Encode, bincode::Decode)]
 pub struct EncodedImage {
     pub data: Vec<u8>,
     pub encoding: String,
@@ -179,6 +147,21 @@ impl Default for EncodedImage {
         Self {
             data: vec![],
             encoding: "".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, bincode::Encode, bincode::Decode)]
+pub struct PromptResponseMsg {
+    pub prompt: String,
+    pub response: String,
+}
+
+impl Default for PromptResponseMsg {
+    fn default() -> Self {
+        Self {
+            prompt: "".to_string(),
+            response: "".to_string(),
         }
     }
 }

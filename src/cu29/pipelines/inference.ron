@@ -19,27 +19,27 @@
                 "source_type": "rtsp",
                 // URL of the RTSP camera
                 // rtsp://<username>:<password>@<ip>:<port>/<stream>
-                "source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
+                //"source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
+                "source_uri": "rtsp://tapo_terrace:123456789@192.168.1.151:554/stream2",
             }
-        ),
-        (
-            id: "printer",
-            type: "crate::cu29::tasks::Printer",
         ),
         (
             id: "inference",
             type: "crate::cu29::tasks::Inference",
         ),
         (
-            id: "broadcast",
-            type: "crate::cu29::tasks::Broadcast",
+            id: "bcast_text",
+            type: "crate::cu29::tasks::BroadcastChat",
+        ),
+        (
+            id: "bcast_image",
+            type: "crate::cu29::tasks::BroadcastImage",
         ),
     ],
     cnx: [
-        (src: "cam0", dst: "printer", msg: "crate::cu29::msgs::ImageRgb8Msg"),
-        (src: "cam0", dst: "broadcast", msg: "crate::cu29::msgs::ImageRgb8Msg"),
         (src: "cam0", dst: "inference", msg: "crate::cu29::msgs::ImageRgb8Msg"),
-        (src: "inference", dst: "broadcast", msg: "crate::cu29::msgs::InferenceResultMsg"),
+        (src: "cam0", dst: "bcast_image", msg: "crate::cu29::msgs::ImageRgb8Msg"),
+        (src: "inference", dst: "bcast_text", msg: "crate::cu29::msgs::PromptResponseMsg"),
     ],
     logging: (
         slab_size_mib: 1024, // Preallocates 1GiB of memory map file at a time

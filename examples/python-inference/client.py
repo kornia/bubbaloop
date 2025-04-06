@@ -25,19 +25,35 @@ async def get_api_response(client: httpx.AsyncClient, url: str) -> dict | None:
 def response_to_image(response: dict) -> rr.Image:
     # decode the image
     decoder = kr.ImageDecoder()
-    image_json = response["Success"]["image"]
-    data = decoder.decode(bytes(image_json["data"]))
+    data = decoder.decode(bytes(response["image"]["data"]))
     return rr.Image(data)
 
 
-def response_to_inference_result(response: dict) -> rr.Boxes2D:
-    detections = response["Success"]["detections"]
-    array = np.array([[d["xmin"], d["ymin"], d["xmax"], d["ymax"]] for d in detections])
-    return rr.Boxes2D(
-        array=array,
-        array_format=rr.Box2DFormat.XYXY,
-        class_ids=np.array([d["class"] for d in detections]),
-    )
+def response_to_inference_result(response: dict) -> rr.TextLog:
+    log_text = f"prompt: {response['prompt']} -- response: {response['response']}"
+    return rr.TextLog(log_text, level=rr.TextLogLevel.INFO)
+
+
+async def poll_image(client: httpx.AsyncClient, url: str, rr):
+    while True:
+        # get the image from the server
+        response = await get_api_response(client, url)
+
+        if response is not None and "Success" in response:
+            response = response["Success"]
+            rr.set_time_sequence("session", response["timestamp_nanos"])
+            rr.log("/image", response_to_image(response))
+
+
+async def poll_inference_result(client: httpx.AsyncClient, url: str, rr):
+    while True:
+        # get the inference result from the server
+        response = await get_api_response(client, url)
+
+        if response is not None and "Success" in response:
+            response = response["Success"]
+            rr.set_time_sequence("session", response["timestamp_nanos"])
+            rr.log("/logs", response_to_inference_result(response))
 
 
 async def main() -> None:
@@ -47,27 +63,26 @@ async def main() -> None:
     parser.add_argument("--port", type=int, default=3000)
     args = parser.parse_args()
 
-    rr.init("rerun_example_my_data", spawn=True)
+    rr.init("rerun_inference_client", spawn=True)
 
-    client = httpx.AsyncClient(timeout=None)
-
-    while True:
-        # get the image from the server
-        response = await get_api_response(
-            client,
-            f"http://{args.host}:{args.port}/api/v0/inference/image",
+    async with httpx.AsyncClient(timeout=None) as client:
+        image_task = asyncio.create_task(
+            poll_image(
+                client,
+                url=f"http://{args.host}:{args.port}/api/v0/inference/image",
+                rr=rr,
+            )
         )
-        if response is not None and "Success" in response:
-            rr.set_time_sequence("session", response["Success"]["timestamp_nanos"])
-            rr.log("/image", response_to_image(response))
 
-        # get the inference result from the server
-        response = await get_api_response(
-            client, f"http://{args.host}:{args.port}/api/v0/inference/result"
+        inference_task = asyncio.create_task(
+            poll_inference_result(
+                client,
+                url=f"http://{args.host}:{args.port}/api/v0/inference/result",
+                rr=rr,
+            )
         )
-        if response is not None and "Success" in response:
-            rr.set_time_sequence("session", response["Success"]["timestamp_nanos"])
-            rr.log("/image/detections", response_to_inference_result(response))
+
+        await asyncio.gather(image_task, inference_task)
 
 
 if __name__ == "__main__":
