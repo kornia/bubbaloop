@@ -12,4 +12,4 @@
 
 ***
 
-* [⚡ Camera Inference](camera-inference.md)
+* [🍄 Model Inference](model-inference.md)

@@ -2,7 +2,7 @@
 description: Example showing how to use the inference functionality
 ---
 
-# ⚡ Camera Inference
+# 🍄 Model Inference
 
 The Bubbaloop server is able to run **inference** efficiently Visual Language Models (VLM) using directly the camera streams without any latency in the same process and broadcast the results.
 
