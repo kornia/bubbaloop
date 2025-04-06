@@ -45,6 +45,3 @@ list-pipelines HOST="0.0.0.0" PORT="3000":
 
 config-pipeline HOST="0.0.0.0" PORT="3000":
     RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} pipeline config
-
-chat HOST="0.0.0.0" PORT="3000":
-    RUST_LOG=info cargo run --release --example chat -- -h {{HOST}} -p {{PORT}}

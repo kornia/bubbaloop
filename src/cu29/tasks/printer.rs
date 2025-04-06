@@ -21,7 +21,7 @@ impl<'cl> CuSinkTask<'cl> for Printer {
         let Some(msg) = input.payload() else {
             return Ok(());
         };
-        log::debug!("Received image {} : {:?}", self.counter, msg.size());
+        log::debug!("Received image {} : {:?}", self.counter, msg.0.size());
         self.counter += 1;
         Ok(())
     }

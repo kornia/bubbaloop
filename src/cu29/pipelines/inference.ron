@@ -28,19 +28,18 @@
             type: "crate::cu29::tasks::Inference",
         ),
         (
-            id: "broadcast",
-            type: "crate::cu29::tasks::Broadcast",
+            id: "bcast_text",
+            type: "crate::cu29::tasks::BroadcastChat",
         ),
         (
-            id: "text0",
-            type: "crate::cu29::tasks::TextCapture",
-        )
+            id: "bcast_image",
+            type: "crate::cu29::tasks::BroadcastImage",
+        ),
     ],
     cnx: [
         (src: "cam0", dst: "inference", msg: "crate::cu29::msgs::ImageRgb8Msg"),
-        (src: "text0", dst: "inference", msg: "crate::cu29::msgs::ChatTextMsg"),
-        (src: "cam0", dst: "broadcast", msg: "crate::cu29::msgs::ImageRgb8Msg"),
-        (src: "inference", dst: "broadcast", msg: "crate::cu29::msgs::ChatTextMsg"),
+        (src: "cam0", dst: "bcast_image", msg: "crate::cu29::msgs::ImageRgb8Msg"),
+        (src: "inference", dst: "bcast_text", msg: "crate::cu29::msgs::PromptResponseMsg"),
     ],
     logging: (
         slab_size_mib: 1024, // Preallocates 1GiB of memory map file at a time

@@ -1,4 +1,4 @@
-use crate::api::models::camera::CameraResult;
+use crate::api::models::{camera::CameraResult, inference::InferenceResult};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -74,14 +74,16 @@ impl Default for InferenceSenderReceiver {
 /// Global store of all results managed by the server
 #[derive(Clone)]
 pub struct ResultStore {
-    pub inference: InferenceSenderReceiver,
+    pub inference: BroadcastSender<InferenceResult>,
+    pub inference_settings: SenderReceiver,
     pub image: BroadcastSender<CameraResult>,
 }
 
 impl Default for ResultStore {
     fn default() -> Self {
         Self {
-            inference: InferenceSenderReceiver::default(),
+            inference: BroadcastSender::new(),
+            inference_settings: SenderReceiver::new(),
             image: BroadcastSender::new(),
         }
     }
