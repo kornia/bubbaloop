@@ -20,4 +20,5 @@ Connect with like-minded innovators and developers!
 * \[2025-04-06] Added support to inference with Google Paligemma
 * \[2025-03-01] Initial prototype of Inference engine pipeline
 * \[2025-02-01] Added recording pipeline to store rerun files and viz
-* \[2025-01-02] Added RTPS camera support with kornia-rs
+* \[2025-01-02] Added RTSP and Webcam support with kornia-rs
+* \[2024-12-28] Initial push with the basics for pipeline management
