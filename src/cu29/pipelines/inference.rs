@@ -46,7 +46,6 @@ pub fn spawn_inference_pipeline(
     stop_signal: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<PipelineResult> {
     std::thread::spawn({
-        let stop_signal = stop_signal.clone();
         move || -> PipelineResult {
             // parse the ron config string and create the pipeline
             let mut app = InferencePipeline::new()?;
