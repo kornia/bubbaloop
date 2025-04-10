@@ -1,5 +1,7 @@
-use crate::cu29::msgs::{ImageRgb8Msg, PromptResponseMsg};
-use crate::pipeline::SERVER_GLOBAL_STATE;
+use crate::{
+    cu29::msgs::{ImageRgb8Msg, PromptResponseMsg},
+    pipeline::SERVER_GLOBAL_STATE,
+};
 use cu29::prelude::*;
 use kornia_paligemma::{Paligemma, PaligemmaConfig, PaligemmaError};
 use std::{
@@ -93,7 +95,7 @@ impl<'cl> CuTask<'cl> for Inference {
 
 struct InferenceScheduler {
     is_processing: Arc<Mutex<AtomicBool>>,
-    req_tx: Sender<(ImageRgb8Msg, String)>,
+    req_tx: Option<Sender<(ImageRgb8Msg, String)>>,
     rep_rx: Receiver<PromptResponseMsg>,
     inference_handle: Option<JoinHandle<Result<(), PaligemmaError>>>,
 }
@@ -111,6 +113,7 @@ impl InferenceScheduler {
         let inference_handle = std::thread::spawn({
             let is_processing = is_processing.clone();
             move || -> Result<(), PaligemmaError> {
+                // block the thread until the inference is stopped
                 while let Ok((img, prompt)) = req_rx.recv() {
                     log::trace!("Scheduling a new inference");
 
@@ -130,7 +133,7 @@ impl InferenceScheduler {
 
         Ok(Self {
             is_processing,
-            req_tx,
+            req_tx: Some(req_tx),
             rep_rx,
             inference_handle: Some(inference_handle),
         })
@@ -148,21 +151,35 @@ impl InferenceScheduler {
     }
 
     pub fn schedule_inference(&self, img: &ImageRgb8Msg, prompt: &str) {
+        // SAFETY: we are created the channel in the constructor
         // TODO: verify that we are not doing a deep copy of the image
-        let _ = self.req_tx.send((img.clone(), prompt.to_string()));
+        let _ = self
+            .req_tx
+            .as_ref()
+            .unwrap()
+            .send((img.clone(), prompt.to_string()));
+        // set the processing flag to true as we are scheduling an inference
         self.is_processing
             .lock()
             .unwrap()
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
-}
 
-impl Drop for InferenceScheduler {
-    fn drop(&mut self) {
+    pub fn stop(&mut self) {
+        // take ownership of the request channel and close it
+        drop(self.req_tx.take());
+
+        // join the inference thread
         if let Some(handle) = self.inference_handle.take() {
             if let Err(_e) = handle.join() {
                 log::error!("Failed to join inference thread");
             }
         }
+    }
+}
+
+impl Drop for InferenceScheduler {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
