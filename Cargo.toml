@@ -29,8 +29,11 @@ walkdir = "2.5"
 whoami = "1.5"
 
 # message passing framework
-cu29 = { version = "0.7.0" }
-cu29-helpers = { version = "0.7.0" }
+# cu29 = { version = "0.7.0" }
+# cu29-helpers = { version = "0.7.0" }
+# TODO: fixes ron file connections order issues
+cu29 = { git = "https://github.com/copper-project/copper-rs.git", branch = "master" }
+cu29-helpers = { git = "https://github.com/copper-project/copper-rs.git", branch = "master" }
 
 # NOTE: this version requires kornia-rs to be at least 0.1.8
 kornia = { version = "0.1.8", features = ["gstreamer", "jpegturbo"] }

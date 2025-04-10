@@ -1,42 +1,49 @@
 (
     tasks: [
+        //(
+        //    id: "cam0",
+        //    type: "crate::cu29::tasks::VideoCapture",
+        //    config: {
+        //        "source_type": "v4l2",
+        //        "source_uri": "/dev/video0",
+        //        "source_fps": 30,
+        //        "image_cols": 640,
+        //        "image_rows": 480,
+        //    }
+        //),
+        // NOTE: uncomment to use this camera
         (
-            id: "cam0",
+            id: "cam1",
             type: "crate::cu29::tasks::VideoCapture",
             config: {
-                "source_type": "v4l2",
-                "source_uri": "/dev/video0",
-                "source_fps": 30,
-                "image_cols": 640,
-                "image_rows": 480,
+                "source_type": "rtsp",
+                // URL of the RTSP camera
+                // rtsp://<username>:<password>@<ip>:<port>/<stream>
+                //"source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
+                "source_uri": "rtsp://tapo_terrace:123456789@192.168.1.151:554/stream2",
             }
         ),
-        // NOTE: uncomment to use this camera
-        // (
-        //     id: "cam0",
-        //     type: "crate::cu29::tasks::VideoCapture",
-        //     config: {
-        //         "source_type": "rtsp",
-        //         // URL of the RTSP camera
-        //         // rtsp://<username>:<password>@<ip>:<port>/<stream>
-        //         "source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
-        //     }
-        // ),
         (
-            id: "rerun",
+            id: "enc1",
+            type: "crate::cu29::tasks::ImageEncoder",
+        ),
+        (
+            id: "logger",
             type: "crate::cu29::tasks::RerunLogger",
             config: {
                 // Path to the directory where the logs will be stored
                 "path": "/tmp/",
-                // IP address of the rerun server
-                "ip": "192.168.1.144",
-                // Port of the rerun server
-                "port": 9876,
             }
-        )
+        ),
+        (
+            id: "bcast",
+            type: "crate::cu29::tasks::ImageBroadcast",
+        ),
     ],
     cnx: [
-        (src: "cam0", dst: "rerun", msg: "crate::cu29::msgs::ImageRgb8Msg"),
+        (src: "cam1", dst: "enc1", msg: "crate::cu29::msgs::ImageRgb8Msg"),
+        (src: "enc1", dst: "logger", msg: "crate::cu29::msgs::EncodedImage"),
+        (src: "enc1", dst: "bcast", msg: "crate::cu29::msgs::EncodedImage"),
     ]
     ,
     logging: (
