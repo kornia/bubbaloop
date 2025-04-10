@@ -1,6 +1,9 @@
 mod broadcast;
 pub use broadcast::*;
 
+mod image_encoder;
+pub use image_encoder::*;
+
 mod inference;
 pub use inference::*;
 
