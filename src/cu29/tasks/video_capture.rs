@@ -4,6 +4,8 @@ use kornia::io::stream::{CameraCapture, RTSPCameraConfig, V4L2CameraConfig};
 
 pub struct VideoCapture {
     capture: CameraCapture,
+    // TODO: remove once copper support access to the node id
+    channel_id: u8,
 }
 
 impl Freezable for VideoCapture {}
@@ -26,6 +28,10 @@ impl<'cl> CuSrcTask<'cl> for VideoCapture {
         let source_uri = config
             .get::<String>("source_uri")
             .ok_or(CuError::from("No source uri provided"))?;
+
+        let channel_id = config
+            .get::<u8>("channel_id")
+            .ok_or(CuError::from("No channel id provided"))?;
 
         let capture = match source_type.as_str() {
             "rtsp" => RTSPCameraConfig::new()
@@ -54,7 +60,10 @@ impl<'cl> CuSrcTask<'cl> for VideoCapture {
             _ => return Err(CuError::from("Invalid source type")),
         };
 
-        Ok(Self { capture })
+        Ok(Self {
+            capture,
+            channel_id,
+        })
     }
 
     fn start(&mut self, _clock: &RobotClock) -> Result<(), CuError> {
@@ -78,8 +87,11 @@ impl<'cl> CuSrcTask<'cl> for VideoCapture {
             return Ok(());
         };
 
-        output.metadata.tov = clock.now().into();
-        output.set_payload(ImageRgb8Msg(img));
+        output.set_payload(ImageRgb8Msg {
+            stamp_ns: clock.now().as_nanos(),
+            channel_id: self.channel_id,
+            image: img,
+        });
 
         Ok(())
     }

@@ -1,5 +1,5 @@
 use crate::{
-    api::models::camera::{CameraQuery, CameraResponse},
+    api::models::streaming::{StreamingQuery, StreamingResponse},
     pipeline::ResultStore,
 };
 use axum::{
@@ -8,8 +8,8 @@ use axum::{
     Json,
 };
 
-pub async fn get_camera_image(
-    Path(query): Path<CameraQuery>,
+pub async fn get_streaming_image(
+    Path(query): Path<StreamingQuery>,
     State(store): State<ResultStore>,
 ) -> impl IntoResponse {
     let Ok(result) = store.images[query.channel_id as usize]
@@ -18,9 +18,9 @@ pub async fn get_camera_image(
         .recv()
         .await
     else {
-        return Json(CameraResponse::Error {
-            error: "Failed to get camera image: `just start-pipeline camera`".to_string(),
+        return Json(StreamingResponse::Error {
+            error: "Failed to get streaming image: `just start-pipeline streaming`".to_string(),
         });
     };
-    Json(CameraResponse::Success(result))
+    Json(StreamingResponse::Success(result))
 }

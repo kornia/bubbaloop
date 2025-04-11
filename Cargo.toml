@@ -7,7 +7,7 @@ homepage = "http://kornia.org"
 include = ["Cargo.toml"]
 license = "Apache-2.0"
 repository = "https://github.com/kornia/kornia-rs"
-rust-version = "1.81"
+rust-version = "1.86"
 version = "0.0.1-rc.1"
 
 [dependencies]
@@ -37,4 +37,7 @@ cu29-helpers = { git = "https://github.com/copper-project/copper-rs.git", branch
 
 # NOTE: this version requires kornia-rs to be at least 0.1.8
 kornia = { version = "0.1.8", features = ["gstreamer", "jpegturbo"] }
-kornia-paligemma = { git = "https://github.com/kornia/kornia-paligemma.git", branch = "main", features = ["cuda"] }
+kornia-paligemma = { git = "https://github.com/kornia/kornia-paligemma.git", branch = "main", features = [] }
+
+[features]
+cuda = ["kornia-paligemma/cuda"]

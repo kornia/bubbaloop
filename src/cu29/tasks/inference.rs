@@ -71,14 +71,20 @@ impl<'cl> CuTask<'cl> for Inference {
         }
 
         // check first if we have a response from the previous inference
-        if let Some(response_msg) = self.scheduler.try_poll_response() {
+        if let Some((channel_id, prompt, response)) = self.scheduler.try_poll_response() {
             log::debug!(
-                "Received response from inference thread: {:?}",
-                response_msg
+                "Received response from inference thread for channel: {} -- prompt: {} -- response: {}",
+                channel_id,
+                prompt,
+                response
             );
 
-            output.metadata.tov = clock.now().into();
-            output.set_payload(response_msg);
+            output.set_payload(PromptResponseMsg {
+                stamp_ns: clock.now().as_nanos(),
+                channel_id,
+                prompt,
+                response,
+            });
         }
 
         // check if we have a new image and schedule the inference
@@ -96,7 +102,7 @@ impl<'cl> CuTask<'cl> for Inference {
 struct InferenceScheduler {
     is_processing: Arc<Mutex<AtomicBool>>,
     req_tx: Option<Sender<(ImageRgb8Msg, String)>>,
-    rep_rx: Receiver<PromptResponseMsg>,
+    rep_rx: Receiver<(u8, String, String)>,
     inference_handle: Option<JoinHandle<Result<(), PaligemmaError>>>,
 }
 
@@ -106,7 +112,7 @@ impl InferenceScheduler {
         let mut paligemma = Paligemma::new(PaligemmaConfig::default())?;
 
         let (req_tx, req_rx) = std::sync::mpsc::channel::<(ImageRgb8Msg, String)>();
-        let (rep_tx, rep_rx) = std::sync::mpsc::channel::<PromptResponseMsg>();
+        let (rep_tx, rep_rx) = std::sync::mpsc::channel::<(u8, String, String)>();
 
         let is_processing = Arc::new(Mutex::new(AtomicBool::new(false)));
 
@@ -114,14 +120,14 @@ impl InferenceScheduler {
             let is_processing = is_processing.clone();
             move || -> Result<(), PaligemmaError> {
                 // block the thread until the inference is stopped
-                while let Ok((img, prompt)) = req_rx.recv() {
+                while let Ok((img_msg, prompt)) = req_rx.recv() {
                     log::trace!("Scheduling a new inference");
 
-                    let response = paligemma.inference(&img, &prompt, 50, false)?;
+                    let response = paligemma.inference(&img_msg.image, &prompt, 50, false)?;
 
                     log::trace!("Inference completed");
 
-                    let _ = rep_tx.send(PromptResponseMsg { prompt, response });
+                    let _ = rep_tx.send((img_msg.channel_id, prompt, response));
                     is_processing
                         .lock()
                         .unwrap()
@@ -146,7 +152,7 @@ impl InferenceScheduler {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn try_poll_response(&self) -> Option<PromptResponseMsg> {
+    pub fn try_poll_response(&self) -> Option<(u8, String, String)> {
         self.rep_rx.try_recv().ok()
     }
 

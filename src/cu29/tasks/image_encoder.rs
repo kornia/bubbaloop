@@ -28,17 +28,18 @@ impl<'cl> CuTask<'cl> for ImageEncoder {
         input: Self::Input,
         output: Self::Output,
     ) -> Result<(), CuError> {
-        let Some(img) = input.payload() else {
+        let Some(msg) = input.payload() else {
             return Ok(());
         };
 
         let encoded_image = self
             .encoder
-            .encode(img)
+            .encode(&msg.image)
             .map_err(|e| CuError::new_with_cause("Failed to encode image", e))?;
 
-        output.metadata.tov = input.metadata.tov;
         output.set_payload(EncodedImage {
+            stamp_ns: msg.stamp_ns,
+            channel_id: msg.channel_id,
             data: encoded_image,
             encoding: "jpeg".to_string(),
         });

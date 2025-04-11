@@ -1,16 +1,15 @@
 use crate::{
-    api::models::{camera::CameraResult, inference::InferenceResult},
+    api::models::inference::InferenceResult,
     cu29::msgs::{EncodedImage, PromptResponseMsg},
     pipeline::SERVER_GLOBAL_STATE,
 };
 use cu29::prelude::*;
-use std::time::Duration;
 
-pub struct ImageBroadcast;
+pub struct ImageBroadcast1;
 
-impl Freezable for ImageBroadcast {}
+impl Freezable for ImageBroadcast1 {}
 
-impl<'cl> CuSinkTask<'cl> for ImageBroadcast {
+impl<'cl> CuSinkTask<'cl> for ImageBroadcast1 {
     type Input = input_msg!('cl, EncodedImage);
 
     fn new(_config: Option<&ComponentConfig>) -> Result<Self, CuError>
@@ -22,32 +21,48 @@ impl<'cl> CuSinkTask<'cl> for ImageBroadcast {
 
     fn process(&mut self, _clock: &RobotClock, input: Self::Input) -> Result<(), CuError> {
         // broadcast the image
-        if let Some(img) = input.payload() {
-            let acq_time: Duration = match input.metadata.tov {
-                Tov::Time(time) => time.into(),
-                _ => Duration::from_secs(0),
-            };
-
+        if let Some(msg) = input.payload() {
             // send the camera image to the global state
-            let _ = SERVER_GLOBAL_STATE
-                .result_store
-                .image
+            let _ = SERVER_GLOBAL_STATE.result_store.images[0]
                 .tx
-                .send(CameraResult {
-                    timestamp_nanos: acq_time.as_nanos() as u64,
-                    image: img.clone(),
-                });
+                .send(msg.clone());
         }
-
         Ok(())
     }
 }
 
-pub struct InferenceBroadcast;
+pub struct ImageBroadcast2;
 
-impl Freezable for InferenceBroadcast {}
+impl Freezable for ImageBroadcast2 {}
 
-impl<'cl> CuSinkTask<'cl> for InferenceBroadcast {
+impl<'cl> CuSinkTask<'cl> for ImageBroadcast2 {
+    type Input = input_msg!('cl, EncodedImage, EncodedImage);
+
+    fn new(_config: Option<&ComponentConfig>) -> Result<Self, CuError> {
+        Ok(Self {})
+    }
+
+    fn process(&mut self, _clock: &RobotClock, input: Self::Input) -> Result<(), CuError> {
+        let (msg1, msg2) = input;
+        if let Some(msg1) = msg1.payload() {
+            let _ = SERVER_GLOBAL_STATE.result_store.images[msg1.channel_id as usize]
+                .tx
+                .send(msg1.clone());
+        }
+        if let Some(msg2) = msg2.payload() {
+            let _ = SERVER_GLOBAL_STATE.result_store.images[msg2.channel_id as usize]
+                .tx
+                .send(msg2.clone());
+        }
+        Ok(())
+    }
+}
+
+pub struct InferenceBroadcast1;
+
+impl Freezable for InferenceBroadcast1 {}
+
+impl<'cl> CuSinkTask<'cl> for InferenceBroadcast1 {
     type Input = input_msg!('cl, PromptResponseMsg);
 
     fn new(_config: Option<&ComponentConfig>) -> Result<Self, CuError> {
@@ -59,17 +74,11 @@ impl<'cl> CuSinkTask<'cl> for InferenceBroadcast {
             return Ok(());
         };
 
-        let acq_time: Duration = match input.metadata.tov {
-            Tov::Time(time) => time.into(),
-            _ => Duration::from_secs(0),
-        };
-
-        let _ = SERVER_GLOBAL_STATE
-            .result_store
-            .inference
+        let _ = SERVER_GLOBAL_STATE.result_store.inference[prompt.channel_id as usize]
             .tx
             .send(InferenceResult {
-                timestamp_nanos: acq_time.as_nanos() as u64,
+                stamp_ns: prompt.stamp_ns,
+                channel_id: prompt.channel_id,
                 prompt: prompt.prompt.clone(),
                 response: prompt.response.clone(),
             });

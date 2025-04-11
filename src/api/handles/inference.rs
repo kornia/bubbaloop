@@ -1,12 +1,24 @@
-use crate::api::models::inference::{InferenceResponse, InferenceSettingsQuery};
+use crate::api::models::inference::{
+    InferenceResponse, InferenceResultQuery, InferenceSettingsQuery,
+};
 use crate::pipeline::ResultStore;
-use axum::extract::State;
-use axum::response::IntoResponse;
-use axum::Json;
+use axum::{
+    extract::{Path, State},
+    response::IntoResponse,
+    Json,
+};
 use serde_json::json;
 
-pub async fn get_inference_result(State(store): State<ResultStore>) -> impl IntoResponse {
-    let Ok(result) = store.inference.tx.subscribe().recv().await else {
+pub async fn get_inference_result(
+    Path(query): Path<InferenceResultQuery>,
+    State(store): State<ResultStore>,
+) -> impl IntoResponse {
+    let Ok(result) = store.inference[query.channel_id as usize]
+        .tx
+        .subscribe()
+        .recv()
+        .await
+    else {
         return Json(InferenceResponse::Error {
             error: "Failed to get inference result: `just start-pipeline inference`".to_string(),
         });

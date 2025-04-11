@@ -1,11 +1,7 @@
+use crate::{api::handles, pipeline::ServerGlobalState};
 use axum::{
     routing::{get, post},
     Router,
-};
-
-use crate::{
-    api::handles,
-    pipeline::{PipelineStore, ResultStore},
 };
 
 #[derive(Default)]
@@ -15,8 +11,7 @@ impl ApiServer {
     pub async fn start(
         &self,
         addr: String,
-        pipeline_store: PipelineStore,
-        result_store: ResultStore,
+        state: ServerGlobalState,
     ) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("🚀 Starting the server");
         log::info!("🔥 Listening on: {}", addr);
@@ -29,15 +24,27 @@ impl ApiServer {
                 post(handles::compute::compute_mean_std),
             )
             .nest(
+                "/api/v0/streaming",
+                Router::new().route(
+                    "/image/{channel_id}",
+                    get(handles::streaming::get_streaming_image),
+                ),
+            )
+            .nest(
                 "/api/v0/inference",
                 Router::new()
-                    .route("/result", get(handles::inference::get_inference_result))
+                    .route(
+                        "/result/{channel_id}",
+                        get(handles::inference::get_inference_result),
+                    )
                     .route(
                         "/settings",
                         post(handles::inference::post_inference_settings),
                     )
-                    .route("/image", get(handles::camera::get_camera_image))
-                    .with_state(result_store),
+                    .route(
+                        "/image/{channel_id}",
+                        get(handles::camera::get_camera_image),
+                    ),
             )
             .route("/api/v0/stats/whoami", get(handles::stats::whoami))
             .nest(
@@ -47,8 +54,9 @@ impl ApiServer {
                     .route("/stop", post(handles::pipeline::stop_pipeline))
                     .route("/list", get(handles::pipeline::list_pipelines))
                     .route("/config", get(handles::pipeline::get_config))
-                    .with_state(pipeline_store),
-            );
+                    .with_state(state.pipeline_store),
+            )
+            .with_state(state.result_store);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(listener, app).await?;

@@ -21,6 +21,7 @@
                 // rtsp://<username>:<password>@<ip>:<port>/<stream>
                 //"source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
                 "source_uri": "rtsp://tapo_terrace:123456789@192.168.1.151:554/stream2",
+                "channel_id": 0,
             }
         ),
         (
@@ -33,11 +34,17 @@
         ),
         (
             id: "img_bcast",
-            type: "crate::cu29::tasks::ImageBroadcast",
+            type: "crate::cu29::tasks::ImageBroadcast1",
+            config: {
+                "channel_id": 0,
+            }
         ),
         (
             id: "inference_bcast",
-            type: "crate::cu29::tasks::InferenceBroadcast",
+            type: "crate::cu29::tasks::InferenceBroadcast1",
+            config: {
+                "channel_id": 0,
+            }
         ),
 
     ],
