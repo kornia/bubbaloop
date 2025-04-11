@@ -23,7 +23,7 @@ impl<'cl> CuSinkTask<'cl> for ImageBroadcast1 {
         // broadcast the image
         if let Some(msg) = input.payload() {
             // send the camera image to the global state
-            let _ = SERVER_GLOBAL_STATE.result_store.images[0]
+            let _ = SERVER_GLOBAL_STATE.result_store.images[msg.channel_id as usize]
                 .tx
                 .send(msg.clone());
         }

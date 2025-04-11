@@ -1,8 +1,10 @@
+use crate::pipeline::PipelineResult;
 use cu29::prelude::*;
 use cu29_helpers::basic_copper_setup;
-use std::sync::{atomic::AtomicBool, Arc};
-
-use crate::pipeline::PipelineResult;
+use std::{
+    path::PathBuf,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
 
@@ -15,9 +17,7 @@ pub struct RecordingPipeline(pub RecordingApp);
 
 impl RecordingPipeline {
     pub fn new() -> CuResult<Self> {
-        // NOTE: this is a temporary solution to store the logger in the user's home directory
-        let logger_dir = std::path::PathBuf::from(&format!("/home/{}", whoami::username()));
-        let logger_path = logger_dir.join("recording.copper");
+        let logger_path = PathBuf::from("/tmp/recording.copper");
         debug!("Logger path: {}", path = &logger_path);
 
         let copper_ctx = basic_copper_setup(&logger_path, SLAB_SIZE, true, None)?;
