@@ -1,11 +1,10 @@
-use axum::{
-    routing::{get, post},
-    Router,
-};
-
 use crate::{
     api::handles,
     pipeline::{PipelineStore, ResultStore},
+};
+use axum::{
+    routing::{get, post},
+    Router,
 };
 
 #[derive(Default)]
@@ -31,12 +30,18 @@ impl ApiServer {
             .nest(
                 "/api/v0/inference",
                 Router::new()
-                    .route("/result", get(handles::inference::get_inference_result))
+                    .route(
+                        "/result/{channel_id}",
+                        get(handles::inference::get_inference_result),
+                    )
                     .route(
                         "/settings",
                         post(handles::inference::post_inference_settings),
                     )
-                    .route("/image", get(handles::camera::get_camera_image))
+                    .route(
+                        "/image/{channel_id}",
+                        get(handles::camera::get_camera_image),
+                    )
                     .with_state(result_store),
             )
             .route("/api/v0/stats/whoami", get(handles::stats::whoami))

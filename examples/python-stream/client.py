@@ -29,11 +29,6 @@ def response_to_image(response: dict) -> rr.Image:
     return rr.Image(data)
 
 
-def response_to_inference_result(response: dict) -> rr.TextLog:
-    log_text = f"prompt: {response['prompt']} -- response: {response['response']}"
-    return rr.TextLog(log_text, level=rr.TextLogLevel.INFO)
-
-
 async def poll_image(client: httpx.AsyncClient, url: str, rr):
     while True:
         # get the image from the server
@@ -43,20 +38,6 @@ async def poll_image(client: httpx.AsyncClient, url: str, rr):
             response = response["Success"]
             rr.set_time_sequence("session", response["stamp_ns"])
             rr.log(f"/cam/{response['channel_id']}", response_to_image(response))
-
-
-async def poll_inference_result(client: httpx.AsyncClient, url: str, rr):
-    while True:
-        # get the inference result from the server
-        response = await get_api_response(client, url)
-
-        if response is not None and "Success" in response:
-            response = response["Success"]
-            rr.set_time_sequence("session", response["stamp_ns"])
-            rr.log(
-                f"/logs/{response['channel_id']}",
-                response_to_inference_result(response),
-            )
 
 
 async def main() -> None:
@@ -69,23 +50,23 @@ async def main() -> None:
     rr.init("rerun_inference_client", spawn=True)
 
     async with httpx.AsyncClient(timeout=None) as client:
-        image_task = asyncio.create_task(
-            poll_image(
-                client,
-                url=f"http://{args.host}:{args.port}/api/v0/inference/image/0",
-                rr=rr,
-            )
-        )
-
-        inference_task = asyncio.create_task(
-            poll_inference_result(
-                client,
-                url=f"http://{args.host}:{args.port}/api/v0/inference/result/0",
-                rr=rr,
-            )
-        )
-
-        await asyncio.gather(image_task, inference_task)
+        image_tasks = [
+            asyncio.create_task(
+                poll_image(
+                    client,
+                    url=f"http://{args.host}:{args.port}/api/v0/inference/image/0",
+                    rr=rr,
+                )
+            ),
+            asyncio.create_task(
+                poll_image(
+                    client,
+                    url=f"http://{args.host}:{args.port}/api/v0/inference/image/1",
+                    rr=rr,
+                )
+            ),
+        ]
+        await asyncio.gather(*image_tasks)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@
         //    config: {
         //        "source_type": "v4l2",
         //        "source_uri": "/dev/video0",
+        //        "source_id": "cam0",
         //        "source_fps": 30,
         //        "image_cols": 640,
         //        "image_rows": 480,
@@ -13,14 +14,29 @@
         //),
         // NOTE: uncomment to use this camera
         (
+            id: "cam0",
+            type: "crate::cu29::tasks::VideoCapture",
+            config: {
+                "source_type": "rtsp",
+                // URL of the RTSP camera
+                // rtsp://<username>:<password>@<ip>:<port>/<stream>
+                "source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
+                "channel_id": 0,
+            }
+        ),
+        (
+            id: "enc0",
+            type: "crate::cu29::tasks::ImageEncoder",
+        ),
+        (
             id: "cam1",
             type: "crate::cu29::tasks::VideoCapture",
             config: {
                 "source_type": "rtsp",
                 // URL of the RTSP camera
                 // rtsp://<username>:<password>@<ip>:<port>/<stream>
-                //"source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
                 "source_uri": "rtsp://tapo_terrace:123456789@192.168.1.151:554/stream2",
+                "channel_id": 1,
             }
         ),
         (
@@ -29,21 +45,24 @@
         ),
         (
             id: "logger",
-            type: "crate::cu29::tasks::RerunLogger",
+            type: "crate::cu29::tasks::RerunLogger2",
             config: {
                 // Path to the directory where the logs will be stored
                 "path": "/tmp/",
             }
         ),
         (
-            id: "bcast",
-            type: "crate::cu29::tasks::ImageBroadcast",
+            id: "broadcast",
+            type: "crate::cu29::tasks::ImageBroadcast2",
         ),
     ],
     cnx: [
+        (src: "cam0", dst: "enc0", msg: "crate::cu29::msgs::ImageRgb8Msg"),
         (src: "cam1", dst: "enc1", msg: "crate::cu29::msgs::ImageRgb8Msg"),
+        (src: "enc0", dst: "logger", msg: "crate::cu29::msgs::EncodedImage"),
         (src: "enc1", dst: "logger", msg: "crate::cu29::msgs::EncodedImage"),
-        (src: "enc1", dst: "bcast", msg: "crate::cu29::msgs::EncodedImage"),
+        (src: "enc0", dst: "broadcast", msg: "crate::cu29::msgs::EncodedImage"),
+        (src: "enc1", dst: "broadcast", msg: "crate::cu29::msgs::EncodedImage"),
     ]
     ,
     logging: (

@@ -22,8 +22,8 @@ install_deps:
 help:
     cargo run --release --bin bubbaloop -- --help
 
-serve HOST="0.0.0.0" PORT="3000":
-    RUST_LOG=debug cargo run --release --bin serve -- -h {{HOST}} -p {{PORT}}
+serve HOST="0.0.0.0" PORT="3000" FEATURES="":
+    RUST_LOG=debug cargo run --release --bin serve {{FEATURES}} -- -h {{HOST}} -p {{PORT}}
 
 whoami HOST PORT:
     RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} stats whoami

@@ -77,7 +77,7 @@ impl<'cl> CuSinkTask<'cl> for VideoWriter {
     }
 
     fn process(&mut self, _clock: &RobotClock, input: Self::Input) -> CuResult<()> {
-        let Some(image) = input.payload() else {
+        let Some(msg) = input.payload() else {
             return Ok(());
         };
 
@@ -86,7 +86,7 @@ impl<'cl> CuSinkTask<'cl> for VideoWriter {
         };
 
         writer
-            .write(image)
+            .write(&msg.image)
             .map_err(|e| CuError::new_with_cause("Failed to write image", e))?;
 
         Ok(())

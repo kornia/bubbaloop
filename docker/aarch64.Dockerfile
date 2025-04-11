@@ -5,13 +5,16 @@ RUN apt-get update && apt-get install --assume-yes \
     curl \
     gdb \
     pkg-config \
+    software-properties-common \
+    wget \
     && \
     apt-get clean
 
-RUN dpkg --add-architecture arm64
-
 ENV DEBIAN_FRONTEND=noninteractive
 
+RUN dpkg --add-architecture arm64
+
+# Install dependencies
 RUN apt-get update && apt-get install --assume-yes \
     nasm \
     libgstreamer1.0-dev:arm64 \
@@ -21,4 +24,3 @@ RUN apt-get update && apt-get install --assume-yes \
     libudev-dev:arm64 \
     && \
     apt-get clean
-

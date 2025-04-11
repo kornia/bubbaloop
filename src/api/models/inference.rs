@@ -6,10 +6,17 @@ pub struct InferenceSettingsQuery {
     pub prompt: String,
 }
 
+/// The query for the inference request
+#[derive(Debug, Deserialize, Serialize)]
+pub struct InferenceResultQuery {
+    pub channel_id: u8,
+}
+
 /// The result of the inference request
 #[derive(Clone, Debug, Serialize)]
 pub struct InferenceResult {
-    pub timestamp_nanos: u64,
+    pub stamp_ns: u64,
+    pub channel_id: u8,
     pub prompt: String,
     pub response: String,
 }

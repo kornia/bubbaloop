@@ -1,19 +1,15 @@
 use crate::cu29::msgs::EncodedImage;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct CameraResult {
-    pub timestamp_nanos: u64,
-    pub image: EncodedImage,
+/// The query for the inference request
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CameraQuery {
+    pub channel_id: u8,
 }
 
-/// The query for the inference request
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CameraQuery;
-
 /// The response of the inference request
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CameraResponse {
-    Success(CameraResult),
+    Success(EncodedImage),
     Error { error: String },
 }
