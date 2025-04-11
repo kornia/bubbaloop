@@ -80,7 +80,7 @@ impl<'cl> CuTask<'cl> for Inference {
             );
 
             output.set_payload(PromptResponseMsg {
-                stamp_ns: clock.now().as_nanos() as u64,
+                stamp_ns: clock.now().as_nanos(),
                 channel_id,
                 prompt,
                 response,

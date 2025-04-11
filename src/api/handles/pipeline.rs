@@ -23,16 +23,16 @@ pub async fn start_pipeline(
     // TODO: create a pipeline factory so that from the REST API we can register
     //       a new pipeline and start it
     // NOTE: for now we only support one pipeline ["bubbaloop"]
-    const SUPPORTED_PIPELINES: [&str; 3] = ["bubbaloop", "recording", "inference"];
+    const SUPPORTED_PIPELINES: [&str; 4] = ["bubbaloop", "inference", "recording", "streaming"];
     if !SUPPORTED_PIPELINES.contains(&request.pipeline_id.as_str()) {
         log::error!(
-            "Pipeline {} not supported. Try 'bubbaloop' or 'recording' instead",
+            "Pipeline {} not supported. Try 'bubbaloop', 'inference', 'recording' or 'streaming' instead",
             request.pipeline_id
         );
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "Pipeline not supported. Try 'bubbaloop', 'recording' or 'inference' instead",
+                "error": "Pipeline not supported. Try 'bubbaloop', 'recording', 'inference' or 'streaming' instead",
             })),
         );
     }
@@ -56,8 +56,9 @@ pub async fn start_pipeline(
 
     let handle = match pipeline_id.as_str() {
         "bubbaloop" => pipeline::spawn_bubbaloop_thread(stop_signal.clone()),
-        "recording" => cu29::pipelines::spawn_recording_pipeline(stop_signal.clone()),
         "inference" => cu29::pipelines::spawn_inference_pipeline(stop_signal.clone()),
+        "recording" => cu29::pipelines::spawn_recording_pipeline(stop_signal.clone()),
+        "streaming" => cu29::pipelines::spawn_streaming_pipeline(stop_signal.clone()),
         _ => {
             log::error!("Pipeline {} not supported", pipeline_id);
             return (

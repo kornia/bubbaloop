@@ -37,7 +37,7 @@ impl<'cl> CuSinkTask<'cl> for RerunLogger1 {
     fn process(&mut self, _clock: &RobotClock, input: Self::Input) -> Result<(), CuError> {
         if let Some(image) = input.payload() {
             // log the image to the local rerun server
-            log_image_encoded(&self.rec, &format!("/cam/{}", image.channel_id), &image)?;
+            log_image_encoded(&self.rec, &format!("/cam/{}", image.channel_id), image)?;
         }
         Ok(())
     }
@@ -75,10 +75,10 @@ impl<'cl> CuSinkTask<'cl> for RerunLogger2 {
     fn process(&mut self, _clock: &RobotClock, input: Self::Input) -> Result<(), CuError> {
         let (msg1, msg2) = input;
         if let Some(msg1) = msg1.payload() {
-            log_image_encoded(&self.rec, &format!("/cam/{}", msg1.channel_id), &msg1)?;
+            log_image_encoded(&self.rec, &format!("/cam/{}", msg1.channel_id), msg1)?;
         }
         if let Some(msg2) = msg2.payload() {
-            log_image_encoded(&self.rec, &format!("/cam/{}", msg2.channel_id), &msg2)?;
+            log_image_encoded(&self.rec, &format!("/cam/{}", msg2.channel_id), msg2)?;
         }
         Ok(())
     }

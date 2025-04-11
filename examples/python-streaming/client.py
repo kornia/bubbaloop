@@ -1,10 +1,9 @@
-"""Example of a client that requests the inference result from the server."""
+"""Example of a client that requests the streaming image from the server."""
 
 import argparse
 import asyncio
 import httpx
 import rerun as rr
-import numpy as np
 import kornia_rs as kr
 
 
@@ -41,7 +40,7 @@ async def poll_image(client: httpx.AsyncClient, url: str, rr):
 
 
 async def main() -> None:
-    """Main function to receive the inference result from the server."""
+    """Main function to receive the streaming image from the server."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=3000)
@@ -54,14 +53,14 @@ async def main() -> None:
             asyncio.create_task(
                 poll_image(
                     client,
-                    url=f"http://{args.host}:{args.port}/api/v0/inference/image/0",
+                    url=f"http://{args.host}:{args.port}/api/v0/streaming/image/0",
                     rr=rr,
                 )
             ),
             asyncio.create_task(
                 poll_image(
                     client,
-                    url=f"http://{args.host}:{args.port}/api/v0/inference/image/1",
+                    url=f"http://{args.host}:{args.port}/api/v0/streaming/image/1",
                     rr=rr,
                 )
             ),

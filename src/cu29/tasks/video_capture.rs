@@ -88,7 +88,7 @@ impl<'cl> CuSrcTask<'cl> for VideoCapture {
         };
 
         output.set_payload(ImageRgb8Msg {
-            stamp_ns: clock.now().as_nanos() as u64,
+            stamp_ns: clock.now().as_nanos(),
             channel_id: self.channel_id,
             image: img,
         });
