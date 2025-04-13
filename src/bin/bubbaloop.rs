@@ -1,5 +1,4 @@
 use argh::FromArgs;
-use serde_json::json;
 
 // defaults for the server
 const DEFAULT_HOST: &str = "0.0.0.0";
@@ -23,7 +22,6 @@ struct CLIArgs {
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum Commands {
-    Compute(ComputeCommand),
     Inference(InferenceCommand),
     Pipeline(PipelineCommand),
     Stats(StatsCommand),
@@ -33,33 +31,6 @@ enum Commands {
 #[argh(subcommand, name = "inference")]
 /// Execute inference on the server
 struct InferenceCommand {}
-
-#[derive(FromArgs)]
-#[argh(subcommand, name = "compute")]
-/// Execute local routines on the server
-struct ComputeCommand {
-    #[argh(subcommand)]
-    mode: ComputeMode,
-}
-
-#[derive(FromArgs)]
-#[argh(subcommand)]
-enum ComputeMode {
-    MeanStd(ComputeMeanStdCommand),
-}
-
-/// Compute mean and std of an image
-#[derive(FromArgs)]
-#[argh(subcommand, name = "mean-std")]
-struct ComputeMeanStdCommand {
-    #[argh(option, short = 'i')]
-    /// the images directory to compute the mean and std of
-    images_dir: String,
-
-    #[argh(option, short = 'n')]
-    /// the number of threads to use
-    num_threads: Option<usize>,
-}
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "stats")]
@@ -73,12 +44,18 @@ struct StatsCommand {
 #[argh(subcommand)]
 enum StatsMode {
     Whoami(StatsWhoamiCommand),
+    Sysinfo(StatsSysinfoCommand),
 }
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "whoami")]
 /// Print the whoami
 struct StatsWhoamiCommand {}
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "sysinfo")]
+/// Print the sysinfo
+struct StatsSysinfoCommand {}
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "pipeline")]
@@ -135,30 +112,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", args.host, args.port);
 
     match args.commands {
-        Commands::Compute(compute_command) => match compute_command.mode {
-            ComputeMode::MeanStd(mean_std_command) => {
-                let mut post_payload = json!({
-                    "images_dir": mean_std_command.images_dir,
-                });
-
-                if let Some(num_threads) = mean_std_command.num_threads {
-                    post_payload["num_threads"] = json!(num_threads);
-                }
-
+        Commands::Stats(stats_command) => match stats_command.mode {
+            StatsMode::Whoami(_) => {
                 let response = client
-                    .post(format!("http://{}/api/v0/compute/mean_std", addr))
-                    .json(&post_payload)
+                    .get(format!("http://{}/api/v0/stats/whoami", addr))
                     .send()
                     .await?;
 
                 let result = response.json::<serde_json::Value>().await?;
                 println!("Result: {}", serde_json::to_string_pretty(&result)?);
             }
-        },
-        Commands::Stats(stats_command) => match stats_command.mode {
-            StatsMode::Whoami(_whoami_command) => {
+            StatsMode::Sysinfo(_) => {
                 let response = client
-                    .get(format!("http://{}/api/v0/stats/whoami", addr))
+                    .get(format!("http://{}/api/v0/stats/sysinfo", addr))
                     .send()
                     .await?;
 

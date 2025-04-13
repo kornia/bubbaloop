@@ -15,7 +15,7 @@ struct Whoami {
 }
 
 /// Get the current user's information
-pub async fn whoami() -> impl IntoResponse {
+pub async fn get_whoami() -> impl IntoResponse {
     log::debug!("🤖 Received request for whoami");
     Json(Whoami {
         realname: whoami::realname(),

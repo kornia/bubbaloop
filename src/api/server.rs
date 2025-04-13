@@ -19,7 +19,13 @@ impl ApiServer {
 
         let app = Router::new()
             .route("/", get(|| async { "Welcome to Bubbaloop!" }))
-            .route("/api/v0/stats/whoami", get(handles::stats::whoami))
+            //.route("/api/v0/stats/whoami", get(handles::stats::whoami))
+            .nest(
+                "/api/v0/stats",
+                Router::new()
+                    .route("/whoami", get(handles::stats::get_whoami))
+                    .route("/sysinfo", get(handles::stats::get_sysinfo)),
+            )
             .nest(
                 "/api/v0/streaming",
                 Router::new().route(

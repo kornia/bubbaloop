@@ -28,6 +28,9 @@ serve HOST="0.0.0.0" PORT="3000" FEATURES="":
 whoami HOST="0.0.0.0" PORT="3000":
     RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} stats whoami
 
+sysinfo HOST="0.0.0.0" PORT="3000":
+    RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} stats sysinfo
+
 compute-mean-std HOST PORT PATH:
     RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} compute mean-std -i {{PATH}}
 
