@@ -1,24 +1,23 @@
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
-
+use crate::{
+    api::models::pipeline::{PipelineStartRequest, PipelineStopRequest},
+    cu29,
+    pipeline::{self, PipelineHandle, PipelineInfo, PipelineStatus, PipelineStore},
+};
 use axum::{
     extract::State,
     response::{IntoResponse, Json},
 };
 use reqwest::StatusCode;
 use serde_json::json;
-
-use crate::{
-    api::models::pipeline::{PipelineStartRequest, PipelineStopRequest},
-    cu29,
-    pipeline::{self, PipelineHandle, PipelineInfo, PipelineStatus, PipelineStore},
-};
+use std::{sync::atomic::AtomicBool, sync::Arc};
 
 /// Start a pipeline given its id
 pub async fn start_pipeline(
     State(store): State<PipelineStore>,
     Json(request): Json<PipelineStartRequest>,
 ) -> impl IntoResponse {
+    log::debug!("Request to start pipeline: {}", request.pipeline_id);
+
     // TODO: create a pipeline factory so that from the REST API we can register
     //       a new pipeline and start it
     // NOTE: for now we only support one pipeline ["bubbaloop"]
@@ -78,6 +77,8 @@ pub async fn start_pipeline(
         },
     );
 
+    log::debug!("Pipeline {} started", pipeline_id);
+
     (
         StatusCode::OK,
         Json(json!({
@@ -93,6 +94,7 @@ pub async fn stop_pipeline(
 ) -> impl IntoResponse {
     log::debug!("Request to stop pipeline: {}", request.pipeline_id);
     if !store.unregister_pipeline(&request.pipeline_id) {
+        log::error!("Pipeline {} not found", request.pipeline_id);
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -100,6 +102,8 @@ pub async fn stop_pipeline(
             })),
         );
     }
+
+    log::debug!("Pipeline {} stopped", request.pipeline_id);
 
     (
         StatusCode::OK,
@@ -109,6 +113,7 @@ pub async fn stop_pipeline(
 
 // List all pipelines and return their status
 pub async fn list_pipelines(State(store): State<PipelineStore>) -> impl IntoResponse {
+    log::debug!("Request to list pipelines");
     let store = store.0.lock().expect("Failed to lock pipeline store");
     let pipelines = store
         .values()

@@ -1,7 +1,7 @@
-use crate::api::models::inference::{
-    InferenceResponse, InferenceResultQuery, InferenceSettingsQuery,
+use crate::{
+    api::models::inference::{InferenceResponse, InferenceResultQuery, InferenceSettingsQuery},
+    pipeline::ResultStore,
 };
-use crate::pipeline::ResultStore;
 use axum::{
     extract::{Path, State},
     response::IntoResponse,
@@ -13,6 +13,7 @@ pub async fn get_inference_result(
     Path(query): Path<InferenceResultQuery>,
     State(store): State<ResultStore>,
 ) -> impl IntoResponse {
+    log::debug!("Request to get inference result: {}", query.channel_id);
     let Ok(result) = store.inference[query.channel_id as usize]
         .tx
         .subscribe()
@@ -30,6 +31,7 @@ pub async fn post_inference_settings(
     State(store): State<ResultStore>,
     Json(query): Json<InferenceSettingsQuery>,
 ) -> impl IntoResponse {
+    log::debug!("Request to post inference settings: {}", query.prompt);
     let Ok(_) = store.inference_settings.tx.send(query.prompt) else {
         return Json(json!({
             "error": "Failed to send inference settings"

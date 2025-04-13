@@ -61,8 +61,6 @@ pub fn spawn_inference_pipeline(
             // stop the pipeline and wait for the tasks to finish
             app.stop_all_tasks()?;
 
-            log::debug!("Inference pipeline stopped");
-
             Ok(())
         }
     })
