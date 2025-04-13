@@ -40,7 +40,7 @@ struct Disk {
 pub async fn get_sysinfo() -> impl IntoResponse {
     log::debug!("🤖 Received request for sysinfo");
 
-    // TODO: implement this into a backgorund task
+    // TODO: implement this into a background task
     let mut sys = System::new_all();
     sys.refresh_all();
     sys.refresh_cpu_usage();
