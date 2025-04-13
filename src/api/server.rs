@@ -51,7 +51,6 @@ impl ApiServer {
                     .route("/start", post(handles::pipeline::start_pipeline))
                     .route("/stop", post(handles::pipeline::stop_pipeline))
                     .route("/list", get(handles::pipeline::list_pipelines))
-                    .route("/config", get(handles::pipeline::get_config))
                     .with_state(state.pipeline_store),
             )
             .with_state(state.result_store);

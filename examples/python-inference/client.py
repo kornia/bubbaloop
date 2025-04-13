@@ -72,7 +72,7 @@ async def main() -> None:
         image_task = asyncio.create_task(
             poll_image(
                 client,
-                url=f"http://{args.host}:{args.port}/api/v0/inference/image/0",
+                url=f"http://{args.host}:{args.port}/api/v0/streaming/image/0",
                 rr=rr,
             )
         )

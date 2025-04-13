@@ -1,4 +1,3 @@
-use ::cu29::read_configuration;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -119,22 +118,4 @@ pub async fn list_pipelines(State(store): State<PipelineStore>) -> impl IntoResp
         })
         .collect::<Vec<_>>();
     Json(pipelines)
-}
-
-/// Get the current configuration pipeline
-pub async fn get_config(State(_store): State<PipelineStore>) -> impl IntoResponse {
-    let copper_config = match read_configuration("bubbaloop.ron") {
-        Ok(config) => config,
-        Err(e) => {
-            log::error!("Failed to read configuration: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Failed to read configuration" })),
-            );
-        }
-    };
-
-    let all_nodes = copper_config.get_all_nodes();
-
-    (StatusCode::OK, Json(json!(all_nodes)))
 }

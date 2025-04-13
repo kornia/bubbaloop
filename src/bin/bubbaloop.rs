@@ -22,15 +22,9 @@ struct CLIArgs {
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum Commands {
-    Inference(InferenceCommand),
     Pipeline(PipelineCommand),
     Stats(StatsCommand),
 }
-
-#[derive(FromArgs)]
-#[argh(subcommand, name = "inference")]
-/// Execute inference on the server
-struct InferenceCommand {}
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "stats")]
@@ -71,7 +65,6 @@ enum PipelineMode {
     Start(PipelineStartCommand),
     Stop(PipelineStopCommand),
     List(PipelineListCommand),
-    Config(PipelineConfigCommand),
 }
 
 #[derive(FromArgs)]
@@ -96,11 +89,6 @@ struct PipelineStopCommand {
 #[argh(subcommand, name = "list")]
 /// List pipelines
 struct PipelineListCommand {}
-
-#[derive(FromArgs)]
-#[argh(subcommand, name = "config")]
-/// Get the pipeline config
-struct PipelineConfigCommand {}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -166,25 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let result = response.json::<serde_json::Value>().await?;
                 println!("Result: {}", serde_json::to_string_pretty(&result)?);
             }
-            PipelineMode::Config(_pipeline_config_command) => {
-                let response = client
-                    .get(format!("http://{}/api/v0/pipeline/config", addr))
-                    .send()
-                    .await?;
-
-                let result = response.json::<serde_json::Value>().await?;
-                println!("Result: {}", serde_json::to_string_pretty(&result)?);
-            }
         },
-        Commands::Inference(_inference_command) => {
-            let response = client
-                .get(format!("http://{}/api/v0/inference/result", addr))
-                .send()
-                .await?;
-
-            let result = response.json::<serde_json::Value>().await?;
-            println!("Result: {}", serde_json::to_string_pretty(&result)?);
-        }
     }
 
     Ok(())
