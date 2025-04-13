@@ -19,10 +19,7 @@ impl ApiServer {
 
         let app = Router::new()
             .route("/", get(|| async { "Welcome to Bubbaloop!" }))
-            .route(
-                "/api/v0/compute/mean_std",
-                post(handles::compute::compute_mean_std),
-            )
+            .route("/api/v0/stats/whoami", get(handles::stats::whoami))
             .nest(
                 "/api/v0/streaming",
                 Router::new().route(
@@ -42,7 +39,6 @@ impl ApiServer {
                         post(handles::inference::post_inference_settings),
                     ),
             )
-            .route("/api/v0/stats/whoami", get(handles::stats::whoami))
             .nest(
                 "/api/v0/pipeline",
                 Router::new()
