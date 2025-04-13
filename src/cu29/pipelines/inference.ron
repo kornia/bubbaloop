@@ -25,7 +25,7 @@
             }
         ),
         (
-            id: "encoder",
+            id: "enc0",
             type: "crate::cu29::tasks::ImageEncoder",
         ),
         (
@@ -34,14 +34,14 @@
         ),
         (
             id: "img_bcast",
-            type: "crate::cu29::tasks::ImageBroadcast1",
+            type: "crate::cu29::tasks::ImageBroadcast",
             config: {
                 "channel_id": 0,
             }
         ),
         (
             id: "inference_bcast",
-            type: "crate::cu29::tasks::InferenceBroadcast1",
+            type: "crate::cu29::tasks::InferenceBroadcast",
             config: {
                 "channel_id": 0,
             }
@@ -49,9 +49,9 @@
 
     ],
     cnx: [
-        (src: "cam0", dst: "encoder", msg: "crate::cu29::msgs::ImageRgb8Msg"),
+        (src: "cam0", dst: "enc0", msg: "crate::cu29::msgs::ImageRgb8Msg"),
         (src: "cam0", dst: "inference", msg: "crate::cu29::msgs::ImageRgb8Msg"),
-        (src: "encoder", dst: "img_bcast", msg: "crate::cu29::msgs::EncodedImage"),
+        (src: "enc0", dst: "img_bcast", msg: "crate::cu29::msgs::EncodedImage"),
         (src: "inference", dst: "inference_bcast", msg: "crate::cu29::msgs::PromptResponseMsg"),
     ],
     logging: (

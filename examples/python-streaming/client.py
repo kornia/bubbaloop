@@ -1,4 +1,8 @@
-"""Example of a client that requests the streaming image from the server."""
+"""Example of a client that requests the streaming image from the server.
+
+Usage:
+    python examples/python-streaming/client.py --host 0.0.0.0 --port 3000 --cameras 0 1
+"""
 
 import argparse
 import asyncio
@@ -22,7 +26,7 @@ async def get_api_response(client: httpx.AsyncClient, url: str) -> dict | None:
 
 
 def response_to_image(response: dict) -> rr.Image:
-    # decode the image
+    # decode the JPEG image
     decoder = kr.ImageDecoder()
     data = decoder.decode(bytes(response["data"]))
     return rr.Image(data)
@@ -40,31 +44,27 @@ async def poll_image(client: httpx.AsyncClient, url: str, rr):
 
 
 async def main() -> None:
-    """Main function to receive the streaming image from the server."""
+    """Main function to receive the streaming images from the server."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=3000)
+    parser.add_argument("--cameras", type=int, nargs="+", default=[0])
     args = parser.parse_args()
 
-    rr.init("rerun_inference_client", spawn=True)
+    rr.init("rerun_streaming_client", spawn=True)
 
     async with httpx.AsyncClient(timeout=None) as client:
-        image_tasks = [
-            asyncio.create_task(
-                poll_image(
-                    client,
-                    url=f"http://{args.host}:{args.port}/api/v0/streaming/image/0",
-                    rr=rr,
+        image_tasks = []
+        for camera_id in args.cameras:
+            image_tasks.append(
+                asyncio.create_task(
+                    poll_image(
+                        client,
+                        url=f"http://{args.host}:{args.port}/api/v0/streaming/image/{camera_id}",
+                        rr=rr,
+                    )
                 )
-            ),
-            asyncio.create_task(
-                poll_image(
-                    client,
-                    url=f"http://{args.host}:{args.port}/api/v0/streaming/image/1",
-                    rr=rr,
-                )
-            ),
-        ]
+            )
         await asyncio.gather(*image_tasks)
 
 

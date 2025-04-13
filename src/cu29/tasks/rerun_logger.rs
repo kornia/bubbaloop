@@ -2,13 +2,13 @@ use crate::cu29::msgs::{EncodedImage, ImageRgb8Msg};
 use cu29::prelude::*;
 use std::path::PathBuf;
 
-pub struct RerunLogger1 {
+pub struct RerunLoggerOne {
     rec: rerun::RecordingStream,
 }
 
-impl Freezable for RerunLogger1 {}
+impl Freezable for RerunLoggerOne {}
 
-impl<'cl> CuSinkTask<'cl> for RerunLogger1 {
+impl<'cl> CuSinkTask<'cl> for RerunLoggerOne {
     type Input = input_msg!('cl, EncodedImage);
 
     fn new(config: Option<&ComponentConfig>) -> Result<Self, CuError>
@@ -43,13 +43,13 @@ impl<'cl> CuSinkTask<'cl> for RerunLogger1 {
     }
 }
 
-pub struct RerunLogger2 {
+pub struct RerunLoggerTwo {
     rec: rerun::RecordingStream,
 }
 
-impl Freezable for RerunLogger2 {}
+impl Freezable for RerunLoggerTwo {}
 
-impl<'cl> CuSinkTask<'cl> for RerunLogger2 {
+impl<'cl> CuSinkTask<'cl> for RerunLoggerTwo {
     type Input = input_msg!('cl, EncodedImage, EncodedImage);
 
     fn new(config: Option<&ComponentConfig>) -> Result<Self, CuError> {
