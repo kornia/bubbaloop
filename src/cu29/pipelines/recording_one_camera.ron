@@ -12,35 +12,28 @@
             }
         ),
         (
-            id: "cam1",
-            type: "crate::cu29::tasks::VideoCapture",
-            config: {
-                "source_type": "rtsp",
-                // URL of the RTSP camera
-                // rtsp://<username>:<password>@<ip>:<port>/<stream>
-                "source_uri": "rtsp://tapo_terrace:123456789@192.168.1.151:554/stream2",
-                "channel_id": 1,
-            }
-        ),
-        (
             id: "enc0",
             type: "crate::cu29::tasks::ImageEncoder",
         ),
         (
-            id: "enc1",
-            type: "crate::cu29::tasks::ImageEncoder",
+            id: "logger",
+            type: "crate::cu29::tasks::RerunLoggerOne",
+            config: {
+                // Path to the directory where the recordings will be stored
+                "path": "/tmp/",
+            }
         ),
         (
-            id: "broadcast",
-            type: "crate::cu29::tasks::ImageBroadcast2",
+            id: "bcast0",
+            type: "crate::cu29::tasks::ImageBroadcast",
         ),
     ],
     cnx: [
         (src: "cam0", dst: "enc0", msg: "crate::cu29::msgs::ImageRgb8Msg"),
-        (src: "cam1", dst: "enc1", msg: "crate::cu29::msgs::ImageRgb8Msg"),
-        (src: "enc0", dst: "broadcast", msg: "crate::cu29::msgs::EncodedImage"),
-        (src: "enc1", dst: "broadcast", msg: "crate::cu29::msgs::EncodedImage"),
-    ],
+        (src: "enc0", dst: "logger", msg: "crate::cu29::msgs::EncodedImage"),
+        (src: "enc0", dst: "bcast0", msg: "crate::cu29::msgs::EncodedImage"),
+    ]
+    ,
     logging: (
         slab_size_mib: 1024, // Preallocates 1GiB of memory map file at a time
         section_size_mib: 100, // Preallocates 100MiB of memory map per section for the main logger.

@@ -5,11 +5,11 @@ use crate::{
 };
 use cu29::prelude::*;
 
-pub struct ImageBroadcast1;
+pub struct ImageBroadcast;
 
-impl Freezable for ImageBroadcast1 {}
+impl Freezable for ImageBroadcast {}
 
-impl<'cl> CuSinkTask<'cl> for ImageBroadcast1 {
+impl<'cl> CuSinkTask<'cl> for ImageBroadcast {
     type Input = input_msg!('cl, EncodedImage);
 
     fn new(_config: Option<&ComponentConfig>) -> Result<Self, CuError>
@@ -31,38 +31,11 @@ impl<'cl> CuSinkTask<'cl> for ImageBroadcast1 {
     }
 }
 
-pub struct ImageBroadcast2;
+pub struct InferenceBroadcast;
 
-impl Freezable for ImageBroadcast2 {}
+impl Freezable for InferenceBroadcast {}
 
-impl<'cl> CuSinkTask<'cl> for ImageBroadcast2 {
-    type Input = input_msg!('cl, EncodedImage, EncodedImage);
-
-    fn new(_config: Option<&ComponentConfig>) -> Result<Self, CuError> {
-        Ok(Self {})
-    }
-
-    fn process(&mut self, _clock: &RobotClock, input: Self::Input) -> Result<(), CuError> {
-        let (msg1, msg2) = input;
-        if let Some(msg1) = msg1.payload() {
-            let _ = SERVER_GLOBAL_STATE.result_store.images[msg1.channel_id as usize]
-                .tx
-                .send(msg1.clone());
-        }
-        if let Some(msg2) = msg2.payload() {
-            let _ = SERVER_GLOBAL_STATE.result_store.images[msg2.channel_id as usize]
-                .tx
-                .send(msg2.clone());
-        }
-        Ok(())
-    }
-}
-
-pub struct InferenceBroadcast1;
-
-impl Freezable for InferenceBroadcast1 {}
-
-impl<'cl> CuSinkTask<'cl> for InferenceBroadcast1 {
+impl<'cl> CuSinkTask<'cl> for InferenceBroadcast {
     type Input = input_msg!('cl, PromptResponseMsg);
 
     fn new(_config: Option<&ComponentConfig>) -> Result<Self, CuError> {

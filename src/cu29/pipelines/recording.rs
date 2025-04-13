@@ -10,7 +10,7 @@ const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
 
 // NOTE: this will use the default config file in the current directory during compilation
 // however, it will be overridden by the ron config string when the pipeline is started
-#[copper_runtime(config = "src/cu29/pipelines/recording.ron")]
+#[copper_runtime(config = "src/cu29/pipelines/recording_two_camera.ron")]
 struct RecordingApp {}
 
 pub struct RecordingPipeline(pub RecordingApp);
@@ -57,9 +57,6 @@ pub fn spawn_recording_pipeline(
             while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
                 // we run the pipeline iteration step by step
                 app.run_one_iteration()?;
-
-                // NOTE: is this really needed?
-                std::thread::sleep(std::time::Duration::from_millis(30));
             }
 
             // stop the pipeline and wait for the tasks to finish

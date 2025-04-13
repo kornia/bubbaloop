@@ -40,10 +40,6 @@ impl ApiServer {
                     .route(
                         "/settings",
                         post(handles::inference::post_inference_settings),
-                    )
-                    .route(
-                        "/image/{channel_id}",
-                        get(handles::camera::get_camera_image),
                     ),
             )
             .route("/api/v0/stats/whoami", get(handles::stats::whoami))
