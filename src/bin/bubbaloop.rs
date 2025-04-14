@@ -23,6 +23,7 @@ struct CLIArgs {
 #[argh(subcommand)]
 enum Commands {
     Pipeline(PipelineCommand),
+    Recording(RecordingCommand),
     Stats(StatsCommand),
 }
 
@@ -50,6 +51,31 @@ struct StatsWhoamiCommand {}
 #[argh(subcommand, name = "sysinfo")]
 /// Print the sysinfo
 struct StatsSysinfoCommand {}
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "recording")]
+/// Recording management commands
+struct RecordingCommand {
+    #[argh(subcommand)]
+    mode: RecordingMode,
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand)]
+enum RecordingMode {
+    Start(RecordingStartCommand),
+    Stop(RecordingStopCommand),
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "start")]
+/// Start recording
+struct RecordingStartCommand {}
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "stop")]
+/// Stop recording
+struct RecordingStopCommand {}
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "pipeline")]
@@ -113,6 +139,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             StatsMode::Sysinfo(_) => {
                 let response = client
                     .get(format!("http://{}/api/v0/stats/sysinfo", addr))
+                    .send()
+                    .await?;
+
+                let result = response.json::<serde_json::Value>().await?;
+                println!("Result: {}", serde_json::to_string_pretty(&result)?);
+            }
+        },
+        Commands::Recording(recording_command) => match recording_command.mode {
+            RecordingMode::Start(_) => {
+                let response = client
+                    .post(format!("http://{}/api/v0/recording", addr))
+                    .json(&bubbaloop::api::models::recording::RecordingQuery {
+                        command: bubbaloop::api::models::recording::RecordingCommand::Start,
+                    })
+                    .send()
+                    .await?;
+
+                let result = response.json::<serde_json::Value>().await?;
+                println!("Result: {}", serde_json::to_string_pretty(&result)?);
+            }
+            RecordingMode::Stop(_) => {
+                let response = client
+                    .post(format!("http://{}/api/v0/recording", addr))
+                    .json(&bubbaloop::api::models::recording::RecordingQuery {
+                        command: bubbaloop::api::models::recording::RecordingCommand::Stop,
+                    })
                     .send()
                     .await?;
 

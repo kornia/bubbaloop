@@ -33,6 +33,10 @@ impl ApiServer {
                     get(handles::streaming::get_streaming_image),
                 ),
             )
+            .route(
+                "/api/v0/recording",
+                post(handles::recording::post_recording_command),
+            )
             .nest(
                 "/api/v0/inference",
                 Router::new()

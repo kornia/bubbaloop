@@ -7,8 +7,8 @@ pub use image_encoder::*;
 mod inference;
 pub use inference::*;
 
-mod rerun_logger;
-pub use rerun_logger::*;
+mod recorder;
+pub use recorder::*;
 
 mod video_capture;
 pub use video_capture::*;

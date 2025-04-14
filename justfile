@@ -39,3 +39,9 @@ stop-pipeline ID HOST="0.0.0.0" PORT="3000":
 
 list-pipelines HOST="0.0.0.0" PORT="3000":
     RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} pipeline list
+
+start-recording HOST="0.0.0.0" PORT="3000":
+    RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} recording start
+
+stop-recording HOST="0.0.0.0" PORT="3000":
+    RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} recording stop

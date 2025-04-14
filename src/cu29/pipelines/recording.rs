@@ -10,7 +10,7 @@ const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
 
 // NOTE: this will use the default config file in the current directory during compilation
 // however, it will be overridden by the ron config string when the pipeline is started
-#[copper_runtime(config = "src/cu29/pipelines/recording_two_camera.ron")]
+#[copper_runtime(config = "src/cu29/pipelines/recording_one_camera.ron")]
 struct RecordingApp {}
 
 pub struct RecordingPipeline(pub RecordingApp);
@@ -61,6 +61,8 @@ pub fn spawn_recording_pipeline(
 
             // stop the pipeline and wait for the tasks to finish
             app.stop_all_tasks()?;
+
+            log::debug!("Recording pipeline stopped");
 
             Ok(())
         }

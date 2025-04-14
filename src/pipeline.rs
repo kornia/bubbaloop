@@ -1,4 +1,7 @@
-use crate::{api::models::inference::InferenceResult, cu29::msgs::EncodedImage};
+use crate::{
+    api::models::{inference::InferenceResult, recording::RecordingCommand},
+    cu29::msgs::EncodedImage,
+};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -35,18 +38,18 @@ impl<T: Clone> Default for BroadcastSender<T> {
 
 /// A sender and receiver for a single message
 #[derive(Clone)]
-pub struct SenderReceiver {
-    pub rx: Arc<Mutex<std::sync::mpsc::Receiver<String>>>,
-    pub tx: std::sync::mpsc::Sender<String>,
+pub struct SenderReceiver<T> {
+    pub rx: Arc<Mutex<std::sync::mpsc::Receiver<T>>>,
+    pub tx: std::sync::mpsc::Sender<T>,
 }
 
-impl Default for SenderReceiver {
+impl<T> Default for SenderReceiver<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SenderReceiver {
+impl<T> SenderReceiver<T> {
     pub fn new() -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         Self {
@@ -57,12 +60,12 @@ impl SenderReceiver {
 }
 
 #[derive(Clone)]
-pub struct InferenceSenderReceiver {
-    pub query: SenderReceiver,
-    pub result: SenderReceiver,
+pub struct InferenceSenderReceiver<T> {
+    pub query: SenderReceiver<T>,
+    pub result: SenderReceiver<T>,
 }
 
-impl Default for InferenceSenderReceiver {
+impl<T> Default for InferenceSenderReceiver<T> {
     fn default() -> Self {
         Self {
             query: SenderReceiver::new(),
@@ -76,9 +79,10 @@ impl Default for InferenceSenderReceiver {
 pub struct ResultStore {
     // NOTE: support a fixed number of streams
     pub inference: [BroadcastSender<InferenceResult>; 2],
-    pub inference_settings: SenderReceiver,
+    pub inference_settings: SenderReceiver<String>,
     // NOTE: support a fixed number of streams
     pub images: [BroadcastSender<EncodedImage>; 2],
+    pub recording: SenderReceiver<RecordingCommand>,
 }
 
 impl Default for ResultStore {
@@ -87,6 +91,7 @@ impl Default for ResultStore {
             inference: [BroadcastSender::new(), BroadcastSender::new()],
             inference_settings: SenderReceiver::new(),
             images: [BroadcastSender::new(), BroadcastSender::new()],
+            recording: SenderReceiver::new(),
         }
     }
 }

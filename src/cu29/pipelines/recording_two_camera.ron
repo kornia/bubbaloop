@@ -39,8 +39,8 @@
             type: "crate::cu29::tasks::ImageBroadcast",
         ),
         (
-            id: "logger",
-            type: "crate::cu29::tasks::RerunLoggerTwo",
+            id: "recorder",
+            type: "crate::cu29::tasks::RecorderTwo",
             config: {
                 // Path to the directory where the logs will be stored
                 "path": "/tmp/",
@@ -50,8 +50,8 @@
     cnx: [
         (src: "cam0", dst: "enc0", msg: "crate::cu29::msgs::ImageRgb8Msg"),
         (src: "cam1", dst: "enc1", msg: "crate::cu29::msgs::ImageRgb8Msg"),
-        (src: "enc0", dst: "logger", msg: "crate::cu29::msgs::EncodedImage"),
-        (src: "enc1", dst: "logger", msg: "crate::cu29::msgs::EncodedImage"),
+        (src: "enc0", dst: "recorder", msg: "crate::cu29::msgs::EncodedImage"),
+        (src: "enc1", dst: "recorder", msg: "crate::cu29::msgs::EncodedImage"),
         (src: "enc0", dst: "bcast0", msg: "crate::cu29::msgs::EncodedImage"),
         (src: "enc1", dst: "bcast1", msg: "crate::cu29::msgs::EncodedImage"),
     ]
