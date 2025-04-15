@@ -6,6 +6,14 @@ description: Get started with serving Bubbaloop serving platform
 
 ## Setup the project
 
+{% hint style="info" %}
+Windows users are recommeneded to use Windows Subsystems by running `wsl.exe --install Ubuntu-22.04` on a Powershell.
+{% endhint %}
+
+{% hint style="info" %}
+You may need to install [rust](https://www.rust-lang.org/tools/install) if you have not.
+{% endhint %}
+
 {% stepper %}
 {% step %}
 #### Download the project
