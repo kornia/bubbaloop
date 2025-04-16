@@ -10,18 +10,18 @@ const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
 
 // NOTE: this will use the default config file in the current directory during compilation
 // however, it will be overridden by the ron config string when the pipeline is started
-#[copper_runtime(config = "src/cu29/pipelines/streaming_two_camera.ron")]
-struct StreamingApp {}
+#[copper_runtime(config = "src/cu29/pipelines/bubbaloop_2.ron")]
+struct BubbaloopApp {}
 
-pub struct StreamingPipeline(pub StreamingApp);
+pub struct BubbaloopPipeline(pub BubbaloopApp);
 
-impl StreamingPipeline {
+impl BubbaloopPipeline {
     pub fn new() -> CuResult<Self> {
-        let logger_path = PathBuf::from("/tmp/streaming.copper");
+        let logger_path = PathBuf::from("/tmp/bubbaloop.copper");
         debug!("Logger path: {}", path = &logger_path);
 
         let copper_ctx = basic_copper_setup(&logger_path, SLAB_SIZE, true, None)?;
-        let application = StreamingAppBuilder::new()
+        let application = BubbaloopAppBuilder::new()
             .with_context(&copper_ctx)
             .build()?;
 
@@ -42,13 +42,14 @@ impl StreamingPipeline {
 /// # Returns
 ///
 /// A handle to the thread that runs the pipeline
-pub fn spawn_streaming_pipeline(
+pub fn spawn_bubbaloop_pipeline(
     stop_signal: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<PipelineResult> {
     std::thread::spawn({
+        let stop_signal = stop_signal.clone();
         move || -> PipelineResult {
             // parse the ron config string and create the pipeline
-            let mut app = StreamingPipeline::new()?;
+            let mut app = BubbaloopPipeline::new()?;
 
             // create the pipeline and start the tasks
             app.start_all_tasks()?;
@@ -61,20 +62,22 @@ pub fn spawn_streaming_pipeline(
             // stop the pipeline and wait for the tasks to finish
             app.stop_all_tasks()?;
 
+            log::debug!("Bubbaloop pipeline stopped");
+
             Ok(())
         }
     })
 }
 
-impl std::ops::Deref for StreamingPipeline {
-    type Target = StreamingApp;
+impl std::ops::Deref for BubbaloopPipeline {
+    type Target = BubbaloopApp;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl std::ops::DerefMut for StreamingPipeline {
+impl std::ops::DerefMut for BubbaloopPipeline {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }

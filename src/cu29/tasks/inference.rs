@@ -18,10 +18,16 @@ use std::{
 // https://ai.google.dev/gemma/docs/paligemma/prompt-system-instructions
 const DEFAULT_PROMPT: &str = "cap en";
 
+#[derive(PartialEq)]
+enum InferenceState {
+    Disabled,
+}
+
 /// Task that runs inference on an image
 pub struct Inference {
     current_prompt: String,
     scheduler: InferenceScheduler,
+    state: InferenceState,
 }
 
 impl Freezable for Inference {}
@@ -40,6 +46,7 @@ impl<'cl> CuTask<'cl> for Inference {
         Ok(Self {
             current_prompt: DEFAULT_PROMPT.to_string(),
             scheduler,
+            state: InferenceState::Disabled,
         })
     }
 
@@ -49,6 +56,10 @@ impl<'cl> CuTask<'cl> for Inference {
         input: Self::Input,
         output: Self::Output,
     ) -> Result<(), CuError> {
+        if self.state == InferenceState::Disabled {
+            return Ok(());
+        }
+
         // clear the output payload to avoid any previous payload to be forwarded
         output.clear_payload();
 

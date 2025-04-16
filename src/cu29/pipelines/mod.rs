@@ -1,7 +1,6 @@
-mod inference;
-mod recording;
-mod streaming;
+mod bubbaloop;
+pub use bubbaloop::spawn_bubbaloop_pipeline;
 
+// EXPERIMENTAL
+mod inference;
 pub use inference::spawn_inference_pipeline;
-pub use recording::spawn_recording_pipeline;
-pub use streaming::spawn_streaming_pipeline;

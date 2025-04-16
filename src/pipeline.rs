@@ -176,9 +176,7 @@ pub struct PipelineInfo {
 }
 
 /// A dummy pipeline that runs indefinitely and prints a message every second
-pub fn spawn_bubbaloop_thread(
-    stop_signal: Arc<AtomicBool>,
-) -> std::thread::JoinHandle<PipelineResult> {
+pub fn spawn_hello_thread(stop_signal: Arc<AtomicBool>) -> std::thread::JoinHandle<PipelineResult> {
     let signs = ["|", "/", "-", "\\", "|", "/", "-", "\\"];
     let emojis = ["😊", "🚀", "🦀", "🎉", "✨", "🎸", "🌟", "🍕", "🎮", "🌈"];
     std::thread::spawn(move || {

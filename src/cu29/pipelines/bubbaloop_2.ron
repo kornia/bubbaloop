@@ -54,8 +54,7 @@
         (src: "enc1", dst: "recorder", msg: "crate::cu29::msgs::EncodedImage"),
         (src: "enc0", dst: "bcast0", msg: "crate::cu29::msgs::EncodedImage"),
         (src: "enc1", dst: "bcast1", msg: "crate::cu29::msgs::EncodedImage"),
-    ]
-    ,
+    ],
     logging: (
         slab_size_mib: 1024, // Preallocates 1GiB of memory map file at a time
         section_size_mib: 100, // Preallocates 100MiB of memory map per section for the main logger.
