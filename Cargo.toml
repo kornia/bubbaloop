@@ -37,7 +37,4 @@ kornia = { version = "0.1.8", features = ["gstreamer", "jpegturbo"] }
 kornia-paligemma = { git = "https://github.com/kornia/kornia-paligemma.git", branch = "main", features = [] }
 
 [features]
-one_camera = []
-two_camera = []
-
 cuda = ["kornia-paligemma/cuda"]
