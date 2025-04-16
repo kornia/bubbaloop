@@ -1,10 +1,9 @@
 use crate::{
-    api::models::recording::RecordingCommand,
-    cu29::msgs::{EncodedImage, ImageRgb8Msg},
+    api::models::recording::RecordingCommand, cu29::msgs::EncodedImage,
     pipeline::SERVER_GLOBAL_STATE,
 };
 use cu29::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 enum RecorderState {
     Stopped,
@@ -47,18 +46,7 @@ impl<'cl> CuSinkTask<'cl> for RecorderOne {
         match &mut self.state {
             RecorderState::Stopped => {
                 if let Ok(RecordingCommand::Start) = maybe_command {
-                    let rec_path = {
-                        let timestamp = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs();
-                        self.path.clone().join(format!("{}.rrd", timestamp))
-                    };
-
-                    let rec = rerun::RecordingStreamBuilder::new("rerun_logger")
-                        .save(&rec_path)
-                        .map_err(|e| CuError::new_with_cause("Failed to spawn rerun stream", e))?;
-
+                    let (rec, rec_path) = create_recording_stream(&self.path)?;
                     self.state = RecorderState::Recording(rec);
                     log::info!("Started recording to {}", rec_path.display());
                 }
@@ -69,7 +57,9 @@ impl<'cl> CuSinkTask<'cl> for RecorderOne {
                     self.state = RecorderState::Stopped;
                     log::info!("Stopped recording");
                     return Ok(());
-                } else if let Some(image) = input.payload() {
+                }
+
+                if let Some(image) = input.payload() {
                     log_image_encoded(rec, &format!("/cam/{}", image.channel_id), image)?;
                 }
             }
@@ -111,18 +101,7 @@ impl<'cl> CuSinkTask<'cl> for RecorderTwo {
         match &mut self.state {
             RecorderState::Stopped => {
                 if let Ok(RecordingCommand::Start) = maybe_command {
-                    let rec_path = {
-                        let timestamp = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs();
-                        self.path.clone().join(format!("{}.rrd", timestamp))
-                    };
-
-                    let rec = rerun::RecordingStreamBuilder::new("rerun_logger_two_images")
-                        .save(&rec_path)
-                        .map_err(|e| CuError::new_with_cause("Failed to spawn rerun stream", e))?;
-
+                    let (rec, rec_path) = create_recording_stream(&self.path)?;
                     self.state = RecorderState::Recording(rec);
                     log::info!("Started recording to {}", rec_path.display());
                 }
@@ -147,21 +126,20 @@ impl<'cl> CuSinkTask<'cl> for RecorderTwo {
     }
 }
 
-fn _log_image_rgb8(
-    rec: &rerun::RecordingStream,
-    name: &str,
-    msg: &ImageRgb8Msg,
-) -> Result<(), CuError> {
-    rec.log(
-        name,
-        &rerun::Image::from_elements(
-            msg.image.as_slice(),
-            msg.image.size().into(),
-            rerun::ColorModel::RGB,
-        ),
-    )
-    .map_err(|e| CuError::new_with_cause("Failed to log image", e))?;
-    Ok(())
+fn create_recording_stream(path: &Path) -> Result<(rerun::RecordingStream, PathBuf), CuError> {
+    let rec_path = {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        path.join(format!("{}.rrd", timestamp))
+    };
+
+    let rec = rerun::RecordingStreamBuilder::new("rerun_logger")
+        .save(&rec_path)
+        .map_err(|e| CuError::new_with_cause("Failed to spawn rerun stream", e))?;
+
+    Ok((rec, rec_path))
 }
 
 fn log_image_encoded(
