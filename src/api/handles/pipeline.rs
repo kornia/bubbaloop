@@ -18,16 +18,16 @@ pub async fn start_pipeline(
 ) -> impl IntoResponse {
     log::debug!("Request to start pipeline: {}", request.pipeline_id);
 
-    const SUPPORTED_PIPELINES: [&str; 3] = ["bubbaloop", "hello-world", "inference"];
+    const SUPPORTED_PIPELINES: [&str; 3] = ["bubbaloop", "cameras", "inference"];
     if !SUPPORTED_PIPELINES.contains(&request.pipeline_id.as_str()) {
         log::error!(
-            "Pipeline {} not supported. Try 'bubbaloop', 'hello-world', 'inference', instead",
+            "Pipeline {} not supported. Try 'bubbaloop', 'cameras', 'inference', instead",
             request.pipeline_id
         );
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "Pipeline not supported. Try 'bubbaloop', 'hello-world', 'inference' instead",
+                "error": "Pipeline not supported. Try 'bubbaloop', 'cameras', 'inference' instead",
             })),
         );
     }
@@ -50,12 +50,9 @@ pub async fn start_pipeline(
     let stop_signal = Arc::new(AtomicBool::new(false));
 
     let handle = match pipeline_id.as_str() {
-        "hello-world" => pipeline::spawn_hello_thread(stop_signal.clone()),
+        "bubbaloop" => pipeline::spawn_bubbaloop_thread(stop_signal.clone()),
+        "cameras" => cu29::pipelines::spawn_cameras_pipeline(stop_signal.clone()),
         "inference" => cu29::pipelines::spawn_inference_pipeline(stop_signal.clone()),
-        "bubbaloop" => {
-            // TODO: read config from file and setup camera sources
-            cu29::pipelines::spawn_bubbaloop_pipeline(stop_signal.clone())
-        }
         _ => {
             log::error!("Pipeline {} not supported", pipeline_id);
             return (

@@ -10,20 +10,18 @@ const SLAB_SIZE: Option<usize> = Some(150 * 1024 * 1024);
 
 // NOTE: this will use the default config file in the current directory during compilation
 // however, it will be overridden by the ron config string when the pipeline is started
-#[copper_runtime(config = "src/cu29/pipelines/bubbaloop_2.ron")]
-struct BubbaloopApp {}
+#[copper_runtime(config = "src/cu29/pipelines/cameras_2.ron")]
+struct CamerasApp {}
 
-pub struct BubbaloopPipeline(pub BubbaloopApp);
+pub struct CamerasPipeline(pub CamerasApp);
 
-impl BubbaloopPipeline {
+impl CamerasPipeline {
     pub fn new() -> CuResult<Self> {
-        let logger_path = PathBuf::from("/tmp/bubbaloop.copper");
+        let logger_path = PathBuf::from("/tmp/cameras.copper");
         debug!("Logger path: {}", path = &logger_path);
 
         let copper_ctx = basic_copper_setup(&logger_path, SLAB_SIZE, true, None)?;
-        let application = BubbaloopAppBuilder::new()
-            .with_context(&copper_ctx)
-            .build()?;
+        let application = CamerasAppBuilder::new().with_context(&copper_ctx).build()?;
 
         Ok(Self(application))
     }
@@ -42,14 +40,14 @@ impl BubbaloopPipeline {
 /// # Returns
 ///
 /// A handle to the thread that runs the pipeline
-pub fn spawn_bubbaloop_pipeline(
+pub fn spawn_cameras_pipeline(
     stop_signal: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<PipelineResult> {
     std::thread::spawn({
         let stop_signal = stop_signal.clone();
         move || -> PipelineResult {
             // parse the ron config string and create the pipeline
-            let mut app = BubbaloopPipeline::new()?;
+            let mut app = CamerasPipeline::new()?;
 
             // create the pipeline and start the tasks
             app.start_all_tasks()?;
@@ -62,22 +60,22 @@ pub fn spawn_bubbaloop_pipeline(
             // stop the pipeline and wait for the tasks to finish
             app.stop_all_tasks()?;
 
-            log::debug!("Bubbaloop pipeline stopped");
+            log::debug!("Cameras pipeline stopped");
 
             Ok(())
         }
     })
 }
 
-impl std::ops::Deref for BubbaloopPipeline {
-    type Target = BubbaloopApp;
+impl std::ops::Deref for CamerasPipeline {
+    type Target = CamerasApp;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl std::ops::DerefMut for BubbaloopPipeline {
+impl std::ops::DerefMut for CamerasPipeline {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }

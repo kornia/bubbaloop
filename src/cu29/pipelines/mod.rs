@@ -1,5 +1,5 @@
-mod bubbaloop;
-pub use bubbaloop::spawn_bubbaloop_pipeline;
+mod cameras;
+pub use cameras::spawn_cameras_pipeline;
 
 // EXPERIMENTAL
 mod inference;
