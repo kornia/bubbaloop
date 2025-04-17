@@ -78,19 +78,19 @@ impl<T> Default for InferenceSenderReceiver<T> {
 #[derive(Clone)]
 pub struct ResultStore {
     // NOTE: support a fixed number of streams
-    pub inference: [BroadcastSender<InferenceResult>; 2],
+    pub inference: [BroadcastSender<InferenceResult>; 8],
     pub inference_settings: SenderReceiver<String>,
     // NOTE: support a fixed number of streams
-    pub images: [BroadcastSender<EncodedImage>; 2],
+    pub images: [BroadcastSender<EncodedImage>; 8],
     pub recording: SenderReceiver<RecordingCommand>,
 }
 
 impl Default for ResultStore {
     fn default() -> Self {
         Self {
-            inference: [BroadcastSender::new(), BroadcastSender::new()],
+            inference: std::array::from_fn(|_| BroadcastSender::new()),
             inference_settings: SenderReceiver::new(),
-            images: [BroadcastSender::new(), BroadcastSender::new()],
+            images: std::array::from_fn(|_| BroadcastSender::new()),
             recording: SenderReceiver::new(),
         }
     }

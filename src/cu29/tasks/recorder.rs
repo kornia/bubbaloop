@@ -126,6 +126,130 @@ impl<'cl> CuSinkTask<'cl> for RecorderTwo {
     }
 }
 
+pub struct RecorderThree {
+    state: RecorderState,
+    path: PathBuf,
+}
+
+impl Freezable for RecorderThree {}
+
+impl<'cl> CuSinkTask<'cl> for RecorderThree {
+    type Input = input_msg!('cl, EncodedImage, EncodedImage, EncodedImage);
+
+    fn new(config: Option<&ComponentConfig>) -> Result<Self, CuError> {
+        let config = config.expect("config is required");
+        let path = config.get::<String>("path").expect("path is required");
+
+        Ok(Self {
+            state: RecorderState::Stopped,
+            path: PathBuf::from(path),
+        })
+    }
+
+    fn process(&mut self, _clock: &RobotClock, input: Self::Input) -> Result<(), CuError> {
+        let maybe_command = SERVER_GLOBAL_STATE
+            .result_store
+            .recording
+            .rx
+            .lock()
+            .expect("Failed to lock recording")
+            .try_recv();
+
+        match &mut self.state {
+            RecorderState::Stopped => {
+                if let Ok(RecordingCommand::Start) = maybe_command {
+                    let (rec, rec_path) = create_recording_stream(&self.path)?;
+                    self.state = RecorderState::Recording(rec);
+                    log::info!("Started recording to {}", rec_path.display());
+                }
+            }
+            RecorderState::Recording(rec) => {
+                if let Ok(RecordingCommand::Stop) = maybe_command {
+                    rec.flush_blocking();
+                    self.state = RecorderState::Stopped;
+                    log::info!("Stopped recording");
+                    return Ok(());
+                } else {
+                    let (msg1, msg2, msg3) = input;
+                    if let (Some(image1), Some(image2), Some(image3)) =
+                        (msg1.payload(), msg2.payload(), msg3.payload())
+                    {
+                        log_image_encoded(rec, &format!("/cam/{}", image1.channel_id), image1)?;
+                        log_image_encoded(rec, &format!("/cam/{}", image2.channel_id), image2)?;
+                        log_image_encoded(rec, &format!("/cam/{}", image3.channel_id), image3)?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub struct RecorderFour {
+    state: RecorderState,
+    path: PathBuf,
+}
+
+impl Freezable for RecorderFour {}
+
+impl<'cl> CuSinkTask<'cl> for RecorderFour {
+    type Input = input_msg!('cl, EncodedImage, EncodedImage, EncodedImage, EncodedImage);
+
+    fn new(config: Option<&ComponentConfig>) -> Result<Self, CuError> {
+        let config = config.expect("config is required");
+        let path = config.get::<String>("path").expect("path is required");
+
+        Ok(Self {
+            state: RecorderState::Stopped,
+            path: PathBuf::from(path),
+        })
+    }
+
+    fn process(&mut self, _clock: &RobotClock, input: Self::Input) -> Result<(), CuError> {
+        let maybe_command = SERVER_GLOBAL_STATE
+            .result_store
+            .recording
+            .rx
+            .lock()
+            .expect("Failed to lock recording")
+            .try_recv();
+
+        match &mut self.state {
+            RecorderState::Stopped => {
+                if let Ok(RecordingCommand::Start) = maybe_command {
+                    let (rec, rec_path) = create_recording_stream(&self.path)?;
+                    self.state = RecorderState::Recording(rec);
+                    log::info!("Started recording to {}", rec_path.display());
+                }
+            }
+            RecorderState::Recording(rec) => {
+                if let Ok(RecordingCommand::Stop) = maybe_command {
+                    rec.flush_blocking();
+                    self.state = RecorderState::Stopped;
+                    log::info!("Stopped recording");
+                    return Ok(());
+                } else {
+                    let (msg1, msg2, msg3, msg4) = input;
+                    if let (Some(image1), Some(image2), Some(image3), Some(image4)) = (
+                        msg1.payload(),
+                        msg2.payload(),
+                        msg3.payload(),
+                        msg4.payload(),
+                    ) {
+                        log_image_encoded(rec, &format!("/cam/{}", image1.channel_id), image1)?;
+                        log_image_encoded(rec, &format!("/cam/{}", image2.channel_id), image2)?;
+                        log_image_encoded(rec, &format!("/cam/{}", image3.channel_id), image3)?;
+                        log_image_encoded(rec, &format!("/cam/{}", image4.channel_id), image4)?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 fn create_recording_stream(path: &Path) -> Result<(rerun::RecordingStream, PathBuf), CuError> {
     let rec_path = {
         let timestamp = std::time::SystemTime::now()
