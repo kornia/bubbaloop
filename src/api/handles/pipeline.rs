@@ -16,13 +16,13 @@ pub async fn start_pipeline(
     State(store): State<PipelineStore>,
     Json(request): Json<PipelineStartRequest>,
 ) -> impl IntoResponse {
-    log::debug!("Request to start pipeline: {}", request.pipeline_id);
+    log::debug!("Request to start pipeline: {}", request.name);
 
     const SUPPORTED_PIPELINES: [&str; 3] = ["bubbaloop", "cameras", "inference"];
-    if !SUPPORTED_PIPELINES.contains(&request.pipeline_id.as_str()) {
+    if !SUPPORTED_PIPELINES.contains(&request.name.as_str()) {
         log::error!(
             "Pipeline {} not supported. Try 'bubbaloop', 'cameras', 'inference', instead",
-            request.pipeline_id
+            request.name
         );
         return (
             StatusCode::BAD_REQUEST,
@@ -33,11 +33,11 @@ pub async fn start_pipeline(
     }
 
     // check if the pipeline id is already in the store
-    let pipeline_id = request.pipeline_id;
+    let pipeline_name = request.name;
     let mut pipeline_store = store.0.lock().expect("Failed to lock pipeline store");
 
-    if pipeline_store.contains_key(&pipeline_id) {
-        log::error!("Pipeline {} already exists", pipeline_id);
+    if pipeline_store.contains_key(&pipeline_name) {
+        log::error!("Pipeline {} already exists", pipeline_name);
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -49,12 +49,12 @@ pub async fn start_pipeline(
     // the stop signal to kill the pipeline thread
     let stop_signal = Arc::new(AtomicBool::new(false));
 
-    let handle = match pipeline_id.as_str() {
+    let handle = match pipeline_name.as_str() {
         "bubbaloop" => pipeline::spawn_bubbaloop_thread(stop_signal.clone()),
         "cameras" => cu29::pipelines::spawn_cameras_pipeline(stop_signal.clone()),
         "inference" => cu29::pipelines::spawn_inference_pipeline(stop_signal.clone()),
         _ => {
-            log::error!("Pipeline {} not supported", pipeline_id);
+            log::error!("Pipeline {} not supported", pipeline_name);
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "Pipeline not supported" })),
@@ -64,21 +64,21 @@ pub async fn start_pipeline(
 
     // add the pipeline handle to the store
     pipeline_store.insert(
-        pipeline_id.clone(),
+        pipeline_name.clone(),
         PipelineHandle {
-            id: pipeline_id.clone(),
+            id: pipeline_name.clone(),
             handle,
             status: PipelineStatus::Running,
             stop_signal,
         },
     );
 
-    log::debug!("Pipeline {} started", pipeline_id);
+    log::debug!("Pipeline {} started", pipeline_name);
 
     (
         StatusCode::OK,
         Json(json!({
-            "message": format!("Pipeline {} started", pipeline_id),
+            "message": format!("Pipeline {} started", pipeline_name),
         })),
     )
 }
@@ -88,9 +88,9 @@ pub async fn stop_pipeline(
     State(store): State<PipelineStore>,
     Json(request): Json<PipelineStopRequest>,
 ) -> impl IntoResponse {
-    log::debug!("Request to stop pipeline: {}", request.pipeline_id);
-    if !store.unregister_pipeline(&request.pipeline_id) {
-        log::error!("Pipeline {} not found", request.pipeline_id);
+    log::debug!("Request to stop pipeline: {}", request.name);
+    if !store.unregister_pipeline(&request.name) {
+        log::error!("Pipeline {} not found", request.name);
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -99,11 +99,11 @@ pub async fn stop_pipeline(
         );
     }
 
-    log::debug!("Pipeline {} stopped", request.pipeline_id);
+    log::debug!("Pipeline {} stopped", request.name);
 
     (
         StatusCode::OK,
-        Json(json!({ "message": format!("Pipeline {} stopped", request.pipeline_id) })),
+        Json(json!({ "message": format!("Pipeline {} stopped", request.name) })),
     )
 }
 

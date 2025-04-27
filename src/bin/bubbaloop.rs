@@ -97,18 +97,18 @@ enum PipelineMode {
 #[argh(subcommand, name = "start")]
 /// Start a pipeline
 struct PipelineStartCommand {
-    #[argh(option, short = 'i')]
-    /// the pipeline id
-    id: String,
+    #[argh(option, short = 'n')]
+    /// the pipeline name
+    name: String,
 }
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "stop")]
 /// Stop a pipeline
 struct PipelineStopCommand {
-    #[argh(option, short = 'i')]
-    /// the pipeline id
-    id: String,
+    #[argh(option, short = 'n')]
+    /// the pipeline name
+    name: String,
 }
 
 #[derive(FromArgs)]
@@ -177,7 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let response = client
                     .post(format!("http://{}/api/v0/pipeline/start", addr))
                     .json(&bubbaloop::api::models::pipeline::PipelineStartRequest {
-                        pipeline_id: pipeline_start_command.id,
+                        name: pipeline_start_command.name,
                     })
                     .send()
                     .await?;
@@ -189,7 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let response = client
                     .post(format!("http://{}/api/v0/pipeline/stop", addr))
                     .json(&bubbaloop::api::models::pipeline::PipelineStopRequest {
-                        pipeline_id: pipeline_stop_command.id,
+                        name: pipeline_stop_command.name,
                     })
                     .send()
                     .await?;
