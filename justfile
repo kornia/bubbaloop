@@ -16,6 +16,14 @@ clippy:
 check:
     cargo check
 
+lint:
+    @echo "Running format..."
+    just format
+    @echo "Running clippy..."
+    just clippy
+    @echo "Running check..."
+    just check
+
 install_deps:
     ./scripts/install_deps.sh
 
