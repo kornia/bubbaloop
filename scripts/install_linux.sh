@@ -45,16 +45,21 @@ if [ -f "$SERVICE_FILE" ]; then
     sudo systemctl daemon-reload
 fi
 
-# Copy the server binary to /usr/local/bin
+# Install binaries in a loop
 BUBBALOOP_INSTALL_DIR=/usr/local/bin
-echo -e "${GREEN}Installing server binary to $BUBBALOOP_INSTALL_DIR...${NC}"
-sudo cp $REPO_DIR/target/release/serve $BUBBALOOP_INSTALL_DIR/
-sudo chmod +x $BUBBALOOP_INSTALL_DIR/serve
+BINARIES=("serve" "bubbaloop")
 
-# Copy the client binary to /usr/local/bin
-echo -e "${GREEN}Installing client binary to $BUBBALOOP_INSTALL_DIR...${NC}"
-sudo cp $REPO_DIR/target/release/bubbaloop $BUBBALOOP_INSTALL_DIR/
-sudo chmod +x $BUBBALOOP_INSTALL_DIR/bubbaloop
+for binary in "${BINARIES[@]}"; do
+    echo -e "${GREEN}Installing $binary binary to $BUBBALOOP_INSTALL_DIR...${NC}"
+    if [ -f "$REPO_DIR/target/release/$binary" ]; then
+        sudo cp "$REPO_DIR/target/release/$binary" "$BUBBALOOP_INSTALL_DIR/"
+        sudo chmod +x "$BUBBALOOP_INSTALL_DIR/$binary"
+        echo -e "${GREEN}$binary installed successfully.${NC}"
+    else
+        echo -e "${RED}$binary not found in target/release! Aborting installation.${NC}"
+        exit 1
+    fi
+done
 
 # Create a systemd service file
 echo -e "${GREEN}Creating systemd service...${NC}"
@@ -90,4 +95,4 @@ echo -e "${GREEN}Installation complete!${NC}"
 echo -e "${GREEN}Service status:${NC}"
 sudo systemctl status bubbaloop.service --no-pager
 
-echo -e "${GREEN}You can check the logs with: sudojournalctl -u bubbaloop.service -f${NC}"
+echo -e "${GREEN}You can check the logs with: sudo journalctl -u bubbaloop.service -f${NC}"
