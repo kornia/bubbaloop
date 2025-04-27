@@ -1,0 +1,37 @@
+(
+    tasks: [
+        (
+            id: "cam0",
+            type: "crate::cu29::tasks::PlaybackOne",
+            config: {
+                "log_path": "/home/edgar/1745694838.rrd",
+            }
+        ),
+        (
+            id: "enc0",
+            type: "crate::cu29::tasks::ImageEncoder",
+        ),
+        (
+            id: "bcast0",
+            type: "crate::cu29::tasks::ImageBroadcast",
+        ),
+        (
+            id: "recorder",
+            type: "crate::cu29::tasks::RecorderOne",
+            config: {
+                // Path to the directory where the logs will be stored
+                "path": "/tmp/",
+            }
+        ),
+    ],
+    cnx: [
+        (src: "cam0", dst: "enc0", msg: "crate::cu29::msgs::ImageRgb8Msg"),
+        (src: "enc0", dst: "recorder", msg: "crate::cu29::msgs::EncodedImage"),
+        (src: "enc0", dst: "bcast0", msg: "crate::cu29::msgs::EncodedImage"),
+    ],
+    logging: (
+        slab_size_mib: 1024, // Preallocates 1GiB of memory map file at a time
+        section_size_mib: 100, // Preallocates 100MiB of memory map per section for the main logger.
+        enable_task_logging: false,
+    ),
+)

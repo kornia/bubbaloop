@@ -7,6 +7,8 @@ pub use image_encoder::*;
 mod inference;
 pub use inference::*;
 
+mod playback;
+pub use playback::*;
 mod recorder;
 pub use recorder::*;
 
