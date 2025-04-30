@@ -22,6 +22,7 @@ struct CLIArgs {
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum Commands {
+    Inference(InferenceCommand),
     Pipeline(PipelineCommand),
     Recording(RecordingCommand),
     Stats(StatsCommand),
@@ -116,6 +117,35 @@ struct PipelineStopCommand {
 /// List pipelines
 struct PipelineListCommand {}
 
+#[derive(FromArgs)]
+#[argh(subcommand, name = "inference")]
+/// Inference management commands
+struct InferenceCommand {
+    #[argh(subcommand)]
+    mode: InferenceMode,
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand)]
+enum InferenceMode {
+    Result(InferenceResultCommand),
+    Settings(InferenceSettingsCommand),
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "result")]
+/// Get the latest inference result
+struct InferenceResultCommand {}
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "settings")]
+/// Get the inference settings
+struct InferenceSettingsCommand {
+    #[argh(option)]
+    /// the prompt to configure during the inference
+    prompt: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: CLIArgs = argh::from_env();
@@ -207,7 +237,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Result: {}", serde_json::to_string_pretty(&result)?);
             }
         },
-    }
+        Commands::Inference(inference_command) => match inference_command.mode {
+            InferenceMode::Result(_) => {
+                let response = client
+                    .get(format!("http://{}/api/v0/inference/result", addr))
+                    .send()
+                    .await?;
 
+                let result = response.json::<serde_json::Value>().await?;
+                println!("Result: {}", serde_json::to_string_pretty(&result)?);
+            }
+            InferenceMode::Settings(inference_settings_command) => {
+                let response = client
+                    .post(format!("http://{}/api/v0/inference/settings", addr))
+                    .json(&bubbaloop::api::models::inference::InferenceSettingsQuery {
+                        prompt: inference_settings_command.prompt,
+                    })
+                    .send()
+                    .await?;
+
+                let result = response.json::<serde_json::Value>().await?;
+                println!("Result: {}", serde_json::to_string_pretty(&result)?);
+            }
+        },
+    }
     Ok(())
 }
