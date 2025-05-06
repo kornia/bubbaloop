@@ -6,12 +6,6 @@ pub struct InferenceSettingsQuery {
     pub prompt: String,
 }
 
-/// The query for the inference request
-#[derive(Debug, Deserialize, Serialize)]
-pub struct InferenceResultQuery {
-    pub channel_id: u8,
-}
-
 /// The result of the inference request
 #[derive(Clone, Debug, Serialize)]
 pub struct InferenceResult {

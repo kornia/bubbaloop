@@ -40,10 +40,7 @@ impl ApiServer {
             .nest(
                 "/api/v0/inference",
                 Router::new()
-                    .route(
-                        "/result/{channel_id}",
-                        get(handles::inference::get_inference_result),
-                    )
+                    .route("/result", get(handles::inference::get_inference_result))
                     .route(
                         "/settings",
                         post(handles::inference::post_inference_settings),

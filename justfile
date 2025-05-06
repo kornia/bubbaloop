@@ -53,3 +53,9 @@ start-recording HOST="0.0.0.0" PORT="3000":
 
 stop-recording HOST="0.0.0.0" PORT="3000":
     RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} recording stop
+
+inference-result HOST="0.0.0.0" PORT="3000":
+    RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} inference result
+
+inference-settings PROMPT HOST="0.0.0.0" PORT="3000":
+    RUST_LOG=info cargo run --release --bin bubbaloop -- -h {{HOST}} -p {{PORT}} inference settings --prompt "{{PROMPT}}"

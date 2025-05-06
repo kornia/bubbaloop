@@ -47,7 +47,9 @@ impl<'cl> CuSinkTask<'cl> for InferenceBroadcast {
             return Ok(());
         };
 
-        let _ = SERVER_GLOBAL_STATE.result_store.inference[prompt.channel_id as usize]
+        let _ = SERVER_GLOBAL_STATE
+            .result_store
+            .inference
             .tx
             .send(InferenceResult {
                 stamp_ns: prompt.stamp_ns,
