@@ -12,3 +12,10 @@ pub enum RecordingCommand {
 pub struct RecordingQuery {
     pub command: RecordingCommand,
 }
+
+/// The response for the recording request
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum RecordingResponse {
+    Success,
+    Error { error: String },
+}

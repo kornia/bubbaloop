@@ -1,7 +1,7 @@
 use crate::{
     api::models::pipeline::{PipelineStartRequest, PipelineStopRequest},
     cu29,
-    pipeline::{self, PipelineHandle, PipelineInfo, PipelineStatus, PipelineStore},
+    pipeline::{self, PipelineHandle, PipelineStatus, ServerGlobalState},
 };
 use axum::{
     extract::State,
@@ -13,7 +13,7 @@ use std::{sync::atomic::AtomicBool, sync::Arc};
 
 /// Start a pipeline given its id
 pub async fn start_pipeline(
-    State(store): State<PipelineStore>,
+    State(state): State<ServerGlobalState>,
     Json(request): Json<PipelineStartRequest>,
 ) -> impl IntoResponse {
     log::debug!("Request to start pipeline: {}", request.name);
@@ -34,7 +34,11 @@ pub async fn start_pipeline(
 
     // check if the pipeline id is already in the store
     let pipeline_name = request.name;
-    let mut pipeline_store = store.0.lock().expect("Failed to lock pipeline store");
+    let mut pipeline_store = state
+        .pipeline_store
+        .0
+        .lock()
+        .expect("Failed to lock pipeline store");
 
     if pipeline_store.contains_key(&pipeline_name) {
         log::error!("Pipeline {} already exists", pipeline_name);
@@ -85,11 +89,11 @@ pub async fn start_pipeline(
 
 // Stop a pipeline given its id
 pub async fn stop_pipeline(
-    State(store): State<PipelineStore>,
+    State(state): State<ServerGlobalState>,
     Json(request): Json<PipelineStopRequest>,
 ) -> impl IntoResponse {
     log::debug!("Request to stop pipeline: {}", request.name);
-    if !store.unregister_pipeline(&request.name) {
+    if !state.pipeline_store.unregister_pipeline(&request.name) {
         log::error!("Pipeline {} not found", request.name);
         return (
             StatusCode::BAD_REQUEST,
@@ -108,15 +112,7 @@ pub async fn stop_pipeline(
 }
 
 // List all pipelines and return their status
-pub async fn list_pipelines(State(store): State<PipelineStore>) -> impl IntoResponse {
+pub async fn list_pipelines(State(state): State<ServerGlobalState>) -> impl IntoResponse {
     log::debug!("Request to list pipelines");
-    let store = store.0.lock().expect("Failed to lock pipeline store");
-    let pipelines = store
-        .values()
-        .map(|pipeline| PipelineInfo {
-            id: pipeline.id.clone(),
-            status: pipeline.status.clone(),
-        })
-        .collect::<Vec<_>>();
-    Json(pipelines)
+    Json(state.pipeline_store.list_pipelines())
 }

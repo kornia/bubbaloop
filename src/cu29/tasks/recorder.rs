@@ -1,5 +1,6 @@
 use crate::{
-    api::models::recording::RecordingCommand, cu29::msgs::EncodedImage,
+    api::models::recording::{RecordingCommand, RecordingResponse},
+    cu29::msgs::EncodedImage,
     pipeline::SERVER_GLOBAL_STATE,
 };
 use cu29::prelude::*;
@@ -38,6 +39,7 @@ impl<'cl> CuSinkTask<'cl> for RecorderOne {
         let maybe_command = SERVER_GLOBAL_STATE
             .result_store
             .recording
+            .request
             .rx
             .lock()
             .expect("Failed to lock recording")
@@ -45,17 +47,57 @@ impl<'cl> CuSinkTask<'cl> for RecorderOne {
 
         match &mut self.state {
             RecorderState::Stopped => {
+                if let Ok(RecordingCommand::Stop) = maybe_command {
+                    SERVER_GLOBAL_STATE
+                        .result_store
+                        .recording
+                        .reply
+                        .tx
+                        .send(RecordingResponse::Error {
+                            error: "Could not stop recording. Recorder is not recording"
+                                .to_string(),
+                        })
+                        .map_err(|e| CuError::new_with_cause("Failed to send reply", e))?;
+                }
                 if let Ok(RecordingCommand::Start) = maybe_command {
                     let (rec, rec_path) = create_recording_stream(&self.path)?;
                     self.state = RecorderState::Recording(rec);
                     log::info!("Started recording to {}", rec_path.display());
+
+                    SERVER_GLOBAL_STATE
+                        .result_store
+                        .recording
+                        .reply
+                        .tx
+                        .send(RecordingResponse::Success)
+                        .map_err(|e| CuError::new_with_cause("Failed to send reply", e))?;
                 }
             }
             RecorderState::Recording(rec) => {
+                if let Ok(RecordingCommand::Start) = maybe_command {
+                    SERVER_GLOBAL_STATE
+                        .result_store
+                        .recording
+                        .reply
+                        .tx
+                        .send(RecordingResponse::Error {
+                            error: "Could not start recording. Recorder is already recording"
+                                .to_string(),
+                        })
+                        .map_err(|e| CuError::new_with_cause("Failed to send reply", e))?;
+                }
                 if let Ok(RecordingCommand::Stop) = maybe_command {
                     rec.flush_blocking();
                     self.state = RecorderState::Stopped;
                     log::info!("Stopped recording");
+
+                    SERVER_GLOBAL_STATE
+                        .result_store
+                        .recording
+                        .reply
+                        .tx
+                        .send(RecordingResponse::Success)
+                        .map_err(|e| CuError::new_with_cause("Failed to send reply", e))?;
                     return Ok(());
                 }
 
@@ -93,6 +135,7 @@ impl<'cl> CuSinkTask<'cl> for RecorderTwo {
         let maybe_command = SERVER_GLOBAL_STATE
             .result_store
             .recording
+            .request
             .rx
             .lock()
             .expect("Failed to lock recording")
@@ -150,6 +193,7 @@ impl<'cl> CuSinkTask<'cl> for RecorderThree {
         let maybe_command = SERVER_GLOBAL_STATE
             .result_store
             .recording
+            .request
             .rx
             .lock()
             .expect("Failed to lock recording")
@@ -210,6 +254,7 @@ impl<'cl> CuSinkTask<'cl> for RecorderFour {
         let maybe_command = SERVER_GLOBAL_STATE
             .result_store
             .recording
+            .request
             .rx
             .lock()
             .expect("Failed to lock recording")

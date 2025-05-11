@@ -21,3 +21,10 @@ pub enum InferenceResponse {
     Success(InferenceResult),
     Error { error: String },
 }
+
+/// The query for the inference settings request
+#[derive(Debug, Deserialize, Serialize)]
+pub enum InferenceSettingsResponse {
+    Success,
+    Error { error: String },
+}

@@ -1,5 +1,8 @@
 use crate::{
-    api::models::{inference::InferenceResult, recording::RecordingCommand},
+    api::models::{
+        inference::InferenceResult,
+        recording::{RecordingCommand, RecordingResponse},
+    },
     cu29::msgs::EncodedImage,
 };
 use once_cell::sync::Lazy;
@@ -74,6 +77,22 @@ impl<T> Default for InferenceSenderReceiver<T> {
     }
 }
 
+/// A sender and receiver for a single message
+#[derive(Clone)]
+pub struct RequestReply<T1, T2> {
+    pub request: SenderReceiver<T1>,
+    pub reply: SenderReceiver<T2>,
+}
+
+impl<T1, T2> Default for RequestReply<T1, T2> {
+    fn default() -> Self {
+        Self {
+            request: SenderReceiver::new(),
+            reply: SenderReceiver::new(),
+        }
+    }
+}
+
 /// Global store of all results managed by the server
 #[derive(Clone)]
 pub struct ResultStore {
@@ -82,7 +101,7 @@ pub struct ResultStore {
     pub inference_settings: SenderReceiver<String>,
     // NOTE: support a fixed number of streams
     pub images: [BroadcastSender<EncodedImage>; 8],
-    pub recording: SenderReceiver<RecordingCommand>,
+    pub recording: RequestReply<RecordingCommand, RecordingResponse>,
 }
 
 impl Default for ResultStore {
@@ -91,7 +110,7 @@ impl Default for ResultStore {
             inference: BroadcastSender::new(),
             inference_settings: SenderReceiver::new(),
             images: std::array::from_fn(|_| BroadcastSender::new()),
-            recording: SenderReceiver::new(),
+            recording: RequestReply::default(),
         }
     }
 }
@@ -139,10 +158,36 @@ impl PipelineStore {
             })
             .unwrap_or(false)
     }
+
+    pub fn list_pipelines(&self) -> Vec<PipelineInfo> {
+        self.0
+            .lock()
+            .unwrap()
+            .values()
+            .map(|pipeline| PipelineInfo {
+                id: pipeline.id.clone(),
+                status: pipeline.status.clone(),
+            })
+            .collect()
+    }
+
+    pub fn is_cameras_pipeline_running(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .values()
+            .any(|pipeline| pipeline.id == "cameras" && pipeline.status == PipelineStatus::Running)
+    }
+
+    pub fn is_inference_pipeline_running(&self) -> bool {
+        self.0.lock().unwrap().values().any(|pipeline| {
+            pipeline.id == "inference" && pipeline.status == PipelineStatus::Running
+        })
+    }
 }
 
 /// The current status of a pipeline
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum PipelineStatus {
     /// The pipeline is running in the background
     Running,
