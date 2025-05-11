@@ -12,6 +12,7 @@ Connect with like-minded innovators and developers!
 
 * 💬 Discord Server: [https://discord.com/invite/HfnywwpBnD](https://discord.com/invite/HfnywwpBnD)
 * :book: Checkout our live [documentation](https://kornia.gitbook.io/bubbaloop)
+* :woman\_technologist: Give me the code: [https://github.com/kornia/bubbaloop](https://github.com/kornia/bubbaloop)
 
 ## [📢](https://emojipedia.org/loudspeaker) News
 
