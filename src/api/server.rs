@@ -33,9 +33,9 @@ impl ApiServer {
                     get(handles::streaming::get_streaming_image),
                 ),
             )
-            .route(
+            .nest(
                 "/api/v0/recording",
-                post(handles::recording::post_recording_command),
+                Router::new().route("/command", post(handles::recording::post_recording_command)),
             )
             .nest(
                 "/api/v0/inference",
@@ -51,10 +51,9 @@ impl ApiServer {
                 Router::new()
                     .route("/start", post(handles::pipeline::start_pipeline))
                     .route("/stop", post(handles::pipeline::stop_pipeline))
-                    .route("/list", get(handles::pipeline::list_pipelines))
-                    .with_state(state.pipeline_store),
+                    .route("/list", get(handles::pipeline::list_pipelines)), //.with_state(state.pipeline_store),
             )
-            .with_state(state.result_store);
+            .with_state(state);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(listener, app).await?;

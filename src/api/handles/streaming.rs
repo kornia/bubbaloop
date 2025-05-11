@@ -1,6 +1,6 @@
 use crate::{
     api::models::streaming::{StreamingQuery, StreamingResponse},
-    pipeline::ResultStore,
+    pipeline::ServerGlobalState,
 };
 use axum::{
     extract::{Path, State},
@@ -10,9 +10,9 @@ use axum::{
 
 pub async fn get_streaming_image(
     Path(query): Path<StreamingQuery>,
-    State(store): State<ResultStore>,
+    State(state): State<ServerGlobalState>,
 ) -> impl IntoResponse {
-    let Ok(result) = store.images[query.channel_id as usize]
+    let Ok(result) = state.result_store.images[query.channel_id as usize]
         .tx
         .subscribe()
         .recv()

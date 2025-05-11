@@ -74,6 +74,28 @@ impl<T> Default for InferenceSenderReceiver<T> {
     }
 }
 
+/// A sender and receiver for a single message
+#[derive(Clone)]
+pub struct RequestReply<T1, T2> {
+    pub request: SenderReceiver<T1>,
+    pub reply: SenderReceiver<T2>,
+}
+
+impl<T1, T2> Default for RequestReply<T1, T2> {
+    fn default() -> Self {
+        Self {
+            request: SenderReceiver::new(),
+            reply: SenderReceiver::new(),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Reply {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 /// Global store of all results managed by the server
 #[derive(Clone)]
 pub struct ResultStore {
@@ -82,7 +104,8 @@ pub struct ResultStore {
     pub inference_settings: SenderReceiver<String>,
     // NOTE: support a fixed number of streams
     pub images: [BroadcastSender<EncodedImage>; 8],
-    pub recording: SenderReceiver<RecordingCommand>,
+    // pub recording: SenderReceiver<RecordingCommand>,
+    pub recording: RequestReply<RecordingCommand, Reply>,
 }
 
 impl Default for ResultStore {
@@ -91,7 +114,7 @@ impl Default for ResultStore {
             inference: BroadcastSender::new(),
             inference_settings: SenderReceiver::new(),
             images: std::array::from_fn(|_| BroadcastSender::new()),
-            recording: SenderReceiver::new(),
+            recording: RequestReply::default(),
         }
     }
 }
@@ -139,10 +162,22 @@ impl PipelineStore {
             })
             .unwrap_or(false)
     }
+
+    pub fn list_pipelines(&self) -> Vec<PipelineInfo> {
+        self.0
+            .lock()
+            .unwrap()
+            .values()
+            .map(|pipeline| PipelineInfo {
+                id: pipeline.id.clone(),
+                status: pipeline.status.clone(),
+            })
+            .collect()
+    }
 }
 
 /// The current status of a pipeline
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum PipelineStatus {
     /// The pipeline is running in the background
     Running,

@@ -179,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Recording(recording_command) => match recording_command.mode {
             RecordingMode::Start(_) => {
                 let response = client
-                    .post(format!("http://{}/api/v0/recording", addr))
+                    .post(format!("http://{}/api/v0/recording/command", addr))
                     .json(&bubbaloop::api::models::recording::RecordingQuery {
                         command: bubbaloop::api::models::recording::RecordingCommand::Start,
                     })
@@ -191,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             RecordingMode::Stop(_) => {
                 let response = client
-                    .post(format!("http://{}/api/v0/recording", addr))
+                    .post(format!("http://{}/api/v0/recording/command", addr))
                     .json(&bubbaloop::api::models::recording::RecordingQuery {
                         command: bubbaloop::api::models::recording::RecordingCommand::Stop,
                     })
