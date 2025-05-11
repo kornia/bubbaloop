@@ -19,7 +19,7 @@ Go to [`cameras.rs`](../../src/cu29/pipelines/cameras.rs) an update the `config`
 We provide as an example a couple of pipelines to record from one and multiple cameras. See: `cameras_1.ron` , `cameras_2.ron` , etc.
 
 ```rust
-#[copper_runtime(config = "src/cu29/pipelines/cmeras_1.ron")]
+#[copper_runtime(config = "src/cu29/pipelines/cameras_1.ron")]
 struct CamerasApp {}
 ```
 {% endstep %}

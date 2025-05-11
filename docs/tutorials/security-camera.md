@@ -81,7 +81,7 @@ cd bubbaloop
 
 Edit `src/cu29/pipelines/cameras_1.ron`:
 
-```ron
+```json
 (
     tasks: [
         (
@@ -107,13 +107,13 @@ sudo ./scripts/install_linux.sh
 
 This will install all the necessary dependencies including Rust (if not installed on your computer) and start the system process. You can check the status via
 
-```
+```bash
 systemctl status bubbaloop
 ```
 
 for real time logs
 
-```
+```bash
 sudo journalctl -u bubbaloop.service -f
 ```
 
@@ -171,35 +171,8 @@ rerun 1735941642.rrd
 ## Running Paligemma for Object Detection (Experimental)
 
 {% hint style="warning" %}
-For now the pipelines are mutually exclusive. This means that before starting the inference you need to stop the `cameras` pipeline.
-
-`bubbaloop pipeline stop --name cameras`
+For now the pipelines are mutually exclusive. This means that before starting the inference you need to stop any running pipeline.
 {% endhint %}
-
-Edit `src/cu29/pipelines/inference.ron`:
-
-```ron
-(
-    tasks: [
-        (
-            id: "cam0",
-            type: "crate::cu29::tasks::VideoCapture",
-            config: {
-                "source_type": "rtsp",
-                "source_uri": "rtsp://192.168.1.141:8554/live",
-                "channel_id": 0,
-            },
-        ),
-        (
-            id: "inference",
-            type: "crate::cu29::tasks::Inference",
-            config: {
-                "prompt": "What objects are in the scene?",
-            },
-        ),
-    ],
-)
-```
 
 Now you can start safely the inference engine
 
@@ -221,6 +194,19 @@ The inference result can be obtained using the following command
 
 ```bash
 bubbaloop inference result
+```
+
+#### Client
+
+```bash
+Result: {
+  "Success": {
+    "channel_id": 0,
+    "prompt": "Is there any human?",
+    "response": "no",
+    "stamp_ns": 141281452950
+  }
+}
 ```
 
 ***
