@@ -19,7 +19,6 @@ impl ApiServer {
 
         let app = Router::new()
             .route("/", get(|| async { "Welcome to Bubbaloop!" }))
-            //.route("/api/v0/stats/whoami", get(handles::stats::whoami))
             .nest(
                 "/api/v0/stats",
                 Router::new()
@@ -51,7 +50,7 @@ impl ApiServer {
                 Router::new()
                     .route("/start", post(handles::pipeline::start_pipeline))
                     .route("/stop", post(handles::pipeline::stop_pipeline))
-                    .route("/list", get(handles::pipeline::list_pipelines)), //.with_state(state.pipeline_store),
+                    .route("/list", get(handles::pipeline::list_pipelines)),
             )
             .with_state(state);
 

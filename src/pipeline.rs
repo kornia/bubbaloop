@@ -101,7 +101,6 @@ pub struct ResultStore {
     pub inference_settings: SenderReceiver<String>,
     // NOTE: support a fixed number of streams
     pub images: [BroadcastSender<EncodedImage>; 8],
-    // pub recording: SenderReceiver<RecordingCommand>,
     pub recording: RequestReply<RecordingCommand, RecordingResponse>,
 }
 
