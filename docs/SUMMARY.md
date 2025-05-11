@@ -16,4 +16,4 @@
 
 ## Tutorials
 
-* [Security Camera](tutorials/security-camera.md)
+* [Security Camera App](tutorials/security-camera.md)
