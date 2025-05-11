@@ -13,3 +13,7 @@
 ***
 
 * [🍄 Model Inference (experimental)](model-inference-experimental.md)
+
+## Tutorials
+
+* [Security Camera](tutorials/security-camera.md)
