@@ -15,7 +15,7 @@ just serve
 Send a HTTP request to the server to start the background task
 
 ```
-just start-pipeline bubaloop 0.0.0.0 3000
+just start-pipeline bubbaloop 0.0.0.0 3000
 ```
 
 From the server side you will see the following

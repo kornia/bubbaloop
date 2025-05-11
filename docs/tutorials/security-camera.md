@@ -6,7 +6,7 @@ cover: >-
 coverY: 0
 ---
 
-# Security Camera App
+# Home Security App
 
 **Why should you care?**
 
@@ -219,7 +219,7 @@ bubbaloop inference settings --prompt "Is there any human?"
 
 The inference result can be obtained using the following command
 
-```
+```bash
 bubbaloop inference result
 ```
 

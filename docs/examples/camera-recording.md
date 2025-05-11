@@ -4,28 +4,28 @@ description: Example showing how to stream data from cameras and log into disk
 
 # 📷 Camera Recording
 
-The Bubbaloop platform includes the `recording` pipeline functionality which allows to record data from multi camera streams and serialize in disk including the video frames metadata such as the timestamps.
+The Bubbaloop platform includes a `cameras` pipeline functionality which allows to stream and record data from multi camera streams and serialize in disk including the video frames metadata such as the timestamps.
 
 ## Edit the pipeline file
 
-In order to customize the recording pipeline we need to follow the steps below, eg to adjust our  RTSP streams configuration:
+In order to customize the recording pipeline we need to follow the steps below, eg to adjust our RTSP streams configuration:
 
 {% stepper %}
 {% step %}
-### Update the pipeline in[ recording.rs](../../src/cu29/pipelines/recording.rs)
+#### Update the pipeline in[ cameras.rs](../../src/cu29/pipelines/cameras.rs)
 
-Go to [`recording.rs`](../../src/cu29/pipelines/recording.rs) an update the `config` parameter by specifying the path to the pipeline `ron` file that you want to use for the recording task.
+Go to [`cameras.rs`](../../src/cu29/pipelines/cameras.rs) an update the `config` parameter by specifying the path to the pipeline `ron` file that you want to use for the recording task.
 
-We provide as an example a couple of pipelines to record from one and multiple cameras. See: `recording_one_camera.ron` and `recording_two_camera.ron`&#x20;
+We provide as an example a couple of pipelines to record from one and multiple cameras. See: `cameras_1.ron` , `cameras_2.ron` , etc.
 
 ```rust
-#[copper_runtime(config = "src/cu29/pipelines/recording_one_camera.ron")]
-struct RecordingApp {}
+#[copper_runtime(config = "src/cu29/pipelines/cmeras_1.ron")]
+struct CamerasApp {}
 ```
 {% endstep %}
 
 {% step %}
-### Customize the pipeline file&#x20;
+#### Customize the pipeline file
 
 You can definitely customize the `ron` file e.g to update the camera parameters like the `source_uri` to point to your RTSP camera; or enable disable the broadcasting.
 
@@ -216,12 +216,12 @@ just serve
 [2025-04-13T12:22:53Z INFO  bubbaloop::api::server] 🔧 Press Ctrl+C to stop the server
 ```
 
-## Start recording
+## Start streaming
 
-Start recording from the camera and log using [rerun.io](https://www.rerun.io).
+Start the camera pipeline and log using [rerun.io](https://www.rerun.io).
 
 ```
-just start-pipeline recording 0.0.0.0 3000
+just start-pipeline cameras 0.0.0.0 3000
 ```
 
 ```bash
@@ -248,6 +248,22 @@ python examples/python-streaming/client.py \
 <figure><img src="https://github.com/kornia/data/blob/main/bubbaloop/bubbaloop_stream_two_cams.png?raw=true" alt=""><figcaption></figcaption></figure>
 {% endtab %}
 {% endtabs %}
+
+## Start Recording
+
+Send a request to server to start recording from the cameras
+
+```bash
+just start-recording 0.0.0.0 30000
+```
+
+#### Client terminal
+
+```
+Result: {
+  "message": "Pipeline recording started"
+}
+```
 
 ## Stop recording
 

@@ -11,12 +11,11 @@
 Connect with like-minded innovators and developers!
 
 * 💬 Discord Server: [https://discord.com/invite/HfnywwpBnD](https://discord.com/invite/HfnywwpBnD)
-* :book: Checkout our live [documentation](https://edgar-riba.gitbook.io/bubbaloop)
-
-
+* :book: Checkout our live [documentation](https://kornia.gitbook.io/bubbaloop)
 
 ## [📢](https://emojipedia.org/loudspeaker) News
 
+* \[2025-05-11] Added tutorial for Home Security App
 * \[2025-04-06] Added support to inference with Google Paligemma
 * \[2025-03-01] Initial prototype of Inference engine pipeline
 * \[2025-02-01] Added recording pipeline to store rerun files and viz

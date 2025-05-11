@@ -16,7 +16,7 @@ You may need to install [rust](https://www.rust-lang.org/tools/install) if you h
 
 {% stepper %}
 {% step %}
-#### Download the project
+**Download the project**
 
 ```
 git clone https://github.com/kornia/bubbaloop.git
@@ -24,7 +24,7 @@ git clone https://github.com/kornia/bubbaloop.git
 {% endstep %}
 
 {% step %}
-#### Install pre-requisites
+**Install pre-requisites**
 
 {% hint style="info" %}
 you need to install `cargo` in order to fetch and build necessary packages. If you don't have `cargo`, you can install it by following the instructions on the [official Rust website](https://www.rust-lang.org/tools/install).
@@ -34,7 +34,7 @@ Install **justfile**: [https://github.com/casey/just?tab=readme-ov-file#linux](h
 {% endstep %}
 
 {% step %}
-#### Install Dependencies
+**Install Dependencies**
 
 To get started, ensure all necessary system dependencies
 
@@ -85,7 +85,8 @@ Options:
   --help, help      display usage information
 
 Commands:
-  compute           Execute local routines on the server
+  inference         Inference management commands
   pipeline          Pipeline management commands
+  recording         Recording management commands
   stats             Get stats about the server
 ```

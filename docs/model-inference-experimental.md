@@ -1,5 +1,5 @@
 ---
-description: Example showing how to use the inference functionality
+description: Example showing how to use the models inference functionality.
 ---
 
 # 🍄 Model Inference (experimental)

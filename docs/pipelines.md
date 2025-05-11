@@ -23,10 +23,8 @@ description: Basic usage and pipeline management with Bubbaloop
 ## Pipeline Types
 
 * `bubbaloop` — Our hello-world simple demo pipeline
-* `inference`  — Processes video streams for inference using computer vision models
-* `recording` — Captures and records video streams form single or multiple camera
-* `streaming` — Distributes video streams to clients
-* `custom` — (SOON) to implement custom pipelines
+* `cameras` — Captures and records video streams form single or multiple camera
+* `inference` — Processes video streams for inference using computer vision models
 
 ## Available API
 
