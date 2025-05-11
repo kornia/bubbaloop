@@ -1,5 +1,8 @@
 use crate::{
-    api::models::{inference::InferenceResult, recording::RecordingCommand},
+    api::models::{
+        inference::InferenceResult,
+        recording::{RecordingCommand, RecordingResponse},
+    },
     cu29::msgs::EncodedImage,
 };
 use once_cell::sync::Lazy;
@@ -90,12 +93,6 @@ impl<T1, T2> Default for RequestReply<T1, T2> {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Reply {
-    pub success: bool,
-    pub error: Option<String>,
-}
-
 /// Global store of all results managed by the server
 #[derive(Clone)]
 pub struct ResultStore {
@@ -105,7 +102,7 @@ pub struct ResultStore {
     // NOTE: support a fixed number of streams
     pub images: [BroadcastSender<EncodedImage>; 8],
     // pub recording: SenderReceiver<RecordingCommand>,
-    pub recording: RequestReply<RecordingCommand, Reply>,
+    pub recording: RequestReply<RecordingCommand, RecordingResponse>,
 }
 
 impl Default for ResultStore {
@@ -173,6 +170,20 @@ impl PipelineStore {
                 status: pipeline.status.clone(),
             })
             .collect()
+    }
+
+    pub fn is_cameras_pipeline_running(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .values()
+            .any(|pipeline| pipeline.id == "cameras" && pipeline.status == PipelineStatus::Running)
+    }
+
+    pub fn is_inference_pipeline_running(&self) -> bool {
+        self.0.lock().unwrap().values().any(|pipeline| {
+            pipeline.id == "inference" && pipeline.status == PipelineStatus::Running
+        })
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::{
-    api::models::recording::RecordingCommand,
+    api::models::recording::{RecordingCommand, RecordingResponse},
     cu29::msgs::EncodedImage,
-    pipeline::{Reply, SERVER_GLOBAL_STATE},
+    pipeline::SERVER_GLOBAL_STATE,
 };
 use cu29::prelude::*;
 use std::path::{Path, PathBuf};
@@ -53,11 +53,9 @@ impl<'cl> CuSinkTask<'cl> for RecorderOne {
                         .recording
                         .reply
                         .tx
-                        .send(Reply {
-                            success: false,
-                            error: Some(
-                                "Could not stop recording. Recorder is not recording".to_string(),
-                            ),
+                        .send(RecordingResponse::Error {
+                            error: "Could not stop recording. Recorder is not recording"
+                                .to_string(),
                         })
                         .map_err(|e| CuError::new_with_cause("Failed to send reply", e))?;
                 }
@@ -71,10 +69,7 @@ impl<'cl> CuSinkTask<'cl> for RecorderOne {
                         .recording
                         .reply
                         .tx
-                        .send(Reply {
-                            success: true,
-                            error: None,
-                        })
+                        .send(RecordingResponse::Success)
                         .map_err(|e| CuError::new_with_cause("Failed to send reply", e))?;
                 }
             }
@@ -85,12 +80,9 @@ impl<'cl> CuSinkTask<'cl> for RecorderOne {
                         .recording
                         .reply
                         .tx
-                        .send(Reply {
-                            success: false,
-                            error: Some(
-                                "Could not start recording. Recorder is already recording"
-                                    .to_string(),
-                            ),
+                        .send(RecordingResponse::Error {
+                            error: "Could not start recording. Recorder is already recording"
+                                .to_string(),
                         })
                         .map_err(|e| CuError::new_with_cause("Failed to send reply", e))?;
                 }
@@ -104,10 +96,7 @@ impl<'cl> CuSinkTask<'cl> for RecorderOne {
                         .recording
                         .reply
                         .tx
-                        .send(Reply {
-                            success: true,
-                            error: None,
-                        })
+                        .send(RecordingResponse::Success)
                         .map_err(|e| CuError::new_with_cause("Failed to send reply", e))?;
                     return Ok(());
                 }
