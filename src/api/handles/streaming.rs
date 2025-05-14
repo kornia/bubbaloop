@@ -12,7 +12,11 @@ pub async fn get_streaming_image(
     State(state): State<ServerGlobalState>,
 ) -> impl IntoResponse {
     log::debug!("Request to get streaming image: {}", query.channel_id);
-    if !state.pipeline_store.is_cameras_pipeline_running() {
+
+    // TODO: need to improve later to make sure that the right pipeline is running
+    if !state.pipeline_store.is_cameras_pipeline_running()
+        && !state.pipeline_store.is_inference_pipeline_running()
+    {
         return Json(StreamingResponse::Error {
             error: "Cameras pipeline not started. Please start the cameras pipeline first."
                 .to_string(),

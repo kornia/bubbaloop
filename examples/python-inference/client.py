@@ -4,8 +4,8 @@ import argparse
 import asyncio
 import httpx
 import rerun as rr
-import numpy as np
 import kornia_rs as kr
+import numpy as np
 
 
 async def get_api_response(client: httpx.AsyncClient, url: str) -> dict | None:
@@ -41,7 +41,10 @@ async def poll_image(client: httpx.AsyncClient, url: str, rr):
 
         if response is not None and "Success" in response:
             response = response["Success"]
-            rr.set_time_sequence("session", response["stamp_ns"])
+            rr.set_time(
+                "session",
+                timestamp=np.datetime64(response["stamp_ns"], "ns"),
+            )
             rr.log(f"/cam/{response['channel_id']}", response_to_image(response))
 
 
@@ -52,7 +55,10 @@ async def poll_inference_result(client: httpx.AsyncClient, url: str, rr):
 
         if response is not None and "Success" in response:
             response = response["Success"]
-            rr.set_time_sequence("session", response["stamp_ns"])
+            rr.set_time(
+                "session",
+                timestamp=np.datetime64(response["stamp_ns"], "ns"),
+            )
             rr.log(
                 f"/logs/{response['channel_id']}",
                 response_to_inference_result(response),
@@ -80,7 +86,7 @@ async def main() -> None:
         inference_task = asyncio.create_task(
             poll_inference_result(
                 client,
-                url=f"http://{args.host}:{args.port}/api/v0/inference/result/0",
+                url=f"http://{args.host}:{args.port}/api/v0/inference/result",
                 rr=rr,
             )
         )
