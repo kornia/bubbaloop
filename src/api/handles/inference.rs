@@ -5,22 +5,31 @@ use crate::{
     pipeline::ServerGlobalState,
 };
 use axum::{extract::State, response::IntoResponse, Json};
+use reqwest::StatusCode;
 
 pub async fn get_inference_result(State(state): State<ServerGlobalState>) -> impl IntoResponse {
-    log::debug!("Request to get inference result");
+    log::trace!("Request to get inference result");
+
     if !state.pipeline_store.is_inference_pipeline_running() {
-        return Json(InferenceResponse::Error {
-            error: "Inference pipeline not running. Please start the inference pipeline first."
-                .to_string(),
-        });
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(InferenceResponse::Error {
+                error: "Inference pipeline not running. Please start the inference pipeline first."
+                    .to_string(),
+            }),
+        );
     }
 
     let Ok(result) = state.result_store.inference.tx.subscribe().recv().await else {
-        return Json(InferenceResponse::Error {
-            error: "Failed to get inference result: `just start-pipeline inference`".to_string(),
-        });
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(InferenceResponse::Error {
+                error: "Failed to get inference result: `just start-pipeline inference`"
+                    .to_string(),
+            }),
+        );
     };
-    Json(InferenceResponse::Success(result))
+    (StatusCode::OK, Json(InferenceResponse::Success(result)))
 }
 
 pub async fn post_inference_settings(
@@ -28,18 +37,25 @@ pub async fn post_inference_settings(
     Json(query): Json<InferenceSettingsQuery>,
 ) -> impl IntoResponse {
     log::debug!("Request to post inference settings: {}", query.prompt);
+
     if !state.pipeline_store.is_inference_pipeline_running() {
-        return Json(InferenceSettingsResponse::Error {
-            error: "Inference pipeline not running. Please start the inference pipeline first."
-                .to_string(),
-        });
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(InferenceSettingsResponse::Error {
+                error: "Inference pipeline not running. Please start the inference pipeline first."
+                    .to_string(),
+            }),
+        );
     }
 
     let Ok(_) = state.result_store.inference_settings.tx.send(query.prompt) else {
-        return Json(InferenceSettingsResponse::Error {
-            error: "Failed to send inference settings".to_string(),
-        });
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(InferenceSettingsResponse::Error {
+                error: "Failed to send inference settings".to_string(),
+            }),
+        );
     };
 
-    Json(InferenceSettingsResponse::Success)
+    (StatusCode::OK, Json(InferenceSettingsResponse::Success))
 }

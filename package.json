@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "react-json-tree": "^0.20.0",
+    "react-json-view": "^1.21.3"
+  }
+}

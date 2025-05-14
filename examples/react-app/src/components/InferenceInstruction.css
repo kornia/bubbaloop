@@ -1,0 +1,62 @@
+/* InferenceInstruction.css */
+.inference-instruction {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    overflow: hidden;
+    background-color: #272822;
+    margin: 10px 0;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.instruction-input {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #383830;
+    border-radius: 4px;
+    background-color: #1e1f1c;
+    color: #f8f8f2;
+    font-family: inherit;
+    font-size: 14px;
+    resize: vertical;
+}
+
+.instruction-input:focus {
+    outline: none;
+    border-color: #66d9ef;
+}
+
+.instruction-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.instruction-error {
+    color: #f92672;
+    font-size: 14px;
+    flex-grow: 1;
+}
+
+.instruction-button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    background-color: #a6e22e;
+    color: #272822;
+    font-weight: 500;
+    cursor: pointer;
+    min-width: 100px;
+}
+
+.instruction-button:hover:not(:disabled) {
+    background-color: #c3f53e;
+}
+
+.instruction-button:disabled {
+    background-color: #75715e;
+    cursor: not-allowed;
+    opacity: 0.7;
+}
