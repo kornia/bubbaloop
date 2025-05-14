@@ -87,20 +87,6 @@ async fn handle_socket(
         .subscribe();
 
     // Stream images until the client disconnects
-    //loop {
-    //    let Ok(result) = rx.recv().await else {
-    //        log::error!("Failed to receive image");
-    //        break;
-    //    };
-
-    //    if let Err(e) = socket
-    //        .send(axum::extract::ws::Message::Binary(result.data.into()))
-    //        .await
-    //    {
-    //        log::error!("Failed to send WebSocket message: {}", e);
-    //        break;
-    //    }
-    //}
     while let Ok(result) = rx.recv().await {
         if let Err(e) = socket
             .send(axum::extract::ws::Message::Binary(result.data.into()))
