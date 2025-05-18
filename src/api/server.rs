@@ -3,6 +3,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Default)]
 pub struct ApiServer;
@@ -17,6 +18,15 @@ impl ApiServer {
         log::info!("🔥 Listening on: {}", addr);
         log::info!("🔧 Press Ctrl+C to stop the server");
 
+        // Configure CORS to allow requests from your frontend app
+        let cors = CorsLayer::new()
+            // Allow requests from any origin
+            .allow_origin(Any)
+            // Allow common HTTP methods
+            .allow_methods(Any)
+            // Allow common headers
+            .allow_headers(Any);
+
         let app = Router::new()
             .route("/", get(|| async { "Welcome to Bubbaloop!" }))
             .nest(
@@ -27,10 +37,15 @@ impl ApiServer {
             )
             .nest(
                 "/api/v0/streaming",
-                Router::new().route(
-                    "/image/{channel_id}",
-                    get(handles::streaming::get_streaming_image),
-                ),
+                Router::new()
+                    .route(
+                        "/image/{channel_id}",
+                        get(handles::streaming::get_streaming_image),
+                    )
+                    .route(
+                        "/ws/{channel_id}",
+                        get(handles::streaming::websocket_streaming_image),
+                    ),
             )
             .nest(
                 "/api/v0/recording",
@@ -52,6 +67,7 @@ impl ApiServer {
                     .route("/stop", post(handles::pipeline::stop_pipeline))
                     .route("/list", get(handles::pipeline::list_pipelines)),
             )
+            .layer(cors) // Add the CORS middleware
             .with_state(state);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;

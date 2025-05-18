@@ -16,7 +16,7 @@ use std::{
 /// The default prompt to use if no prompt is provided
 // NOTE: check the original prompt instructions
 // https://ai.google.dev/gemma/docs/paligemma/prompt-system-instructions
-const DEFAULT_PROMPT: &str = "cap en";
+const DEFAULT_PROMPT: &str = "cap en\n";
 
 /// Task that runs inference on an image
 pub struct Inference {

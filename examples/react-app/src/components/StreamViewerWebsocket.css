@@ -1,0 +1,71 @@
+/* StreamViewer.css */
+.stream-viewer {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background-color: #f8f9fa;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.stream-display {
+    flex-grow: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #000;
+    min-height: 200px;
+    position: relative;
+    overflow: hidden;
+}
+
+.stream-image {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.stream-error {
+    color: #721c24;
+    background-color: #f8d7da;
+    padding: 15px;
+    border-radius: 4px;
+    margin: 10px;
+    max-width: 80%;
+}
+
+.stream-placeholder {
+    color: #999;
+    font-size: 16px;
+}
+
+.stream-status {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    background-color: #fff;
+    border-top: 1px solid #ddd;
+    font-size: 14px;
+    color: #666;
+}
+
+.status-indicator {
+    color: #4CAF50;
+    margin-right: 6px;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 0.4;
+    }
+
+    50% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0.4;
+    }
+}

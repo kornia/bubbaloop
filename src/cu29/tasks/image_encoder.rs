@@ -1,9 +1,9 @@
 use crate::cu29::msgs::{EncodedImage, ImageRgb8Msg};
 use cu29::prelude::*;
-use kornia::io::jpeg::ImageEncoder as KorniaImageEncoder;
+use kornia_io::jpegturbo::JpegTurboEncoder;
 
 pub struct ImageEncoder {
-    encoder: KorniaImageEncoder,
+    encoder: JpegTurboEncoder,
 }
 
 impl Freezable for ImageEncoder {}
@@ -17,7 +17,7 @@ impl<'cl> CuTask<'cl> for ImageEncoder {
         Self: Sized,
     {
         Ok(Self {
-            encoder: KorniaImageEncoder::new()
+            encoder: JpegTurboEncoder::new()
                 .map_err(|e| CuError::new_with_cause("Failed to create jpeg encoder", e))?,
         })
     }
@@ -34,7 +34,7 @@ impl<'cl> CuTask<'cl> for ImageEncoder {
 
         let encoded_image = self
             .encoder
-            .encode(&msg.image)
+            .encode_rgb8(&msg.image)
             .map_err(|e| CuError::new_with_cause("Failed to encode image", e))?;
 
         output.set_payload(EncodedImage {
