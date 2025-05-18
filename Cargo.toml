@@ -6,7 +6,7 @@ edition = "2021"
 homepage = "http://kornia.org"
 include = ["Cargo.toml"]
 license = "Apache-2.0"
-repository = "https://github.com/kornia/kornia-rs"
+repository = "https://github.com/kornia/bubbaloop"
 rust-version = "1.86"
 version = "0.0.1-rc.1"
 
@@ -34,7 +34,7 @@ cu29 = { git = "https://github.com/copper-project/copper-rs.git", branch = "mast
 cu29-helpers = { git = "https://github.com/copper-project/copper-rs.git", branch = "master" }
 
 # NOTE: this version requires kornia-rs to be at least 0.1.8
-kornia = { version = "0.1.8", features = ["gstreamer", "jpegturbo"] }
+kornia = { version = "0.1.9", features = ["gstreamer", "turbojpeg"] }
 kornia-paligemma = { git = "https://github.com/kornia/kornia-paligemma.git", branch = "main", features = [] }
 
 [features]
