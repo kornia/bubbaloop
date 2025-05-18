@@ -1,6 +1,6 @@
 use crate::cu29::msgs::ImageRgb8Msg;
 use cu29::prelude::*;
-use kornia::io::stream::video::{ImageFormat, VideoCodec, VideoWriter as KorniaVideoWriter};
+use kornia_io::stream::video::{ImageFormat, VideoCodec, VideoWriter as KorniaVideoWriter};
 
 // default values for the video writer
 const DEFAULT_RES_ROWS: u32 = 480;

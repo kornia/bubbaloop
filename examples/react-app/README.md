@@ -2,9 +2,28 @@
 
 This is a React application for connecting to and displaying camera streams and inference results from a Bubbaloop backend.
 
+## Prerequisites
+
+Before running the React app, you must have the Bubbaloop server running with the inference pipeline:
+
+1. **Start the Bubbaloop server**
+   ```bash
+   # In the root of your bubbaloop project
+   
+   # First, start the server
+   just serve 0.0.0.0 3000
+   
+   # Then, in another terminal, start the inference pipeline
+   just start-pipeline inference 0.0.0.0 3000
+   ```
+
+2. **Verify the server is running**
+   The server should start the inference pipeline and be ready to accept connections.
+   You should see logs indicating successful initialization.
+
 ## Running the Application
 
-Follow these steps to run the application:
+Once the server is running, follow these steps to run the React app:
 
 1. **Install dependencies**
    ```bash

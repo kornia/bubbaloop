@@ -1,6 +1,6 @@
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
 
-type ImageRgb8 = kornia::image::Image<u8, 3>;
+type ImageRgb8 = kornia_image::Image<u8, 3>;
 
 #[derive(Clone)]
 pub struct ImageRgb8Msg {

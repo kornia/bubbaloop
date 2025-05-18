@@ -1,6 +1,6 @@
 use crate::cu29::msgs::{EncodedImage, ImageRgb8Msg};
 use cu29::prelude::*;
-use kornia::io::jpegturbo::JpegTurboEncoder;
+use kornia_io::jpegturbo::JpegTurboEncoder;
 
 pub struct ImageEncoder {
     encoder: JpegTurboEncoder,
