@@ -36,6 +36,7 @@ cu29-helpers = { git = "https://github.com/copper-project/copper-rs.git", branch
 kornia-image = "0.1.9"
 kornia-io = { version = "0.1.9", features = ["gstreamer", "turbojpeg"] }
 kornia-paligemma = { git = "https://github.com/kornia/kornia-paligemma.git", tag = "v0.1.0", features = [] }
+kornia-infernum = { git = "https://github.com/kornia/kornia-infernum.git", tag = "v0.1.0" }
 
 [features]
 cuda = ["kornia-paligemma/cuda"]
