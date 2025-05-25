@@ -50,12 +50,6 @@ Once the server is running, follow these steps to run the React app:
    - Click "Update Connection" to apply changes
 
 2. **Features**
-<<<<<<< HEAD
-=======
-
-
-
->>>>>>> main
    - Stream viewer for camera feeds
    - Inference instruction panel for sending commands
    - Inference result display showing detection outcomes
