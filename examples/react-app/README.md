@@ -2,7 +2,7 @@
 
 This is a React application for connecting to and displaying camera streams and inference results from a Bubbaloop backend.
 
-### TODO: add short video
+https://github.com/user-attachments/assets/2ba6575a-6a47-43d7-a8eb-0cdb76be1d43
 
 ## Prerequisites
 
@@ -50,6 +50,12 @@ Once the server is running, follow these steps to run the React app:
    - Click "Update Connection" to apply changes
 
 2. **Features**
+<<<<<<< HEAD
+=======
+
+
+
+>>>>>>> main
    - Stream viewer for camera feeds
    - Inference instruction panel for sending commands
    - Inference result display showing detection outcomes
