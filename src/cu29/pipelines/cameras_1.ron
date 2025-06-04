@@ -7,7 +7,8 @@
                 "source_type": "rtsp",
                 // URL of the RTSP camera
                 // rtsp://<username>:<password>@<ip>:<port>/<stream>
-                "source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
+                //"source_uri": "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2",
+                "source_uri": "rtsp://rtspstream:4j_U0tJ6fGtiaKREnuVnH@zephyr.rtsp.stream/movie",
                 "channel_id": 0,
             }
         ),

@@ -1,6 +1,6 @@
 use crate::cu29::msgs::ImageRgb8Msg;
 use cu29::prelude::*;
-use kornia_io::stream::{CameraCapture, RTSPCameraConfig, V4L2CameraConfig};
+use kornia_io::stream::{CameraCapture, RTSPCameraConfig, StreamCapture, V4L2CameraConfig};
 
 pub struct VideoCapture {
     capture: CameraCapture,
@@ -34,10 +34,21 @@ impl<'cl> CuSrcTask<'cl> for VideoCapture {
             .ok_or(CuError::from("No channel id provided"))?;
 
         let capture = match source_type.as_str() {
-            "rtsp" => RTSPCameraConfig::new()
-                .with_url(&source_uri)
-                .build()
-                .map_err(|e| CuError::new_with_cause("Failed to build camera", e))?,
+            //"rtsp" => RTSPCameraConfig::new()
+            //    .with_url(&source_uri)
+            //    .build()
+            //    .map_err(|e| {
+            //        println!("Failed to build camera: {}", e);
+            //        CuError::new_with_cause("Failed to build camera", e)
+            //    })?,
+            "rtsp" => {
+                let pipeline = format!("rtspsrc location={} latency={} ! rtph264depay ! avdec_h264 ! videoconvert ! video/x-raw,format=RGB ! appsink name=sink", source_uri, 100);
+                let capture = StreamCapture::new(&pipeline).map_err(|e| {
+                    println!("Failed to build camera: {}", e);
+                    CuError::new_with_cause("Failed to build camera", e)
+                })?;
+                CameraCapture(capture)
+            }
             "v4l2" => {
                 // parse the needed parameters from the config
                 let image_cols = config

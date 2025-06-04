@@ -21,26 +21,15 @@ async def get_api_response(client: httpx.AsyncClient, url: str) -> dict | None:
     if response is None:
         return None
 
-    json_response = response.json()
-    return json_response
+    return response.content
 
 
-def response_to_image(response: dict) -> rr.Image:
-    # decode the JPEG image
+async def poll_image(client: httpx.AsyncClient, url: str, rr, camera_id: int):
     decoder = kr.ImageDecoder()
-    data = decoder.decode(bytes(response["data"]))
-    return rr.Image(data)
-
-
-async def poll_image(client: httpx.AsyncClient, url: str, rr):
     while True:
         # get the image from the server
         response = await get_api_response(client, url)
-
-        if response is not None and "Success" in response:
-            response = response["Success"]
-            rr.set_time_sequence("session", response["stamp_ns"])
-            rr.log(f"/cam/{response['channel_id']}", response_to_image(response))
+        rr.log(f"/cam/{camera_id}", rr.Image(decoder.decode(response)))
 
 
 async def main() -> None:
@@ -62,6 +51,7 @@ async def main() -> None:
                         client,
                         url=f"http://{args.host}:{args.port}/api/v0/streaming/image/{camera_id}",
                         rr=rr,
+                        camera_id=camera_id,
                     )
                 )
             )
