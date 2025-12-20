@@ -30,3 +30,6 @@ dashboard/dist/
 # Generated proto files (rebuilt each time)
 dashboard/src/proto/*.pb.js
 dashboard/src/proto/*.pb.d.ts
+
+# Cloned zenoh-ts for bridge (built via pixi run bridge)
+zenoh-ts/

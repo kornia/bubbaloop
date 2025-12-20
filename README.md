@@ -17,19 +17,15 @@ Captures H264 streams directly from RTSP cameras (zero decode overhead) and publ
 pixi install
 ```
 
-### 2. Build and run zenoh-bridge-remote-api (one-time setup)
+### 2. Start zenoh-bridge-remote-api
 
 The bridge provides WebSocket access for browsers to connect to Zenoh:
 
 ```bash
-# Clone and build
-git clone https://github.com/eclipse-zenoh/zenoh-ts.git
-cd zenoh-ts/zenoh-bridge-remote-api
-cargo build --release
-
-# Run the bridge (in a separate terminal)
-./target/release/zenoh-bridge-remote-api --listen tcp/0.0.0.0:7448 --ws-port 10000
+pixi run bridge
 ```
+
+This will clone, build (first time only), and run the bridge on port 10000.
 
 ### 3. Configure cameras
 
