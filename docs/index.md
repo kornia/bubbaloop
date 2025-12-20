@@ -1,15 +1,16 @@
 # 🎥 Bubbaloop
 
-**Multi-camera RTSP streaming with ROS-Z and Foxglove.**
+**Multi-camera RTSP streaming with ROS-Z and real-time browser visualization.**
 
-Bubbaloop captures H264 streams directly from RTSP cameras with **zero decode overhead** and publishes them via Zenoh/ROS-Z for real-time visualization in Foxglove Studio.
+Bubbaloop captures H264 streams directly from RTSP cameras with **zero decode overhead** and publishes them via Zenoh/ROS-Z for real-time visualization in the React Dashboard or Foxglove Studio.
 
 ## ✨ Features
 
 - 🚀 **Zero-copy H264 passthrough** — No decoding overhead, direct stream forwarding
-- 📡 **Multi-camera support** — Stream from multiple RTSP cameras simultaneously  
+- 📡 **Multi-camera support** — Stream from multiple RTSP cameras simultaneously
 - 🔌 **Zenoh/ROS-Z integration** — Publish camera streams as ROS-compatible topics
-- 📊 **Foxglove visualization** — Real-time video streaming to Foxglove Studio
+- 🌐 **React Dashboard** — Real-time browser-based visualization with WebCodecs
+- 📊 **Foxglove support** — Optional integration with Foxglove Studio
 - ⚙️ **Simple YAML config** — Easy camera configuration
 
 ## 🏗️ Tech Stack
@@ -19,33 +20,39 @@ Bubbaloop captures H264 streams directly from RTSP cameras with **zero decode ov
 | Language | Rust 🦀 |
 | Video Capture | GStreamer |
 | Messaging | Zenoh / ROS-Z |
-| Visualization | Foxglove WebSocket |
+| Dashboard | React + WebCodecs |
 | Package Manager | Pixi |
 
 ## 🚀 Quick Start
 
 ```bash
-# Install pixi
-curl -fsSL https://pixi.sh/install.sh | sh
-
-# Clone and enter the project
-git clone https://github.com/kornia/bubbaloop.git
-cd bubbaloop
-
 # Install dependencies
 pixi install
 
-# Configure cameras
-vim config.yaml
+# Terminal 1: Start zenoh-bridge-remote-api
+./zenoh-bridge-remote-api --listen tcp/0.0.0.0:7448 --ws-port 10000
 
-# Run
+# Terminal 2: Start camera capture
 pixi run multicam
+
+# Terminal 3: Start dashboard
+pixi run dashboard
 ```
 
-Then connect Foxglove Studio to `ws://<host>:8765` to view your camera streams.
+Open http://localhost:5173 in Chrome, Edge, or Safari.
+
+See [Quickstart](quickstart.md) for detailed setup instructions.
+
+## 📦 Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `pixi run multicam` | Start camera capture and Zenoh publishing |
+| `pixi run dashboard` | Start React dashboard (auto npm install) |
+| `pixi run build` | Build Rust binaries |
+| `pixi run docs` | Serve documentation locally |
 
 ## 👥 Community
 
 - 💬 [Discord Server](https://discord.com/invite/HfnywwpBnD)
 - 📦 [GitHub Repository](https://github.com/kornia/bubbaloop)
-

@@ -99,8 +99,8 @@ impl H264StreamCapture {
             .dynamic_cast::<gstreamer_app::AppSink>()
             .map_err(|_| H264CaptureError::DowncastError)?;
 
-        // Use bounded channel to prevent unbounded memory growth
-        let (frame_tx, frame_rx) = flume::bounded::<H264Frame>(8);
+        // Use unbounded channel to ensure no frames are dropped
+        let (frame_tx, frame_rx) = flume::unbounded::<H264Frame>();
 
         // Set up callbacks to capture H264 frames
         appsink.set_callbacks(
@@ -111,9 +111,8 @@ impl H264StreamCapture {
                         match Self::handle_sample(sink, sequence) {
                             Ok(frame) => {
                                 sequence = sequence.wrapping_add(1);
-                                // Use try_send to avoid blocking GStreamer thread
-                                // If channel is full, drop the frame (backpressure)
-                                let _ = frame_tx.try_send(frame);
+                                // Send frame (unbounded channel never blocks)
+                                let _ = frame_tx.send(frame);
                                 Ok(gstreamer::FlowSuccess::Ok)
                             }
                             Err(_) => Err(gstreamer::FlowError::Error),
@@ -137,8 +136,13 @@ impl H264StreamCapture {
 
         let gst_buffer = sample.buffer_owned().ok_or(H264CaptureError::BufferError)?;
 
-        // Get presentation timestamp
-        let pts = gst_buffer.pts().map(|p| p.nseconds()).unwrap_or(0);
+        // Get presentation timestamp, fall back to DTS if PTS is not available
+        // Some cameras/streams may not provide PTS for all frames
+        let pts = gst_buffer
+            .pts()
+            .or_else(|| gst_buffer.dts())
+            .map(|t| t.nseconds())
+            .unwrap_or(0);
 
         // Check if this is a keyframe by looking at buffer flags
         let keyframe = !gst_buffer

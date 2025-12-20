@@ -22,3 +22,11 @@ target
 
 .pixi/
 site/
+
+# Dashboard build artifacts
+dashboard/node_modules/
+dashboard/dist/
+
+# Generated proto files (rebuilt each time)
+dashboard/src/proto/*.pb.js
+dashboard/src/proto/*.pb.d.ts

@@ -20,6 +20,10 @@ clippy = "cargo clippy --all-targets --all-features -- -D warnings"
 lint = { depends-on = ["fmt-check", "clippy"] }
 docs = "mkdocs serve"
 docs-build = "mkdocs build"
+dashboard-install = "cd dashboard && npm install"
+dashboard-proto = { cmd = "cd dashboard && npm run proto", depends-on = ["dashboard-install"] }
+dashboard = { cmd = "cd dashboard && npm run dev", depends-on = ["dashboard-proto"] }
+dashboard-build = { cmd = "cd dashboard && npm run build", depends-on = ["dashboard-proto"] }
 pre-commit-install = "pre-commit install"
 pre-commit-run = "pre-commit run --all-files"
 
@@ -49,3 +53,6 @@ mkdocs-material = ">=9.0"
 
 # Development tools
 pre-commit = ">=3.0"
+
+# Dashboard
+nodejs = ">=20"

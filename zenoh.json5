@@ -1,0 +1,24 @@
+{
+  // Zenoh router configuration with Remote API plugin for browser WebSocket access
+  mode: "router",
+
+  // Listen for peer connections
+  listen: {
+    endpoints: ["tcp/0.0.0.0:7447"],
+  },
+
+  // Plugin loading configuration
+  plugins_loading: {
+    enabled: true,
+    search_dirs: ["~/.zenoh/lib", "/usr/local/lib", "/usr/lib"],
+  },
+
+  // Plugins configuration
+  plugins: {
+    // Remote API plugin exposes WebSocket endpoint for zenoh-ts clients
+    remote_api: {
+      // WebSocket port for browser connections
+      websocket_port: 10000,
+    },
+  },
+}
