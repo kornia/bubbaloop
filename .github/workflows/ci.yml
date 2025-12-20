@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  lint:
-    name: Lint
+  ci:
+    name: CI
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,22 +21,15 @@ jobs:
           pixi-version: v0.39.0
           cache: true
 
-      - name: Check formatting
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Format
         run: pixi run fmt-check
 
-      - name: Run clippy
+      - name: Clippy
         run: pixi run clippy
-
-  build:
-    name: Build & Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: prefix-dev/setup-pixi@v0.8.1
-        with:
-          pixi-version: v0.39.0
-          cache: true
 
       - name: Check
         run: pixi run check
