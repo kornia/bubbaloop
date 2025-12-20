@@ -1,0 +1,8 @@
+cameras:
+  - name: "front"
+    url: "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2"
+    latency: 200
+  - name: "rear"
+    url: "rtsp://192.168.1.11:554/live"
+    latency: 100
+
