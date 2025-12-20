@@ -184,8 +184,11 @@ function ConnectionPanel({
 
 function BrowserCheck() {
   const isSupported = H264Decoder.isSupported();
+  const isSecureContext = window.isSecureContext;
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
-  if (isSupported) return null;
+  // WebCodecs requires secure context (localhost or https)
+  if (isSupported && isSecureContext) return null;
 
   return (
     <div className="browser-check">
@@ -193,8 +196,17 @@ function BrowserCheck() {
         <span className="warning-icon">⚠️</span>
         <div>
           <strong>WebCodecs not supported</strong>
-          <p>Your browser doesn't support WebCodecs API for H264 decoding.</p>
-          <p>Please use Chrome 94+, Edge 94+, or Safari 16.4+.</p>
+          {!isSecureContext && !isLocalhost ? (
+            <>
+              <p>WebCodecs requires a <strong>secure context</strong>.</p>
+              <p>Access via <code>http://localhost:5173</code> instead of <code>{window.location.host}</code></p>
+            </>
+          ) : (
+            <>
+              <p>Your browser doesn't support WebCodecs API for H264 decoding.</p>
+              <p>Please use Chrome 94+, Edge 94+, or Safari 16.4+.</p>
+            </>
+          )}
         </div>
       </div>
 
