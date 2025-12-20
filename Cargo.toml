@@ -1,0 +1,48 @@
+[package]
+name = "bubbaloop"
+version = "0.1.0"
+authors = ["Edgar Riba <edgar.riba@gmail.com>"]
+license = "Apache-2.0"
+edition = "2021"
+description = "Multi-camera RTSP streaming with ROS-Z and Foxglove"
+
+[dependencies]
+# CLI and logging
+argh = "0.1"
+ctrlc = "3.4"
+env_logger = "0.11"
+log = "0.4"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+flume = "0.12"
+
+# GStreamer for H264 capture
+gstreamer = "0.23"
+gstreamer-app = "0.23"
+
+# ROS-Z pub/sub
+ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
+zenoh = "1.7"
+
+# Foxglove visualization
+foxglove = "0.16"
+
+# Protobuf serialization
+prost = "0.14"
+prost-types = "0.14"
+
+# Configuration
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+
+# Error handling
+thiserror = "2.0"
+
+[build-dependencies]
+prost-build = "0.14"
+
+[[bin]]
+name = "multicam"
+path = "src/bin/multicam.rs"
+

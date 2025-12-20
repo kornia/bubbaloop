@@ -1,0 +1,73 @@
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+/// Configuration for a single RTSP camera
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraConfig {
+    /// Unique name for the camera (used in topic names)
+    pub name: String,
+    /// RTSP URL (e.g., rtsp://user:pass@192.168.1.10:554/stream)
+    pub url: String,
+    /// Latency in milliseconds for the RTSP stream
+    #[serde(default = "default_latency")]
+    pub latency: u32,
+}
+
+fn default_latency() -> u32 {
+    200
+}
+
+/// Root configuration structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    /// List of cameras to capture
+    pub cameras: Vec<CameraConfig>,
+}
+
+impl Config {
+    /// Load configuration from a YAML file
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        let contents = std::fs::read_to_string(path.as_ref())
+            .map_err(|e| ConfigError::IoError(e.to_string()))?;
+        Self::from_str(&contents)
+    }
+
+    /// Parse configuration from a YAML string
+    pub fn from_str(yaml: &str) -> Result<Self, ConfigError> {
+        serde_yaml::from_str(yaml).map_err(|e| ConfigError::ParseError(e.to_string()))
+    }
+}
+
+/// Configuration errors
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("IO error: {0}")]
+    IoError(String),
+    #[error("Parse error: {0}")]
+    ParseError(String),
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_config() {
+        let yaml = r#"
+cameras:
+  - name: "front"
+    url: "rtsp://192.168.1.10:554/stream"
+    latency: 200
+  - name: "rear"
+    url: "rtsp://192.168.1.11:554/live"
+"#;
+        let config = Config::from_str(yaml).unwrap();
+        assert_eq!(config.cameras.len(), 2);
+        assert_eq!(config.cameras[0].name, "front");
+        assert_eq!(config.cameras[0].latency, 200);
+        assert_eq!(config.cameras[1].latency, 200); // default
+    }
+}
+
