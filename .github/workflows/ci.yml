@@ -28,11 +28,11 @@ jobs:
       - name: Format
         run: pixi run fmt-check
 
+      - name: Build tests
+        run: pixi run cargo test --all-features --no-run
+
       - name: Clippy
         run: pixi run clippy
-
-      - name: Check
-        run: pixi run check
 
       - name: Test
         run: pixi run test
