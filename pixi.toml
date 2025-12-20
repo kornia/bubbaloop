@@ -14,6 +14,8 @@ build = "cargo build --release"
 multicam = "RUST_LOG=info cargo run --bin multicam --release"
 check = "cargo check"
 test = "cargo test"
+docs = "mkdocs serve"
+docs-build = "mkdocs build"
 
 [dependencies]
 # Rust toolchain
@@ -34,4 +36,7 @@ gst-libav = ">=1.22"            # Contains avdec_h264
 pkg-config = ">=0.29"
 cmake = ">=3.20"
 zlib = ">=1.2"
+
+# Documentation
+mkdocs-material = ">=9.0"
 

@@ -49,7 +49,7 @@ impl FoxgloveNode {
         );
 
         // Start WebSocket server
-        let server = match WebSocketServer::new().start().await {
+        let server = match WebSocketServer::new().bind("0.0.0.0", 8765).start().await {
             Ok(s) => s,
             Err(e) => {
                 log::error!("Failed to start Foxglove WebSocket server: {}", e);

@@ -38,31 +38,3 @@ cameras:
 ## Visualization
 
 Connect Foxglove Studio to `ws://localhost:8765` to view all camera streams.
-
-## Jetson Deployment
-
-### Option 1: Deploy and build natively
-
-```bash
-# From your dev machine, sync files to Jetson
-./scripts/deploy-jetson.sh <jetson-ip> nvidia
-
-# On Jetson
-ssh nvidia@<jetson-ip>
-cd ~/bubbaloop
-
-# Install pixi (one-time)
-curl -fsSL https://pixi.sh/install.sh | bash
-
-# Build and run
-pixi install
-pixi run multicam
-```
-
-## Architecture
-
-```
-RTSP Camera ─► GStreamer (H264 passthrough) ─► ROS-Z ─► Foxglove WebSocket
-```
-
-Each camera publishes to `/camera/{name}/compressed` with format `h264`.
