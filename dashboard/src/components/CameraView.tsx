@@ -4,25 +4,6 @@ import { useZenohSubscriber, getSamplePayload } from '../lib/zenoh';
 import { H264Decoder } from '../lib/h264-decoder';
 import { decodeCompressedImage, Header } from '../proto/camera';
 
-// Check if H264 data contains a keyframe (IDR NAL unit type 5)
-function checkForKeyframe(data: Uint8Array): boolean {
-  for (let i = 0; i < data.length - 4; i++) {
-    if (data[i] === 0 && data[i + 1] === 0) {
-      let nalStart = -1;
-      if (data[i + 2] === 1) {
-        nalStart = i + 3;
-      } else if (data[i + 2] === 0 && data[i + 3] === 1) {
-        nalStart = i + 4;
-      }
-      if (nalStart >= 0 && nalStart < data.length) {
-        const nalType = data[nalStart] & 0x1f;
-        if (nalType === 5) return true;
-      }
-    }
-  }
-  return false;
-}
-
 interface DragHandleProps {
   [key: string]: unknown;
 }
@@ -58,16 +39,17 @@ export function CameraView({
   const [isReady, setIsReady] = useState(false);
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
   const frameCountRef = useRef(0);
-  const firstKeyframeLoggedRef = useRef(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(cameraName);
   const [editTopic, setEditTopic] = useState(topic);
   const [showInfo, setShowInfo] = useState(false);
-  const [lastMeta, setLastMeta] = useState<{
+  const lastMetaRef = useRef<{
     header?: Header;
     format: string;
     dataSize: number;
   } | null>(null);
+  const [lastMeta, setLastMeta] = useState(lastMetaRef.current);
+  const metaUpdateIntervalRef = useRef<number | null>(null);
 
   // Handle decoded frame - render to canvas
   const handleFrame = useCallback((frame: VideoFrame) => {
@@ -132,30 +114,16 @@ export function CameraView({
       const payload = getSamplePayload(sample);
       const msg = decodeCompressedImage(payload);
 
-      // Store latest metadata for info panel
-      setLastMeta({
+      // Store latest metadata in ref (no re-render)
+      lastMetaRef.current = {
         header: msg.header,
         format: msg.format,
         dataSize: msg.data.length,
-      });
+      };
 
       if (msg.format !== 'h264') {
         console.warn(`[CameraView] Unexpected format: ${msg.format}`);
         return;
-      }
-
-      // Log first keyframe data for debugging
-      if (!firstKeyframeLoggedRef.current && msg.data.length > 0) {
-        const hasKeyframe = checkForKeyframe(msg.data);
-        if (hasKeyframe) {
-          firstKeyframeLoggedRef.current = true;
-          console.log(`[CameraView ${cameraName}] First keyframe received:`, {
-            dataLength: msg.data.length,
-            first32Bytes: Array.from(msg.data.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' '),
-            format: msg.format,
-            sequence: msg.header?.sequence,
-          });
-        }
       }
 
       // Use pub_time as timestamp (convert from nanoseconds to microseconds)
@@ -170,10 +138,28 @@ export function CameraView({
     } catch (e) {
       console.error('[CameraView] Failed to process sample:', e);
     }
-  }, [cameraName]);
+  }, []);
 
   // Subscribe to camera topic
   const { fps, messageCount } = useZenohSubscriber(session, topic, handleSample);
+
+  // Periodically update metadata state when info panel is visible
+  useEffect(() => {
+    if (showInfo) {
+      // Update immediately
+      setLastMeta(lastMetaRef.current);
+      // Then update every 500ms
+      metaUpdateIntervalRef.current = window.setInterval(() => {
+        setLastMeta(lastMetaRef.current);
+      }, 500);
+    }
+    return () => {
+      if (metaUpdateIntervalRef.current) {
+        clearInterval(metaUpdateIntervalRef.current);
+        metaUpdateIntervalRef.current = null;
+      }
+    };
+  }, [showInfo]);
 
   const handleSaveEdit = () => {
     if (editName !== cameraName && onNameChange) {

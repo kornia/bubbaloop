@@ -100,10 +100,12 @@ function StatusIndicator({ status, endpoint, onReconnect }: { status: Connection
 function BrowserCheck() {
   const isSupported = H264Decoder.isSupported();
   const isSecureContext = window.isSecureContext;
-  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
   // WebCodecs requires secure context (localhost or https)
   if (isSupported && isSecureContext) return null;
+
+  // Determine the specific issue
+  const needsSecureContext = !isSecureContext;
 
   return (
     <div className="browser-check">
@@ -111,10 +113,10 @@ function BrowserCheck() {
         <span className="warning-icon">⚠️</span>
         <div>
           <strong>WebCodecs not supported</strong>
-          {!isSecureContext && !isLocalhost ? (
+          {needsSecureContext ? (
             <>
               <p>WebCodecs requires a <strong>secure context</strong> (localhost or HTTPS).</p>
-              <p>Access via <code>http://localhost:5173</code> or use SSH tunnel: <code>ssh -L 5173:localhost:5173 -L 10000:localhost:10000 host</code></p>
+              <p>Access via <code>https://{window.location.host}</code> or <code>http://localhost:5173</code></p>
             </>
           ) : (
             <>

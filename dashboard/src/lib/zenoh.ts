@@ -70,7 +70,6 @@ export function useZenohSession(config: ZenohConfig): UseZenohSessionResult {
 }
 
 export interface UseZenohSubscriberResult {
-  latestSample: Sample | null;
   messageCount: number;
   fps: number;        // Smoothed FPS (moving average)
   instantFps: number; // Raw FPS for last second
@@ -90,7 +89,6 @@ export function useZenohSubscriber(
   topic: string,
   onSample?: SampleCallback
 ): UseZenohSubscriberResult {
-  const [latestSample, setLatestSample] = useState<Sample | null>(null);
   const [messageCount, setMessageCount] = useState(0);
   const [fps, setFps] = useState(0);
   const [instantFps, setInstantFps] = useState(0);
@@ -125,7 +123,6 @@ export function useZenohSubscriber(
 
             messageCountRef.current++;
             setMessageCount(messageCountRef.current);
-            setLatestSample(sample);
             onSampleRef.current?.(sample);
           },
         });
@@ -174,7 +171,6 @@ export function useZenohSubscriber(
   }, [session, topic]);
 
   return {
-    latestSample,
     messageCount,
     fps,
     instantFps,

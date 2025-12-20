@@ -20,6 +20,14 @@ export default defineConfig({
         target: 'ws://127.0.0.1:10000',
         ws: true,
         rewriteWsOrigin: true,
+        // Suppress noisy socket errors on connection close
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            // Silently ignore "socket ended" errors - these happen on reconnect
+            if (err.message?.includes('ended by the other party')) return;
+            console.error('[Proxy] Error:', err.message);
+          });
+        },
       },
     },
   },
