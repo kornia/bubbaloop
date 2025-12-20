@@ -22,7 +22,7 @@ docs = "mkdocs serve"
 docs-build = "mkdocs build"
 dashboard-install = "cd dashboard && npm install"
 dashboard-proto = { cmd = "cd dashboard && npm run proto", depends-on = ["dashboard-install"] }
-dashboard = { cmd = "cd dashboard && npm run dev", depends-on = ["dashboard-proto", "bridge-build"] }
+dashboard = { cmd = "cd dashboard && npm run dev", depends-on = ["dashboard-proto"] }
 dashboard-build = { cmd = "cd dashboard && npm run build", depends-on = ["dashboard-proto"] }
 pre-commit-install = "pre-commit install"
 pre-commit-run = "pre-commit run --all-files"
@@ -30,7 +30,7 @@ pre-commit-run = "pre-commit run --all-files"
 # Zenoh bridge (for dashboard WebSocket connection)
 bridge-clone = "test -d zenoh-ts || git clone https://github.com/eclipse-zenoh/zenoh-ts.git"
 bridge-build = { cmd = "cd zenoh-ts/zenoh-bridge-remote-api && cargo build --release", depends-on = ["bridge-clone"] }
-bridge = { cmd = "zenoh-ts/zenoh-bridge-remote-api/target/release/zenoh-bridge-remote-api --listen tcp/0.0.0.0:7448 --ws-port 10000", depends-on = ["bridge-build"] }
+bridge = { cmd = "zenoh-ts/target/release/zenoh-bridge-remote-api --listen tcp/0.0.0.0:7448 --ws-port 10000", depends-on = ["bridge-build"] }
 
 [dependencies]
 # Rust toolchain
