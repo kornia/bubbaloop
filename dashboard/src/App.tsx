@@ -1,10 +1,19 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useZenohSession, useZenohTopicDiscovery, ConnectionStatus } from './lib/zenoh';
 import { Dashboard } from './components/Dashboard';
 import { H264Decoder } from './lib/h264-decoder';
 
-// Default Zenoh endpoint (zenoh-plugin-remote-api WebSocket)
-const DEFAULT_ZENOH_ENDPOINT = 'ws://127.0.0.1:10000';
+// Auto-detect Zenoh endpoint based on current host
+// When accessing via Tailscale or remote, use the same host for Zenoh WebSocket
+// Use wss:// when page is loaded over HTTPS (required by browsers)
+function getZenohEndpoint(): string {
+  const hostname = window.location.hostname;
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const port = 10000;
+  return `${protocol}://${hostname}:${port}`;
+}
+
+const ZENOH_ENDPOINT = getZenohEndpoint();
 
 // Default camera configuration - modify these to match your setup
 // ros-z key format: {domain_id}/{topic_with_%_encoding}/{type_info}
@@ -15,7 +24,7 @@ const DEFAULT_CAMERAS = [
   { name: 'terrace', topic: '0/camera%terrace%compressed/**' },
 ];
 
-function StatusIndicator({ status }: { status: ConnectionStatus }) {
+function StatusIndicator({ status, endpoint, onReconnect }: { status: ConnectionStatus; endpoint: string; onReconnect: () => void }) {
   const statusConfig = {
     disconnected: { color: 'var(--text-muted)', label: 'Disconnected' },
     connecting: { color: 'var(--warning)', label: 'Connecting...' },
@@ -27,14 +36,29 @@ function StatusIndicator({ status }: { status: ConnectionStatus }) {
 
   return (
     <div className="status-indicator">
+      <span className="status-endpoint" title={endpoint}>{endpoint}</span>
       <span className="status-dot" style={{ backgroundColor: config.color }} />
       <span className="status-label">{config.label}</span>
+      {(status === 'error' || status === 'disconnected') && (
+        <button className="reconnect-btn" onClick={onReconnect} title="Reconnect">
+          ↻
+        </button>
+      )}
 
       <style>{`
         .status-indicator {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 10px;
+        }
+
+        .status-endpoint {
+          font-size: 12px;
+          font-family: 'JetBrains Mono', monospace;
+          color: var(--text-muted);
+          padding: 4px 8px;
+          background: var(--bg-tertiary);
+          border-radius: 4px;
         }
 
         .status-dot {
@@ -49,6 +73,23 @@ function StatusIndicator({ status }: { status: ConnectionStatus }) {
           color: var(--text-secondary);
         }
 
+        .reconnect-btn {
+          background: none;
+          border: 1px solid var(--border-color);
+          border-radius: 4px;
+          color: var(--text-secondary);
+          cursor: pointer;
+          font-size: 14px;
+          padding: 2px 8px;
+          transition: all 0.2s;
+        }
+
+        .reconnect-btn:hover {
+          background: var(--bg-tertiary);
+          color: var(--text-primary);
+          border-color: var(--accent-primary);
+        }
+
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.4; }
@@ -58,129 +99,6 @@ function StatusIndicator({ status }: { status: ConnectionStatus }) {
   );
 }
 
-function ConnectionPanel({
-  endpoint,
-  onEndpointChange,
-  status,
-  error,
-  onReconnect
-}: {
-  endpoint: string;
-  onEndpointChange: (endpoint: string) => void;
-  status: ConnectionStatus;
-  error: Error | null;
-  onReconnect: () => void;
-}) {
-  const [inputValue, setInputValue] = useState(endpoint);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (inputValue !== endpoint) {
-      onEndpointChange(inputValue);
-    } else {
-      onReconnect();
-    }
-  };
-
-  return (
-    <div className="connection-panel">
-      <form onSubmit={handleSubmit}>
-        <label>
-          <span className="label-text">Zenoh Endpoint</span>
-          <input
-            type="text"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            placeholder="ws://127.0.0.1:10000"
-            className="mono"
-          />
-        </label>
-        <button type="submit" disabled={status === 'connecting'}>
-          {status === 'connecting' ? 'Connecting...' : 'Connect'}
-        </button>
-      </form>
-      {error && (
-        <div className="error-message">
-          {error.message}
-        </div>
-      )}
-
-      <style>{`
-        .connection-panel {
-          padding: 12px 16px;
-          background: var(--bg-tertiary);
-          border-bottom: 1px solid var(--border-color);
-        }
-
-        .connection-panel form {
-          display: flex;
-          align-items: flex-end;
-          gap: 12px;
-        }
-
-        .connection-panel label {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .label-text {
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          color: var(--text-muted);
-        }
-
-        .connection-panel input {
-          padding: 8px 12px;
-          background: var(--bg-primary);
-          border: 1px solid var(--border-color);
-          border-radius: 6px;
-          color: var(--text-primary);
-          font-size: 13px;
-          outline: none;
-          transition: border-color 0.2s;
-        }
-
-        .connection-panel input:focus {
-          border-color: var(--accent-primary);
-        }
-
-        .connection-panel button {
-          padding: 8px 20px;
-          background: var(--accent-primary);
-          border: none;
-          border-radius: 6px;
-          color: white;
-          font-size: 13px;
-          font-weight: 500;
-          cursor: pointer;
-          transition: background 0.2s, opacity 0.2s;
-        }
-
-        .connection-panel button:hover:not(:disabled) {
-          background: #5c7cfa;
-        }
-
-        .connection-panel button:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-
-        .error-message {
-          margin-top: 8px;
-          padding: 8px 12px;
-          background: rgba(255, 23, 68, 0.1);
-          border: 1px solid var(--error);
-          border-radius: 6px;
-          color: var(--error);
-          font-size: 13px;
-        }
-      `}</style>
-    </div>
-  );
-}
 
 function BrowserCheck() {
   const isSupported = H264Decoder.isSupported();
@@ -250,9 +168,7 @@ function BrowserCheck() {
 }
 
 export default function App() {
-  const [endpoint, setEndpoint] = useState(DEFAULT_ZENOH_ENDPOINT);
-
-  const zenohConfig = useMemo(() => ({ endpoint }), [endpoint]);
+  const zenohConfig = useMemo(() => ({ endpoint: ZENOH_ENDPOINT }), []);
   const { session, status, error, reconnect } = useZenohSession(zenohConfig);
   const { topics: availableTopics } = useZenohTopicDiscovery(session, '**');
 
@@ -261,20 +177,18 @@ export default function App() {
       <header className="app-header">
         <div className="header-left">
           <h1>Bubbaloop</h1>
-          <span className="header-subtitle">Camera Dashboard</span>
+          <span className="header-subtitle">Dashboard</span>
         </div>
-        <StatusIndicator status={status} />
+        <StatusIndicator status={status} endpoint={ZENOH_ENDPOINT} onReconnect={reconnect} />
       </header>
 
       <BrowserCheck />
 
-      <ConnectionPanel
-        endpoint={endpoint}
-        onEndpointChange={setEndpoint}
-        status={status}
-        error={error}
-        onReconnect={reconnect}
-      />
+      {error && (
+        <div className="error-banner">
+          <span>⚠️</span> {error.message}
+        </div>
+      )}
 
       {session ? (
         <Dashboard session={session} cameras={DEFAULT_CAMERAS} availableTopics={availableTopics} />
@@ -285,17 +199,18 @@ export default function App() {
               <>
                 <div className="spinner" />
                 <p>Connecting to Zenoh...</p>
+                <p className="hint">{ZENOH_ENDPOINT}</p>
               </>
             ) : status === 'error' ? (
               <>
                 <span className="error-icon">❌</span>
-                <p>Failed to connect</p>
-                <p className="hint">Check that zenohd is running with the remote-api plugin</p>
+                <p>Failed to connect to {ZENOH_ENDPOINT}</p>
+                <p className="hint">Check that zenoh-bridge-remote-api is running on port 10000</p>
               </>
             ) : (
               <>
-                <span className="info-icon">ℹ️</span>
-                <p>Enter Zenoh endpoint to connect</p>
+                <div className="spinner" />
+                <p>Initializing...</p>
               </>
             )}
           </div>
@@ -378,6 +293,17 @@ export default function App() {
           font-size: 32px;
           display: block;
           margin-bottom: 8px;
+        }
+
+        .error-banner {
+          padding: 10px 24px;
+          background: rgba(255, 23, 68, 0.1);
+          border-bottom: 1px solid var(--error);
+          color: var(--error);
+          font-size: 13px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
         }
 
         @keyframes spin {

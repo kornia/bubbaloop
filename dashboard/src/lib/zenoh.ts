@@ -80,7 +80,7 @@ export interface UseZenohSubscriberResult {
 type SampleCallback = (sample: Sample) => void;
 
 // Number of samples for moving average FPS calculation
-const FPS_WINDOW_SIZE = 5;
+const FPS_WINDOW_SIZE = 15;
 
 /**
  * React hook for subscribing to a Zenoh topic
