@@ -53,7 +53,11 @@ pixi run multicam
 pixi run dashboard
 ```
 
-Open http://localhost:5173 in your browser (Chrome, Edge, or Safari).
+**Local access:** http://localhost:5173
+
+**Remote access (Tailscale, LAN):** https://\<ip\>:5173 (accept self-signed cert)
+
+The dashboard serves HTTPS with Zenoh WebSocket proxied through the same port - no extra setup needed.
 
 ## Documentation
 

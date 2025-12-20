@@ -3,14 +3,11 @@ import { useZenohSession, useZenohTopicDiscovery, ConnectionStatus } from './lib
 import { Dashboard } from './components/Dashboard';
 import { H264Decoder } from './lib/h264-decoder';
 
-// Auto-detect Zenoh endpoint based on current host
-// When accessing via Tailscale or remote, use the same host for Zenoh WebSocket
-// Use wss:// when page is loaded over HTTPS (required by browsers)
+// Zenoh endpoint - proxied through Vite on /zenoh path
+// This allows single-port HTTPS access (WebSocket tunneled through same connection)
 function getZenohEndpoint(): string {
-  const hostname = window.location.hostname;
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const port = 10000;
-  return `${protocol}://${hostname}:${port}`;
+  return `${protocol}://${window.location.host}/zenoh`;
 }
 
 const ZENOH_ENDPOINT = getZenohEndpoint();
@@ -116,8 +113,8 @@ function BrowserCheck() {
           <strong>WebCodecs not supported</strong>
           {!isSecureContext && !isLocalhost ? (
             <>
-              <p>WebCodecs requires a <strong>secure context</strong>.</p>
-              <p>Access via <code>http://localhost:5173</code> instead of <code>{window.location.host}</code></p>
+              <p>WebCodecs requires a <strong>secure context</strong> (localhost or HTTPS).</p>
+              <p>Access via <code>http://localhost:5173</code> or use SSH tunnel: <code>ssh -L 5173:localhost:5173 -L 10000:localhost:10000 host</code></p>
             </>
           ) : (
             <>

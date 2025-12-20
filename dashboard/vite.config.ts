@@ -9,12 +9,19 @@ export default defineConfig({
     wasm(),
     topLevelAwait(),
     react(),
-    basicSsl(), // Enable HTTPS with self-signed cert for WebCodecs on non-localhost
+    basicSsl(), // Self-signed cert for HTTPS
   ],
   server: {
     port: 5173,
     host: true,
-    https: true, // Enable HTTPS
+    // Proxy Zenoh WebSocket through Vite - no separate WSS port needed
+    proxy: {
+      '/zenoh': {
+        target: 'ws://127.0.0.1:10000',
+        ws: true,
+        rewriteWsOrigin: true,
+      },
+    },
   },
   optimizeDeps: {
     // Force pre-bundle these CommonJS dependencies
