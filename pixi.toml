@@ -14,8 +14,14 @@ build = "cargo build --release"
 multicam = "RUST_LOG=info cargo run --bin multicam --release"
 check = "cargo check"
 test = "cargo test"
+fmt = "cargo fmt --all"
+fmt-check = "cargo fmt --all -- --check"
+clippy = "cargo clippy --all-targets --all-features -- -D warnings"
+lint = { depends-on = ["fmt-check", "clippy"] }
 docs = "mkdocs serve"
 docs-build = "mkdocs build"
+pre-commit-install = "pre-commit install"
+pre-commit-run = "pre-commit run --all-files"
 
 [dependencies]
 # Rust toolchain
@@ -36,7 +42,10 @@ gst-libav = ">=1.22"            # Contains avdec_h264
 pkg-config = ">=0.29"
 cmake = ">=3.20"
 zlib = ">=1.2"
+protobuf = ">=3.20"          # protoc compiler for prost-build
 
 # Documentation
 mkdocs-material = ">=9.0"
 
+# Development tools
+pre-commit = ">=3.0"

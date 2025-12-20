@@ -20,4 +20,3 @@ impl MessageTypeInfo for protos::CompressedImage {
 }
 
 impl WithTypeInfo for protos::CompressedImage {}
-

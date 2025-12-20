@@ -123,10 +123,7 @@ impl H264StreamCapture {
                 .build(),
         );
 
-        Ok(Self {
-            pipeline,
-            frame_rx,
-        })
+        Ok(Self { pipeline, frame_rx })
     }
 
     /// Handle incoming sample from GStreamer (zero-copy)
@@ -138,18 +135,15 @@ impl H264StreamCapture {
             .pull_sample()
             .map_err(|e| H264CaptureError::FlowError(e.to_string()))?;
 
-        let gst_buffer = sample
-            .buffer_owned()
-            .ok_or(H264CaptureError::BufferError)?;
+        let gst_buffer = sample.buffer_owned().ok_or(H264CaptureError::BufferError)?;
 
         // Get presentation timestamp
-        let pts = gst_buffer
-            .pts()
-            .map(|p| p.nseconds())
-            .unwrap_or(0);
+        let pts = gst_buffer.pts().map(|p| p.nseconds()).unwrap_or(0);
 
         // Check if this is a keyframe by looking at buffer flags
-        let keyframe = !gst_buffer.flags().contains(gstreamer::BufferFlags::DELTA_UNIT);
+        let keyframe = !gst_buffer
+            .flags()
+            .contains(gstreamer::BufferFlags::DELTA_UNIT);
 
         // Map buffer for reading (zero-copy)
         let buffer = gst_buffer

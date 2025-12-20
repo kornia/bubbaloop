@@ -69,18 +69,18 @@ impl RtspCameraNode {
         let mut shutdown_rx = shutdown_tx.subscribe();
 
         // Initialize H264 capture
-        let capture = match H264StreamCapture::new(&self.camera_config.url, self.camera_config.latency)
-        {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!(
-                    "Failed to create H264 capture for camera '{}': {}",
-                    self.camera_config.name,
-                    e
-                );
-                return Ok(());
-            }
-        };
+        let capture =
+            match H264StreamCapture::new(&self.camera_config.url, self.camera_config.latency) {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!(
+                        "Failed to create H264 capture for camera '{}': {}",
+                        self.camera_config.name,
+                        e
+                    );
+                    return Ok(());
+                }
+            };
 
         // Start the capture pipeline
         if let Err(e) = capture.start() {

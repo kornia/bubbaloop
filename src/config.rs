@@ -29,11 +29,11 @@ impl Config {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let contents = std::fs::read_to_string(path.as_ref())
             .map_err(|e| ConfigError::IoError(e.to_string()))?;
-        Self::from_str(&contents)
+        Self::parse(&contents)
     }
 
     /// Parse configuration from a YAML string
-    pub fn from_str(yaml: &str) -> Result<Self, ConfigError> {
+    pub fn parse(yaml: &str) -> Result<Self, ConfigError> {
         serde_yaml::from_str(yaml).map_err(|e| ConfigError::ParseError(e.to_string()))
     }
 }
@@ -63,11 +63,10 @@ cameras:
   - name: "rear"
     url: "rtsp://192.168.1.11:554/live"
 "#;
-        let config = Config::from_str(yaml).unwrap();
+        let config = Config::parse(yaml).unwrap();
         assert_eq!(config.cameras.len(), 2);
         assert_eq!(config.cameras[0].name, "front");
         assert_eq!(config.cameras[0].latency, 200);
         assert_eq!(config.cameras[1].latency, 200); // default
     }
 }
-

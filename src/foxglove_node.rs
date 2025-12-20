@@ -69,7 +69,9 @@ impl FoxgloveNode {
             let shutdown_tx_clone = shutdown_tx.clone();
 
             handles.push(tokio::spawn(async move {
-                if let Err(e) = run_camera_subscriber(ctx, &topic, &camera_name_clone, shutdown_tx_clone).await {
+                if let Err(e) =
+                    run_camera_subscriber(ctx, &topic, &camera_name_clone, shutdown_tx_clone).await
+                {
                     log::error!("Camera subscriber '{}' error: {}", camera_name_clone, e);
                 }
             }));
@@ -101,7 +103,9 @@ async fn run_camera_subscriber(
     let mut shutdown_rx = shutdown_tx.subscribe();
 
     // Create a temporary node for the subscriber
-    let node = ctx.create_node(&format!("foxglove_sub_{}", camera_name)).build()?;
+    let node = ctx
+        .create_node(format!("foxglove_sub_{}", camera_name))
+        .build()?;
 
     // Create subscriber
     let subscriber: ZSub<CompressedImage, Sample, ProtobufSerdes<CompressedImage>> = node
@@ -112,7 +116,11 @@ async fn run_camera_subscriber(
     // Create Foxglove channel for CompressedVideo (better for H264 streams)
     let channel = foxglove::Channel::<CompressedVideo>::new(topic);
 
-    log::info!("Foxglove subscriber for camera '{}' started on topic '{}'", camera_name, topic);
+    log::info!(
+        "Foxglove subscriber for camera '{}' started on topic '{}'",
+        camera_name,
+        topic
+    );
 
     loop {
         tokio::select! {

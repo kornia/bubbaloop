@@ -1,9 +1,5 @@
 use argh::FromArgs;
-use bubbaloop::{
-    config::Config,
-    foxglove_node::FoxgloveNode,
-    rtsp_camera_node::RtspCameraNode,
-};
+use bubbaloop::{config::Config, foxglove_node::FoxgloveNode, rtsp_camera_node::RtspCameraNode};
 use ros_z::{context::ZContextBuilder, Builder, Result as ZResult};
 use std::sync::Arc;
 
@@ -32,10 +28,7 @@ async fn main() -> ZResult<()> {
         }
     };
 
-    log::info!(
-        "Loaded configuration with {} cameras",
-        config.cameras.len()
-    );
+    log::info!("Loaded configuration with {} cameras", config.cameras.len());
 
     // Create shutdown channel
     let shutdown_tx = tokio::sync::watch::Sender::new(());
@@ -93,4 +86,3 @@ async fn main() -> ZResult<()> {
 
     Ok(())
 }
-
