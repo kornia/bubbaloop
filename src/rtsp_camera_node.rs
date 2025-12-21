@@ -93,53 +93,50 @@ impl RtspCameraNode {
                 .with_serdes::<ProtobufSerdes<RawImage>>()
                 .build()?;
 
+            log::info!(
+                "Camera '{}' raw publishing to '{}' with {:?} decoder",
+                camera_config.name,
+                raw_topic,
+                camera_config.raw.decoder
+            );
+
+            // Channels for decoder thread
+            let (h264_tx, h264_rx) = flume::bounded::<DecoderInput>(4);
+            let (decoded_tx, decoded_rx) = flume::unbounded::<RawFrame>();
+
+            // Spawn decoder in separate thread - decoder creation happens in thread too
+            let camera_name = camera_config.name.clone();
             let backend = camera_config.raw.decoder.into();
-            match VideoH264Decoder::new(backend) {
-                Ok(decoder) => {
-                    log::info!(
-                        "Camera '{}' raw publishing to '{}' with {:?} decoder",
-                        camera_config.name,
-                        raw_topic,
-                        camera_config.raw.decoder
-                    );
+            std::thread::spawn(move || {
+                // Create decoder in thread (GStreamer init can block)
+                let decoder = match VideoH264Decoder::new(backend) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        log::error!("Failed to create decoder for '{}': {}", camera_name, e);
+                        return;
+                    }
+                };
 
-                    // Channels for decoder thread
-                    let (h264_tx, h264_rx) = flume::bounded::<DecoderInput>(4);
-                    let (decoded_tx, decoded_rx) = flume::unbounded::<RawFrame>();
+                log::info!("Decoder thread started for '{}'", camera_name);
 
-                    // Spawn decoder in separate thread (GStreamer has its own threading)
-                    let camera_name = camera_config.name.clone();
-                    std::thread::spawn(move || {
-                        log::debug!("Decoder thread started for '{}'", camera_name);
+                while let Ok(input) = h264_rx.recv() {
+                    // Push to GStreamer (may block)
+                    if let Err(e) = decoder.push(&input.data, input.pts, input.keyframe) {
+                        log::error!("Decoder push error for '{}': {}", camera_name, e);
+                        continue;
+                    }
 
-                        while let Ok(input) = h264_rx.recv() {
-                            // Push to GStreamer (may block)
-                            if let Err(e) = decoder.push(&input.data, input.pts, input.keyframe) {
-                                log::error!("Decoder push error for '{}': {}", camera_name, e);
-                                continue;
-                            }
-
-                            // Drain all decoded frames
-                            while let Ok(mut frame) = decoder.receiver().try_recv() {
-                                frame.sequence = decoder.next_sequence();
-                                let _ = decoded_tx.send(frame);
-                            }
-                        }
-
-                        log::debug!("Decoder thread ended for '{}'", camera_name);
-                    });
-
-                    (Some(raw_pub), Some(h264_tx), Some(decoded_rx))
+                    // Drain all decoded frames
+                    while let Ok(mut frame) = decoder.receiver().try_recv() {
+                        frame.sequence = decoder.next_sequence();
+                        let _ = decoded_tx.send(frame);
+                    }
                 }
-                Err(e) => {
-                    log::error!(
-                        "Failed to create decoder for '{}': {}",
-                        camera_config.name,
-                        e
-                    );
-                    (None, None, None)
-                }
-            }
+
+                log::debug!("Decoder thread ended for '{}'", camera_name);
+            });
+
+            (Some(raw_pub), Some(h264_tx), Some(decoded_rx))
         } else {
             (None, None, None)
         };
