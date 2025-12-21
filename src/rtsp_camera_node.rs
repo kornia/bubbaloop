@@ -157,10 +157,10 @@ impl RtspCameraNode {
                         None => std::future::pending().await,
                     }
                 } => {
-                    if let Some(ref pub_) = self.raw_pub {
-                        let msg = frame_to_raw_image(&frame, &self.camera_config.name);
+                    if let Some(ref _pub) = self.raw_pub {
+                        let _msg = frame_to_raw_image(&frame, &self.camera_config.name);
                         // Non-blocking publish
-                        let _ = pub_.publish(&msg);
+                        //let _ = pub_.publish(&msg);
                     }
                 }
             }
