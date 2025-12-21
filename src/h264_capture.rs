@@ -2,28 +2,23 @@ use crate::h264_decode::{DecoderBackend, RawFrame};
 use gstreamer::prelude::*;
 use thiserror::Error;
 
-/// Errors that can occur during H264 stream capture
 #[derive(Debug, Error)]
 pub enum H264CaptureError {
     #[error("GStreamer error: {0}")]
     GStreamer(#[from] gstreamer::glib::Error),
     #[error("GStreamer state change error: {0}")]
     StateChange(#[from] gstreamer::StateChangeError),
-    #[error("Failed to get element by name")]
-    ElementNotFound,
-    #[error("Failed to downcast pipeline")]
+    #[error("Element not found: {0}")]
+    ElementNotFound(&'static str),
+    #[error("Failed to downcast")]
     DowncastError,
-    #[error("Failed to get buffer from sample")]
+    #[error("Buffer error")]
     BufferError,
-    #[error("Failed to get caps from sample: {0}")]
+    #[error("Caps error: {0}")]
     CapsError(String),
-    #[error("Failed to send EOS event")]
-    EosError,
-    #[error("Flow error: {0}")]
-    FlowError(String),
 }
 
-/// A single H264 frame captured from the RTSP stream (zero-copy)
+/// H264 frame (zero-copy from GStreamer)
 pub struct H264Frame {
     buffer: gstreamer::MappedBuffer<gstreamer::buffer::Readable>,
     pub pts: u64,
@@ -32,23 +27,18 @@ pub struct H264Frame {
 }
 
 impl H264Frame {
-    #[inline]
     pub fn as_slice(&self) -> &[u8] {
         self.buffer.as_slice()
     }
-
-    #[inline]
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
-
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 }
 
-/// Captures H264 frames from RTSP, optionally with decoded raw frames via tee
+/// Captures H264 from RTSP with optional decode via tee
 pub struct H264StreamCapture {
     pipeline: gstreamer::Pipeline,
     h264_rx: flume::Receiver<H264Frame>,
@@ -56,19 +46,12 @@ pub struct H264StreamCapture {
 }
 
 impl H264StreamCapture {
-    /// Create capture without decoding (compressed only)
+    /// Compressed only
     pub fn new(url: &str, latency: u32) -> Result<Self, H264CaptureError> {
         Self::with_decoder(url, latency, None)
     }
 
-    /// Create capture with optional decoder using GStreamer tee
-    ///
-    /// Pipeline with decoder:
-    /// ```text
-    /// rtspsrc ! rtph264depay ! h264parse ! tee name=t
-    ///   t. ! queue ! appsink (H264)
-    ///   t. ! queue ! decoder ! videoconvert ! appsink (raw)
-    /// ```
+    /// With optional decoder via GStreamer tee
     pub fn with_decoder(
         url: &str,
         latency: u32,
@@ -80,49 +63,49 @@ impl H264StreamCapture {
 
         let pipeline_desc = match decoder {
             Some(backend) => {
-                let decoder_segment = backend.pipeline_segment();
+                let dec = backend.pipeline_segment();
                 format!(
                     "rtspsrc location={url} latency={latency} ! \
-                     rtph264depay ! \
-                     h264parse config-interval=-1 ! \
+                     rtph264depay ! h264parse config-interval=-1 ! \
                      video/x-h264,stream-format=byte-stream,alignment=au ! \
                      tee name=t \
-                     t. ! queue max-size-buffers=2 leaky=downstream ! appsink name=h264sink emit-signals=true sync=false \
-                     t. ! queue max-size-buffers=2 leaky=downstream ! {decoder_segment} ! video/x-raw,format=RGBA ! appsink name=rawsink emit-signals=true sync=false"
+                     t. ! queue max-size-buffers=1 leaky=downstream ! \
+                         appsink name=h264sink emit-signals=true sync=false max-buffers=1 drop=true \
+                     t. ! queue max-size-buffers=1 leaky=downstream ! {dec} ! \
+                         video/x-raw,format=RGBA ! \
+                         appsink name=rawsink emit-signals=true sync=false max-buffers=1 drop=true"
                 )
             }
             None => format!(
                 "rtspsrc location={url} latency={latency} ! \
-                 rtph264depay ! \
-                 h264parse config-interval=-1 ! \
+                 rtph264depay ! h264parse config-interval=-1 ! \
                  video/x-h264,stream-format=byte-stream,alignment=au ! \
-                 appsink name=h264sink emit-signals=true sync=false"
+                 appsink name=h264sink emit-signals=true sync=false max-buffers=1 drop=true"
             ),
         };
 
-        log::debug!("Creating pipeline: {}", pipeline_desc);
+        log::debug!("Pipeline: {}", pipeline_desc);
 
         let pipeline = gstreamer::parse::launch(&pipeline_desc)?
             .dynamic_cast::<gstreamer::Pipeline>()
             .map_err(|_| H264CaptureError::DowncastError)?;
 
-        // H264 sink (always present)
+        // H264 sink - bounded channel, drop if full
+        let (h264_tx, h264_rx) = flume::bounded::<H264Frame>(2);
         let h264_sink = pipeline
             .by_name("h264sink")
-            .ok_or(H264CaptureError::ElementNotFound)?
+            .ok_or(H264CaptureError::ElementNotFound("h264sink"))?
             .dynamic_cast::<gstreamer_app::AppSink>()
             .map_err(|_| H264CaptureError::DowncastError)?;
-
-        let (h264_tx, h264_rx) = flume::unbounded::<H264Frame>();
 
         h264_sink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample({
                     let mut seq: u32 = 0;
                     move |sink| {
-                        if let Ok(frame) = Self::handle_h264_sample(sink, seq) {
+                        if let Ok(frame) = Self::extract_h264(sink, seq) {
                             seq = seq.wrapping_add(1);
-                            let _ = h264_tx.send(frame);
+                            let _ = h264_tx.try_send(frame); // Drop if full
                         }
                         Ok(gstreamer::FlowSuccess::Ok)
                     }
@@ -132,30 +115,31 @@ impl H264StreamCapture {
 
         // Raw sink (optional)
         let raw_rx = if decoder.is_some() {
-            let raw_sink = pipeline
-                .by_name("rawsink")
-                .ok_or(H264CaptureError::ElementNotFound)?
-                .dynamic_cast::<gstreamer_app::AppSink>()
-                .map_err(|_| H264CaptureError::DowncastError)?;
+            if let Some(raw_sink_elem) = pipeline.by_name("rawsink") {
+                let (raw_tx, raw_rx) = flume::bounded::<RawFrame>(2);
+                let raw_sink = raw_sink_elem
+                    .dynamic_cast::<gstreamer_app::AppSink>()
+                    .map_err(|_| H264CaptureError::DowncastError)?;
 
-            let (raw_tx, raw_rx) = flume::unbounded::<RawFrame>();
-
-            raw_sink.set_callbacks(
-                gstreamer_app::AppSinkCallbacks::builder()
-                    .new_sample({
-                        let mut seq: u32 = 0;
-                        move |sink| {
-                            if let Ok(frame) = Self::handle_raw_sample(sink, seq) {
-                                seq = seq.wrapping_add(1);
-                                let _ = raw_tx.send(frame);
+                raw_sink.set_callbacks(
+                    gstreamer_app::AppSinkCallbacks::builder()
+                        .new_sample({
+                            let mut seq: u32 = 0;
+                            move |sink| {
+                                if let Ok(frame) = Self::extract_raw(sink, seq) {
+                                    seq = seq.wrapping_add(1);
+                                    let _ = raw_tx.try_send(frame); // Drop if full
+                                }
+                                Ok(gstreamer::FlowSuccess::Ok)
                             }
-                            Ok(gstreamer::FlowSuccess::Ok)
-                        }
-                    })
-                    .build(),
-            );
-
-            Some(raw_rx)
+                        })
+                        .build(),
+                );
+                Some(raw_rx)
+            } else {
+                log::warn!("rawsink not found - decoder may have failed");
+                None
+            }
         } else {
             None
         };
@@ -167,27 +151,22 @@ impl H264StreamCapture {
         })
     }
 
-    fn handle_h264_sample(
+    fn extract_h264(
         sink: &gstreamer_app::AppSink,
-        sequence: u32,
+        seq: u32,
     ) -> Result<H264Frame, H264CaptureError> {
         let sample = sink
             .pull_sample()
-            .map_err(|e| H264CaptureError::FlowError(e.to_string()))?;
+            .map_err(|_| H264CaptureError::BufferError)?;
+        let buf = sample.buffer_owned().ok_or(H264CaptureError::BufferError)?;
 
-        let gst_buffer = sample.buffer_owned().ok_or(H264CaptureError::BufferError)?;
-
-        let pts = gst_buffer
+        let pts = buf
             .pts()
-            .or_else(|| gst_buffer.dts())
+            .or_else(|| buf.dts())
             .map(|t| t.nseconds())
             .unwrap_or(0);
-
-        let keyframe = !gst_buffer
-            .flags()
-            .contains(gstreamer::BufferFlags::DELTA_UNIT);
-
-        let buffer = gst_buffer
+        let keyframe = !buf.flags().contains(gstreamer::BufferFlags::DELTA_UNIT);
+        let buffer = buf
             .into_mapped_buffer_readable()
             .map_err(|_| H264CaptureError::BufferError)?;
 
@@ -195,26 +174,21 @@ impl H264StreamCapture {
             buffer,
             pts,
             keyframe,
-            sequence,
+            sequence: seq,
         })
     }
 
-    fn handle_raw_sample(
-        sink: &gstreamer_app::AppSink,
-        sequence: u32,
-    ) -> Result<RawFrame, H264CaptureError> {
+    fn extract_raw(sink: &gstreamer_app::AppSink, seq: u32) -> Result<RawFrame, H264CaptureError> {
         let sample = sink
             .pull_sample()
-            .map_err(|e| H264CaptureError::FlowError(e.to_string()))?;
-
+            .map_err(|_| H264CaptureError::BufferError)?;
         let caps = sample.caps().ok_or(H264CaptureError::BufferError)?;
         let info = gstreamer_video::VideoInfo::from_caps(caps)
             .map_err(|e| H264CaptureError::CapsError(e.to_string()))?;
 
-        let buffer = sample.buffer().ok_or(H264CaptureError::BufferError)?;
-        let pts = buffer.pts().map(|t| t.nseconds()).unwrap_or(0);
-
-        let map = buffer
+        let buf = sample.buffer().ok_or(H264CaptureError::BufferError)?;
+        let pts = buf.pts().map(|t| t.nseconds()).unwrap_or(0);
+        let map = buf
             .map_readable()
             .map_err(|_| H264CaptureError::BufferError)?;
 
@@ -223,7 +197,7 @@ impl H264StreamCapture {
             width: info.width(),
             height: info.height(),
             pts,
-            sequence,
+            sequence: seq,
             format: "RGBA".to_string(),
             step: info.width() * 4,
         })
@@ -234,17 +208,14 @@ impl H264StreamCapture {
         Ok(())
     }
 
-    /// Receiver for H264 compressed frames
     pub fn h264_receiver(&self) -> &flume::Receiver<H264Frame> {
         &self.h264_rx
     }
 
-    /// Receiver for decoded raw frames (None if decoder not enabled)
     pub fn raw_receiver(&self) -> Option<&flume::Receiver<RawFrame>> {
         self.raw_rx.as_ref()
     }
 
-    /// Legacy API - same as h264_receiver
     pub fn receiver(&self) -> &flume::Receiver<H264Frame> {
         &self.h264_rx
     }

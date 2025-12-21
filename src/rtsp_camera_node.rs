@@ -146,7 +146,8 @@ impl RtspCameraNode {
                 // H264 compressed frames
                 Ok(frame) = h264_rx.recv_async() => {
                     let msg = frame_to_compressed_image(&frame, &self.camera_config.name);
-                    let _ = self.compressed_pub.async_publish(&msg).await;
+                    // Non-blocking publish
+                    let _ = self.compressed_pub.publish(&msg);
                 }
 
                 // Decoded raw frames (if decoder enabled)
@@ -158,7 +159,8 @@ impl RtspCameraNode {
                 } => {
                     if let Some(ref pub_) = self.raw_pub {
                         let msg = frame_to_raw_image(&frame, &self.camera_config.name);
-                        let _ = pub_.async_publish(&msg).await;
+                        // Non-blocking publish
+                        let _ = pub_.publish(&msg);
                     }
                 }
             }
