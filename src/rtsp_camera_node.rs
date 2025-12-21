@@ -143,6 +143,15 @@ impl RtspCameraNode {
             self.camera_config.url
         );
 
+        // Spawn dedicated compressed publisher task (non-blocking)
+        let (compressed_tx, mut compressed_rx) = mpsc::channel::<CompressedImage>(2);
+        let compressed_pub = self.compressed_pub;
+        let compressed_pub_handle = tokio::spawn(async move {
+            while let Some(msg) = compressed_rx.recv().await {
+                let _ = compressed_pub.async_publish(&msg).await;
+            }
+        });
+
         // Spawn dedicated raw publisher task (non-blocking)
         let (raw_tx, mut raw_rx) = mpsc::channel::<RawImage>(1);
         let raw_pub = self.raw_pub;
@@ -166,15 +175,14 @@ impl RtspCameraNode {
                     // Send to decoder
                     let _ = decoder.push(compressed_frame.as_slice(), compressed_frame.pts, compressed_frame.keyframe);
 
-                    // Publish compressed
+                    // Fire-and-forget publish compressed
                     let msg = frame_to_compressed_image(&compressed_frame, &camera_name);
-                    let _ = self.compressed_pub.async_publish(&msg).await;
+                    let _ = compressed_tx.try_send(msg);
                 }
 
                 // Decoded raw frames - fire and forget via channel
                 Ok(raw_frame) = decoder.receiver().recv_async() => {
                     let msg = frame_to_raw_image(&raw_frame, &camera_name);
-                    // Non-blocking: drop if channel full
                     let _ = raw_tx.try_send(msg);
                 }
             }
@@ -182,7 +190,9 @@ impl RtspCameraNode {
 
         log::info!("Shutting down camera '{}'...", self.camera_config.name);
 
+        drop(compressed_tx);
         drop(raw_tx);
+        let _ = compressed_pub_handle.await;
         let _ = raw_pub_handle.await;
         let _ = capture.close();
         let _ = decoder.close();
