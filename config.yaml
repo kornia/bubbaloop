@@ -2,7 +2,12 @@ cameras:
   - name: "entrance"
     url: "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2"
     latency: 200
+    raw:
+      enabled: true
+      decoder: software  # "software" (CPU) or "nvidia" (GPU)
   - name: "terrace"
     url: "rtsp://tapo_terrace:123456789@192.168.1.151:554/stream2"
-    latency: 100
-
+    latency: 200
+    raw:
+      enabled: true
+      decoder: software  # "software" (CPU) or "nvidia" (GPU)

@@ -1,6 +1,37 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Decoder backend selection for raw frame decoding
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DecoderBackend {
+    /// Software decoding using avdec_h264 (CPU, always available)
+    #[default]
+    Software,
+    /// Hardware decoding using nvh264dec (NVIDIA GPU, requires drivers)
+    Nvidia,
+}
+
+impl From<DecoderBackend> for crate::h264_decode::DecoderBackend {
+    fn from(config: DecoderBackend) -> Self {
+        match config {
+            DecoderBackend::Software => crate::h264_decode::DecoderBackend::Software,
+            DecoderBackend::Nvidia => crate::h264_decode::DecoderBackend::Nvidia,
+        }
+    }
+}
+
+/// Configuration for raw frame publishing
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RawConfig {
+    /// Enable raw frame publishing (decoded RGB frames)
+    #[serde(default)]
+    pub enabled: bool,
+    /// Decoder backend to use
+    #[serde(default)]
+    pub decoder: DecoderBackend,
+}
+
 /// Configuration for a single RTSP camera
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraConfig {
@@ -11,6 +42,9 @@ pub struct CameraConfig {
     /// Latency in milliseconds for the RTSP stream
     #[serde(default = "default_latency")]
     pub latency: u32,
+    /// Raw frame publishing configuration
+    #[serde(default)]
+    pub raw: RawConfig,
 }
 
 fn default_latency() -> u32 {
@@ -68,5 +102,23 @@ cameras:
         assert_eq!(config.cameras[0].name, "front");
         assert_eq!(config.cameras[0].latency, 200);
         assert_eq!(config.cameras[1].latency, 200); // default
+                                                    // Raw config defaults
+        assert!(!config.cameras[0].raw.enabled);
+        assert_eq!(config.cameras[0].raw.decoder, DecoderBackend::Software);
+    }
+
+    #[test]
+    fn test_parse_config_with_raw() {
+        let yaml = r#"
+cameras:
+  - name: "front"
+    url: "rtsp://192.168.1.10:554/stream"
+    raw:
+      enabled: true
+      decoder: nvidia
+"#;
+        let config = Config::parse(yaml).unwrap();
+        assert!(config.cameras[0].raw.enabled);
+        assert_eq!(config.cameras[0].raw.decoder, DecoderBackend::Nvidia);
     }
 }

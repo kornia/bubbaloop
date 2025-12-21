@@ -17,9 +17,10 @@ log = "0.4"
 tokio = { version = "1", features = ["full"] }
 flume = "0.12"
 
-# GStreamer for H264 capture
+# GStreamer for H264 capture and decode
 gstreamer = "0.24"
 gstreamer-app = "0.24"
+gstreamer-video = "0.24"
 
 # ROS-Z pub/sub
 ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
