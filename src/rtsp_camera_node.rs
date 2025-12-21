@@ -111,12 +111,18 @@ impl RtspCameraNode {
         }
 
         // Create decoder
-        let decoder = match VideoH264Decoder::new(self.camera_config.decoder.into()) {
+        let decoder = match VideoH264Decoder::new(
+            self.camera_config.decoder.into(),
+            self.camera_config.height,
+            self.camera_config.width,
+        ) {
             Ok(d) => {
                 log::info!(
-                    "Camera '{}' decoder created (backend: {:?})",
+                    "Camera '{}' decoder created (backend: {:?}, {}x{})",
                     self.camera_config.name,
-                    self.camera_config.decoder
+                    self.camera_config.decoder,
+                    self.camera_config.width,
+                    self.camera_config.height
                 );
                 d
             }

@@ -82,7 +82,7 @@ impl VideoH264Decoder {
     /// # Arguments
     ///
     /// * `backend` - Decoder backend to use (Software or Nvidia)
-    pub fn new(backend: DecoderBackend) -> Result<Self, H264DecodeError> {
+    pub fn new(backend: DecoderBackend, height: u32, width: u32) -> Result<Self, H264DecodeError> {
         // Initialize GStreamer if not already initialized
         if !gstreamer::INITIALIZED.load(std::sync::atomic::Ordering::Relaxed) {
             gstreamer::init()?;
@@ -95,7 +95,7 @@ impl VideoH264Decoder {
             "appsrc name=src is-live=true ! \
              h264parse ! \
              {decoder_segment} ! \
-             video/x-raw,format=RGBA ! \
+             video/x-raw,format=RGBA,height={height},width={width} ! \
              appsink name=sink emit-signals=true sync=false"
         );
 
