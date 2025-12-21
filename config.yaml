@@ -4,10 +4,10 @@ cameras:
     latency: 200
     raw:
       enabled: true
-      decoder: software  # "software" (CPU), "nvidia" (desktop GPU), or "jetson" (Jetson)
+      decoder: jetson  # "software" (CPU), "nvidia" (desktop GPU), or "jetson" (Jetson)
   - name: "terrace"
     url: "rtsp://tapo_terrace:123456789@192.168.1.151:554/stream2"
     latency: 200
     raw:
       enabled: true
-      decoder: software # "software" (CPU), "nvidia" (desktop GPU), or "jetson" (Jetson)
+      decoder: jetson  # "software" (CPU), "nvidia" (desktop GPU), or "jetson" (Jetson)
