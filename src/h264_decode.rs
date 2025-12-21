@@ -23,21 +23,26 @@ pub enum H264DecodeError {
 }
 
 /// Decoder backend selection
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DecoderBackend {
     /// Software decoding using avdec_h264 (CPU, always available)
     #[default]
     Software,
-    /// Hardware decoding using nvh264dec (NVIDIA GPU, requires drivers)
+    /// Hardware decoding using nvh264dec (NVIDIA desktop GPU)
     Nvidia,
+    /// Hardware decoding using nvv4l2decoder (NVIDIA Jetson)
+    Jetson,
 }
 
 impl DecoderBackend {
-    /// Get the GStreamer element name for this backend
-    fn element_name(&self) -> &'static str {
+    /// Get the GStreamer pipeline segment for decoder + converter
+    fn pipeline_segment(&self) -> &'static str {
         match self {
-            DecoderBackend::Software => "avdec_h264",
-            DecoderBackend::Nvidia => "nvh264dec",
+            DecoderBackend::Software => "avdec_h264 ! videoconvert",
+            DecoderBackend::Nvidia => "nvh264dec ! videoconvert",
+            // Jetson uses nvvidconv for hardware color conversion
+            DecoderBackend::Jetson => "nvv4l2decoder enable-max-performance=1 ! nvvidconv",
         }
     }
 }
@@ -55,13 +60,10 @@ pub struct RawFrame {
     pub pts: u64,
     /// Frame sequence number
     pub sequence: u32,
-}
-
-impl RawFrame {
-    /// Get the row stride (bytes per row)
-    pub fn step(&self) -> u32 {
-        self.width * 3 // RGB24 = 3 bytes per pixel
-    }
+    /// Format of the frame
+    pub format: String,
+    /// Step in bytes
+    pub step: u32,
 }
 
 /// Decodes H264 NAL units to raw RGB frames using GStreamer
@@ -86,15 +88,14 @@ impl VideoH264Decoder {
             gstreamer::init()?;
         }
 
-        let decoder_element = backend.element_name();
+        let decoder_segment = backend.pipeline_segment();
 
         // Build pipeline for H264 decoding to RGB
         let pipeline_desc = format!(
-            "appsrc name=src caps=video/x-h264,stream-format=byte-stream,alignment=au ! \
+            "appsrc name=src is-live=true ! \
              h264parse ! \
-             {decoder_element} ! \
-             videoconvert ! \
-             video/x-raw,format=RGB ! \
+             {decoder_segment} ! \
+             video/x-raw,format=RGBA ! \
              appsink name=sink emit-signals=true sync=false"
         );
 
@@ -110,11 +111,6 @@ impl VideoH264Decoder {
             .ok_or(H264DecodeError::ElementNotFound)?
             .dynamic_cast::<gstreamer_app::AppSrc>()
             .map_err(|_| H264DecodeError::DowncastError)?;
-
-        // Configure appsrc
-        appsrc.set_format(gstreamer::Format::Time);
-        appsrc.set_is_live(true);
-        appsrc.set_stream_type(gstreamer_app::AppStreamType::Stream);
 
         // Get appsink for receiving decoded frames
         let appsink = pipeline
@@ -149,7 +145,8 @@ impl VideoH264Decoder {
             "H264 decoder initialized with {} backend",
             match backend {
                 DecoderBackend::Software => "software (avdec_h264)",
-                DecoderBackend::Nvidia => "NVIDIA (nvh264dec)",
+                DecoderBackend::Nvidia => "NVIDIA desktop (nvh264dec)",
+                DecoderBackend::Jetson => "NVIDIA Jetson (nvv4l2decoder)",
             }
         );
 
@@ -193,6 +190,8 @@ impl VideoH264Decoder {
             height,
             pts,
             sequence: 0, // Will be set by caller
+            format: "RGBA".to_string(),
+            step: width * 4,
         })
     }
 

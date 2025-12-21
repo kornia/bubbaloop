@@ -41,8 +41,8 @@ fn frame_to_raw_image(frame: &RawFrame, camera_name: &str) -> RawImage {
         }),
         width: frame.width,
         height: frame.height,
-        encoding: "rgb8".to_string(),
-        step: frame.step(),
+        encoding: frame.format.clone(),
+        step: frame.step,
         data: frame.data.clone(),
     }
 }
