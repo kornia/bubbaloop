@@ -9,12 +9,14 @@ use ros_z::{
 use std::sync::Arc;
 use zenoh::bytes::ZBytes;
 use zenoh::pubsub::Publisher;
-use zenoh::shm::ShmProviderBuilder;
+use zenoh::shm::{BlockOn, GarbageCollect, ShmProviderBuilder};
 use zenoh::Wait;
 
-/// Backpressure constants for SHM publishing
-const BACKOFF_THRESHOLD: u32 = 3; // Enter backoff after N consecutive failures
-const BACKOFF_SKIP_FRAMES: u32 = 5; // Skip N frames during backoff
+/// SHM pool size per camera (256MB = ~1300 frames at 200KB each)
+const SHM_POOL_SIZE: usize = 256 * 1024 * 1024;
+
+/// Timeout for SHM allocation (GarbageCollect + BlockOn will retry within this window)
+const SHM_ALLOC_TIMEOUT_MS: u64 = 50;
 
 fn get_pub_time() -> u64 {
     std::time::SystemTime::now()
@@ -36,7 +38,7 @@ fn frame_to_compressed_image(frame: H264Frame, camera_name: &str) -> CompressedI
     }
 }
 
-/// RTSP Camera node - captures and publishes H264 + raw frames via SHM
+/// RTSP Camera node - captures H264 streams and publishes raw frames via SHM
 pub struct RtspCameraNode {
     #[allow(dead_code)]
     node: ZNode,
@@ -47,11 +49,9 @@ pub struct RtspCameraNode {
     #[allow(dead_code)]
     shm_session: Arc<zenoh::Session>,
     shm_raw_pub: Publisher<'static>,
-    // SHM publishing stats and backpressure state
+    // Stats
     shm_published: u64,
     shm_skipped: u64,
-    shm_consecutive_failures: u32,
-    shm_backoff_remaining: u32,
     shm_last_log: std::time::Instant,
 }
 
@@ -60,6 +60,7 @@ impl RtspCameraNode {
         let node_name = format!("camera_{}_node", camera_config.name);
         let node = ctx.create_node(&node_name).build()?;
 
+        // Compressed H264 publisher (ros-z)
         let compressed_topic = format!("/camera/{}/compressed", camera_config.name);
         let compressed_pub = node
             .create_pub::<CompressedImage>(&compressed_topic)
@@ -72,12 +73,9 @@ impl RtspCameraNode {
             compressed_topic
         );
 
-        // Create SHM provider for zero-copy raw image transfer
-        // Pool size: ~256MB to hold many frames in flight
-        // SHM buffers are held until subscriber acknowledges, so need generous headroom
-        let shm_pool_size = 256 * 1024 * 1024;
+        // SHM provider for zero-copy raw image transfer
         let shm_provider = Arc::new(
-            ShmProviderBuilder::default_backend(shm_pool_size)
+            ShmProviderBuilder::default_backend(SHM_POOL_SIZE)
                 .wait()
                 .map_err(|e| {
                     Box::new(std::io::Error::other(format!("SHM backend error: {}", e)))
@@ -86,12 +84,12 @@ impl RtspCameraNode {
         );
 
         log::info!(
-            "Camera '{}' SHM provider created (pool size: {} MB)",
+            "Camera '{}' SHM pool: {} MB",
             camera_config.name,
-            shm_pool_size / (1024 * 1024)
+            SHM_POOL_SIZE / (1024 * 1024)
         );
 
-        // Create a separate Zenoh session for SHM publishing
+        // Zenoh session with SHM enabled
         let mut zenoh_config = zenoh::Config::default();
         zenoh_config
             .insert_json5("transport/shared_memory/enabled", "true")
@@ -105,10 +103,10 @@ impl RtspCameraNode {
                 as Box<dyn std::error::Error + Send + Sync>
         })?);
 
-        // Create raw Zenoh publisher for SHM image data
+        // SHM publisher for raw images
         let shm_raw_topic = format!("camera/{}/raw_shm", camera_config.name);
         log::info!(
-            "Camera '{}' SHM raw publisher on '{}'",
+            "Camera '{}' SHM topic: '{}'",
             camera_config.name,
             shm_raw_topic
         );
@@ -129,22 +127,14 @@ impl RtspCameraNode {
             shm_raw_pub,
             shm_published: 0,
             shm_skipped: 0,
-            shm_consecutive_failures: 0,
-            shm_backoff_remaining: 0,
             shm_last_log: std::time::Instant::now(),
         })
     }
 
-    /// Publish a raw frame via SHM with backpressure handling
+    /// Publish a raw frame via SHM
+    /// Uses BlockOn<GarbageCollect> policy: reclaims unused buffers, then waits async if needed
     async fn publish_shm(&mut self, frame: RawFrame) {
-        // Backpressure: skip frames if in backoff mode
-        if self.shm_backoff_remaining > 0 {
-            self.shm_backoff_remaining -= 1;
-            self.shm_skipped += 1;
-            return;
-        }
-
-        // Build RawImage protobuf message
+        // Build protobuf message
         let msg = RawImage {
             header: Some(Header {
                 acq_time: frame.pts,
@@ -154,54 +144,46 @@ impl RtspCameraNode {
             }),
             width: frame.width,
             height: frame.height,
-            encoding: frame.format.clone(),
+            encoding: frame.format,
             step: frame.step,
             data: frame.data,
         };
-
-        // Encode protobuf to bytes
         let proto_bytes = msg.encode_to_vec();
 
-        // Allocate SHM buffer and copy proto bytes
-        let mut shm_buf = match self.shm_provider.alloc(proto_bytes.len()).wait() {
-            Ok(buf) => {
-                // Success: reset failure counter
-                self.shm_consecutive_failures = 0;
-                buf
-            }
-            Err(_) => {
-                // Failure: increment counter and maybe enter backoff
-                self.shm_consecutive_failures += 1;
-                if self.shm_consecutive_failures >= BACKOFF_THRESHOLD {
-                    self.shm_backoff_remaining = BACKOFF_SKIP_FRAMES;
-                    log::debug!(
-                        "[{}] SHM backpressure: skipping {} frames to let pool recover",
-                        self.camera_config.name,
-                        BACKOFF_SKIP_FRAMES
-                    );
-                }
+        // Allocate SHM buffer with timeout
+        // BlockOn<GarbageCollect>: first tries to reclaim unused buffers, then waits async
+        let alloc_result = tokio::time::timeout(
+            tokio::time::Duration::from_millis(SHM_ALLOC_TIMEOUT_MS),
+            self.shm_provider
+                .alloc(proto_bytes.len())
+                .with_policy::<BlockOn<GarbageCollect>>(),
+        )
+        .await;
+
+        let mut shm_buf = match alloc_result {
+            Ok(Ok(buf)) => buf,
+            _ => {
                 self.shm_skipped += 1;
                 return;
             }
         };
+
+        // Copy data and publish
         shm_buf.as_mut().copy_from_slice(&proto_bytes);
-
-        // Publish via SHM
         let zbytes: ZBytes = shm_buf.into();
-        if let Err(e) = self.shm_raw_pub.put(zbytes).await {
-            log::warn!(
-                "SHM publish failed for '{}': {}",
-                self.camera_config.name,
-                e
-            );
-        }
-        self.shm_published += 1;
 
-        // Log periodically
+        if self.shm_raw_pub.put(zbytes).await.is_ok() {
+            self.shm_published += 1;
+        } else {
+            self.shm_skipped += 1;
+        }
+
+        // Log stats every second
         if self.shm_last_log.elapsed().as_secs() >= 1 {
             log::info!(
-                "[{}] SHM: {} published, {} skipped ({}x{}, {} bytes)",
+                "[{}] SHM: frame {}, {} published, {} skipped ({}x{}, {} bytes)",
                 self.camera_config.name,
+                msg.header.as_ref().map(|h| h.sequence).unwrap_or(0),
                 self.shm_published,
                 self.shm_skipped,
                 msg.width,
@@ -246,7 +228,7 @@ impl RtspCameraNode {
         ) {
             Ok(d) => {
                 log::info!(
-                    "Camera '{}' decoder created (backend: {:?}, {}x{})",
+                    "Camera '{}' decoder: {:?} {}x{}",
                     self.camera_config.name,
                     self.camera_config.decoder,
                     self.camera_config.width,
@@ -272,6 +254,7 @@ impl RtspCameraNode {
 
         let h264_rx = capture.receiver();
         let camera_name = self.camera_config.name.clone();
+        let mut last_frame_time = std::time::Instant::now();
 
         loop {
             tokio::select! {
@@ -279,42 +262,36 @@ impl RtspCameraNode {
 
                 _ = shutdown_rx.changed() => break,
 
-                // H264 compressed frames
-                Ok(compressed_frame) = h264_rx.recv_async() => {
-                    // Send to decoder
-                    if let Err(e) = decoder.push(compressed_frame.as_slice(), compressed_frame.pts, compressed_frame.keyframe) {
+                // H264 compressed frames -> decode and publish compressed
+                Ok(h264_frame) = h264_rx.recv_async() => {
+                    last_frame_time = std::time::Instant::now();
+
+                    // Push to decoder
+                    if let Err(e) = decoder.push(h264_frame.as_slice(), h264_frame.pts, h264_frame.keyframe) {
                         log::warn!("[{}] Decoder push failed: {}", camera_name, e);
                     }
 
-                    // Fire-and-forget publish compressed
-                    let msg = frame_to_compressed_image(compressed_frame, &camera_name);
-                    if let Err(e) = self.compressed_pub.async_publish(&msg).await {
-                        log::warn!("[{}] Compressed publish failed: {}", camera_name, e);
-                    }
-                    //let _ = compressed_tx.try_send(msg);
-
-                    //// Log stats periodically
-                    //if last_stats.elapsed().as_secs() >= 2 {
-                    //    log::info!(
-                    //        "[{}] Stats: H264={}, decoded={}, pending={}",
-                    //        camera_name,
-                    //        h264_count,
-                    //        decoded_count,
-                    //        h264_count.saturating_sub(decoded_count)
-                    //    );
-                    //    last_stats = std::time::Instant::now();
-                    //}
+                    // Publish compressed (fire-and-forget)
+                    let msg = frame_to_compressed_image(h264_frame, &camera_name);
+                    let _ = self.compressed_pub.async_publish(&msg).await;
                 }
 
-                // Decoded raw frames - publish via SHM for zero-copy transfer
+                // Decoded raw frames -> publish via SHM
                 Ok(raw_frame) = decoder.receiver().recv_async() => {
                     self.publish_shm(raw_frame).await;
+                }
+
+                // Stall detection
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {
+                    let stale_secs = last_frame_time.elapsed().as_secs();
+                    if stale_secs >= 5 {
+                        log::warn!("[{}] Stream stalled: no frames for {}s", camera_name, stale_secs);
+                    }
                 }
             }
         }
 
         log::info!("Shutting down camera '{}'...", self.camera_config.name);
-
         let _ = capture.close();
         let _ = decoder.close();
 
