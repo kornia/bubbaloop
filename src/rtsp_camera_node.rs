@@ -27,12 +27,12 @@ fn frame_to_compressed_image(frame: &H264Frame, camera_name: &str) -> Compressed
     }
 }
 
-fn frame_to_raw_image(frame: &RawFrame, camera_name: &str, sequence: u32) -> RawImage {
+fn frame_to_raw_image(frame: &RawFrame, camera_name: &str) -> RawImage {
     RawImage {
         header: Some(Header {
             acq_time: frame.pts,
             pub_time: get_pub_time(),
-            sequence,
+            sequence: frame.sequence,
             frame_id: camera_name.to_string(),
         }),
         width: frame.width,
@@ -162,17 +162,17 @@ impl RtspCameraNode {
 
                 // Decoded raw frames
                 Ok(raw_frame) = decoder.receiver().recv_async() => {
-                    let sequence = raw_frame.sequence;
-
-                    let msg = frame_to_raw_image(&raw_frame, &self.camera_config.name, sequence);
+                    let msg = frame_to_raw_image(&raw_frame, &self.camera_config.name);
                     let _ = self.raw_pub.async_publish(&msg).await;
                 }
             }
         }
 
         log::info!("Shutting down camera '{}'...", self.camera_config.name);
+
         let _ = capture.close();
         let _ = decoder.close();
+
         Ok(())
     }
 }

@@ -6,18 +6,25 @@ use thiserror::Error;
 pub enum H264DecodeError {
     #[error("GStreamer error: {0}")]
     GStreamer(#[from] gstreamer::glib::Error),
+
     #[error("GStreamer state change error: {0}")]
     StateChange(#[from] gstreamer::StateChangeError),
+
     #[error("Failed to get element by name")]
     ElementNotFound,
+
     #[error("Failed to downcast element")]
     DowncastError,
+
     #[error("Failed to get buffer from sample")]
     BufferError,
+
     #[error("Failed to get caps from sample")]
     CapsError,
+
     #[error("Failed to push buffer to appsrc")]
     PushError,
+
     #[error("Channel disconnected")]
     ChannelDisconnected,
 }

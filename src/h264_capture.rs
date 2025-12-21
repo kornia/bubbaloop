@@ -5,12 +5,16 @@ use thiserror::Error;
 pub enum H264CaptureError {
     #[error("GStreamer error: {0}")]
     GStreamer(#[from] gstreamer::glib::Error),
+
     #[error("GStreamer state change error: {0}")]
     StateChange(#[from] gstreamer::StateChangeError),
+
     #[error("Element not found: {0}")]
     ElementNotFound(&'static str),
+
     #[error("Failed to downcast")]
     DowncastError,
+
     #[error("Buffer error")]
     BufferError,
 }
@@ -27,9 +31,11 @@ impl H264Frame {
     pub fn as_slice(&self) -> &[u8] {
         self.buffer.as_slice()
     }
+
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
+
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
@@ -58,7 +64,7 @@ impl H264StreamCapture {
             .dynamic_cast::<gstreamer::Pipeline>()
             .map_err(|_| H264CaptureError::DowncastError)?;
 
-        let (tx, rx) = flume::bounded::<H264Frame>(2);
+        let (tx, rx) = flume::unbounded::<H264Frame>();
 
         let appsink = pipeline
             .by_name("sink")
