@@ -8,8 +8,10 @@ pub enum DecoderBackend {
     /// Software decoding using avdec_h264 (CPU, always available)
     #[default]
     Software,
-    /// Hardware decoding using nvh264dec (NVIDIA GPU, requires drivers)
+    /// Hardware decoding using nvh264dec (NVIDIA desktop GPU)
     Nvidia,
+    /// Hardware decoding using nvv4l2decoder (NVIDIA Jetson)
+    Jetson,
 }
 
 impl From<DecoderBackend> for crate::h264_decode::DecoderBackend {
@@ -17,6 +19,7 @@ impl From<DecoderBackend> for crate::h264_decode::DecoderBackend {
         match config {
             DecoderBackend::Software => crate::h264_decode::DecoderBackend::Software,
             DecoderBackend::Nvidia => crate::h264_decode::DecoderBackend::Nvidia,
+            DecoderBackend::Jetson => crate::h264_decode::DecoderBackend::Jetson,
         }
     }
 }
@@ -120,5 +123,20 @@ cameras:
         let config = Config::parse(yaml).unwrap();
         assert!(config.cameras[0].raw.enabled);
         assert_eq!(config.cameras[0].raw.decoder, DecoderBackend::Nvidia);
+    }
+
+    #[test]
+    fn test_parse_config_with_jetson() {
+        let yaml = r#"
+cameras:
+  - name: "front"
+    url: "rtsp://192.168.1.10:554/stream"
+    raw:
+      enabled: true
+      decoder: jetson
+"#;
+        let config = Config::parse(yaml).unwrap();
+        assert!(config.cameras[0].raw.enabled);
+        assert_eq!(config.cameras[0].raw.decoder, DecoderBackend::Jetson);
     }
 }
