@@ -2,12 +2,12 @@ cameras:
   - name: "entrance"
     url: "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2"
     latency: 200
-    decoder: jetson  # software | nvidia | jetson
+    decoder: software  # software | nvidia | jetson
     width: 224
     height: 224
   - name: "terrace"
     url: "rtsp://tapo_terrace:123456789@192.168.1.151:554/stream2"
     latency: 200
-    decoder: jetson
+    decoder: software
     width: 224
     height: 224

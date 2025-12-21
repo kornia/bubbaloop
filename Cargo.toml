@@ -24,7 +24,7 @@ gstreamer-video = "0.24"
 
 # ROS-Z pub/sub
 ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
-zenoh = "1.7"
+zenoh = { version = "1.6.2", features = ["shared-memory"] }
 
 # Foxglove visualization
 foxglove = "0.16"
@@ -47,3 +47,7 @@ prost-build = "0.14"
 [[bin]]
 name = "multicam"
 path = "src/bin/multicam.rs"
+
+[[bin]]
+name = "inference_node"
+path = "src/bin/inference_node.rs"

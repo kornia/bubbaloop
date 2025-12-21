@@ -43,13 +43,33 @@ pub enum DecoderBackend {
 }
 
 impl DecoderBackend {
-    /// Get the GStreamer pipeline segment for decoder + converter
-    pub fn pipeline_segment(&self) -> &'static str {
+    /// Get the GStreamer pipeline segment for decoder + converter + scaler
+    /// Returns (segment, uses_gpu_scale) - if uses_gpu_scale is true, width/height
+    /// should be specified in the segment's caps filter, not after videoscale
+    pub fn pipeline_segment(&self, width: u32, height: u32) -> (String, bool) {
         match self {
-            DecoderBackend::Software => "avdec_h264 ! videoconvert",
-            DecoderBackend::Nvidia => "nvh264dec ! videoconvert",
-            // Jetson uses nvvidconv for hardware color conversion
-            DecoderBackend::Jetson => "nvv4l2decoder enable-max-performance=1 ! nvvidconv",
+            // Software: CPU decode + CPU scale
+            DecoderBackend::Software => (
+                "avdec_h264 ! videoconvert ! videoscale".to_string(),
+                false, // needs videoscale caps after
+            ),
+            // NVIDIA desktop: GPU decode + GPU scale via nvvidconv
+            DecoderBackend::Nvidia => (
+                format!(
+                    "nvh264dec ! nvvidconv ! video/x-raw,format=RGBA,width={width},height={height}"
+                ),
+                true, // scaling already done in GPU
+            ),
+            // Jetson: GPU decode + GPU scale via nvvidconv
+            // nvv4l2decoder outputs to NVMM memory, nvvidconv does GPU scaling
+            DecoderBackend::Jetson => (
+                format!(
+                    "nvv4l2decoder enable-max-performance=1 ! \
+                     nvvidconv ! video/x-raw(memory:NVMM),format=RGBA,width={width},height={height} ! \
+                     nvvidconv ! video/x-raw,format=RGBA"
+                ),
+                true, // scaling already done in GPU
+            ),
         }
     }
 }
@@ -80,7 +100,6 @@ pub struct VideoH264Decoder {
     pipeline: gstreamer::Pipeline,
     appsrc: gstreamer_app::AppSrc,
     frame_rx: flume::Receiver<RawFrame>,
-    sequence: std::sync::atomic::AtomicU32,
 }
 
 impl VideoH264Decoder {
@@ -95,16 +114,27 @@ impl VideoH264Decoder {
             gstreamer::init()?;
         }
 
-        let decoder_segment = backend.pipeline_segment();
+        let (decoder_segment, gpu_scaled) = backend.pipeline_segment(width, height);
 
-        // Build pipeline for H264 decoding to RGB
-        let pipeline_desc = format!(
-            "appsrc name=src is-live=true ! \
-             h264parse ! \
-             {decoder_segment} ! \
-             video/x-raw,format=RGBA,height={height},width={width} ! \
-             appsink name=sink emit-signals=true sync=false"
-        );
+        // Build pipeline for H264 decoding to RGBA at specified resolution
+        // GPU backends (NVIDIA/Jetson) include scaling in their segment
+        // Software backend needs videoscale + caps filter after
+        let pipeline_desc = if gpu_scaled {
+            format!(
+                "appsrc name=src is-live=true format=3 ! \
+                 h264parse ! \
+                 {decoder_segment} ! \
+                 appsink name=sink emit-signals=true sync=false"
+            )
+        } else {
+            format!(
+                "appsrc name=src is-live=true format=3 ! \
+                 h264parse ! \
+                 {decoder_segment} ! \
+                 video/x-raw,format=RGBA,width={width},height={height} ! \
+                 appsink name=sink emit-signals=true sync=false"
+            )
+        };
 
         log::debug!("Creating H264 decoder pipeline: {}", pipeline_desc);
 
@@ -129,19 +159,25 @@ impl VideoH264Decoder {
         // Channel for decoded frames
         let (frame_tx, frame_rx) = flume::unbounded::<RawFrame>();
 
+        // Sequence counter shared with callback
+        let sequence = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seq_clone = sequence.clone();
+
         // Set up callback to receive decoded frames
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
-                .new_sample(move |sink| match Self::handle_decoded_sample(sink) {
-                    Ok(frame) => {
-                        let _ = frame_tx.send(frame);
-                        Ok(gstreamer::FlowSuccess::Ok)
-                    }
-                    Err(e) => {
-                        log::error!("[H264Decoder] Error handling decoded sample: {}", e);
-                        Err(gstreamer::FlowError::Error)
-                    }
-                })
+                .new_sample(
+                    move |sink| match Self::handle_decoded_sample(sink, &seq_clone) {
+                        Ok(frame) => {
+                            let _ = frame_tx.send(frame);
+                            Ok(gstreamer::FlowSuccess::Ok)
+                        }
+                        Err(e) => {
+                            log::error!("[H264Decoder] Error handling decoded sample: {}", e);
+                            Err(gstreamer::FlowError::Error)
+                        }
+                    },
+                )
                 .build(),
         );
 
@@ -149,11 +185,18 @@ impl VideoH264Decoder {
         pipeline.set_state(gstreamer::State::Playing)?;
 
         log::info!(
-            "H264 decoder initialized with {} backend",
+            "H264 decoder initialized with {} backend ({}x{}, {})",
             match backend {
                 DecoderBackend::Software => "software (avdec_h264)",
                 DecoderBackend::Nvidia => "NVIDIA desktop (nvh264dec)",
                 DecoderBackend::Jetson => "NVIDIA Jetson (nvv4l2decoder)",
+            },
+            width,
+            height,
+            if gpu_scaled {
+                "GPU scaling"
+            } else {
+                "CPU scaling"
             }
         );
 
@@ -161,13 +204,13 @@ impl VideoH264Decoder {
             pipeline,
             appsrc,
             frame_rx,
-            sequence: std::sync::atomic::AtomicU32::new(0),
         })
     }
 
     /// Handle a decoded sample from appsink
     fn handle_decoded_sample(
         appsink: &gstreamer_app::AppSink,
+        sequence: &std::sync::atomic::AtomicU32,
     ) -> Result<RawFrame, H264DecodeError> {
         let sample = appsink
             .pull_sample()
@@ -191,12 +234,13 @@ impl VideoH264Decoder {
             .map_readable()
             .map_err(|_| H264DecodeError::BufferError)?;
 
+        let seq = sequence.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(RawFrame {
             data: map.as_slice().to_vec(),
             width,
             height,
             pts,
-            sequence: 0, // Will be set by caller
+            sequence: seq,
             format: "RGBA".to_string(),
             step: width * 4,
         })
@@ -249,12 +293,6 @@ impl VideoH264Decoder {
     /// ```
     pub fn receiver(&self) -> &flume::Receiver<RawFrame> {
         &self.frame_rx
-    }
-
-    /// Get and increment the sequence number
-    pub fn next_sequence(&self) -> u32 {
-        self.sequence
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Close the decoder pipeline
