@@ -37,7 +37,7 @@ pub enum DecoderBackend {
 
 impl DecoderBackend {
     /// Get the GStreamer pipeline segment for decoder + converter
-    fn pipeline_segment(&self) -> &'static str {
+    pub fn pipeline_segment(&self) -> &'static str {
         match self {
             DecoderBackend::Software => "avdec_h264 ! videoconvert",
             DecoderBackend::Nvidia => "nvh264dec ! videoconvert",
