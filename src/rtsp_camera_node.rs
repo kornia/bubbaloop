@@ -1,6 +1,6 @@
 use crate::config::CameraConfig;
 use crate::h264_capture::{H264Frame, H264StreamCapture};
-use crate::h264_decode::RawFrame;
+use crate::h264_decode::{RawFrame, VideoH264Decoder};
 use crate::protos::{CompressedImage, Header, RawImage};
 use ros_z::{
     context::ZContext, msg::ProtobufSerdes, node::ZNode, pubsub::ZPub, Builder, Result as ZResult,
@@ -27,12 +27,12 @@ fn frame_to_compressed_image(frame: &H264Frame, camera_name: &str) -> Compressed
     }
 }
 
-fn frame_to_raw_image(frame: &RawFrame, camera_name: &str) -> RawImage {
+fn frame_to_raw_image(frame: &RawFrame, camera_name: &str, sequence: u32) -> RawImage {
     RawImage {
         header: Some(Header {
             acq_time: frame.pts,
             pub_time: get_pub_time(),
-            sequence: frame.sequence,
+            sequence,
             frame_id: camera_name.to_string(),
         }),
         width: frame.width,
@@ -48,7 +48,7 @@ pub struct RtspCameraNode {
     #[allow(dead_code)]
     node: ZNode,
     compressed_pub: ZPub<CompressedImage, ProtobufSerdes<CompressedImage>>,
-    raw_pub: Option<ZPub<RawImage, ProtobufSerdes<RawImage>>>,
+    raw_pub: ZPub<RawImage, ProtobufSerdes<RawImage>>,
     camera_config: CameraConfig,
 }
 
@@ -64,26 +64,17 @@ impl RtspCameraNode {
             .build()?;
 
         log::info!(
-            "Camera '{}' publishing to '{}'",
+            "Camera '{}' publishing compressed to '{}'",
             camera_config.name,
             compressed_topic
         );
 
-        let raw_pub = if camera_config.raw.enabled {
-            let raw_topic = format!("/camera/{}/raw", camera_config.name);
-            let pub_ = node
-                .create_pub::<RawImage>(&raw_topic)
-                .with_serdes::<ProtobufSerdes<RawImage>>()
-                .build()?;
-            log::info!(
-                "Camera '{}' raw publishing to '{}'",
-                camera_config.name,
-                raw_topic
-            );
-            Some(pub_)
-        } else {
-            None
-        };
+        let raw_topic = format!("/camera/{}/raw", camera_config.name);
+        let raw_pub = node
+            .create_pub::<RawImage>(&raw_topic)
+            .with_serdes::<ProtobufSerdes<RawImage>>()
+            .build()?;
+        log::info!("Camera '{}' raw topic '{}'", camera_config.name, raw_topic);
 
         Ok(Self {
             node,
@@ -96,28 +87,19 @@ impl RtspCameraNode {
     pub async fn run(self, shutdown_tx: tokio::sync::watch::Sender<()>) -> ZResult<()> {
         let mut shutdown_rx = shutdown_tx.subscribe();
 
-        // Create capture with optional decoder (uses GStreamer tee internally)
-        let decoder = if self.camera_config.raw.enabled {
-            Some(self.camera_config.raw.decoder.into())
-        } else {
-            None
-        };
-
-        let capture = match H264StreamCapture::with_decoder(
-            &self.camera_config.url,
-            self.camera_config.latency,
-            decoder,
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                log::error!(
-                    "Failed to create capture for '{}': {}",
-                    self.camera_config.name,
-                    e
-                );
-                return Ok(());
-            }
-        };
+        // Create H264 capture
+        let capture =
+            match H264StreamCapture::new(&self.camera_config.url, self.camera_config.latency) {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!(
+                        "Failed to create capture for '{}': {}",
+                        self.camera_config.name,
+                        e
+                    );
+                    return Ok(());
+                }
+            };
 
         if let Err(e) = capture.start() {
             log::error!(
@@ -128,14 +110,33 @@ impl RtspCameraNode {
             return Ok(());
         }
 
+        // Create decoder
+        let decoder = match VideoH264Decoder::new(self.camera_config.decoder.into()) {
+            Ok(d) => {
+                log::info!(
+                    "Camera '{}' decoder created (backend: {:?})",
+                    self.camera_config.name,
+                    self.camera_config.decoder
+                );
+                d
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to create decoder for '{}': {}",
+                    self.camera_config.name,
+                    e
+                );
+                return Ok(());
+            }
+        };
+
         log::info!(
             "Camera '{}' capturing from {}",
             self.camera_config.name,
             self.camera_config.url
         );
 
-        let h264_rx = capture.h264_receiver();
-        let raw_rx = capture.raw_receiver();
+        let h264_rx = capture.receiver();
 
         loop {
             tokio::select! {
@@ -144,30 +145,28 @@ impl RtspCameraNode {
                 _ = shutdown_rx.changed() => break,
 
                 // H264 compressed frames
-                Ok(frame) = h264_rx.recv_async() => {
-                    let msg = frame_to_compressed_image(&frame, &self.camera_config.name);
-                    // Non-blocking publish
-                    let _ = self.compressed_pub.publish(&msg);
+                Ok(compressed_frame) = h264_rx.recv_async() => {
+                    // Send to decoder
+                    let _ = decoder.push(compressed_frame.as_slice(), compressed_frame.pts, compressed_frame.keyframe);
+
+                    // Publish compressed
+                    let msg = frame_to_compressed_image(&compressed_frame, &self.camera_config.name);
+                    let _ = self.compressed_pub.async_publish(&msg).await;
                 }
 
-                // Decoded raw frames (if decoder enabled)
-                Ok(frame) = async {
-                    match raw_rx {
-                        Some(rx) => rx.recv_async().await,
-                        None => std::future::pending().await,
-                    }
-                } => {
-                    if let Some(ref _pub) = self.raw_pub {
-                        let _msg = frame_to_raw_image(&frame, &self.camera_config.name);
-                        // Non-blocking publish
-                        //let _ = pub_.publish(&msg);
-                    }
+                // Decoded raw frames
+                Ok(raw_frame) = decoder.receiver().recv_async() => {
+                    let sequence = raw_frame.sequence;
+
+                    let msg = frame_to_raw_image(&raw_frame, &self.camera_config.name, sequence);
+                    let _ = self.raw_pub.async_publish(&msg).await;
                 }
             }
         }
 
         log::info!("Shutting down camera '{}'...", self.camera_config.name);
         let _ = capture.close();
+        let _ = decoder.close();
         Ok(())
     }
 }

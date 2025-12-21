@@ -24,15 +24,15 @@ impl From<DecoderBackend> for crate::h264_decode::DecoderBackend {
     }
 }
 
-/// Configuration for raw frame publishing
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RawConfig {
-    /// Enable raw frame publishing (decoded RGB frames)
-    #[serde(default)]
-    pub enabled: bool,
-    /// Decoder backend to use
-    #[serde(default)]
-    pub decoder: DecoderBackend,
+/// Output mode for decoded raw frames
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RawOutputMode {
+    /// Decode but don't publish (for local processing via callback)
+    #[default]
+    Local,
+    /// Publish raw RGBA frames (warning: ~8MB per 1080p frame!)
+    Publish,
 }
 
 /// Configuration for a single RTSP camera
@@ -45,9 +45,12 @@ pub struct CameraConfig {
     /// Latency in milliseconds for the RTSP stream
     #[serde(default = "default_latency")]
     pub latency: u32,
-    /// Raw frame publishing configuration
+    /// Decoder backend to use (software, nvidia, jetson)
     #[serde(default)]
-    pub raw: RawConfig,
+    pub decoder: DecoderBackend,
+    /// Raw frame output mode (local or publish)
+    #[serde(default)]
+    pub raw_output: RawOutputMode,
 }
 
 fn default_latency() -> u32 {
@@ -104,25 +107,22 @@ cameras:
         assert_eq!(config.cameras.len(), 2);
         assert_eq!(config.cameras[0].name, "front");
         assert_eq!(config.cameras[0].latency, 200);
-        assert_eq!(config.cameras[1].latency, 200); // default
-                                                    // Raw config defaults
-        assert!(!config.cameras[0].raw.enabled);
-        assert_eq!(config.cameras[0].raw.decoder, DecoderBackend::Software);
+        assert_eq!(config.cameras[1].latency, 200);
+        // Defaults
+        assert_eq!(config.cameras[0].decoder, DecoderBackend::Software);
+        assert_eq!(config.cameras[0].raw_output, RawOutputMode::Local);
     }
 
     #[test]
-    fn test_parse_config_with_raw() {
+    fn test_parse_config_with_decoder() {
         let yaml = r#"
 cameras:
   - name: "front"
     url: "rtsp://192.168.1.10:554/stream"
-    raw:
-      enabled: true
-      decoder: nvidia
+    decoder: nvidia
 "#;
         let config = Config::parse(yaml).unwrap();
-        assert!(config.cameras[0].raw.enabled);
-        assert_eq!(config.cameras[0].raw.decoder, DecoderBackend::Nvidia);
+        assert_eq!(config.cameras[0].decoder, DecoderBackend::Nvidia);
     }
 
     #[test]
@@ -131,12 +131,11 @@ cameras:
 cameras:
   - name: "front"
     url: "rtsp://192.168.1.10:554/stream"
-    raw:
-      enabled: true
-      decoder: jetson
+    decoder: jetson
+    raw_output: publish
 "#;
         let config = Config::parse(yaml).unwrap();
-        assert!(config.cameras[0].raw.enabled);
-        assert_eq!(config.cameras[0].raw.decoder, DecoderBackend::Jetson);
+        assert_eq!(config.cameras[0].decoder, DecoderBackend::Jetson);
+        assert_eq!(config.cameras[0].raw_output, RawOutputMode::Publish);
     }
 }

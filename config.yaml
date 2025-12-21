@@ -2,12 +2,10 @@ cameras:
   - name: "entrance"
     url: "rtsp://tapo_entrance:123456789@192.168.1.141:554/stream2"
     latency: 200
-    raw:
-      enabled: true
-      decoder: jetson  # "software" (CPU), "nvidia" (desktop GPU), or "jetson" (Jetson)
+    decoder: jetson    # software | nvidia | jetson
+    raw_output: local  # local (no publish) | publish (warning: ~8MB/frame!)
   - name: "terrace"
     url: "rtsp://tapo_terrace:123456789@192.168.1.151:554/stream2"
     latency: 200
-    raw:
-      enabled: true
-      decoder: jetson  # "software" (CPU), "nvidia" (desktop GPU), or "jetson" (Jetson)
+    decoder: jetson
+    raw_output: local
