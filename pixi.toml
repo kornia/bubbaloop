@@ -12,6 +12,7 @@ scripts = ["scripts/activate.sh"]
 [tasks]
 build = "cargo build --release"
 multicam = "RUST_LOG=info cargo run --bin multicam --release"
+inference = "RUST_LOG=info cargo run --bin inference_node --release"
 check = "cargo check"
 test = "cargo test"
 fmt = "cargo fmt --all"
