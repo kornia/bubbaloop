@@ -15,9 +15,6 @@ use zenoh::Wait;
 /// SHM pool size per camera (256MB = ~1300 frames at 200KB each)
 const SHM_POOL_SIZE: usize = 256 * 1024 * 1024;
 
-/// Timeout for SHM allocation (GarbageCollect + BlockOn will retry within this window)
-const SHM_ALLOC_TIMEOUT_MS: u64 = 50;
-
 fn get_pub_time() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -131,8 +128,7 @@ impl RtspCameraNode {
         })
     }
 
-    /// Publish a raw frame via SHM
-    /// Uses BlockOn<GarbageCollect> policy: reclaims unused buffers, then waits async if needed
+    /// Publish a raw frame via SHM using async allocation
     async fn publish_shm(&mut self, frame: RawFrame) {
         // Build protobuf message
         let msg = RawImage {
@@ -150,20 +146,23 @@ impl RtspCameraNode {
         };
         let proto_bytes = msg.encode_to_vec();
 
-        // Allocate SHM buffer with timeout
-        // BlockOn<GarbageCollect>: first tries to reclaim unused buffers, then waits async
-        let alloc_result = tokio::time::timeout(
-            tokio::time::Duration::from_millis(SHM_ALLOC_TIMEOUT_MS),
-            self.shm_provider
-                .alloc(proto_bytes.len())
-                .with_policy::<BlockOn<GarbageCollect>>(),
-        )
-        .await;
-
-        let mut shm_buf = match alloc_result {
-            Ok(Ok(buf)) => buf,
-            _ => {
+        // Allocate SHM buffer with BlockOn<GarbageCollect> policy (async)
+        // - GarbageCollect: reclaims unused buffers on OOM
+        // - BlockOn: enables async .await, yields with 1ms sleep between retries
+        let mut shm_buf = match self
+            .shm_provider
+            .alloc(proto_bytes.len())
+            .with_policy::<BlockOn<GarbageCollect>>()
+            .await
+        {
+            Ok(buf) => buf,
+            Err(e) => {
                 self.shm_skipped += 1;
+                log::error!(
+                    "[{}] Failed to allocate SHM buffer: {}",
+                    self.camera_config.name,
+                    e
+                );
                 return;
             }
         };
