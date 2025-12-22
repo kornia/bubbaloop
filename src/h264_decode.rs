@@ -156,7 +156,7 @@ impl VideoH264Decoder {
             .map_err(|_| H264DecodeError::DowncastError)?;
 
         // Channel for decoded frames
-        let (frame_tx, frame_rx) = flume::unbounded::<RawFrame>();
+        let (frame_tx, frame_rx) = flume::bounded::<RawFrame>(4);
 
         // Sequence counter shared with callback
         let sequence = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
