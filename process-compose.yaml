@@ -1,35 +1,31 @@
 version: "0.5"
 
 processes:
-  build-bubbaloop:
-    command: pixi run build
+  build:
+    command: pixi run build && pixi run bridge-build
     availability:
       restart: "no"
-
-  build-bridge:
-    command: pixi run bridge-build
-    depends_on:
-      build-bubbaloop:
-        condition: process_completed_successfully
 
   bridge:
     command: pixi run bridge
     depends_on:
-      build-bridge:
+      build:
         condition: process_completed_successfully
 
   cameras:
     command: pixi run cameras
     depends_on:
-      build-bubbaloop:
+      build:
         condition: process_completed_successfully
-      build-bridge:
+
+  inference:
+    command: pixi run inference
+    depends_on:
+      build:
         condition: process_completed_successfully
 
   dashboard:
     command: pixi run dashboard
     depends_on:
       bridge:
-        condition: process_started
-      cameras:
         condition: process_started
