@@ -140,6 +140,7 @@ impl RtspCameraNode {
     }
 
     /// SHM task: reads decoded frames, publishes via SHM
+    /// Uses a dedicated publish task to avoid blocking the receive loop
     async fn shm_task(
         decoder: Arc<VideoH264Decoder>,
         camera_name: String,
@@ -156,7 +157,9 @@ impl RtspCameraNode {
         let shm_session = Arc::new(zenoh::open(zenoh_config).wait()?);
 
         let shm_raw_topic = format!("camera/{}/raw_shm", camera_name);
-        let shm_raw_pub = shm_session.declare_publisher(&shm_raw_topic).wait()?;
+        let shm_raw_pub = shm_session
+            .declare_publisher(shm_raw_topic.clone())
+            .wait()?;
 
         log::info!(
             "[{}] SHM task started → '{}' ({} MB pool)",
@@ -165,9 +168,34 @@ impl RtspCameraNode {
             SHM_POOL_SIZE / (1024 * 1024)
         );
 
-        let mut published: u64 = 0;
-        let mut last_log = std::time::Instant::now();
+        // Channel to decouple receive from publish (bounded for backpressure)
+        let (publish_tx, publish_rx) = flume::bounded::<ZBytes>(2);
 
+        // Spawn dedicated publish task
+        let pub_camera_name = camera_name.clone();
+        let publish_task = tokio::spawn(async move {
+            let mut published: u64 = 0;
+            let mut last_log = std::time::Instant::now();
+
+            while let Ok(zbytes) = publish_rx.recv_async().await {
+                if shm_raw_pub.put(zbytes).await.is_ok() {
+                    published += 1;
+                }
+
+                if last_log.elapsed().as_secs() >= 1 {
+                    log::info!("[{}] SHM: {} published", pub_camera_name, published);
+                    last_log = std::time::Instant::now();
+                }
+            }
+
+            log::info!(
+                "[{}] SHM publish task exiting (published: {})",
+                pub_camera_name,
+                published
+            );
+        });
+
+        // Receive loop - builds ZBytes and sends to publish channel (non-blocking)
         loop {
             tokio::select! {
                 biased;
@@ -180,8 +208,6 @@ impl RtspCameraNode {
                 result = decoder.receiver().recv_async() => {
                     match result {
                         Ok(frame) => {
-                            let sequence = frame.sequence;
-
                             // Build protobuf
                             let msg = frame_to_raw_image(frame, &camera_name);
                             let proto_bytes = msg.encode_to_vec();
@@ -199,23 +225,13 @@ impl RtspCameraNode {
                                 }
                             };
 
-                            // Copy and publish
+                            // Copy to SHM buffer
                             shm_buf.as_mut().copy_from_slice(&proto_bytes);
                             let zbytes: ZBytes = shm_buf.into();
 
-                            if shm_raw_pub.put(zbytes).await.is_ok() {
-                                published += 1;
-                            }
-
-                            // Log stats every second
-                            if last_log.elapsed().as_secs() >= 1 {
-                                log::info!(
-                                    "[{}] SHM: frame {}, {} published",
-                                    camera_name,
-                                    sequence,
-                                    published
-                                );
-                                last_log = std::time::Instant::now();
+                            // Non-blocking send - drop frame if publish task is behind
+                            if publish_tx.try_send(zbytes).is_err() {
+                                log::debug!("[{}] SHM publish channel full, dropping frame", camera_name);
                             }
                         }
                         Err(_) => break, // Channel closed
@@ -224,11 +240,11 @@ impl RtspCameraNode {
             }
         }
 
-        log::info!(
-            "[{}] SHM task exiting (published: {})",
-            camera_name,
-            published
-        );
+        // Signal publish task to exit and wait for it
+        drop(publish_tx);
+        let _ = publish_task.await;
+
+        log::info!("[{}] SHM task exiting", camera_name);
         Ok(())
     }
 
