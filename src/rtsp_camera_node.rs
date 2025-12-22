@@ -2,16 +2,9 @@ use crate::config::CameraConfig;
 use crate::h264_capture::{H264Frame, H264StreamCapture};
 use crate::h264_decode::{DecoderBackend, RawFrame, VideoH264Decoder};
 use crate::protos::{CompressedImage, Header, RawImage};
-use prost::Message;
 use ros_z::{context::ZContext, msg::ProtobufSerdes, pubsub::ZPub, Builder, Result as ZResult};
 use std::sync::Arc;
 use tokio::task::JoinSet;
-use zenoh::bytes::ZBytes;
-use zenoh::shm::{BlockOn, GarbageCollect, ShmProviderBuilder};
-use zenoh::Wait;
-
-/// SHM pool size per camera (256MB = ~1300 frames at 200KB each)
-const SHM_POOL_SIZE: usize = 256 * 1024 * 1024;
 
 fn get_pub_time() -> u64 {
     std::time::SystemTime::now()
@@ -49,7 +42,7 @@ fn frame_to_raw_image(frame: RawFrame, camera_name: &str) -> RawImage {
     }
 }
 
-/// RTSP Camera node - captures H264 streams and publishes via compressed and SHM topics
+/// RTSP Camera node - captures H264 streams and publishes via ros-z
 pub struct RtspCameraNode {
     ctx: Arc<ZContext>,
     camera_config: CameraConfig,
@@ -140,31 +133,27 @@ impl RtspCameraNode {
         Ok(())
     }
 
-    /// SHM task: reads decoded frames, publishes via SHM
-    async fn shm_task(
+    /// Raw image task: reads decoded frames, publishes via ros-z
+    async fn raw_task(
+        ctx: Arc<ZContext>,
         decoder: Arc<VideoH264Decoder>,
         camera_name: String,
         shutdown_tx: tokio::sync::watch::Sender<()>,
     ) -> ZResult<()> {
         let mut shutdown_rx = shutdown_tx.subscribe();
 
-        // Create SHM provider
-        let shm_provider = Arc::new(ShmProviderBuilder::default_backend(SHM_POOL_SIZE).wait()?);
+        // Create raw image publisher using ros-z
+        let node = ctx
+            .create_node(format!("camera_{}_raw", camera_name))
+            .build()?;
 
-        // Zenoh session with SHM enabled
-        let mut zenoh_config = zenoh::Config::default();
-        zenoh_config.insert_json5("transport/shared_memory/enabled", "true")?;
-        let shm_session = Arc::new(zenoh::open(zenoh_config).wait()?);
+        let raw_topic = format!("/camera/{}/raw", camera_name);
+        let raw_pub: ZPub<RawImage, ProtobufSerdes<RawImage>> = node
+            .create_pub::<RawImage>(&raw_topic)
+            .with_serdes::<ProtobufSerdes<RawImage>>()
+            .build()?;
 
-        let shm_raw_topic = format!("camera/{}/raw_shm", camera_name);
-        let shm_raw_pub = shm_session.declare_publisher(&shm_raw_topic).wait()?;
-
-        log::info!(
-            "[{}] SHM task started → '{}' ({} MB pool)",
-            camera_name,
-            shm_raw_topic,
-            SHM_POOL_SIZE / (1024 * 1024)
-        );
+        log::info!("[{}] Raw task started → '{}'", camera_name, raw_topic);
 
         let mut published: u64 = 0;
         let mut last_log = std::time::Instant::now();
@@ -174,7 +163,7 @@ impl RtspCameraNode {
                 biased;
 
                 _ = shutdown_rx.changed() => {
-                    log::info!("[{}] SHM task received shutdown", camera_name);
+                    log::info!("[{}] Raw task received shutdown", camera_name);
                     break;
                 }
 
@@ -183,38 +172,16 @@ impl RtspCameraNode {
                         Ok(frame) => {
                             let sequence = frame.sequence;
 
-                            // Build protobuf
+                            // Build and publish raw image
                             let msg = frame_to_raw_image(frame, &camera_name);
-                            let proto_bytes = msg.encode_to_vec();
-
-                            // Allocate SHM buffer
-                            let mut shm_buf = match shm_provider
-                                .alloc(proto_bytes.len())
-                                .with_policy::<BlockOn<GarbageCollect>>()
-                                .await
-                            {
-                                Ok(buf) => buf,
-                                Err(e) => {
-                                    log::error!("[{}] SHM alloc failed: {}", camera_name, e);
-                                    continue;
-                                }
-                            };
-
-                            // Copy and publish
-                            shm_buf.as_mut().copy_from_slice(&proto_bytes);
-                            let zbytes: ZBytes = shm_buf.into();
-
-                            //if shm_raw_pub.put(zbytes).await.is_ok() {
-                            //    published += 1;
-                            //}
-                            if shm_raw_pub.put(zbytes).wait().is_ok() {
+                            if raw_pub.async_publish(&msg).await.is_ok() {
                                 published += 1;
                             }
 
                             // Log stats every second
                             if last_log.elapsed().as_secs() >= 1 {
                                 log::info!(
-                                    "[{}] SHM: frame {}, {} published",
+                                    "[{}] Raw: frame {}, {} published",
                                     camera_name,
                                     sequence,
                                     published
@@ -229,7 +196,7 @@ impl RtspCameraNode {
         }
 
         log::info!(
-            "[{}] SHM task exiting (published: {})",
+            "[{}] Raw task exiting (published: {})",
             camera_name,
             published
         );
@@ -263,9 +230,10 @@ impl RtspCameraNode {
             self.camera_config.height
         );
 
-        // Spawn tasks with shutdown receivers
+        // Spawn tasks
         let mut tasks: JoinSet<()> = JoinSet::new();
 
+        // Compressed task
         tasks.spawn({
             let ctx = self.ctx.clone();
             let camera_name = camera_name.clone();
@@ -282,13 +250,16 @@ impl RtspCameraNode {
             }
         });
 
+        // Raw image task (using ros-z instead of direct Zenoh SHM)
         tasks.spawn({
+            let ctx = self.ctx.clone();
             let camera_name = camera_name.clone();
             let decoder = decoder.clone();
             let shutdown_tx = shutdown_tx.clone();
             async move {
-                if let Err(e) = Self::shm_task(decoder, camera_name.clone(), shutdown_tx).await {
-                    log::error!("[{}] SHM task failed: {}", camera_name, e);
+                if let Err(e) = Self::raw_task(ctx, decoder, camera_name.clone(), shutdown_tx).await
+                {
+                    log::error!("[{}] Raw task failed: {}", camera_name, e);
                 }
             }
         });
@@ -299,7 +270,6 @@ impl RtspCameraNode {
 
         log::info!("Shutting down camera '{}'...", camera_name);
 
-        // Tasks will exit via their select! loops when they see shutdown
         // Wait for all tasks to complete
         while tasks.join_next().await.is_some() {}
 

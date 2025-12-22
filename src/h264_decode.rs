@@ -156,7 +156,7 @@ impl VideoH264Decoder {
             .map_err(|_| H264DecodeError::DowncastError)?;
 
         // Channel for decoded frames
-        let (frame_tx, frame_rx) = flume::bounded::<RawFrame>(4);
+        let (frame_tx, frame_rx) = flume::unbounded::<RawFrame>();
 
         // Sequence counter shared with callback
         let sequence = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -168,7 +168,7 @@ impl VideoH264Decoder {
                 .new_sample(
                     move |sink| match Self::handle_decoded_sample(sink, &seq_clone) {
                         Ok(frame) => {
-                            let _ = frame_tx.try_send(frame);
+                            let _ = frame_tx.send(frame);
                             Ok(gstreamer::FlowSuccess::Ok)
                         }
                         Err(e) => {
