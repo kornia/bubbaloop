@@ -89,6 +89,7 @@ impl RtspCameraNode {
 
         let mut published: u64 = 0;
         let mut last_log = std::time::Instant::now();
+        let mut last_published_count: u64 = 0;
 
         loop {
             tokio::select! {
@@ -114,14 +115,19 @@ impl RtspCameraNode {
                                 published += 1;
                             }
 
-                            // Log stats every second
-                            if last_log.elapsed().as_secs() >= 1 {
+                            // Log stats with FPS every second
+                            let elapsed = last_log.elapsed();
+                            if elapsed.as_secs() >= 1 {
+                                let frames_this_period = published - last_published_count;
+                                let fps = frames_this_period as f64 / elapsed.as_secs_f64();
                                 log::info!(
-                                    "[{}] Compressed: frame {}, {} published",
+                                    "[{}] Compressed: seq={}, total={}, fps={:.1}",
                                     camera_name,
                                     sequence,
-                                    published
+                                    published,
+                                    fps
                                 );
+                                last_published_count = published;
                                 last_log = std::time::Instant::now();
                             }
                         }
@@ -167,7 +173,10 @@ impl RtspCameraNode {
         );
 
         let mut published: u64 = 0;
+        let mut decoded_count: u64 = 0;
         let mut last_log = std::time::Instant::now();
+        let mut last_published_count: u64 = 0;
+        let mut last_decoded_count: u64 = 0;
 
         // Rate limiting: 1 Hz (publish once per second)
         let publish_interval = std::time::Duration::from_secs(1);
@@ -185,48 +194,57 @@ impl RtspCameraNode {
                 result = decoder.receiver().recv_async() => {
                     match result {
                         Ok(frame) => {
-                            // Rate limit: only publish at 1 Hz
-                            let now = std::time::Instant::now();
-                            if now.duration_since(last_publish) < publish_interval {
-                                continue; // Skip this frame
-                            }
-                            last_publish = now;
-
+                            decoded_count += 1;
                             let sequence = frame.sequence;
 
-                            // Build protobuf
-                            let msg = frame_to_raw_image(frame, &camera_name);
-                            let proto_bytes = msg.encode_to_vec();
+                            // Rate limit: only publish at 1 Hz
+                            let now = std::time::Instant::now();
+                            let should_publish = now.duration_since(last_publish) >= publish_interval;
 
-                            // Allocate SHM buffer
-                            let mut shm_buf = match shm_provider
-                                .alloc(proto_bytes.len())
-                                .with_policy::<BlockOn<GarbageCollect>>()
-                                .await
-                            {
-                                Ok(buf) => buf,
-                                Err(e) => {
-                                    log::error!("[{}] SHM alloc failed: {}", camera_name, e);
-                                    continue;
+                            if should_publish {
+                                last_publish = now;
+
+                                // Build protobuf
+                                let msg = frame_to_raw_image(frame, &camera_name);
+                                let proto_bytes = msg.encode_to_vec();
+
+                                // Allocate SHM buffer
+                                let mut shm_buf = match shm_provider
+                                    .alloc(proto_bytes.len())
+                                    .with_policy::<BlockOn<GarbageCollect>>()
+                                    .await
+                                {
+                                    Ok(buf) => buf,
+                                    Err(e) => {
+                                        log::error!("[{}] SHM alloc failed: {}", camera_name, e);
+                                        continue;
+                                    }
+                                };
+
+                                // Copy and publish
+                                shm_buf.as_mut().copy_from_slice(&proto_bytes);
+                                let zbytes: ZBytes = shm_buf.into();
+
+                                if shm_raw_pub.put(zbytes).await.is_ok() {
+                                    published += 1;
                                 }
-                            };
-
-                            // Copy and publish
-                            shm_buf.as_mut().copy_from_slice(&proto_bytes);
-                            let zbytes: ZBytes = shm_buf.into();
-
-                            if shm_raw_pub.put(zbytes).await.is_ok() {
-                                published += 1;
                             }
 
-                            // Log stats every second
-                            if last_log.elapsed().as_secs() >= 1 {
+                            // Log stats with FPS every second
+                            let elapsed = last_log.elapsed();
+                            if elapsed.as_secs() >= 1 {
+                                let decoded_this_period = decoded_count - last_decoded_count;
+                                let decode_fps = decoded_this_period as f64 / elapsed.as_secs_f64();
+                                let pub_this_period = published - last_published_count;
                                 log::info!(
-                                    "[{}] SHM: frame {}, {} published",
+                                    "[{}] SHM: seq={}, decoded_fps={:.1}, pub={}",
                                     camera_name,
                                     sequence,
-                                    published
+                                    decode_fps,
+                                    pub_this_period
                                 );
+                                last_decoded_count = decoded_count;
+                                last_published_count = published;
                                 last_log = std::time::Instant::now();
                             }
                         }
