@@ -29,7 +29,6 @@ processes:
   inference:
     command: pixi run inference
     namespace: nodes
-    disabled: true
     depends_on:
       build:
         condition: process_completed_successfully

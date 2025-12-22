@@ -253,7 +253,6 @@ impl RtspCameraNode {
 
         let h264_rx = capture.receiver();
         let camera_name = self.camera_config.name.clone();
-        let mut last_frame_time = std::time::Instant::now();
 
         loop {
             tokio::select! {
@@ -263,8 +262,6 @@ impl RtspCameraNode {
 
                 // H264 compressed frames -> decode and publish compressed
                 Ok(h264_frame) = h264_rx.recv_async() => {
-                    last_frame_time = std::time::Instant::now();
-
                     // Push to decoder
                     if let Err(e) = decoder.push(h264_frame.as_slice(), h264_frame.pts, h264_frame.keyframe) {
                         log::warn!("[{}] Decoder push failed: {}", camera_name, e);
@@ -278,14 +275,6 @@ impl RtspCameraNode {
                 // Decoded raw frames -> publish via SHM
                 Ok(raw_frame) = decoder.receiver().recv_async() => {
                     self.publish_shm(raw_frame).await;
-                }
-
-                // Stall detection
-                _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {
-                    let stale_secs = last_frame_time.elapsed().as_secs();
-                    if stale_secs >= 5 {
-                        log::warn!("[{}] Stream stalled: no frames for {}s", camera_name, stale_secs);
-                    }
                 }
             }
         }
