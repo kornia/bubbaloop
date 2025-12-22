@@ -7,7 +7,7 @@ use ros_z::{context::ZContext, msg::ProtobufSerdes, pubsub::ZPub, Builder, Resul
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use zenoh::bytes::ZBytes;
-use zenoh::shm::{BlockOn, GarbageCollect, ShmProviderBuilder};
+use zenoh::shm::{GarbageCollect, ShmProviderBuilder};
 use zenoh::Wait;
 
 /// SHM pool size per camera (256MB = ~1300 frames at 200KB each)
@@ -60,7 +60,7 @@ impl RtspCameraNode {
         Ok(Self { ctx, camera_config })
     }
 
-    /// Compressed task: feeds decoder, publishes compressed images
+    /// Compressed task: feeds decoder, publishes compressed images (async)
     async fn compressed_task(
         ctx: Arc<ZContext>,
         capture: Arc<H264StreamCapture>,
@@ -140,13 +140,13 @@ impl RtspCameraNode {
         Ok(())
     }
 
-    /// SHM task: reads decoded frames, publishes via SHM
-    async fn shm_task(
+    /// SHM task: reads decoded frames, publishes via SHM (synchronous - runs on blocking thread)
+    fn shm_task_blocking(
         decoder: Arc<VideoH264Decoder>,
         camera_name: String,
         shutdown_tx: tokio::sync::watch::Sender<()>,
     ) -> ZResult<()> {
-        let mut shutdown_rx = shutdown_tx.subscribe();
+        let shutdown_rx = shutdown_tx.subscribe();
 
         // Create SHM provider
         let shm_provider = Arc::new(ShmProviderBuilder::default_backend(SHM_POOL_SIZE).wait()?);
@@ -157,7 +157,9 @@ impl RtspCameraNode {
         let shm_session = Arc::new(zenoh::open(zenoh_config).wait()?);
 
         let shm_raw_topic = format!("camera/{}/raw_shm", camera_name);
-        let shm_raw_pub = shm_session.declare_publisher(&shm_raw_topic).wait()?;
+        let shm_raw_pub = shm_session
+            .declare_publisher(shm_raw_topic.clone())
+            .wait()?;
 
         log::info!(
             "[{}] SHM task started → '{}' ({} MB pool)",
@@ -169,61 +171,65 @@ impl RtspCameraNode {
         let mut published: u64 = 0;
         let mut last_log = std::time::Instant::now();
 
+        // Synchronous receive loop - uses blocking recv()
         loop {
-            tokio::select! {
-                biased;
+            // Check shutdown (non-blocking)
+            if shutdown_rx.has_changed().unwrap_or(true) {
+                log::info!("[{}] SHM task received shutdown", camera_name);
+                break;
+            }
 
-                _ = shutdown_rx.changed() => {
-                    log::info!("[{}] SHM task received shutdown", camera_name);
-                    break;
-                }
+            // Use recv_timeout to allow periodic shutdown checks
+            match decoder
+                .receiver()
+                .recv_timeout(std::time::Duration::from_millis(100))
+            {
+                Ok(frame) => {
+                    let sequence = frame.sequence;
 
-                result = decoder.receiver().recv_async() => {
-                    match result {
-                        Ok(frame) => {
-                            let sequence = frame.sequence;
+                    // Build protobuf
+                    let msg = frame_to_raw_image(frame, &camera_name);
+                    let proto_bytes = msg.encode_to_vec();
 
-                            // Build protobuf
-                            let msg = frame_to_raw_image(frame, &camera_name);
-                            let proto_bytes = msg.encode_to_vec();
-
-                            // Allocate SHM buffer
-                            let mut shm_buf = match shm_provider
-                                .alloc(proto_bytes.len())
-                                .with_policy::<BlockOn<GarbageCollect>>()
-                                .await
-                            {
-                                Ok(buf) => buf,
-                                Err(e) => {
-                                    log::error!("[{}] SHM alloc failed: {}", camera_name, e);
-                                    continue;
-                                }
-                            };
-
-                            // Copy and publish
-                            shm_buf.as_mut().copy_from_slice(&proto_bytes);
-                            let zbytes: ZBytes = shm_buf.into();
-
-                            //if shm_raw_pub.put(zbytes).await.is_ok() {
-                            //    published += 1;
-                            //}
-                            if shm_raw_pub.put(zbytes).wait().is_ok() {
-                                published += 1;
-                            }
-
-                            // Log stats every second
-                            if last_log.elapsed().as_secs() >= 1 {
-                                log::info!(
-                                    "[{}] SHM: frame {}, {} published",
-                                    camera_name,
-                                    sequence,
-                                    published
-                                );
-                                last_log = std::time::Instant::now();
-                            }
+                    // Allocate SHM buffer (synchronous)
+                    let mut shm_buf = match shm_provider
+                        .alloc(proto_bytes.len())
+                        .with_policy::<GarbageCollect>()
+                        .wait()
+                    {
+                        Ok(buf) => buf,
+                        Err(e) => {
+                            log::error!("[{}] SHM alloc failed: {}", camera_name, e);
+                            continue;
                         }
-                        Err(_) => break, // Channel closed
+                    };
+
+                    // Copy and publish (synchronous)
+                    shm_buf.as_mut().copy_from_slice(&proto_bytes);
+                    let zbytes: ZBytes = shm_buf.into();
+
+                    if shm_raw_pub.put(zbytes).wait().is_ok() {
+                        published += 1;
                     }
+
+                    // Log stats every second
+                    if last_log.elapsed().as_secs() >= 1 {
+                        log::info!(
+                            "[{}] SHM: frame {}, {} published",
+                            camera_name,
+                            sequence,
+                            published
+                        );
+                        last_log = std::time::Instant::now();
+                    }
+                }
+                Err(flume::RecvTimeoutError::Timeout) => {
+                    // Continue to check shutdown
+                    continue;
+                }
+                Err(flume::RecvTimeoutError::Disconnected) => {
+                    // Channel closed
+                    break;
                 }
             }
         }
@@ -263,7 +269,7 @@ impl RtspCameraNode {
             self.camera_config.height
         );
 
-        // Spawn tasks with shutdown receivers
+        // Spawn compressed task (async on tokio runtime)
         let mut tasks: JoinSet<()> = JoinSet::new();
 
         tasks.spawn({
@@ -282,14 +288,15 @@ impl RtspCameraNode {
             }
         });
 
-        tasks.spawn({
-            let camera_name = camera_name.clone();
-            let decoder = decoder.clone();
-            let shutdown_tx = shutdown_tx.clone();
-            async move {
-                if let Err(e) = Self::shm_task(decoder, camera_name.clone(), shutdown_tx).await {
-                    log::error!("[{}] SHM task failed: {}", camera_name, e);
-                }
+        // Spawn SHM task on blocking thread pool (doesn't affect async runtime)
+        let shm_camera_name = camera_name.clone();
+        let shm_decoder = decoder.clone();
+        let shm_shutdown_tx = shutdown_tx.clone();
+        let shm_handle = tokio::task::spawn_blocking(move || {
+            if let Err(e) =
+                Self::shm_task_blocking(shm_decoder, shm_camera_name.clone(), shm_shutdown_tx)
+            {
+                log::error!("[{}] SHM task failed: {}", shm_camera_name, e);
             }
         });
 
@@ -299,9 +306,9 @@ impl RtspCameraNode {
 
         log::info!("Shutting down camera '{}'...", camera_name);
 
-        // Tasks will exit via their select! loops when they see shutdown
         // Wait for all tasks to complete
         while tasks.join_next().await.is_some() {}
+        let _ = shm_handle.await;
 
         // Cleanup resources
         if let Err(e) = capture.close() {
