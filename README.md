@@ -2,7 +2,7 @@
 
 Multi-camera RTSP streaming with ROS-Z and real-time browser visualization.
 
-Captures H264 streams directly from RTSP cameras (zero decode overhead) and publishes them via Zenoh/ROS-Z for visualization in the React Dashboard or Foxglove Studio.
+Captures H264 streams directly from RTSP cameras (zero decode overhead) and publishes them via Zenoh/ROS-Z for visualization in the React Dashboard.
 
 ## Requirements
 
@@ -53,11 +53,10 @@ pixi run multicam
 pixi run dashboard
 ```
 
-**Local access:** http://localhost:5173
+**Local:** http://localhost:5173
+**Remote:** https://\<ip\>:5173 (accept self-signed cert)
 
-**Remote access (Tailscale, LAN):** https://\<ip\>:5173 (accept self-signed cert)
-
-The dashboard serves HTTPS with Zenoh WebSocket proxied through the same port - no extra setup needed.
+The dashboard auto-connects, shows live FPS/latency stats, and serves HTTPS with Zenoh WebSocket proxied through the same port.
 
 ## Documentation
 

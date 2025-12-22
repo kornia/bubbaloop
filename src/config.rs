@@ -89,6 +89,7 @@ cameras:
     height: 480
   - name: "rear"
     url: "rtsp://192.168.1.11:554/live"
+    latency: 100
     decoder: software
     width: 1280
     height: 720
@@ -109,6 +110,7 @@ cameras:
 cameras:
   - name: "front"
     url: "rtsp://192.168.1.10:554/stream"
+    latency: 200
     decoder: nvidia
     width: 640
     height: 480
@@ -123,6 +125,7 @@ cameras:
 cameras:
   - name: "front"
     url: "rtsp://192.168.1.10:554/stream"
+    latency: 200
     decoder: jetson
     width: 320
     height: 240

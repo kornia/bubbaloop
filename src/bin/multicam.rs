@@ -61,8 +61,10 @@ async fn main() -> ZResult<()> {
             camera_config.url
         );
 
-        let node = match RtspCameraNode::new(ctx.clone(), camera_config.clone()) {
-            Ok(n) => n,
+        match RtspCameraNode::new(ctx.clone(), camera_config.clone()) {
+            Ok(node) => {
+                tasks.push(tokio::spawn(node.run(shutdown_tx.clone())));
+            }
             Err(e) => {
                 log::error!(
                     "Failed to create camera node '{}': {}",
@@ -72,20 +74,11 @@ async fn main() -> ZResult<()> {
                 continue;
             }
         };
-
-        tasks.push(tokio::spawn(node.run(shutdown_tx.clone())));
     }
-
-    // Foxglove bridge node - commented out for now
-    // log::info!("Starting Foxglove bridge node");
-    // let foxglove_node = FoxgloveNode::new(ctx.clone(), &config.cameras)?;
-    // tasks.push(tokio::spawn(foxglove_node.run(shutdown_tx.clone())));
 
     // Wait for all tasks to complete
     for task in tasks {
-        if let Err(e) = task.await {
-            log::error!("Task error: {}", e);
-        }
+        task.await??;
     }
 
     log::info!("All nodes shut down, exiting");

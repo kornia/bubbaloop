@@ -2,15 +2,15 @@
 
 **Multi-camera RTSP streaming with ROS-Z and real-time browser visualization.**
 
-Bubbaloop captures H264 streams directly from RTSP cameras with **zero decode overhead** and publishes them via Zenoh/ROS-Z for real-time visualization in the React Dashboard or Foxglove Studio.
+Bubbaloop captures H264 streams directly from RTSP cameras with **zero decode overhead** and publishes them via Zenoh/ROS-Z for real-time visualization in the React Dashboard.
 
 ## ✨ Features
 
 - 🚀 **Zero-copy H264 passthrough** — No decoding overhead, direct stream forwarding
 - 📡 **Multi-camera support** — Stream from multiple RTSP cameras simultaneously
 - 🔌 **Zenoh/ROS-Z integration** — Publish camera streams as ROS-compatible topics
-- 🌐 **React Dashboard** — Real-time browser-based visualization with WebCodecs
-- 📊 **Foxglove support** — Optional integration with Foxglove Studio
+- 🌐 **React Dashboard** — Real-time browser visualization with WebCodecs, live FPS/latency stats
+- 🔒 **Remote access** — HTTPS with self-signed cert, single-port deployment
 - ⚙️ **Simple YAML config** — Easy camera configuration
 
 ## 🏗️ Tech Stack
@@ -29,8 +29,8 @@ Bubbaloop captures H264 streams directly from RTSP cameras with **zero decode ov
 # Install dependencies
 pixi install
 
-# Terminal 1: Start zenoh-bridge-remote-api
-./zenoh-bridge-remote-api --listen tcp/0.0.0.0:7448 --ws-port 10000
+# Terminal 1: Start zenoh bridge
+pixi run bridge
 
 # Terminal 2: Start camera capture
 pixi run multicam

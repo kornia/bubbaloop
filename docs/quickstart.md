@@ -40,21 +40,9 @@ This installs all required dependencies including:
 - Node.js (for dashboard)
 - Build tools (pkg-config, cmake)
 
-### 4. Build zenoh-bridge-remote-api (one-time)
+### 4. Build zenoh-bridge-remote-api (automatic)
 
-The dashboard connects to Zenoh via WebSocket. You need the bridge:
-
-```bash
-# Clone zenoh-ts repository
-git clone https://github.com/eclipse-zenoh/zenoh-ts.git
-cd zenoh-ts/zenoh-bridge-remote-api
-
-# Build the bridge
-cargo build --release
-```
-
-!!! tip "Save the binary path"
-    Note the path to `./target/release/zenoh-bridge-remote-api` for later use.
+The bridge is built automatically when you run `pixi run bridge` for the first time.
 
 ## Configuration
 
@@ -77,13 +65,13 @@ See [Configuration](configuration.md) for detailed options.
 
 You need **three terminals** to run the complete system:
 
-### Terminal 1: Start zenoh-bridge-remote-api
+### Terminal 1: Start zenoh-bridge
 
 ```bash
-./path/to/zenoh-bridge-remote-api --listen tcp/0.0.0.0:7448 --ws-port 10000
+pixi run bridge
 ```
 
-You should see:
+First run will clone and build the bridge. You should see:
 
 ```
 [INFO  zenoh_bridge_remote_api] Listening on tcp/0.0.0.0:7448
@@ -126,35 +114,40 @@ You should see:
 
 ## Visualization
 
-Open http://localhost:5173 in your browser.
+**Local:** http://localhost:5173
+**Remote:** https://\<your-ip\>:5173 (accept self-signed cert)
 
-### Connect to Zenoh
+### Connection
 
-1. The default endpoint `ws://127.0.0.1:10000` should be pre-filled
-2. Click **Connect**
-3. The status should change to "Connected"
+The dashboard auto-connects via built-in proxy. Check the header for status:
+
+- 🟢 **Connected** — ready to stream
+- 🟡 **Connecting** — establishing connection
+- 🔴 **Error** — click ↻ to retry
 
 ### View Camera Streams
 
-Your camera streams will automatically appear. If not:
+Cameras appear automatically. To add manually:
 
 1. Click **Add Camera**
-2. Click the edit (✏️) icon
-3. Select a topic from the dropdown or enter manually:
-   - `0/camera%entrance%compressed/**`
-   - `0/camera%backyard%compressed/**`
+2. Click ✏️ to edit
+3. Select topic or enter: `0/camera%entrance%compressed/**`
 4. Click **Save**
 
 ### Dashboard Features
 
-| Action | How To |
-|--------|--------|
-| Add Camera | Click "Add Camera" button |
-| Edit Camera | Click pencil (✏️) icon |
-| Show Metadata | Click info (ⓘ) icon |
-| Remove Camera | Click X icon |
-| Reorder | Drag by grip handle |
-| Maximize | Click expand icon |
+| Action | How |
+|--------|-----|
+| Add Camera | "Add Camera" button |
+| Edit | ✏️ icon |
+| Metadata | ⓘ icon (shows latency, timestamps) |
+| Remove | ✕ icon |
+| Reorder | Drag grip handle |
+| Maximize | Expand icon |
+
+### Live Stats
+
+Each camera displays: **FPS** · **frame count** · **resolution** · **LIVE/INIT** status
 
 ## Stopping
 
@@ -176,7 +169,7 @@ Press `Ctrl+C` in each terminal to gracefully shutdown.
 
 ### "WebSocket disconnected"
 
-- Ensure `zenoh-bridge-remote-api` is running in Terminal 1
+- Ensure `pixi run bridge` is running in Terminal 1
 - Check it's listening on port 10000
 
 ### "Waiting for keyframe"
@@ -194,4 +187,4 @@ Press `Ctrl+C` in each terminal to gracefully shutdown.
 
 - [Configuration](configuration.md) — Detailed camera configuration options
 - [Architecture](architecture.md) — Understand the system design
-- [Visualization](visualization.md) — Alternative visualization options
+- [Visualization](visualization.md) — Dashboard details and troubleshooting
