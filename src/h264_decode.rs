@@ -168,7 +168,7 @@ impl VideoH264Decoder {
                 .new_sample(
                     move |sink| match Self::handle_decoded_sample(sink, &seq_clone) {
                         Ok(frame) => {
-                            let _ = frame_tx.send(frame);
+                            let _ = frame_tx.try_send(frame);
                             Ok(gstreamer::FlowSuccess::Ok)
                         }
                         Err(e) => {
