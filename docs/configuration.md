@@ -7,7 +7,7 @@ Bubbaloop uses a simple YAML configuration file to define cameras.
 By default, the application reads `config.yaml` from the current directory. You can specify a different path:
 
 ```bash
-pixi run multicam -- -c /path/to/config.yaml
+pixi run cameras -- -c /path/to/config.yaml
 ```
 
 ## Camera Configuration
@@ -119,4 +119,3 @@ The message type is `bubbaloop.camera.v1.CompressedImage` containing:
 - `header`: Timestamp and sequence information
 - `format`: Always `"h264"`
 - `data`: Raw H264 NAL units (Annex B format)
-

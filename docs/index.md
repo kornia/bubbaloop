@@ -29,14 +29,8 @@ Bubbaloop captures H264 streams directly from RTSP cameras with **zero decode ov
 # Install dependencies
 pixi install
 
-# Terminal 1: Start zenoh bridge
-pixi run bridge
-
-# Terminal 2: Start camera capture
-pixi run multicam
-
-# Terminal 3: Start dashboard
-pixi run dashboard
+# Start everything (bridge + cameras + dashboard)
+pixi run up
 ```
 
 Open http://localhost:5173 in Chrome, Edge, or Safari.
@@ -47,7 +41,7 @@ See [Quickstart](quickstart.md) for detailed setup instructions.
 
 | Command | Description |
 |---------|-------------|
-| `pixi run multicam` | Start camera capture and Zenoh publishing |
+| `pixi run cameras` | Start camera capture and Zenoh publishing |
 | `pixi run dashboard` | Start React dashboard (auto npm install) |
 | `pixi run build` | Build Rust binaries |
 | `pixi run docs` | Serve documentation locally |

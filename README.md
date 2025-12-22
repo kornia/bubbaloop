@@ -17,17 +17,7 @@ Captures H264 streams directly from RTSP cameras (zero decode overhead) and publ
 pixi install
 ```
 
-### 2. Start zenoh-bridge-remote-api
-
-The bridge provides WebSocket access for browsers to connect to Zenoh:
-
-```bash
-pixi run bridge
-```
-
-This will clone, build (first time only), and run the bridge on port 10000.
-
-### 3. Configure cameras
+### 2. Configure cameras
 
 Edit `config.yaml` to add your RTSP cameras:
 
@@ -41,22 +31,24 @@ cameras:
     latency: 100
 ```
 
-### 4. Start the camera streams
+### 3. Start everything
 
 ```bash
-pixi run multicam
+pixi run up
 ```
 
-### 5. Start the dashboard
-
-```bash
-pixi run dashboard
-```
+This launches the zenoh bridge, camera streams, and dashboard using [process-compose](https://github.com/F1bonacc1/process-compose).
 
 **Local:** http://localhost:5173
 **Remote:** https://\<ip\>:5173 (accept self-signed cert)
 
-The dashboard auto-connects, shows live FPS/latency stats, and serves HTTPS with Zenoh WebSocket proxied through the same port.
+### Running services individually
+
+```bash
+pixi run bridge      # Start zenoh bridge
+pixi run cameras    # Start camera streams
+pixi run dashboard   # Start dashboard
+```
 
 ## Documentation
 

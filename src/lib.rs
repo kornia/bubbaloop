@@ -1,5 +1,4 @@
 pub mod config;
-pub mod foxglove_node;
 pub mod h264_capture;
 pub mod h264_decode;
 pub mod rtsp_camera_node;
