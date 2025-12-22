@@ -1,10 +1,28 @@
-import { defineConfig } from 'vite';
+import { defineConfig, createLogger } from 'vite';
 import react from '@vitejs/plugin-react';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 
+// Custom logger that filters out noisy proxy errors
+const logger = createLogger();
+const originalError = logger.error.bind(logger);
+logger.error = (msg, options) => {
+  // Filter out WebSocket proxy errors (bridge not running, connection closed, etc.)
+  if (
+    msg.includes('ws proxy error') &&
+    (msg.includes('ECONNREFUSED') ||
+     msg.includes('ECONNRESET') ||
+     msg.includes('EPIPE') ||
+     msg.includes('socket hang up'))
+  ) {
+    return; // Silently ignore - frontend shows connection status
+  }
+  originalError(msg, options);
+};
+
 export default defineConfig({
+  customLogger: logger,
   plugins: [
     wasm(),
     topLevelAwait(),
@@ -20,14 +38,6 @@ export default defineConfig({
         target: 'ws://127.0.0.1:10000',
         ws: true,
         rewriteWsOrigin: true,
-        // Suppress noisy socket errors on connection close
-        configure: (proxy) => {
-          proxy.on('error', (err) => {
-            // Silently ignore "socket ended" errors - these happen on reconnect
-            if (err.message?.includes('ended by the other party')) return;
-            console.error('[Proxy] Error:', err.message);
-          });
-        },
       },
     },
   },

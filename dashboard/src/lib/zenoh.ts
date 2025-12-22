@@ -15,6 +15,25 @@ export interface UseZenohSessionResult {
 }
 
 /**
+ * Gracefully close a Zenoh session with timeout
+ */
+async function closeSessionGracefully(session: Session | null, timeoutMs = 1000): Promise<void> {
+  if (!session) return;
+
+  try {
+    // Race between close and timeout
+    await Promise.race([
+      session.close(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Close timeout')), timeoutMs)
+      ),
+    ]);
+  } catch {
+    // Ignore close errors - session may already be closed
+  }
+}
+
+/**
  * React hook for managing a Zenoh session
  */
 export function useZenohSession(config: ZenohConfig): UseZenohSessionResult {
@@ -22,15 +41,16 @@ export function useZenohSession(config: ZenohConfig): UseZenohSessionResult {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [error, setError] = useState<Error | null>(null);
   const sessionRef = useRef<Session | null>(null);
+  const isClosingRef = useRef(false);
 
   const connect = useCallback(async () => {
+    // Prevent reconnect while closing
+    if (isClosingRef.current) return;
+
     if (sessionRef.current) {
-      try {
-        await sessionRef.current.close();
-      } catch {
-        // Ignore close errors
-      }
+      await closeSessionGracefully(sessionRef.current);
       sessionRef.current = null;
+      setSession(null);
     }
 
     setStatus('connecting');
@@ -39,10 +59,19 @@ export function useZenohSession(config: ZenohConfig): UseZenohSessionResult {
     try {
       const zenohConfig = new Config(config.endpoint);
       const newSession = await Session.open(zenohConfig);
+
+      // Check if we were closed while connecting
+      if (isClosingRef.current) {
+        await closeSessionGracefully(newSession);
+        return;
+      }
+
       sessionRef.current = newSession;
       setSession(newSession);
       setStatus('connected');
     } catch (e) {
+      if (isClosingRef.current) return; // Ignore errors during shutdown
+
       const err = e instanceof Error ? e : new Error(String(e));
       setError(err);
       setStatus('error');
@@ -51,13 +80,37 @@ export function useZenohSession(config: ZenohConfig): UseZenohSessionResult {
   }, [config.endpoint]);
 
   useEffect(() => {
+    isClosingRef.current = false;
     connect();
 
-    return () => {
+    // Cleanup on unmount
+    const cleanup = () => {
+      isClosingRef.current = true;
       if (sessionRef.current) {
-        sessionRef.current.close().catch(console.error);
+        closeSessionGracefully(sessionRef.current);
         sessionRef.current = null;
       }
+    };
+
+    // Handle page close/refresh
+    const handleBeforeUnload = () => {
+      cleanup();
+    };
+
+    // Handle visibility change (tab switch, minimize)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        // Page is hidden - could pause heavy operations here
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      cleanup();
     };
   }, [connect]);
 
@@ -80,6 +133,24 @@ type SampleCallback = (sample: Sample) => void;
 
 // Number of samples for moving average FPS calculation
 const FPS_WINDOW_SIZE = 15;
+
+/**
+ * Gracefully undeclare a subscriber with timeout
+ */
+async function undeclareSubscriberGracefully(subscriber: Subscriber | null, timeoutMs = 500): Promise<void> {
+  if (!subscriber) return;
+
+  try {
+    await Promise.race([
+      subscriber.undeclare(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Undeclare timeout')), timeoutMs)
+      ),
+    ]);
+  } catch {
+    // Ignore undeclare errors
+  }
+}
 
 /**
  * React hook for subscribing to a Zenoh topic
@@ -107,14 +178,18 @@ export function useZenohSubscriber(
     if (!session || !topic) return;
 
     let mounted = true;
+    let currentSubscriber: Subscriber | null = null;
 
     const setupSubscriber = async () => {
       try {
         // Clean up previous subscriber
         if (subscriberRef.current) {
-          await subscriberRef.current.undeclare();
+          await undeclareSubscriberGracefully(subscriberRef.current);
           subscriberRef.current = null;
         }
+
+        // Check if still mounted before creating new subscriber
+        if (!mounted) return;
 
         // Use callback-based handler
         const subscriber = await session.declareSubscriber(topic, {
@@ -123,13 +198,27 @@ export function useZenohSubscriber(
 
             messageCountRef.current++;
             setMessageCount(messageCountRef.current);
-            onSampleRef.current?.(sample);
+
+            try {
+              onSampleRef.current?.(sample);
+            } catch (e) {
+              // Don't let callback errors break the subscriber
+              console.error('[Zenoh] Sample callback error:', e);
+            }
           },
         });
 
+        if (!mounted) {
+          // Component unmounted during subscribe
+          await undeclareSubscriberGracefully(subscriber);
+          return;
+        }
+
+        currentSubscriber = subscriber;
         subscriberRef.current = subscriber;
         console.log(`[Zenoh] Subscribed to ${topic}`);
       } catch (e) {
+        if (!mounted) return; // Ignore errors during cleanup
         console.error(`[Zenoh] Failed to subscribe to ${topic}:`, e);
       }
     };
@@ -139,6 +228,8 @@ export function useZenohSubscriber(
     // FPS counter with moving average
     let lastCount = 0;
     fpsIntervalRef.current = window.setInterval(() => {
+      if (!mounted) return;
+
       const currentCount = messageCountRef.current;
       const currentFps = currentCount - lastCount;
       lastCount = currentCount;
@@ -160,11 +251,16 @@ export function useZenohSubscriber(
 
     return () => {
       mounted = false;
+
       if (fpsIntervalRef.current) {
         clearInterval(fpsIntervalRef.current);
+        fpsIntervalRef.current = null;
       }
-      if (subscriberRef.current) {
-        subscriberRef.current.undeclare().catch(console.error);
+
+      // Clean up subscriber
+      const sub = currentSubscriber || subscriberRef.current;
+      if (sub) {
+        undeclareSubscriberGracefully(sub);
         subscriberRef.current = null;
       }
     };
@@ -218,9 +314,10 @@ export function useZenohTopicDiscovery(
   const [isDiscovering, setIsDiscovering] = useState(false);
   const topicsSetRef = useRef<Set<string>>(new Set());
   const subscriberRef = useRef<Subscriber | null>(null);
+  const mountedRef = useRef(true);
 
   const discover = useCallback(async () => {
-    if (!session) return;
+    if (!session || !mountedRef.current) return;
 
     setIsDiscovering(true);
     topicsSetRef.current.clear();
@@ -229,30 +326,46 @@ export function useZenohTopicDiscovery(
     try {
       // Clean up previous subscriber
       if (subscriberRef.current) {
-        await subscriberRef.current.undeclare();
+        await undeclareSubscriberGracefully(subscriberRef.current);
         subscriberRef.current = null;
       }
+
+      if (!mountedRef.current) return;
 
       // Subscribe to pattern to discover topics
       const subscriber = await session.declareSubscriber(pattern, {
         handler: (sample: Sample) => {
-          const keyExpr = sample.keyexpr().toString();
-          // Filter for compressed image topics
-          if (keyExpr.includes('compressed') && !topicsSetRef.current.has(keyExpr)) {
-            topicsSetRef.current.add(keyExpr);
-            setTopics(Array.from(topicsSetRef.current).sort());
+          if (!mountedRef.current) return;
+
+          try {
+            const keyExpr = sample.keyexpr().toString();
+            // Filter for compressed image topics
+            if (keyExpr.includes('compressed') && !topicsSetRef.current.has(keyExpr)) {
+              topicsSetRef.current.add(keyExpr);
+              setTopics(Array.from(topicsSetRef.current).sort());
+            }
+          } catch {
+            // Ignore errors extracting key expression
           }
         },
       });
+
+      if (!mountedRef.current) {
+        await undeclareSubscriberGracefully(subscriber);
+        return;
+      }
 
       subscriberRef.current = subscriber;
       console.log(`[Zenoh] Topic discovery started with pattern: ${pattern}`);
 
       // Stop discovering after a short period but keep subscriber for new topics
       setTimeout(() => {
-        setIsDiscovering(false);
+        if (mountedRef.current) {
+          setIsDiscovering(false);
+        }
       }, 3000);
     } catch (e) {
+      if (!mountedRef.current) return;
       console.error('[Zenoh] Topic discovery failed:', e);
       setIsDiscovering(false);
     }
@@ -260,13 +373,17 @@ export function useZenohTopicDiscovery(
 
   // Start discovery when session is available
   useEffect(() => {
+    mountedRef.current = true;
+
     if (session) {
       discover();
     }
 
     return () => {
+      mountedRef.current = false;
+
       if (subscriberRef.current) {
-        subscriberRef.current.undeclare().catch(console.error);
+        undeclareSubscriberGracefully(subscriberRef.current);
         subscriberRef.current = null;
       }
     };
