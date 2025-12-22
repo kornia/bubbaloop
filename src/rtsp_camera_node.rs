@@ -256,8 +256,7 @@ impl RtspCameraNode {
 
         loop {
             tokio::select! {
-                biased;
-
+                // Shutdown signal
                 _ = shutdown_rx.changed() => break,
 
                 // H264 compressed frames -> decode and publish compressed
