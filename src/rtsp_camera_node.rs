@@ -9,7 +9,7 @@ use ros_z::{
 use std::sync::Arc;
 use zenoh::bytes::ZBytes;
 use zenoh::pubsub::Publisher;
-use zenoh::shm::{BlockOn, GarbageCollect, ShmProviderBuilder};
+use zenoh::shm::{GarbageCollect, ShmProviderBuilder};
 use zenoh::Wait;
 
 /// SHM pool size per camera (256MB = ~1300 frames at 200KB each)
@@ -152,8 +152,8 @@ impl RtspCameraNode {
         let mut shm_buf = match self
             .shm_provider
             .alloc(proto_bytes.len())
-            .with_policy::<BlockOn<GarbageCollect>>()
-            .await
+            .with_policy::<GarbageCollect>()
+            .wait()
         {
             Ok(buf) => buf,
             Err(e) => {
