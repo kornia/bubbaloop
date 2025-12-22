@@ -1,6 +1,7 @@
 pub mod config;
 pub mod foxglove_node;
 pub mod h264_capture;
+pub mod h264_decode;
 pub mod rtsp_camera_node;
 
 use ros_z::{MessageTypeInfo, TypeHash, WithTypeInfo};
@@ -20,3 +21,15 @@ impl MessageTypeInfo for protos::CompressedImage {
 }
 
 impl WithTypeInfo for protos::CompressedImage {}
+
+impl MessageTypeInfo for protos::RawImage {
+    fn type_name() -> &'static str {
+        "bubbaloop.camera.v1.RawImage"
+    }
+
+    fn type_hash() -> TypeHash {
+        TypeHash::zero()
+    }
+}
+
+impl WithTypeInfo for protos::RawImage {}

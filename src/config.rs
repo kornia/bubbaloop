@@ -1,6 +1,29 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Decoder backend selection for raw frame decoding
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DecoderBackend {
+    /// Software decoding using avdec_h264 (CPU, always available)
+    #[default]
+    Software,
+    /// Hardware decoding using nvh264dec (NVIDIA desktop GPU)
+    Nvidia,
+    /// Hardware decoding using nvv4l2decoder (NVIDIA Jetson)
+    Jetson,
+}
+
+impl From<DecoderBackend> for crate::h264_decode::DecoderBackend {
+    fn from(config: DecoderBackend) -> Self {
+        match config {
+            DecoderBackend::Software => crate::h264_decode::DecoderBackend::Software,
+            DecoderBackend::Nvidia => crate::h264_decode::DecoderBackend::Nvidia,
+            DecoderBackend::Jetson => crate::h264_decode::DecoderBackend::Jetson,
+        }
+    }
+}
+
 /// Configuration for a single RTSP camera
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraConfig {
@@ -9,12 +32,13 @@ pub struct CameraConfig {
     /// RTSP URL (e.g., rtsp://user:pass@192.168.1.10:554/stream)
     pub url: String,
     /// Latency in milliseconds for the RTSP stream
-    #[serde(default = "default_latency")]
     pub latency: u32,
-}
-
-fn default_latency() -> u32 {
-    200
+    /// Decoder backend to use (software, nvidia, jetson)
+    pub decoder: DecoderBackend,
+    /// Output width for decoded frames
+    pub width: u32,
+    /// Output height for decoded frames
+    pub height: u32,
 }
 
 /// Root configuration structure
@@ -60,13 +84,55 @@ cameras:
   - name: "front"
     url: "rtsp://192.168.1.10:554/stream"
     latency: 200
+    decoder: software
+    width: 640
+    height: 480
   - name: "rear"
     url: "rtsp://192.168.1.11:554/live"
+    latency: 100
+    decoder: software
+    width: 1280
+    height: 720
 "#;
         let config = Config::parse(yaml).unwrap();
         assert_eq!(config.cameras.len(), 2);
         assert_eq!(config.cameras[0].name, "front");
         assert_eq!(config.cameras[0].latency, 200);
-        assert_eq!(config.cameras[1].latency, 200); // default
+        assert_eq!(config.cameras[0].width, 640);
+        assert_eq!(config.cameras[0].height, 480);
+        assert_eq!(config.cameras[1].width, 1280);
+        assert_eq!(config.cameras[1].height, 720);
+    }
+
+    #[test]
+    fn test_parse_config_with_nvidia() {
+        let yaml = r#"
+cameras:
+  - name: "front"
+    url: "rtsp://192.168.1.10:554/stream"
+    latency: 200
+    decoder: nvidia
+    width: 640
+    height: 480
+"#;
+        let config = Config::parse(yaml).unwrap();
+        assert_eq!(config.cameras[0].decoder, DecoderBackend::Nvidia);
+    }
+
+    #[test]
+    fn test_parse_config_with_jetson() {
+        let yaml = r#"
+cameras:
+  - name: "front"
+    url: "rtsp://192.168.1.10:554/stream"
+    latency: 200
+    decoder: jetson
+    width: 320
+    height: 240
+"#;
+        let config = Config::parse(yaml).unwrap();
+        assert_eq!(config.cameras[0].decoder, DecoderBackend::Jetson);
+        assert_eq!(config.cameras[0].width, 320);
+        assert_eq!(config.cameras[0].height, 240);
     }
 }

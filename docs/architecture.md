@@ -12,37 +12,48 @@ flowchart TB
         camN[Camera N]
     end
 
-    subgraph gstreamer [GStreamer H264 Passthrough]
-        direction LR
-        rtspsrc[rtspsrc] --> rtph264depay[rtph264depay] --> h264parse[h264parse] --> appsink[appsink]
+    subgraph bubbaloop [Bubbaloop]
+        subgraph gstreamer [GStreamer H264 Passthrough]
+            direction LR
+            rtspsrc[rtspsrc] --> rtph264depay[rtph264depay] --> h264parse[h264parse] --> appsink[appsink]
+        end
+        rosz[ros-z Publisher]
     end
 
-    subgraph zenoh [ROS-Z / Zenoh]
-        topic1["/camera/cam1/compressed"]
-        topic2["/camera/cam2/compressed"]
-        topicN["/camera/camN/compressed"]
+    subgraph bridge [zenoh-bridge-remote-api]
+        tcp[TCP :7448]
+        ws[WebSocket :10000]
     end
 
-    subgraph foxglove [Foxglove Bridge]
-        ws[WebSocket :8765]
+    subgraph dashboard [React Dashboard]
+        zenohts[zenoh-ts]
+        webcodecs[WebCodecs H264]
+        canvas[Canvas Rendering]
     end
 
-    studio[Foxglove Studio]
+    cam1 -->|RTSP H264| gstreamer
+    cam2 -->|RTSP H264| gstreamer
+    camN -->|RTSP H264| gstreamer
 
-    cam1 -->|H264| gstreamer
-    cam2 -->|H264| gstreamer
-    camN -->|H264| gstreamer
-
-    gstreamer -->|CompressedImage| topic1
-    gstreamer -->|CompressedImage| topic2
-    gstreamer -->|CompressedImage| topicN
-
-    topic1 --> ws
-    topic2 --> ws
-    topicN --> ws
-
-    ws -->|CompressedVideo| studio
+    gstreamer -->|CompressedImage| rosz
+    rosz -->|Zenoh| tcp
+    tcp <--> ws
+    ws -->|WebSocket| zenohts
+    zenohts -->|Protobuf| webcodecs
+    webcodecs -->|VideoFrame| canvas
 ```
+
+## Data Flow
+
+```
+RTSP Camera → GStreamer → ros-z → zenoh-bridge → WebSocket → Browser (WebCodecs)
+```
+
+1. **RTSP Camera**: Streams H264 video via RTSP protocol
+2. **GStreamer**: Extracts H264 NAL units without decoding (zero CPU overhead)
+3. **ros-z**: Publishes `CompressedImage` protobuf messages via Zenoh
+4. **zenoh-bridge**: Bridges TCP Zenoh traffic to WebSocket for browsers
+5. **Browser**: Decodes H264 using WebCodecs API (hardware accelerated)
 
 ## Components
 
@@ -73,16 +84,27 @@ Located in `src/rtsp_camera_node.rs`, each camera node:
 
 - Wraps the H264 capture in a ROS-Z node
 - Publishes `CompressedImage` messages via Zenoh
+- Includes header with timestamps and sequence numbers
 - Handles graceful shutdown on Ctrl+C
 
-### Foxglove Bridge Node
+### zenoh-bridge-remote-api
 
-Located in `src/foxglove_node.rs`, this component:
+External component from [zenoh-ts](https://github.com/eclipse-zenoh/zenoh-ts):
 
-- Subscribes to all camera topics via ROS-Z
-- Converts messages to Foxglove's `CompressedVideo` schema
-- Serves a WebSocket server on port 8765
-- Handles multiple concurrent Foxglove clients
+- Bridges Zenoh TCP protocol to WebSocket
+- Listens on TCP:7448 for Rust clients (multicam)
+- Serves WebSocket on port 10000 for browser clients
+- Enables browser-based Zenoh subscriptions
+
+### React Dashboard
+
+Located in `dashboard/`, the browser-based visualization:
+
+- **zenoh-ts**: TypeScript Zenoh client for WebSocket subscriptions
+- **Protobuf decoder**: Parses `CompressedImage` messages
+- **WebCodecs**: Hardware-accelerated H264 decoding
+- **Canvas rendering**: Displays decoded video frames
+- **dnd-kit**: Drag-and-drop camera card reordering
 
 ## Message Format
 
@@ -102,3 +124,37 @@ message CompressedImage {
   bytes data = 3;        // H264 NAL units (Annex B)
 }
 ```
+
+### Topic Naming
+
+Each camera publishes to a ROS-Z topic:
+
+```
+/camera/{camera_name}/compressed
+```
+
+In Zenoh key expression format:
+
+```
+0/camera%{camera_name}%compressed/**
+```
+
+## Performance Characteristics
+
+| Metric | Value |
+|--------|-------|
+| CPU overhead | Near zero (no decode) |
+| Latency | ~200ms (configurable) |
+| Memory per camera | ~10-50MB |
+| Max cameras | Limited by network bandwidth |
+
+## Browser Requirements
+
+WebCodecs API is required for H264 decoding:
+
+| Browser | Support |
+|---------|---------|
+| Chrome 94+ | ✅ |
+| Edge 94+ | ✅ |
+| Safari 16.4+ | ✅ |
+| Firefox | ❌ |
