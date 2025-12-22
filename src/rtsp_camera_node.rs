@@ -66,7 +66,10 @@ impl RtspCameraNode {
         capture: Arc<H264StreamCapture>,
         decoder: Arc<VideoH264Decoder>,
         camera_name: String,
+        shutdown_tx: tokio::sync::watch::Sender<()>,
     ) -> ZResult<()> {
+        let mut shutdown_rx = shutdown_tx.subscribe();
+
         // Create compressed publisher
         let node = ctx
             .create_node(format!("camera_{}_compressed", camera_name))
@@ -87,42 +90,63 @@ impl RtspCameraNode {
         let mut published: u64 = 0;
         let mut last_log = std::time::Instant::now();
 
-        while let Ok(h264_frame) = capture.receiver().recv_async().await {
-            // Feed decoder
-            if let Err(e) = decoder.push(h264_frame.as_slice(), h264_frame.pts, h264_frame.keyframe)
-            {
-                log::warn!("[{}] Decoder push failed: {}", camera_name, e);
-            }
+        loop {
+            tokio::select! {
+                biased;
 
-            // Publish compressed
-            let sequence = h264_frame.sequence;
-            let msg = frame_to_compressed_image(h264_frame, &camera_name);
-            if compressed_pub.async_publish(&msg).await.is_ok() {
-                published += 1;
-            }
+                _ = shutdown_rx.changed() => {
+                    log::info!("[{}] Compressed task received shutdown", camera_name);
+                    break;
+                }
 
-            // Log stats every second
-            if last_log.elapsed().as_secs() >= 1 {
-                log::info!(
-                    "[{}] Compressed: frame {}, {} published",
-                    camera_name,
-                    sequence,
-                    published
-                );
-                last_log = std::time::Instant::now();
+                result = capture.receiver().recv_async() => {
+                    match result {
+                        Ok(h264_frame) => {
+                            // Feed decoder
+                            if let Err(e) = decoder.push(h264_frame.as_slice(), h264_frame.pts, h264_frame.keyframe) {
+                                log::warn!("[{}] Decoder push failed: {}", camera_name, e);
+                            }
+
+                            // Publish compressed
+                            let sequence = h264_frame.sequence;
+                            let msg = frame_to_compressed_image(h264_frame, &camera_name);
+                            if compressed_pub.async_publish(&msg).await.is_ok() {
+                                published += 1;
+                            }
+
+                            // Log stats every second
+                            if last_log.elapsed().as_secs() >= 1 {
+                                log::info!(
+                                    "[{}] Compressed: frame {}, {} published",
+                                    camera_name,
+                                    sequence,
+                                    published
+                                );
+                                last_log = std::time::Instant::now();
+                            }
+                        }
+                        Err(_) => break, // Channel closed
+                    }
+                }
             }
         }
 
-        // Close decoder
-        if let Err(e) = decoder.close() {
-            log::error!("[{}] Failed to close decoder: {}", camera_name, e);
-        }
-
+        log::info!(
+            "[{}] Compressed task exiting (published: {})",
+            camera_name,
+            published
+        );
         Ok(())
     }
 
     /// SHM task: reads decoded frames, publishes via SHM
-    async fn shm_task(decoder: Arc<VideoH264Decoder>, camera_name: String) -> ZResult<()> {
+    async fn shm_task(
+        decoder: Arc<VideoH264Decoder>,
+        camera_name: String,
+        shutdown_tx: tokio::sync::watch::Sender<()>,
+    ) -> ZResult<()> {
+        let mut shutdown_rx = shutdown_tx.subscribe();
+
         // Create SHM provider
         let shm_provider = Arc::new(ShmProviderBuilder::default_backend(SHM_POOL_SIZE).wait()?);
 
@@ -141,27 +165,70 @@ impl RtspCameraNode {
             SHM_POOL_SIZE / (1024 * 1024)
         );
 
-        while let Ok(frame) = decoder.receiver().recv_async().await {
-            // Build protobuf
-            let msg = frame_to_raw_image(frame, &camera_name);
-            let proto_bytes = msg.encode_to_vec();
+        let mut published: u64 = 0;
+        let mut last_log = std::time::Instant::now();
 
-            // Allocate SHM buffer
-            let mut shm_buf = shm_provider
-                .alloc(proto_bytes.len())
-                .with_policy::<BlockOn<GarbageCollect>>()
-                .await?;
+        loop {
+            tokio::select! {
+                biased;
 
-            // Copy and publish
-            shm_buf.as_mut().copy_from_slice(&proto_bytes);
-            let zbytes: ZBytes = shm_buf.into();
+                _ = shutdown_rx.changed() => {
+                    log::info!("[{}] SHM task received shutdown", camera_name);
+                    break;
+                }
 
-            if let Err(e) = shm_raw_pub.put(zbytes).await {
-                log::error!("[{}] SHM publish failed: {}", camera_name, e);
-                continue;
+                result = decoder.receiver().recv_async() => {
+                    match result {
+                        Ok(frame) => {
+                            let sequence = frame.sequence;
+
+                            // Build protobuf
+                            let msg = frame_to_raw_image(frame, &camera_name);
+                            let proto_bytes = msg.encode_to_vec();
+
+                            // Allocate SHM buffer
+                            let mut shm_buf = match shm_provider
+                                .alloc(proto_bytes.len())
+                                .with_policy::<BlockOn<GarbageCollect>>()
+                                .await
+                            {
+                                Ok(buf) => buf,
+                                Err(e) => {
+                                    log::error!("[{}] SHM alloc failed: {}", camera_name, e);
+                                    continue;
+                                }
+                            };
+
+                            // Copy and publish
+                            shm_buf.as_mut().copy_from_slice(&proto_bytes);
+                            let zbytes: ZBytes = shm_buf.into();
+
+                            if shm_raw_pub.put(zbytes).await.is_ok() {
+                                published += 1;
+                            }
+
+                            // Log stats every second
+                            if last_log.elapsed().as_secs() >= 1 {
+                                log::info!(
+                                    "[{}] SHM: frame {}, {} published",
+                                    camera_name,
+                                    sequence,
+                                    published
+                                );
+                                last_log = std::time::Instant::now();
+                            }
+                        }
+                        Err(_) => break, // Channel closed
+                    }
+                }
             }
         }
 
+        log::info!(
+            "[{}] SHM task exiting (published: {})",
+            camera_name,
+            published
+        );
         Ok(())
     }
 
@@ -192,7 +259,7 @@ impl RtspCameraNode {
             self.camera_config.height
         );
 
-        // Spawn tasks using JoinSet for proper lifecycle management
+        // Spawn tasks with shutdown receivers
         let mut tasks: JoinSet<()> = JoinSet::new();
 
         tasks.spawn({
@@ -200,11 +267,13 @@ impl RtspCameraNode {
             let camera_name = camera_name.clone();
             let capture = capture.clone();
             let decoder = decoder.clone();
+            let shutdown_tx = shutdown_tx.clone();
             async move {
                 if let Err(e) =
-                    Self::compressed_task(ctx, capture, decoder, camera_name.clone()).await
+                    Self::compressed_task(ctx, capture, decoder, camera_name.clone(), shutdown_tx)
+                        .await
                 {
-                    log::error!("[{}] Failed to start compressed task: {}", camera_name, e);
+                    log::error!("[{}] Compressed task failed: {}", camera_name, e);
                 }
             }
         });
@@ -212,9 +281,10 @@ impl RtspCameraNode {
         tasks.spawn({
             let camera_name = camera_name.clone();
             let decoder = decoder.clone();
+            let shutdown_tx = shutdown_tx.clone();
             async move {
-                if let Err(e) = Self::shm_task(decoder, camera_name.clone()).await {
-                    log::error!("[{}] Failed to start SHM task: {}", camera_name, e);
+                if let Err(e) = Self::shm_task(decoder, camera_name.clone(), shutdown_tx).await {
+                    log::error!("[{}] SHM task failed: {}", camera_name, e);
                 }
             }
         });
@@ -225,23 +295,19 @@ impl RtspCameraNode {
 
         log::info!("Shutting down camera '{}'...", camera_name);
 
-        // Close capture
+        // Tasks will exit via their select! loops when they see shutdown
+        // Wait for all tasks to complete
+        while tasks.join_next().await.is_some() {}
+
+        // Cleanup resources
         if let Err(e) = capture.close() {
             log::error!("[{}] Failed to close capture: {}", camera_name, e);
         }
-
-        // Close decoder
         if let Err(e) = decoder.close() {
             log::error!("[{}] Failed to close decoder: {}", camera_name, e);
         }
 
-        // Wait for all tasks to complete
-        while let Some(task) = tasks.join_next().await {
-            if let Err(e) = task {
-                log::error!("[{}] Failed to join task: {}", camera_name, e);
-            }
-        }
-
+        log::info!("Camera '{}' shutdown complete", camera_name);
         Ok(())
     }
 }
