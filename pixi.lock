@@ -183,6 +183,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/pkg-config-0.29.2-h4bc722e_1009.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.5.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pre-commit-4.5.1-pyha770c72_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/process-compose-1.64.1-h643be8f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/protobuf-6.31.1-py314h503b32b_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/pthread-stubs-0.4-hb9d3cd8_1002.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/pugixml-1.15-h3f63f65_0.conda
@@ -410,6 +411,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/pkg-config-0.29.2-hce167ba_1009.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.5.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pre-commit-4.5.1-pyha770c72_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/process-compose-1.64.1-hb5cd7dd_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/protobuf-6.31.1-py314h0cf174a_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/pthread-stubs-0.4-h86ecc28_1002.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/pugixml-1.15-h6ef32b0_0.conda
@@ -4252,6 +4254,22 @@ packages:
   license_family: MIT
   size: 200827
   timestamp: 1765937577534
+- conda: https://conda.anaconda.org/conda-forge/linux-64/process-compose-1.64.1-h643be8f_0.conda
+  sha256: 8de80ca53278093f810bb93f25f18851719f3847a75e24e69d675f29395aad23
+  md5: db2ed75f8cfa34b19fa8b76c687b8a5a
+  depends:
+  - __glibc >=2.17,<3.0.a0
+  license: Apache-2.0
+  license_family: APACHE
+  size: 8287352
+  timestamp: 1746946077894
+- conda: https://conda.anaconda.org/conda-forge/linux-aarch64/process-compose-1.64.1-hb5cd7dd_0.conda
+  sha256: 39df9a47c7bcd0ad3cfafed5f083d18be363237f34eedee0ff56c356908e3225
+  md5: 17887ab4a067b595db691d1d8f3715a2
+  license: Apache-2.0
+  license_family: APACHE
+  size: 7683265
+  timestamp: 1746946096767
 - conda: https://conda.anaconda.org/conda-forge/linux-64/protobuf-6.31.1-py314h503b32b_2.conda
   sha256: 55c4d82eaa400d3d21701ce152397489b077177527564674aff8021fae536401
   md5: 1699ff22b094378d3a4b20019a995cf3

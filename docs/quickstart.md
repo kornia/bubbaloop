@@ -63,53 +63,33 @@ See [Configuration](configuration.md) for detailed options.
 
 ## Running
 
-You need **three terminals** to run the complete system:
-
-### Terminal 1: Start zenoh-bridge
+### Start everything (recommended)
 
 ```bash
+pixi run up
+```
+
+This uses [process-compose](https://github.com/F1bonacc1/process-compose) to launch all services:
+
+- **bridge** — Zenoh WebSocket bridge
+- **cameras** — RTSP camera capture
+- **dashboard** — React dashboard
+
+Press `Ctrl+C` to stop all services.
+
+### Run services individually
+
+If you prefer separate terminals:
+
+```bash
+# Terminal 1
 pixi run bridge
-```
 
-First run will clone and build the bridge. You should see:
+# Terminal 2
+pixi run cameras
 
-```
-[INFO  zenoh_bridge_remote_api] Listening on tcp/0.0.0.0:7448
-[INFO  zenoh_bridge_remote_api] WebSocket server listening on port 10000
-```
-
-### Terminal 2: Start camera capture
-
-```bash
-cd bubbaloop
-pixi run multicam
-```
-
-You should see:
-
-```
-[INFO  multicam] Loaded configuration with 2 cameras
-[INFO  zenoh::net::runtime] Using ZID: a7e256ba23b34292b71b9827b3e16bfc
-[INFO  multicam] Starting camera 'entrance' from rtsp://...
-[INFO  multicam] Starting camera 'backyard' from rtsp://...
-```
-
-### Terminal 3: Start dashboard
-
-```bash
-cd bubbaloop
+# Terminal 3
 pixi run dashboard
-```
-
-You should see:
-
-```
-> dashboard@0.0.0 dev
-> vite
-
-  VITE v5.x.x  ready in xxx ms
-
-  ➜  Local:   http://localhost:5173/
 ```
 
 ## Visualization
@@ -151,7 +131,7 @@ Each camera displays: **FPS** · **frame count** · **resolution** · **LIVE/INI
 
 ## Stopping
 
-Press `Ctrl+C` in each terminal to gracefully shutdown.
+Press `Ctrl+C` to gracefully shutdown (stops all services if using `pixi run up`).
 
 ## Browser Requirements
 
@@ -174,7 +154,7 @@ Press `Ctrl+C` in each terminal to gracefully shutdown.
 
 ### "Waiting for keyframe"
 
-- Verify `pixi run multicam` is running in Terminal 2
+- Verify `pixi run cameras` is running in Terminal 2
 - Check the camera URL is correct in `config.yaml`
 - Look at Terminal 2 for error messages
 

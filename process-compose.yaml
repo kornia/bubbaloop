@@ -1,0 +1,41 @@
+version: "0.5"
+
+processes:
+  build:
+    command: pixi run build && pixi run bridge-build
+    availability:
+      restart: "no"
+
+  bridge:
+    command: pixi run bridge
+    namespace: core
+    depends_on:
+      build:
+        condition: process_completed_successfully
+    availability:
+      restart: on_failure
+      max_restarts: 5
+
+  cameras:
+    command: pixi run cameras
+    namespace: nodes
+    depends_on:
+      build:
+        condition: process_completed_successfully
+    availability:
+      restart: on_failure
+      max_restarts: 3
+
+  inference:
+    command: pixi run inference
+    namespace: nodes
+    depends_on:
+      build:
+        condition: process_completed_successfully
+
+  dashboard:
+    command: pixi run dashboard
+    namespace: ui
+    depends_on:
+      bridge:
+        condition: process_started

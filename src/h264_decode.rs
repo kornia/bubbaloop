@@ -65,8 +65,7 @@ impl DecoderBackend {
             DecoderBackend::Jetson => (
                 format!(
                     "nvv4l2decoder enable-max-performance=1 ! \
-                     nvvidconv ! video/x-raw(memory:NVMM),format=RGBA,width={width},height={height} ! \
-                     nvvidconv ! video/x-raw,format=RGBA"
+                     nvvidconv ! video/x-raw,format=RGBA,width={width},height={height}"
                 ),
                 true, // scaling already done in GPU
             ),
@@ -148,11 +147,6 @@ impl VideoH264Decoder {
             .ok_or(H264DecodeError::ElementNotFound)?
             .dynamic_cast::<gstreamer_app::AppSrc>()
             .map_err(|_| H264DecodeError::DowncastError)?;
-
-        // Disable blocking on appsrc - drop frames instead of blocking when buffer is full
-        // Also increase max-bytes to allow some buffering before dropping
-        appsrc.set_property("block", false);
-        appsrc.set_property("max-bytes", 10_000_000u64); // 10MB buffer before dropping
 
         // Get appsink for receiving decoded frames
         let appsink = pipeline

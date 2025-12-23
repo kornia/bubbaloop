@@ -16,14 +16,15 @@ Real-time camera visualization via the React Dashboard.
 ### Quick Start
 
 ```bash
-# Terminal 1: Start zenoh-bridge
-pixi run bridge
+pixi run up  # Starts bridge, cameras, and dashboard
+```
 
-# Terminal 2: Start cameras
-pixi run multicam
+Or run individually in separate terminals:
 
-# Terminal 3: Start dashboard
-pixi run dashboard
+```bash
+pixi run bridge      # Terminal 1
+pixi run cameras    # Terminal 2
+pixi run dashboard   # Terminal 3
 ```
 
 **Local:** http://localhost:5173
@@ -42,7 +43,7 @@ This clones, builds (first time only), and runs `zenoh-bridge-remote-api`.
 #### 2. Start Bubbaloop
 
 ```bash
-pixi run multicam
+pixi run cameras
 ```
 
 #### 3. Start Dashboard
@@ -123,7 +124,7 @@ The dashboard serves HTTPS with a self-signed certificate:
 
 ### Dashboard: "Waiting for keyframe"
 
-- Verify `pixi run multicam` is running
+- Verify `pixi run cameras` is running
 - Check the topic pattern matches
 - Look at browser console for subscription logs
 

@@ -1,7 +1,7 @@
 [workspace]
 name = "bubbaloop"
 version = "0.1.0"
-description = "Multi-camera RTSP streaming with ROS-Z and Foxglove"
+description = "Multi-camera RTSP streaming with ROS-Z"
 authors = ["Edgar Riba <edgar.riba@gmail.com>"]
 channels = ["conda-forge"]
 platforms = ["linux-64", "linux-aarch64"]
@@ -10,23 +10,35 @@ platforms = ["linux-64", "linux-aarch64"]
 scripts = ["scripts/activate.sh"]
 
 [tasks]
+# Launch all services (bridge, cameras, dashboard)
+up = "process-compose -f process-compose.yaml up"
+
+# build all nodes
 build = "cargo build --release"
-multicam = "RUST_LOG=info cargo run --bin multicam --release"
-inference = "RUST_LOG=info cargo run --bin inference_node --release"
+
+# development
 check = "cargo check"
 test = "cargo test"
 fmt = "cargo fmt --all"
 fmt-check = "cargo fmt --all -- --check"
 clippy = "cargo clippy --all-targets --all-features -- -D warnings"
 lint = { depends-on = ["fmt-check", "clippy"] }
-docs = "mkdocs serve"
-docs-build = "mkdocs build"
-dashboard-install = "cd dashboard && npm install"
-dashboard-proto = { cmd = "cd dashboard && npm run proto", depends-on = ["dashboard-install"] }
-dashboard = { cmd = "cd dashboard && npm run dev", depends-on = ["dashboard-proto"] }
-dashboard-build = { cmd = "cd dashboard && npm run build", depends-on = ["dashboard-proto"] }
 pre-commit-install = "pre-commit install"
 pre-commit-run = "pre-commit run --all-files"
+
+# documentation
+docs = "mkdocs serve"
+docs-build = "mkdocs build"
+
+# nodes
+cameras = "RUST_LOG=debug cargo run --bin cameras_node --release"
+inference = "RUST_LOG=debug cargo run --bin inference_node --release"
+
+# Dashboard
+dashboard-install = "cd dashboard && npm install"
+dashboard-proto = { cmd = "cd dashboard && npm run proto", depends-on = ["dashboard-install"] }
+dashboard-build = { cmd = "cd dashboard && npm run build", depends-on = ["dashboard-proto"] }
+dashboard = { cmd = "cd dashboard && npm run dev", depends-on = ["dashboard-proto"] }
 
 # Zenoh bridge (for dashboard WebSocket connection)
 bridge-clone = "test -d zenoh-ts || git clone https://github.com/eclipse-zenoh/zenoh-ts.git"
@@ -59,6 +71,7 @@ mkdocs-material = ">=9.0"
 
 # Development tools
 pre-commit = ">=3.0"
+process-compose = ">=1.0"
 
 # Dashboard
 nodejs = ">=20"

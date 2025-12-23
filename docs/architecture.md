@@ -92,7 +92,7 @@ Located in `src/rtsp_camera_node.rs`, each camera node:
 External component from [zenoh-ts](https://github.com/eclipse-zenoh/zenoh-ts):
 
 - Bridges Zenoh TCP protocol to WebSocket
-- Listens on TCP:7448 for Rust clients (multicam)
+- Listens on TCP:7448 for Rust clients (cameras_node)
 - Serves WebSocket on port 10000 for browser clients
 - Enables browser-based Zenoh subscriptions
 

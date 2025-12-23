@@ -17,7 +17,7 @@ Real-time camera dashboard with H264 decoding via WebCodecs.
 
 ```bash
 pixi run bridge     # Terminal 1: zenoh bridge
-pixi run multicam   # Terminal 2: camera streams
+pixi run cameras   # Terminal 2: camera streams
 pixi run dashboard  # Terminal 3: dashboard
 ```
 
@@ -66,7 +66,7 @@ cd dashboard && npm install && npm run dev
 ## Architecture
 
 ```
-RTSP Cameras → multicam (GStreamer) → zenoh-bridge → Dashboard (WebCodecs)
+RTSP Cameras → cameras_node (GStreamer) → zenoh-bridge → Dashboard (WebCodecs)
                                          ↓
                               Vite proxies /zenoh → WS:10000
 ```
@@ -83,5 +83,5 @@ RTSP Cameras → multicam (GStreamer) → zenoh-bridge → Dashboard (WebCodecs)
 ## Troubleshooting
 
 - **"WebSocket disconnected"** — Check `pixi run bridge` is running
-- **"Waiting for keyframe"** — Check `pixi run multicam` is running
+- **"Waiting for keyframe"** — Check `pixi run cameras` is running
 - **"WebCodecs not supported"** — Use Chrome/Edge/Safari, access via localhost or HTTPS
