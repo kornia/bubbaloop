@@ -1,15 +1,14 @@
-pub mod config;
-pub mod h264_capture;
-pub mod h264_decode;
-pub mod rtsp_camera_node;
-
 use ros_z::{MessageTypeInfo, TypeHash, WithTypeInfo};
 
-pub mod protos {
+/// Protobuf schemas for bubbaloop
+pub mod schemas {
     include!(concat!(env!("OUT_DIR"), "/bubbaloop.camera.v1.rs"));
 }
 
-impl MessageTypeInfo for protos::CompressedImage {
+// Re-export commonly used types
+pub use schemas::{CompressedImage, Header, RawImage};
+
+impl MessageTypeInfo for schemas::CompressedImage {
     fn type_name() -> &'static str {
         "bubbaloop.camera.v1.CompressedImage"
     }
@@ -19,9 +18,9 @@ impl MessageTypeInfo for protos::CompressedImage {
     }
 }
 
-impl WithTypeInfo for protos::CompressedImage {}
+impl WithTypeInfo for schemas::CompressedImage {}
 
-impl MessageTypeInfo for protos::RawImage {
+impl MessageTypeInfo for schemas::RawImage {
     fn type_name() -> &'static str {
         "bubbaloop.camera.v1.RawImage"
     }
@@ -31,4 +30,4 @@ impl MessageTypeInfo for protos::RawImage {
     }
 }
 
-impl WithTypeInfo for protos::RawImage {}
+impl WithTypeInfo for schemas::RawImage {}

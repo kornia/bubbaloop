@@ -286,24 +286,11 @@ dependencies = [
 name = "bubbaloop"
 version = "0.1.0"
 dependencies = [
- "argh",
- "ctrlc",
- "env_logger",
- "flume 0.12.0",
- "gstreamer",
- "gstreamer-app",
- "gstreamer-video",
- "log",
  "prost",
  "prost-build",
  "prost-types",
  "ros-z",
  "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.17",
- "tokio",
- "zenoh",
 ]
 
 [[package]]
@@ -1546,6 +1533,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "inference"
+version = "0.1.0"
+dependencies = [
+ "bubbaloop",
+ "env_logger",
+ "log",
+ "prost",
+ "prost-types",
+ "tokio",
+ "zenoh",
+]
+
+[[package]]
 name = "inout"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2734,6 +2734,30 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rtsp_camera"
+version = "0.1.0"
+dependencies = [
+ "argh",
+ "bubbaloop",
+ "ctrlc",
+ "env_logger",
+ "flume 0.12.0",
+ "gstreamer",
+ "gstreamer-app",
+ "gstreamer-video",
+ "log",
+ "prost",
+ "prost-types",
+ "ros-z",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.17",
+ "tokio",
+ "zenoh",
 ]
 
 [[package]]

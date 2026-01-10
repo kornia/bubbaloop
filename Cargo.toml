@@ -1,50 +1,53 @@
-[package]
-name = "bubbaloop"
+[workspace]
+members = [
+    "crates/bubbaloop",
+    "crates/rtsp_camera",
+    "crates/inference",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 authors = ["Edgar Riba <edgar.riba@gmail.com>"]
 license = "Apache-2.0"
 edition = "2021"
-description = "Multi-camera RTSP streaming with ROS-Z and Foxglove"
 
-[dependencies]
-# CLI and logging
-argh = "0.1"
-ctrlc = "3.4"
-env_logger = "0.11"
-log = "0.4"
+[workspace.dependencies]
+# Protobuf serialization
+prost = "0.14"
+prost-types = "0.14"
+prost-build = "0.14"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 flume = "0.12"
+
+# ROS-Z pub/sub
+ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
+
+# Zenoh
+zenoh = { version = "1.6.2", features = ["shared-memory"] }
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# CLI
+argh = "0.1"
+ctrlc = "3.4"
 
 # GStreamer for H264 capture and decode
 gstreamer = "0.24"
 gstreamer-app = "0.24"
 gstreamer-video = "0.24"
 
-# ROS-Z pub/sub
-ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
-zenoh = { version = "1.6.2", features = ["shared-memory"] }
-
-# Protobuf serialization
-prost = "0.14"
-prost-types = "0.14"
-
-# Configuration
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_yaml = "0.9"
-
 # Error handling
 thiserror = "2.0"
 
-[build-dependencies]
-prost-build = "0.14"
-
-[[bin]]
-name = "cameras_node"
-path = "src/bin/cameras_node.rs"
-
-[[bin]]
-name = "inference_node"
-path = "src/bin/inference_node.rs"
+# internal dependencies
+bubbaloop = { path = "crates/bubbaloop" }

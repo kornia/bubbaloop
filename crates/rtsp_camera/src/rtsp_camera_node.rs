@@ -1,7 +1,7 @@
 use crate::config::CameraConfig;
 use crate::h264_capture::{H264Frame, H264StreamCapture};
 use crate::h264_decode::{DecoderBackend, RawFrame, VideoH264Decoder};
-use crate::protos::{CompressedImage, Header, RawImage};
+use bubbaloop::schemas::{CompressedImage, Header, RawImage};
 use prost::Message;
 use ros_z::{context::ZContext, msg::ProtobufSerdes, pubsub::ZPub, Builder, Result as ZResult};
 use std::sync::Arc;

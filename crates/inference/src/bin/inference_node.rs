@@ -5,7 +5,7 @@
 //!
 //! Based on: https://github.com/eclipse-zenoh/zenoh/blob/main/examples/examples/z_sub_shm.rs
 
-use bubbaloop::protos::RawImage;
+use bubbaloop::schemas::RawImage;
 use prost::Message;
 use zenoh::Wait;
 

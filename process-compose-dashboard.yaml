@@ -1,0 +1,13 @@
+version: "0.5"
+
+processes:
+  bridge:
+    command: pixi run bridge
+    namespace: core
+
+  dashboard:
+    command: pixi run dashboard
+    namespace: ui
+    depends_on:
+      bridge:
+        condition: process_started

@@ -7,7 +7,7 @@ use std::path::Path;
 pub enum DecoderBackend {
     /// Software decoding using avdec_h264 (CPU, always available)
     #[default]
-    Software,
+    Cpu,
     /// Hardware decoding using nvh264dec (NVIDIA desktop GPU)
     Nvidia,
     /// Hardware decoding using nvv4l2decoder (NVIDIA Jetson)
@@ -17,7 +17,7 @@ pub enum DecoderBackend {
 impl From<DecoderBackend> for crate::h264_decode::DecoderBackend {
     fn from(config: DecoderBackend) -> Self {
         match config {
-            DecoderBackend::Software => crate::h264_decode::DecoderBackend::Software,
+            DecoderBackend::Cpu => crate::h264_decode::DecoderBackend::Software,
             DecoderBackend::Nvidia => crate::h264_decode::DecoderBackend::Nvidia,
             DecoderBackend::Jetson => crate::h264_decode::DecoderBackend::Jetson,
         }
@@ -84,13 +84,13 @@ cameras:
   - name: "front"
     url: "rtsp://192.168.1.10:554/stream"
     latency: 200
-    decoder: software
+    decoder: cpu
     width: 640
     height: 480
   - name: "rear"
     url: "rtsp://192.168.1.11:554/live"
     latency: 100
-    decoder: software
+    decoder: cpu
     width: 1280
     height: 720
 "#;

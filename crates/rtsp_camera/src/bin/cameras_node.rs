@@ -1,7 +1,6 @@
 use argh::FromArgs;
-use bubbaloop::{config::Config, rtsp_camera_node::RtspCameraNode};
-// use bubbaloop::foxglove_node::FoxgloveNode;  // Commented out for now
 use ros_z::{context::ZContextBuilder, Builder, Result as ZResult};
+use rtsp_camera::{config::Config, rtsp_camera_node::RtspCameraNode};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -9,7 +8,11 @@ use std::sync::Arc;
 /// Multi-camera RTSP streaming with ROS-Z and Foxglove
 struct Args {
     /// path to the configuration file
-    #[argh(option, short = 'c', default = "String::from(\"config.yaml\")")]
+    #[argh(
+        option,
+        short = 'c',
+        default = "String::from(\"crates/rtsp_camera/configs/config_cpu.yaml\")"
+    )]
     config: String,
 }
 
