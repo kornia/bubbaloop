@@ -7,7 +7,7 @@ use std::path::Path;
 pub enum DecoderBackend {
     /// Software decoding using avdec_h264 (CPU, always available)
     #[default]
-    Software,
+    Cpu,
     /// Hardware decoding using nvh264dec (NVIDIA desktop GPU)
     Nvidia,
     /// Hardware decoding using nvv4l2decoder (NVIDIA Jetson)
@@ -17,7 +17,7 @@ pub enum DecoderBackend {
 impl From<DecoderBackend> for crate::h264_decode::DecoderBackend {
     fn from(config: DecoderBackend) -> Self {
         match config {
-            DecoderBackend::Software => crate::h264_decode::DecoderBackend::Software,
+            DecoderBackend::Cpu => crate::h264_decode::DecoderBackend::Software,
             DecoderBackend::Nvidia => crate::h264_decode::DecoderBackend::Nvidia,
             DecoderBackend::Jetson => crate::h264_decode::DecoderBackend::Jetson,
         }
@@ -78,23 +78,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_config() {
+    fn test_parse_config() -> Result<(), ConfigError> {
         let yaml = r#"
 cameras:
   - name: "front"
     url: "rtsp://192.168.1.10:554/stream"
     latency: 200
-    decoder: software
+    decoder: cpu
     width: 640
     height: 480
   - name: "rear"
     url: "rtsp://192.168.1.11:554/live"
     latency: 100
-    decoder: software
+    decoder: cpu
     width: 1280
     height: 720
 "#;
-        let config = Config::parse(yaml).unwrap();
+        let config = Config::parse(yaml)?;
         assert_eq!(config.cameras.len(), 2);
         assert_eq!(config.cameras[0].name, "front");
         assert_eq!(config.cameras[0].latency, 200);
@@ -102,10 +102,11 @@ cameras:
         assert_eq!(config.cameras[0].height, 480);
         assert_eq!(config.cameras[1].width, 1280);
         assert_eq!(config.cameras[1].height, 720);
+        Ok(())
     }
 
     #[test]
-    fn test_parse_config_with_nvidia() {
+    fn test_parse_config_with_nvidia() -> Result<(), ConfigError> {
         let yaml = r#"
 cameras:
   - name: "front"
@@ -115,12 +116,13 @@ cameras:
     width: 640
     height: 480
 "#;
-        let config = Config::parse(yaml).unwrap();
+        let config = Config::parse(yaml)?;
         assert_eq!(config.cameras[0].decoder, DecoderBackend::Nvidia);
+        Ok(())
     }
 
     #[test]
-    fn test_parse_config_with_jetson() {
+    fn test_parse_config_with_jetson() -> Result<(), ConfigError> {
         let yaml = r#"
 cameras:
   - name: "front"
@@ -130,9 +132,10 @@ cameras:
     width: 320
     height: 240
 "#;
-        let config = Config::parse(yaml).unwrap();
+        let config = Config::parse(yaml)?;
         assert_eq!(config.cameras[0].decoder, DecoderBackend::Jetson);
         assert_eq!(config.cameras[0].width, 320);
         assert_eq!(config.cameras[0].height, 240);
+        Ok(())
     }
 }

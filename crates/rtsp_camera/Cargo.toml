@@ -1,0 +1,36 @@
+[package]
+name = "rtsp_camera"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "RTSP camera capture and H264 processing"
+
+[dependencies]
+argh.workspace = true
+ctrlc.workspace = true
+env_logger.workspace = true
+log.workspace = true
+tokio.workspace = true
+flume.workspace = true
+
+gstreamer.workspace = true
+gstreamer-app.workspace = true
+gstreamer-video.workspace = true
+
+ros-z.workspace = true
+zenoh.workspace = true
+
+prost.workspace = true
+prost-types.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+
+thiserror.workspace = true
+bubbaloop.workspace = true
+
+[[bin]]
+name = "cameras_node"
+path = "src/bin/cameras_node.rs"

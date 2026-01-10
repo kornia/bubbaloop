@@ -1,0 +1,20 @@
+[package]
+name = "inference"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "Inference node for processing camera data"
+
+[dependencies]
+prost.workspace = true
+prost-types.workspace = true
+tokio.workspace = true
+zenoh.workspace = true
+env_logger.workspace = true
+log.workspace = true
+bubbaloop.workspace = true
+
+[[bin]]
+name = "inference_node"
+path = "src/bin/inference_node.rs"

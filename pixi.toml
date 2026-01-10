@@ -30,9 +30,9 @@ pre-commit-run = "pre-commit run --all-files"
 docs = "mkdocs serve"
 docs-build = "mkdocs build"
 
-# nodes
-cameras = "RUST_LOG=debug cargo run --bin cameras_node --release"
-inference = "RUST_LOG=debug cargo run --bin inference_node --release"
+# individual nodes
+cameras = "RUST_LOG=debug cargo run --bin cameras_node --package rtsp_camera --release"
+inference = "RUST_LOG=debug cargo run --bin inference_node --package inference --release"
 
 # Dashboard
 dashboard-install = "cd dashboard && npm install"
