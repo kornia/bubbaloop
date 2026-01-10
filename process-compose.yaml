@@ -6,12 +6,32 @@ processes:
     availability:
       restart: "no"
 
+  bridge:
+    command: pixi run bridge
+    namespace: core
+    availability:
+      restart: "no"
+
   cameras:
     command: pixi run cameras
     namespace: nodes
     depends_on:
       build:
         condition: process_completed_successfully
+      bridge:
+        condition: process_started
+        wait_for: 2s
+    availability:
+      restart: on_failure
+      max_restarts: 3
+
+  dashboard:
+    command: pixi run dashboard
+    namespace: ui
+    depends_on:
+      bridge:
+        condition: process_started
+        wait_for: 2s
     availability:
       restart: on_failure
       max_restarts: 3

@@ -12,8 +12,6 @@ scripts = ["scripts/activate.sh"]
 [tasks]
 # Launch all services (bridge, cameras, dashboard)
 up = "process-compose -f process-compose.yaml up"
-# Launch dashboard only (bridge + dashboard)
-dashboard-up = "process-compose -f process-compose-dashboard.yaml up"
 
 # build all nodes
 build = "cargo build --release"
