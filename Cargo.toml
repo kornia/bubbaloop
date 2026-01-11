@@ -3,6 +3,7 @@ members = [
     "crates/bubbaloop",
     "crates/rtsp_camera",
     "crates/inference",
+    "crates/foxglove_bridge",
 ]
 resolver = "2"
 
@@ -48,6 +49,9 @@ gstreamer-video = "0.24"
 
 # Error handling
 thiserror = "2.0"
+
+# Foxglove WebSocket server
+foxglove = "0.16.1"
 
 # internal dependencies
 bubbaloop = { path = "crates/bubbaloop" }

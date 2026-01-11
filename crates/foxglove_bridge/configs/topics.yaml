@@ -1,0 +1,9 @@
+# Foxglove bridge topics configuration
+# List of topics to subscribe to and forward to Foxglove Studio
+# Message type is inferred from topic name:
+# - Topics containing "compressed" -> CompressedImage
+# - Topics containing "raw" -> RawImage
+
+topics:
+  - "/camera/entrance/compressed"
+  - "/camera/terrace/compressed"

@@ -25,13 +25,23 @@ processes:
       restart: on_failure
       max_restarts: 3
 
-  dashboard:
-    command: pixi run dashboard
-    namespace: ui
+  # dashboard:
+  #   command: pixi run dashboard
+  #   namespace: ui
+  #   depends_on:
+  #     bridge:
+  #       condition: process_started
+  #       wait_for: 2s
+  #   availability:
+  #     restart: on_failure
+  #     max_restarts: 3
+
+  foxglove:
+    command: pixi run foxglove
+    namespace: visualization
     depends_on:
-      bridge:
-        condition: process_started
-        wait_for: 2s
+      build:
+        condition: process_completed_successfully
     availability:
       restart: on_failure
       max_restarts: 3
