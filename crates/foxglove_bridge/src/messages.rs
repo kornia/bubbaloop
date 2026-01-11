@@ -17,21 +17,15 @@ macro_rules! register_message_types {
             ) => {
                 {
                     let topic_lower = $topic.to_lowercase();
-                    if false {
-                        unreachable!()
-                    }
                     $(
-                        else if topic_lower.contains(register_message_types!(@keyword_str $keyword)) {
+                        if topic_lower.contains(register_message_types!(@keyword_str $keyword)) {
                             tokio::spawn(async move {
                                 register_message_types!(@handle $keyword, $bubbaloop_type, $foxglove_type, $msg, $converter, $ctx, $topic, $shutdown_rx);
                             })
-                        }
+                        } else
                     )*
-                    else {
-                        let keywords = vec![$(
-                            register_message_types!(@keyword_str $keyword),
-                        )*];
-                        log::error!("Cannot infer message type from topic '{}'. Supported keywords: {}", $topic, keywords.join(", "));
+                    {
+                        log::error!("Cannot infer message type from topic '{}'", $topic);
                         tokio::spawn(async {})
                     }
                 }
