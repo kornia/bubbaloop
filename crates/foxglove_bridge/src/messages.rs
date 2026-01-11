@@ -1,0 +1,129 @@
+// Types are now fully qualified in the macro registration below
+
+/// Register message type handlers with topic keyword mapping
+/// Usage: register_message_types!(
+///     ("compressed" => CompressedImage => FoxgloveCompressedVideo, |msg| { ... }),
+///     ("raw" => RawImage => FoxgloveRawImage, |msg| { ... }),
+/// );
+macro_rules! register_message_types {
+    ($(
+        ($keyword:tt => $bubbaloop_type:ty => $foxglove_type:ty, |$msg:ident| $converter:expr)
+    ),* $(,)?) => {
+        // Generate spawn_message_handler macro that inlines handler logic
+        #[macro_export]
+        macro_rules! spawn_message_handler {
+            (
+                $topic:expr, $ctx:expr, $shutdown_rx:expr
+            ) => {
+                {
+                    let topic_lower = $topic.to_lowercase();
+                    if false {
+                        unreachable!()
+                    }
+                    $(
+                        else if topic_lower.contains(register_message_types!(@keyword_str $keyword)) {
+                            tokio::spawn(async move {
+                                register_message_types!(@handle $keyword, $bubbaloop_type, $foxglove_type, $msg, $converter, $ctx, $topic, $shutdown_rx);
+                            })
+                        }
+                    )*
+                    else {
+                        let keywords = vec![$(
+                            register_message_types!(@keyword_str $keyword),
+                        )*];
+                        log::error!("Cannot infer message type from topic '{}'. Supported keywords: {}", $topic, keywords.join(", "));
+                        tokio::spawn(async {})
+                    }
+                }
+            };
+        }
+    };
+
+    // Extract keyword string from token tree (handles string literals)
+    (@keyword_str $keyword:literal) => { $keyword };
+    (@keyword_str $keyword:tt) => { stringify!($keyword) };
+
+    // Inline handler implementation - no separate function needed
+    (@handle $keyword:tt, $bubbaloop_type:ty, $foxglove_type:ty, $msg:ident, $converter:expr, $ctx:expr, $topic:expr, $shutdown_rx:expr) => {
+        use ros_z::Builder;
+        let ctx = $ctx;
+        let topic = $topic;
+        let mut shutdown_rx = $shutdown_rx;
+
+        let node = match ctx.create_node(&format!("foxglove_{}", topic.replace('/', "_"))).build() {
+            Ok(n) => n,
+            Err(e) => {
+                log::error!("Failed to create node for topic '{}': {}", topic, e);
+                return;
+            }
+        };
+
+        let subscriber = match node
+            .create_sub::<$bubbaloop_type>(topic)
+            .with_serdes::<ros_z::msg::ProtobufSerdes<$bubbaloop_type>>()
+            .build()
+        {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Failed to subscribe to topic '{}': {}", topic, e);
+                return;
+            }
+        };
+
+        let channel = foxglove::Channel::<$foxglove_type>::new(topic);
+        log::info!("Foxglove bridge subscribed to topic: {} ({})", topic, stringify!($bubbaloop_type));
+
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.changed() => break,
+                result = subscriber.async_recv() => {
+                    match result {
+                        Ok($msg) => {
+                            let foxglove_msg = $converter;
+                            channel.log(&foxglove_msg);
+                        }
+                        Err(e) => {
+                            log::error!("Error receiving message from topic '{}': {}", topic, e);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        log::info!("Task for topic '{}' shutting down", topic);
+    };
+}
+
+// Register all message types
+register_message_types!(
+    ("compressed" => bubbaloop::schemas::CompressedImage => foxglove::schemas::CompressedVideo, |msg| {
+        foxglove::schemas::CompressedVideo {
+            timestamp: msg.header.as_ref().map(|h| {
+                foxglove::schemas::Timestamp::new(
+                    (h.pub_time / 1_000_000_000) as u32,
+                    (h.pub_time % 1_000_000_000) as u32,
+                )
+            }),
+            frame_id: msg.header.as_ref().map(|h| h.frame_id.clone()).unwrap_or_default(),
+            format: msg.format.clone(),
+            data: msg.data.into(),
+        }
+    }),
+    ("raw" => bubbaloop::schemas::RawImage => foxglove::schemas::RawImage, |msg| {
+        foxglove::schemas::RawImage {
+            timestamp: msg.header.as_ref().map(|h| {
+                foxglove::schemas::Timestamp::new(
+                    (h.pub_time / 1_000_000_000) as u32,
+                    (h.pub_time % 1_000_000_000) as u32,
+                )
+            }),
+            frame_id: msg.header.as_ref().map(|h| h.frame_id.clone()).unwrap_or_default(),
+            width: msg.width,
+            height: msg.height,
+            encoding: msg.encoding.clone(),
+            step: msg.step,
+            data: msg.data.into(),
+        }
+    }),
+);
