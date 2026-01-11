@@ -1,22 +1,23 @@
-use ros_z::{context::ZContext, Result as ZResult};
+use futures::future;
+use ros_z::{node::ZNode, Result as ZResult};
 use std::sync::Arc;
 
 /// A single Foxglove bridge node that subscribes to multiple topics
 pub struct FoxgloveNode {
-    ctx: Arc<ZContext>,
+    node: Arc<ZNode>,
     topics: Vec<String>,
 }
 
 impl FoxgloveNode {
     /// Create a new Foxglove bridge node that will subscribe to a list of topics
-    pub fn new(ctx: Arc<ZContext>, topics: &[String]) -> ZResult<Self> {
+    pub fn new(node: Arc<ZNode>, topics: &[String]) -> ZResult<Self> {
         log::info!(
             "Foxglove bridge initialized with {} topics to subscribe",
             topics.len()
         );
 
         Ok(Self {
-            ctx,
+            node,
             topics: topics.to_vec(),
         })
     }
@@ -26,22 +27,20 @@ impl FoxgloveNode {
 
         log::info!("Foxglove bridge started");
 
-        let mut tasks = Vec::new();
-        for topic in self.topics {
-            let ctx = self.ctx.clone();
-            let topic_clone = topic.clone();
-            let shutdown_rx_task = shutdown_tx.subscribe();
-
-            let task = spawn_message_handler!(&topic_clone, ctx, shutdown_rx_task);
-            tasks.push(task);
-        }
+        let tasks: Vec<_> = self
+            .topics
+            .into_iter()
+            .map(|topic| {
+                let node_clone = self.node.clone();
+                let shutdown_rx_task = shutdown_tx.subscribe();
+                spawn_message_handler!(&topic, node_clone, shutdown_rx_task)
+            })
+            .collect();
 
         let _ = shutdown_rx.changed().await;
         log::info!("Shutting down Foxglove bridge...");
 
-        for task in tasks {
-            task.abort();
-        }
+        future::join_all(tasks).await;
 
         Ok(())
     }

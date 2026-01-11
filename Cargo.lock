@@ -1057,6 +1057,7 @@ dependencies = [
  "ctrlc",
  "env_logger",
  "foxglove",
+ "futures",
  "log",
  "prost 0.14.1",
  "prost-types 0.14.1",

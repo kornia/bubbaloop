@@ -80,14 +80,11 @@ async fn main() -> ZResult<()> {
         config.topics.len()
     );
 
+    // Create a single ros-z node for the entire application
+    let node = Arc::new(ctx.create_node("foxglove_bridge").build()?);
+
     // Create a single Foxglove bridge node that subscribes to all topics
-    let foxglove_node = match FoxgloveNode::new(ctx, &config.topics) {
-        Ok(node) => node,
-        Err(e) => {
-            log::error!("Failed to create Foxglove bridge: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let foxglove_node = FoxgloveNode::new(node, &config.topics)?;
 
     // Run the bridge node
     foxglove_node.run(shutdown_tx).await?;
