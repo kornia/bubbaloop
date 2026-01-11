@@ -52,7 +52,12 @@ async fn main() -> ZResult<()> {
         let shutdown_tx = shutdown_tx.clone();
         move || {
             log::info!("Received Ctrl+C, shutting down gracefully...");
-            shutdown_tx.send(()).ok();
+            if let Err(e) = shutdown_tx.send(()) {
+                log::warn!(
+                    "Failed to send shutdown signal: {}. Receiver may have been dropped.",
+                    e
+                );
+            }
         }
     })?;
 
