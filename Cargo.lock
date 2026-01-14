@@ -316,14 +316,19 @@ dependencies = [
 name = "bubbaloop"
 version = "0.1.0"
 dependencies = [
+ "argh",
+ "env_logger",
+ "log",
  "prost 0.14.1",
  "prost-build",
  "prost-reflect",
  "prost-types 0.14.1",
  "ros-z",
  "serde",
+ "serde_json",
  "serde_yaml",
  "thiserror 2.0.17",
+ "tokio",
 ]
 
 [[package]]
@@ -2948,7 +2953,7 @@ dependencies = [
 [[package]]
 name = "ros-z"
 version = "0.1.0"
-source = "git+https://github.com/ZettaScaleLabs/ros-z.git?branch=main#a312c63e581581743d001bc3c93735b95097e043"
+source = "git+https://github.com/ZettaScaleLabs/ros-z.git#5a802fa663f66f44226b14986241c86cd41b56c6"
 dependencies = [
  "byteorder",
  "cdr",

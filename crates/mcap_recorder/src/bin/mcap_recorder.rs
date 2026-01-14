@@ -1,26 +1,16 @@
 use argh::FromArgs;
-use bubbaloop::config::TopicsConfig;
 use mcap_recorder::recorder_node::RecorderNode;
 use ros_z::{context::ZContextBuilder, Builder, Result as ZResult};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(FromArgs)]
-/// MCAP recorder for ROS-Z topics
+/// MCAP recorder service for ROS-Z topics
 struct Args {
-    /// path to the topics configuration file
-    #[argh(
-        option,
-        short = 'c',
-        default = "PathBuf::from(\"crates/mcap_recorder/configs/topics.yaml\")"
-    )]
-    config: PathBuf,
-
-    /// output MCAP file path (default: timestamp-based)
-    #[argh(option, short = 'o')]
-    output: Option<PathBuf>,
+    /// output directory for MCAP files (default: current directory)
+    #[argh(option, short = 'o', default = "PathBuf::from(\".\")")]
+    output_dir: PathBuf,
 }
 
 #[tokio::main]
@@ -31,26 +21,13 @@ async fn main() -> ZResult<()> {
 
     let args: Args = argh::from_env();
 
-    // Load topics configuration
-    let config = TopicsConfig::from_file(&args.config)?;
-    log::info!(
-        "Loaded configuration with {} topics for MCAP recorder",
-        config.topics.len()
-    );
+    log::info!("Output directory: {}", args.output_dir.display());
 
-    // Determine output path
-    let output_path = if let Some(path) = args.output {
-        path
-    } else {
-        // Generate timestamp-based filename
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        PathBuf::from(format!("{}.mcap", timestamp))
-    };
-
-    log::info!("Output MCAP file: {}", output_path.display());
+    // Create output directory if it doesn't exist
+    if !args.output_dir.exists() {
+        std::fs::create_dir_all(&args.output_dir)?;
+        log::info!("Created output directory: {}", args.output_dir.display());
+    }
 
     // Create shutdown channel
     let shutdown_tx = tokio::sync::watch::Sender::new(());
@@ -84,13 +61,14 @@ async fn main() -> ZResult<()> {
     // Create ros-z node
     let node = Arc::new(ctx.create_node("mcap_recorder").build()?);
 
-    // Create recorder node (returns recorder handle, actor handle, and node)
-    // Recording starts automatically when the node starts
-    let recorder_node = RecorderNode::new(node, &config.topics, output_path)?;
+    // Create recorder node - waits for start/stop commands via services
+    let recorder_node = RecorderNode::new(node, args.output_dir)?;
+
+    log::info!("Recorder service started. Use 'bubbaloop record start/stop' to control recording.");
 
     recorder_node.run(shutdown_tx).await?;
 
-    log::info!("All nodes shut down, exiting");
+    log::info!("Recorder service shut down, exiting");
 
     Ok(())
 }

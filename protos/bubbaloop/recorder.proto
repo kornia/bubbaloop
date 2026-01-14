@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package bubbaloop.recorder.v1;
+
+// Request to start recording
+message StartRecordingRequest {
+    repeated string topics = 1;    // Topics to record (required)
+}
+
+// Response after starting recording
+message StartRecordingResponse {
+    bool success = 1;
+    string message = 2;            // Error message if failed
+    string file_path = 3;          // Actual file path being recorded to
+}
+
+// Request to stop recording
+message StopRecordingRequest {}
+
+// Response after stopping recording
+message StopRecordingResponse {
+    bool success = 1;
+    string message = 2;            // Error message if failed
+    string file_path = 3;          // Final recorded file path
+    uint64 messages_recorded = 4;  // Number of messages written
+}

@@ -32,7 +32,7 @@ futures = "0.3"
 flume = "0.12"
 
 # ROS-Z pub/sub
-ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
+ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", sha = "5a802fa663f66f44226b14986241c86cd41b56c6", features = ["protobuf"] }
 
 # Zenoh
 zenoh = { version = "1.6.2", features = ["shared-memory"] }

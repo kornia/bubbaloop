@@ -36,6 +36,19 @@ processes:
   #     restart: on_failure
   #     max_restarts: 3
 
+  recorder:
+    command: pixi run mcap_recorder
+    namespace: nodes
+    depends_on:
+      build:
+        condition: process_completed_successfully
+      bridge:
+        condition: process_started
+        wait_for: 2s
+    availability:
+      restart: on_failure
+      max_restarts: 3
+
   foxglove:
     command: pixi run foxglove
     namespace: visualization
