@@ -448,7 +448,36 @@ const App: React.FC = () => {
       return;
     }
 
-    if (showCommands && filteredCommands.length > 0) {
+    // Command history navigation (up/down arrows)
+    // Priority: history navigation when actively browsing history OR when input is empty
+    const browsingHistory = historyIndex >= 0;
+    const canBrowseHistory = commandHistory.length > 0 && (browsingHistory || !input);
+
+    if (canBrowseHistory && (key.upArrow || key.downArrow)) {
+      if (key.upArrow) {
+        if (historyIndex === -1) {
+          // Start browsing history from the end
+          setSavedInput(input);
+          setHistoryIndex(commandHistory.length - 1);
+          setInput(commandHistory[commandHistory.length - 1]);
+        } else if (historyIndex > 0) {
+          // Move to older command
+          setHistoryIndex(historyIndex - 1);
+          setInput(commandHistory[historyIndex - 1]);
+        }
+      } else if (key.downArrow) {
+        if (historyIndex < commandHistory.length - 1) {
+          // Move to newer command
+          setHistoryIndex(historyIndex + 1);
+          setInput(commandHistory[historyIndex + 1]);
+        } else {
+          // Return to saved input (exit history browsing)
+          setHistoryIndex(-1);
+          setInput(savedInput);
+        }
+      }
+    } else if (showCommands && filteredCommands.length > 0) {
+      // Command suggestion navigation (when not browsing history)
       if (key.upArrow) {
         setCommandIndex((prev) =>
           prev > 0 ? prev - 1 : filteredCommands.length - 1
@@ -459,30 +488,6 @@ const App: React.FC = () => {
         );
       } else if (key.tab) {
         setInput(filteredCommands[commandIndex].cmd);
-      }
-    } else if (!showCommands && commandHistory.length > 0) {
-      // Navigate command history when not showing suggestions
-      if (key.upArrow) {
-        if (historyIndex === -1) {
-          // Save current input before navigating history
-          setSavedInput(input);
-          setHistoryIndex(commandHistory.length - 1);
-          setInput(commandHistory[commandHistory.length - 1]);
-        } else if (historyIndex > 0) {
-          setHistoryIndex(historyIndex - 1);
-          setInput(commandHistory[historyIndex - 1]);
-        }
-      } else if (key.downArrow) {
-        if (historyIndex >= 0) {
-          if (historyIndex < commandHistory.length - 1) {
-            setHistoryIndex(historyIndex + 1);
-            setInput(commandHistory[historyIndex + 1]);
-          } else {
-            // Return to saved input
-            setHistoryIndex(-1);
-            setInput(savedInput);
-          }
-        }
       }
     }
 
