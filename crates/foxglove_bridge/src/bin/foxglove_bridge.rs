@@ -62,19 +62,19 @@ async fn main() -> ZResult<()> {
         }
     })?;
 
-    // Initialize ROS-Z context - connect to zenoh-bridge-remote-api
-    // This allows the node to receive messages from cameras
-    // Default to localhost, but allow override via ZENOH_ENDPOINT environment variable
-    let zenoh_endpoint =
-        std::env::var("ZENOH_ENDPOINT").unwrap_or_else(|_| "tcp/127.0.0.1:7448".to_string());
-
-    log::info!("Connecting to Zenoh bridge at: {}", zenoh_endpoint);
-
-    let ctx = Arc::new(
-        ZContextBuilder::default()
-            .with_json("connect/endpoints", json!([zenoh_endpoint]))
-            .build()?,
-    );
+    // Initialize ROS-Z context
+    // Use ZENOH_ENDPOINT env var if set, otherwise use multicast scouting
+    let ctx = if let Ok(endpoint) = std::env::var("ZENOH_ENDPOINT") {
+        log::info!("Connecting to Zenoh at: {}", endpoint);
+        Arc::new(
+            ZContextBuilder::default()
+                .with_json("connect/endpoints", json!([endpoint]))
+                .build()?,
+        )
+    } else {
+        log::info!("Using Zenoh multicast scouting for discovery");
+        Arc::new(ZContextBuilder::default().build()?)
+    };
 
     // Start Foxglove WebSocket server
     log::info!("Starting Foxglove WebSocket server on port 8765...");

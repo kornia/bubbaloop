@@ -7,13 +7,18 @@ use std::sync::Arc;
 #[derive(FromArgs)]
 /// Multi-camera RTSP streaming with ROS-Z and Foxglove
 struct Args {
-    /// path to the configuration file
+    /// path to the camera configuration file
     #[argh(
         option,
         short = 'c',
         default = "String::from(\"crates/rtsp_camera/configs/config_cpu.yaml\")"
     )]
     config: String,
+
+    /// zenoh router endpoint to connect to (e.g., tcp/127.0.0.1:7447)
+    /// If not provided, uses multicast scouting for discovery
+    #[argh(option, short = 'z')]
+    zenoh_endpoint: Option<String>,
 }
 
 #[tokio::main]
@@ -47,19 +52,23 @@ async fn main() -> ZResult<()> {
         }
     })?;
 
-    // Initialize ROS-Z context - connect to zenoh-bridge-remote-api
-    // This allows the dashboard (which connects via WebSocket through the bridge) to receive messages
-    // Default to localhost, but allow override via ZENOH_ENDPOINT environment variable
-    let zenoh_endpoint =
-        std::env::var("ZENOH_ENDPOINT").unwrap_or_else(|_| "tcp/127.0.0.1:7448".to_string());
+    // Initialize ROS-Z context
+    // Priority: 1) -z/--zenoh-endpoint flag, 2) ZENOH_ENDPOINT env var, 3) multicast scouting
+    let zenoh_endpoint = args
+        .zenoh_endpoint
+        .or_else(|| std::env::var("ZENOH_ENDPOINT").ok());
 
-    log::info!("Connecting to Zenoh bridge at: {}", zenoh_endpoint);
-
-    let ctx = Arc::new(
-        ZContextBuilder::default()
-            .with_json("connect/endpoints", json!([zenoh_endpoint]))
-            .build()?,
-    );
+    let ctx = if let Some(endpoint) = zenoh_endpoint {
+        log::info!("Connecting to Zenoh at: {}", endpoint);
+        Arc::new(
+            ZContextBuilder::default()
+                .with_json("connect/endpoints", json!([endpoint]))
+                .build()?,
+        )
+    } else {
+        log::info!("Using Zenoh multicast scouting for discovery");
+        Arc::new(ZContextBuilder::default().build()?)
+    };
 
     // Spawn camera nodes
     let mut tasks = Vec::new();

@@ -70,16 +70,18 @@ async fn main() -> ZResult<()> {
     })?;
 
     // Initialize ROS-Z context
-    let zenoh_endpoint =
-        std::env::var("ZENOH_ENDPOINT").unwrap_or_else(|_| "tcp/127.0.0.1:7448".to_string());
-
-    log::info!("Connecting to Zenoh bridge at: {}", zenoh_endpoint);
-
-    let ctx = Arc::new(
-        ZContextBuilder::default()
-            .with_json("connect/endpoints", json!([zenoh_endpoint]))
-            .build()?,
-    );
+    // Use ZENOH_ENDPOINT env var if set, otherwise use multicast scouting
+    let ctx = if let Ok(endpoint) = std::env::var("ZENOH_ENDPOINT") {
+        log::info!("Connecting to Zenoh at: {}", endpoint);
+        Arc::new(
+            ZContextBuilder::default()
+                .with_json("connect/endpoints", json!([endpoint]))
+                .build()?,
+        )
+    } else {
+        log::info!("Using Zenoh multicast scouting for discovery");
+        Arc::new(ZContextBuilder::default().build()?)
+    };
 
     // Create ros-z node
     let node = Arc::new(ctx.create_node("mcap_recorder").build()?);
