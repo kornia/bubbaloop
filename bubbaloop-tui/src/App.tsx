@@ -195,23 +195,38 @@ const TopicsView: React.FC<TopicsViewProps> = ({ session, onExit }) => {
   const [windowSize, setWindowSize] = useState(10);
   const subscriberRef = useRef<Subscriber | null>(null);
 
-  // Compute Hz stats from timestamps using total time span (robust against TCP bursts)
+  // Compute Hz stats from timestamps (filters out TCP burst artifacts)
   const computeHzStats = (timestamps: number[]): { min: number | null; max: number | null; avg: number | null } => {
     if (timestamps.length < 2) {
       return { min: null, max: null, avg: null };
     }
 
+    // Average Hz from total time span (most robust)
     const totalTime = timestamps[timestamps.length - 1] - timestamps[0];
     const count = timestamps.length - 1;
-
     if (totalTime <= 0) {
       return { min: null, max: null, avg: null };
     }
-
-    // Average Hz over the entire window (robust against burst arrivals)
     const avgHz = (count * 1000) / totalTime;
 
-    return { min: avgHz, max: avgHz, avg: avgHz };
+    // For min/max, filter out TCP burst artifacts (intervals < 10ms = 100+ Hz)
+    const MIN_REALISTIC_INTERVAL = 10; // ms
+    const intervals: number[] = [];
+    for (let i = 1; i < timestamps.length; i++) {
+      const interval = timestamps[i] - timestamps[i - 1];
+      if (interval >= MIN_REALISTIC_INTERVAL) {
+        intervals.push(1000 / interval);
+      }
+    }
+
+    if (intervals.length === 0) {
+      return { min: avgHz, max: avgHz, avg: avgHz };
+    }
+
+    const min = Math.min(...intervals);
+    const max = Math.max(...intervals);
+
+    return { min, max, avg: avgHz };
   };
 
   useEffect(() => {
@@ -310,14 +325,20 @@ const TopicsView: React.FC<TopicsViewProps> = ({ session, onExit }) => {
       <Box flexDirection="column" borderStyle="single" borderColor="#444" marginTop={0}>
         {/* Table header */}
         <Box paddingX={1} borderBottom borderColor="#444">
-          <Box width="60%">
+          <Box width="40%">
             <Text color="#4ECDC4" bold>Topic</Text>
           </Box>
-          <Box width="20%" justifyContent="flex-end">
+          <Box width="12%" justifyContent="flex-end">
             <Text color="#4ECDC4" bold>Count</Text>
           </Box>
-          <Box width="20%" justifyContent="flex-end">
-            <Text color="#4ECDC4" bold>Hz</Text>
+          <Box width="16%" justifyContent="flex-end">
+            <Text color="#4ECDC4" bold>Min Hz</Text>
+          </Box>
+          <Box width="16%" justifyContent="flex-end">
+            <Text color="#4ECDC4" bold>Avg Hz</Text>
+          </Box>
+          <Box width="16%" justifyContent="flex-end">
+            <Text color="#4ECDC4" bold>Max Hz</Text>
           </Box>
         </Box>
 
@@ -329,14 +350,20 @@ const TopicsView: React.FC<TopicsViewProps> = ({ session, onExit }) => {
         ) : (
           sortedTopics.slice(0, 20).map(([topic, stats]) => (
             <Box key={topic} paddingX={1}>
-              <Box width="60%">
-                <Text color="#CCC">{topic.length > 50 ? topic.slice(0, 47) + "..." : topic}</Text>
+              <Box width="40%">
+                <Text color="#CCC">{topic.length > 35 ? topic.slice(0, 32) + "..." : topic}</Text>
               </Box>
-              <Box width="20%" justifyContent="flex-end">
+              <Box width="12%" justifyContent="flex-end">
                 <Text color="#95E1D3">{stats.count}</Text>
               </Box>
-              <Box width="20%" justifyContent="flex-end">
+              <Box width="16%" justifyContent="flex-end">
+                <Text color="#FFD93D">{formatHz(stats.minHz)}</Text>
+              </Box>
+              <Box width="16%" justifyContent="flex-end">
                 <Text color="#4ECDC4">{formatHz(stats.avgHz)}</Text>
+              </Box>
+              <Box width="16%" justifyContent="flex-end">
+                <Text color="#FF6B6B">{formatHz(stats.maxHz)}</Text>
               </Box>
             </Box>
           ))
