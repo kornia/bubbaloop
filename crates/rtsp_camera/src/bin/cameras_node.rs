@@ -15,10 +15,10 @@ struct Args {
     )]
     config: String,
 
-    /// zenoh router endpoint to connect to (e.g., tcp/127.0.0.1:7447)
-    /// If not provided, uses multicast scouting for discovery
-    #[argh(option, short = 'z')]
-    zenoh_endpoint: Option<String>,
+    /// zenoh router endpoint to connect to
+    /// Default: tcp/127.0.0.1:7447 (local zenohd router)
+    #[argh(option, short = 'z', default = "String::from(\"tcp/127.0.0.1:7447\")")]
+    zenoh_endpoint: String,
 }
 
 #[tokio::main]
@@ -52,23 +52,14 @@ async fn main() -> ZResult<()> {
         }
     })?;
 
-    // Initialize ROS-Z context
-    // Priority: 1) -z/--zenoh-endpoint flag, 2) ZENOH_ENDPOINT env var, 3) multicast scouting
-    let zenoh_endpoint = args
-        .zenoh_endpoint
-        .or_else(|| std::env::var("ZENOH_ENDPOINT").ok());
-
-    let ctx = if let Some(endpoint) = zenoh_endpoint {
-        log::info!("Connecting to Zenoh at: {}", endpoint);
-        Arc::new(
-            ZContextBuilder::default()
-                .with_json("connect/endpoints", json!([endpoint]))
-                .build()?,
-        )
-    } else {
-        log::info!("Using Zenoh multicast scouting for discovery");
-        Arc::new(ZContextBuilder::default().build()?)
-    };
+    // Initialize ROS-Z context - connects to local zenohd by default
+    let endpoint = std::env::var("ZENOH_ENDPOINT").unwrap_or(args.zenoh_endpoint);
+    log::info!("Connecting to Zenoh at: {}", endpoint);
+    let ctx = Arc::new(
+        ZContextBuilder::default()
+            .with_json("connect/endpoints", json!([endpoint]))
+            .build()?,
+    );
 
     // Spawn camera nodes
     let mut tasks = Vec::new();
