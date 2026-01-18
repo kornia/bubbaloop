@@ -21,12 +21,12 @@ type ViewMode = "home" | "topics";
 
 // Available slash commands
 const COMMANDS = [
-  { cmd: "/server", description: "Configure remote server endpoint" },
   { cmd: "/connect", description: "Connect to local zenohd" },
-  { cmd: "/disconnect", description: "Disconnect from zenoh" },
   { cmd: "/topics", description: "List available topics" },
   { cmd: "/dashboard", description: "Open web dashboard" },
   { cmd: "/record", description: "Record topics to MCAP file" },
+  { cmd: "/server", description: "Configure remote server endpoint" },
+  { cmd: "/disconnect", description: "Disconnect from zenoh" },
   { cmd: "/quit", description: "Exit Bubbaloop" },
 ];
 
