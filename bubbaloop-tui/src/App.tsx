@@ -825,7 +825,7 @@ const App: React.FC = () => {
             Welcome to Bubbaloop!
           </Text>
           <RobotLogo />
-          <Text color="#AAA">Multi-camera streaming with ROS-Z</Text>
+          <Text color="#AAA">Physical AI with ROS-Z</Text>
         </Box>
 
         {/* Vertical divider */}
