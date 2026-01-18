@@ -449,32 +449,31 @@ const App: React.FC = () => {
     }
 
     // Command history navigation (up/down arrows)
-    // Priority: history navigation when actively browsing history OR when input is empty
+    // Up: start browsing from end (when empty) or go to older command
+    // Down: only works when already browsing, goes to newer or exits
     const browsingHistory = historyIndex >= 0;
-    const canBrowseHistory = commandHistory.length > 0 && (browsingHistory || !input);
 
-    if (canBrowseHistory && (key.upArrow || key.downArrow)) {
-      if (key.upArrow) {
-        if (historyIndex === -1) {
-          // Start browsing history from the end
-          setSavedInput(input);
-          setHistoryIndex(commandHistory.length - 1);
-          setInput(commandHistory[commandHistory.length - 1]);
-        } else if (historyIndex > 0) {
-          // Move to older command
-          setHistoryIndex(historyIndex - 1);
-          setInput(commandHistory[historyIndex - 1]);
-        }
-      } else if (key.downArrow) {
-        if (historyIndex < commandHistory.length - 1) {
-          // Move to newer command
-          setHistoryIndex(historyIndex + 1);
-          setInput(commandHistory[historyIndex + 1]);
-        } else {
-          // Return to saved input (exit history browsing)
-          setHistoryIndex(-1);
-          setInput(savedInput);
-        }
+    if (key.upArrow && commandHistory.length > 0 && (browsingHistory || !input)) {
+      if (historyIndex === -1) {
+        // Start browsing history from the end
+        setSavedInput(input);
+        setHistoryIndex(commandHistory.length - 1);
+        setInput(commandHistory[commandHistory.length - 1]);
+      } else if (historyIndex > 0) {
+        // Move to older command
+        setHistoryIndex(historyIndex - 1);
+        setInput(commandHistory[historyIndex - 1]);
+      }
+    } else if (key.downArrow && browsingHistory) {
+      // Down only works when actively browsing history
+      if (historyIndex < commandHistory.length - 1) {
+        // Move to newer command
+        setHistoryIndex(historyIndex + 1);
+        setInput(commandHistory[historyIndex + 1]);
+      } else {
+        // Return to saved input (exit history browsing)
+        setHistoryIndex(-1);
+        setInput(savedInput);
       }
     } else if (showCommands && filteredCommands.length > 0) {
       // Command suggestion navigation (when not browsing history)
