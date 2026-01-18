@@ -2,7 +2,10 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import open from "open";
+import { userInfo } from "os";
 import { Session, Config, Sample, Subscriber } from "@eclipse-zenoh/zenoh-ts";
+
+const USERNAME = userInfo().username;
 import {
   loadConfig,
   saveConfig,
@@ -804,7 +807,7 @@ const App: React.FC = () => {
           width="50%"
         >
           <Text bold color="#FFF">
-            Welcome to Bubbaloop!
+            Welcome {USERNAME}!
           </Text>
           <RobotLogo />
           <Text color="#AAA">Physical AI with ROS-Z</Text>
