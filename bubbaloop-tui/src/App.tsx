@@ -191,7 +191,6 @@ interface TopicsViewProps {
 
 const TopicsView: React.FC<TopicsViewProps> = ({ session, onExit }) => {
   const [topicStats, setTopicStats] = useState<Map<string, TopicStats>>(new Map());
-  const [totalSamples, setTotalSamples] = useState(0);
   const [windowSize, setWindowSize] = useState(10);
   const subscriberRef = useRef<Subscriber | null>(null);
 
@@ -264,7 +263,6 @@ const TopicsView: React.FC<TopicsViewProps> = ({ session, onExit }) => {
 
               return newMap;
             });
-            setTotalSamples((prev) => prev + 1);
           },
         });
         subscriberRef.current = subscriber;
@@ -317,7 +315,7 @@ const TopicsView: React.FC<TopicsViewProps> = ({ session, onExit }) => {
           Topics Monitor
         </Text>
         <Text color="#888">
-          {sortedTopics.length} topics • {totalSamples} samples • window: {windowSize} • <Text color="#666">esc/q exit</Text>
+          {sortedTopics.length} topics • window: {windowSize} • <Text color="#666">esc/q exit</Text>
         </Text>
       </Box>
 
