@@ -1,21 +1,26 @@
 use argh::FromArgs;
 use bubbaloop::config::TopicsConfig;
-use foxglove::WebSocketServer;
-use foxglove_bridge::foxglove_node::FoxgloveNode;
+use mcap_recorder::recorder_node::RecorderNode;
 use ros_z::{context::ZContextBuilder, Builder, Result as ZResult};
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(FromArgs)]
-/// Foxglove bridge for camera visualization
+/// MCAP recorder for ROS-Z topics
 struct Args {
     /// path to the topics configuration file
     #[argh(
         option,
         short = 'c',
-        default = "String::from(\"crates/foxglove_bridge/configs/topics.yaml\")"
+        default = "PathBuf::from(\"crates/mcap_recorder/configs/topics.yaml\")"
     )]
-    config: String,
+    config: PathBuf,
+
+    /// output MCAP file path (default: timestamp-based)
+    #[argh(option, short = 'o')]
+    output: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -27,23 +32,25 @@ async fn main() -> ZResult<()> {
     let args: Args = argh::from_env();
 
     // Load topics configuration
-    let config = match TopicsConfig::from_file(&args.config) {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("Failed to load config from '{}': {}", args.config, e);
-            std::process::exit(1);
-        }
-    };
-
+    let config = TopicsConfig::from_file(&args.config)?;
     log::info!(
-        "Loaded configuration with {} topics for Foxglove bridge",
+        "Loaded configuration with {} topics for MCAP recorder",
         config.topics.len()
     );
 
-    if config.topics.is_empty() {
-        log::error!("No topics found in configuration");
-        std::process::exit(1);
-    }
+    // Determine output path
+    let output_path = if let Some(path) = args.output {
+        path
+    } else {
+        // Generate timestamp-based filename
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        PathBuf::from(format!("{}.mcap", timestamp))
+    };
+
+    log::info!("Output MCAP file: {}", output_path.display());
 
     // Create shutdown channel
     let shutdown_tx = tokio::sync::watch::Sender::new(());
@@ -76,27 +83,14 @@ async fn main() -> ZResult<()> {
         Arc::new(ZContextBuilder::default().build()?)
     };
 
-    // Start Foxglove WebSocket server
-    log::info!("Starting Foxglove WebSocket server on port 8765...");
-    let server = WebSocketServer::new().start().await?;
-    log::info!("Foxglove WebSocket server started. Connect Foxglove Studio to ws://localhost:8765");
+    // Create ros-z node
+    let node = Arc::new(ctx.create_node("mcap_recorder").build()?);
 
-    log::info!(
-        "Creating Foxglove bridge with {} topics",
-        config.topics.len()
-    );
+    // Create recorder node (returns recorder handle, actor handle, and node)
+    // Recording starts automatically when the node starts
+    let recorder_node = RecorderNode::new(node, &config.topics, output_path)?;
 
-    // Create a single ros-z node for the entire application
-    let node = Arc::new(ctx.create_node("foxglove_bridge").build()?);
-
-    // Create a single Foxglove bridge node that subscribes to all topics
-    let foxglove_node = FoxgloveNode::new(node, &config.topics)?;
-
-    // Run the bridge node
-    foxglove_node.run(shutdown_tx).await?;
-
-    log::info!("Shutting down Foxglove WebSocket server...");
-    server.stop().wait().await;
+    recorder_node.run(shutdown_tx).await?;
 
     log::info!("All nodes shut down, exiting");
 

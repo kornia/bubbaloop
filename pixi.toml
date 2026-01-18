@@ -31,9 +31,12 @@ docs = "mkdocs serve"
 docs-build = "mkdocs build"
 
 # individual nodes
-cameras = "RUST_LOG=debug cargo run --bin cameras_node --package rtsp_camera --release"
+# Cameras connects to local zenohd by default (tcp/127.0.0.1:7447)
+# Override with: pixi run cameras -- -z tcp/other:7447
+cameras = "RUST_LOG=info cargo run --bin cameras_node --package rtsp_camera --release --"
 inference = "RUST_LOG=debug cargo run --bin inference_node --package inference --release"
 foxglove = "RUST_LOG=info cargo run --bin foxglove_bridge --package foxglove_bridge --release"
+mcap_recorder = "RUST_LOG=info cargo run --bin mcap_recorder --package mcap_recorder --release"
 
 # Dashboard
 dashboard-install = "cd dashboard && npm install"
@@ -41,10 +44,18 @@ dashboard-proto = { cmd = "cd dashboard && npm run proto", depends-on = ["dashbo
 dashboard-build = { cmd = "cd dashboard && npm run build", depends-on = ["dashboard-proto"] }
 dashboard = { cmd = "cd dashboard && npm run dev", depends-on = ["dashboard-proto"] }
 
+# TUI
+bubbaloop-install = "cd bubbaloop-tui && npm install"
+bubbaloop = { cmd = "cd bubbaloop-tui && npm run dev", depends-on = ["bubbaloop-install"] }
+
 # Zenoh bridge (for dashboard WebSocket connection)
 bridge-clone = "test -d zenoh-ts || git clone https://github.com/eclipse-zenoh/zenoh-ts.git"
 bridge-build = { cmd = "cd zenoh-ts/zenoh-bridge-remote-api && cargo build --release", depends-on = ["bridge-clone"] }
-bridge = { cmd = "zenoh-ts/target/release/zenoh-bridge-remote-api --listen tcp/0.0.0.0:7448 --ws-port 10000", depends-on = ["bridge-build"] }
+bridge = { cmd = "zenoh-ts/target/release/zenoh-bridge-remote-api --listen tcp/0.0.0.0:7447 --ws-port 10000", depends-on = ["bridge-build"] }
+
+# Zenoh client router (connects to remote server, uses config from TUI)
+# Run `/server` in TUI first to configure the server endpoint
+zenohd-client = "zenohd -c ~/.bubbaloop/zenoh.cli.json5"
 
 [dependencies]
 # Rust toolchain

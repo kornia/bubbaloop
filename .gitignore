@@ -33,3 +33,5 @@ dashboard/src/proto/*.pb.d.ts
 
 # Cloned zenoh-ts for bridge (built via pixi run bridge)
 zenoh-ts/
+bubbaloop-tui/node_modules/
+bubbaloop-tui/dist/

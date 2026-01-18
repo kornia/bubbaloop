@@ -45,10 +45,28 @@ This launches the zenoh bridge, camera streams, and dashboard using [process-com
 ### Running services individually
 
 ```bash
-pixi run bridge      # Start zenoh bridge
-pixi run cameras    # Start camera streams
-pixi run dashboard   # Start dashboard
+pixi run bridge      # Start zenoh bridge (local WebSocket)
+pixi run cameras     # Start camera streams (multicast scouting)
+pixi run dashboard   # Start web dashboard
+pixi run bubbaloop   # Start terminal UI
 ```
+
+### Remote access (TUI/dashboard from laptop to robot)
+
+```bash
+# On robot:
+zenohd -c zenoh.json5       # Zenoh router
+pixi run cameras            # Cameras (auto-connects to local router)
+
+# On laptop (first-time setup):
+pixi run bubbaloop          # Run /server to set robot IP
+
+# On laptop (run services):
+pixi run zenohd-client      # Local router → robot
+pixi run bubbaloop          # TUI → /connect → /topics
+```
+
+See [docs/configuration.md](docs/configuration.md#remote-access-setup) for detailed setup.
 
 ## Documentation
 

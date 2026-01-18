@@ -1,13 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Root configuration structure for Foxglove bridge topics
+/// Root configuration structure for topics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopicsConfig {
     /// List of topics to subscribe to
-    /// Message type is inferred from topic name:
-    /// - Topics containing "compressed" -> CompressedImage
-    /// - Topics containing "raw" -> RawImage
     pub topics: Vec<String>,
 }
 

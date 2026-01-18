@@ -1,10 +1,10 @@
 [package]
-name = "foxglove_bridge"
+name = "mcap_recorder"
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Foxglove bridge for camera visualization"
+description = "MCAP recorder for ROS-Z topics"
 
 [dependencies]
 # CLI and logging
@@ -30,8 +30,11 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 
-# Foxglove WebSocket server
-foxglove = "0.16.1"
+# Channel
+flume.workspace = true
+
+# MCAP file format
+mcap = "0.24"
 
 # Schema crate
 bubbaloop.workspace = true
@@ -40,5 +43,5 @@ bubbaloop.workspace = true
 thiserror.workspace = true
 
 [[bin]]
-name = "foxglove_bridge"
-path = "src/bin/foxglove_bridge.rs"
+name = "mcap_recorder"
+path = "src/bin/mcap_recorder.rs"

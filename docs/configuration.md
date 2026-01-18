@@ -119,3 +119,114 @@ The message type is `bubbaloop.camera.v1.CompressedImage` containing:
 - `header`: Timestamp and sequence information
 - `format`: Always `"h264"`
 - `data`: Raw H264 NAL units (Annex B format)
+
+## Zenoh Configuration
+
+By default, `cameras_node` connects to a local Zenoh router at `tcp/127.0.0.1:7447`. This means you must start `zenohd` before running cameras.
+
+### Override Endpoint
+
+```bash
+# Override with a different endpoint
+pixi run cameras -- -z tcp/192.168.1.100:7447
+
+# Or use environment variable
+ZENOH_ENDPOINT=tcp/192.168.1.100:7447 pixi run cameras
+```
+
+### Priority Order
+
+1. `ZENOH_ENDPOINT` environment variable (highest priority)
+2. `-z` / `--zenoh-endpoint` CLI flag
+3. Default: `tcp/127.0.0.1:7447`
+
+## Remote Access Setup
+
+To access cameras from a remote machine (e.g., laptop connecting to robot):
+
+### Step 1: Configure Server IP (One-time)
+
+On your laptop, run the TUI and configure the server endpoint:
+
+```bash
+pixi run bubbaloop
+```
+
+In the TUI, use `/server` command:
+```
+/server
+> tcp/192.168.1.100:7447   # Enter your robot's IP
+```
+
+This generates `~/.bubbaloop/zenoh.cli.json5` automatically.
+
+### Step 2: Start Services
+
+**On the Server (Robot):**
+
+```bash
+# Terminal 1: Start Zenoh router
+zenohd -c zenoh.json5
+
+# Terminal 2: Start cameras (auto-connects to local router)
+pixi run cameras
+```
+
+**On the Client (Laptop):**
+
+```bash
+# Terminal 1: Start local router (connects to server)
+pixi run zenohd-client
+# or: zenohd -c ~/.bubbaloop/zenoh.cli.json5
+
+# Terminal 2: Run TUI
+pixi run bubbaloop
+# Then: /connect → ws://127.0.0.1:10000 → /topics
+```
+
+### Server Configuration
+
+**`zenoh.json5`** (on the robot):
+```json5
+{
+  mode: "router",
+  listen: {
+    endpoints: ["tcp/0.0.0.0:7447"],
+  },
+  plugins: {
+    remote_api: {
+      websocket_port: 10000,
+    },
+  },
+}
+```
+
+### TUI Commands
+
+| Command | Description |
+|---------|-------------|
+| `/server` | Configure server endpoint (generates zenoh config) |
+| `/connect` | Connect to local zenohd WebSocket |
+| `/topics` | View live topic statistics |
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Server (Robot)                               │
+│  ┌────────────────┐         ┌──────────────────────────────┐   │
+│  │  cameras_node  │──TCP───▶│  zenohd                      │   │
+│  │  (-z :7447)    │  :7447  │  - tcp :7447 (router)        │   │
+│  └────────────────┘         │  - ws :10000 (remote API)    │   │
+│                             └──────────────┬───────────────┘   │
+└────────────────────────────────────────────┼───────────────────┘
+                                             │ TCP :7447
+┌────────────────────────────────────────────┼───────────────────┐
+│                    Client (Laptop)         │                   │
+│                             ┌──────────────▼───────────────┐   │
+│  ┌───────────┐    WebSocket │  zenohd                      │   │
+│  │  TUI      │◀────:10000───│  - connects to server:7447   │   │
+│  └───────────┘              │  - ws :10000 (local)         │   │
+│                             └──────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────┘
+```

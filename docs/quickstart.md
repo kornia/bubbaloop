@@ -82,15 +82,34 @@ Press `Ctrl+C` to stop all services.
 If you prefer separate terminals:
 
 ```bash
-# Terminal 1
+# Terminal 1: Zenoh bridge (WebSocket for dashboard)
 pixi run bridge
 
-# Terminal 2
+# Terminal 2: Camera capture
 pixi run cameras
 
-# Terminal 3
+# Terminal 3: Web dashboard
 pixi run dashboard
 ```
+
+### Remote access (TUI from laptop to robot)
+
+For accessing cameras from another machine:
+
+```bash
+# On server (robot):
+zenohd -c zenoh.json5           # Terminal 1: Zenoh router
+pixi run cameras                # Terminal 2: Cameras (auto-connects to router)
+
+# On client (laptop) - first time setup:
+pixi run bubbaloop              # Run /server to set robot IP (one-time)
+
+# Then start services:
+pixi run zenohd-client          # Terminal 1: Local router → server
+pixi run bubbaloop              # Terminal 2: TUI → /connect → /topics
+```
+
+See [Configuration](configuration.md#remote-access-setup) for detailed setup.
 
 ## Visualization
 
