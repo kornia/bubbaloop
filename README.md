@@ -56,14 +56,15 @@ pixi run bubbaloop   # Start terminal UI
 ```bash
 # On robot:
 zenohd -c zenoh.json5       # Zenoh router
-pixi run cameras-server     # Cameras → router
+pixi run cameras            # Cameras (auto-connects to local router)
 
-# On laptop:
-pixi run bubbaloop          # TUI (run /server to set robot IP)
-pixi run zenohd-client      # Local router (uses TUI config)
+# On laptop (first-time setup):
+pixi run bubbaloop          # Run /server to set robot IP
+
+# On laptop (run services):
+pixi run zenohd-client      # Local router → robot
+pixi run bubbaloop          # TUI → /connect → /topics
 ```
-
-In the TUI, use `/server` to configure the robot's IP. This generates the zenohd config automatically at `~/.bubbaloop/zenoh.cli.json5`.
 
 See [docs/configuration.md](docs/configuration.md#remote-access-setup) for detailed setup.
 

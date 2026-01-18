@@ -99,14 +99,15 @@ For accessing cameras from another machine:
 ```bash
 # On server (robot):
 zenohd -c zenoh.json5           # Terminal 1: Zenoh router
-pixi run cameras-server         # Terminal 2: Cameras → router
+pixi run cameras                # Terminal 2: Cameras (auto-connects to router)
 
-# On client (laptop):
-pixi run bubbaloop              # Terminal 1: TUI (run /server to set IP)
-pixi run zenohd-client          # Terminal 2: Local router (uses TUI config)
+# On client (laptop) - first time setup:
+pixi run bubbaloop              # Run /server to set robot IP (one-time)
+
+# Then start services:
+pixi run zenohd-client          # Terminal 1: Local router → server
+pixi run bubbaloop              # Terminal 2: TUI → /connect → /topics
 ```
-
-In the TUI, use `/server` to configure the robot's IP once. This generates the zenohd config automatically.
 
 See [Configuration](configuration.md#remote-access-setup) for detailed setup.
 
