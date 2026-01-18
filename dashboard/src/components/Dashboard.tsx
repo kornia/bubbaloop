@@ -16,13 +16,15 @@ import {
   rectSortingStrategy,
 } from '@dnd-kit/sortable';
 import { SortableCameraCard } from './SortableCameraCard';
+import { SortableJsonCard } from './SortableJsonCard';
 import {
-  CameraConfig,
-  loadCameras,
-  saveCameras,
-  loadCameraOrder,
-  saveCameraOrder,
-  generateCameraId,
+  PanelConfig,
+  PanelType,
+  loadPanels,
+  savePanels,
+  loadPanelOrder,
+  savePanelOrder,
+  generatePanelId,
 } from '../lib/storage';
 
 interface DashboardProps {
@@ -32,51 +34,55 @@ interface DashboardProps {
 }
 
 export function Dashboard({ session, cameras: initialCameras, availableTopics = [] }: DashboardProps) {
-  // Initialize cameras from localStorage or props
-  const [cameras, setCameras] = useState<CameraConfig[]>(() => {
-    const stored = loadCameras();
+  // Initialize panels from localStorage or props
+  const [panels, setPanels] = useState<PanelConfig[]>(() => {
+    const stored = loadPanels();
     if (stored && stored.length > 0) {
       return stored;
     }
-    // Convert initial cameras to CameraConfig format
+    // Convert initial cameras to PanelConfig format
     return initialCameras.map((c, i) => ({
       id: `cam-${i}`,
       name: c.name,
       topic: c.topic,
+      type: 'camera' as const,
     }));
   });
 
-  // Camera order for drag-and-drop
-  const [cameraOrder, setCameraOrder] = useState<string[]>(() => {
-    const stored = loadCameraOrder();
+  // Panel order for drag-and-drop
+  const [panelOrder, setPanelOrder] = useState<string[]>(() => {
+    const stored = loadPanelOrder();
     if (stored) {
       // Filter out any IDs that don't exist anymore
-      const validIds = new Set(cameras.map((c) => c.id));
+      const validIds = new Set(panels.map((p) => p.id));
       const filteredOrder = stored.filter((id) => validIds.has(id));
-      // Add any new cameras that weren't in the order
+      // Add any new panels that weren't in the order
       const existingIds = new Set(filteredOrder);
-      for (const cam of cameras) {
-        if (!existingIds.has(cam.id)) {
-          filteredOrder.push(cam.id);
+      for (const panel of panels) {
+        if (!existingIds.has(panel.id)) {
+          filteredOrder.push(panel.id);
         }
       }
       return filteredOrder;
     }
-    return cameras.map((c) => c.id);
+    return panels.map((p) => p.id);
   });
 
-  // Maximized camera ID
+  // Maximized panel ID
   const [maximizedId, setMaximizedId] = useState<string | null>(null);
 
-  // Persist cameras when they change
+  // Add panel menu state
+  const [showAddMenu, setShowAddMenu] = useState(false);
+
+  // Persist panels when they change
   useEffect(() => {
-    saveCameras(cameras);
-  }, [cameras]);
+    savePanels(panels);
+  }, [panels]);
 
   // Persist order when it changes
   useEffect(() => {
-    saveCameraOrder(cameraOrder);
-  }, [cameraOrder]);
+    savePanelOrder(panelOrder);
+  }, [panelOrder]);
 
   // DnD sensors
   const sensors = useSensors(
@@ -94,7 +100,7 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     if (over && active.id !== over.id) {
-      setCameraOrder((items) => {
+      setPanelOrder((items) => {
         const oldIndex = items.indexOf(String(active.id));
         const newIndex = items.indexOf(String(over.id));
         return arrayMove(items, oldIndex, newIndex);
@@ -102,48 +108,58 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
     }
   }, []);
 
-  // Update camera
-  const updateCamera = useCallback((id: string, updates: Partial<CameraConfig>) => {
-    setCameras((prev) =>
-      prev.map((cam) => (cam.id === id ? { ...cam, ...updates } : cam))
+  // Update panel
+  const updatePanel = useCallback((id: string, updates: Partial<PanelConfig>) => {
+    setPanels((prev) =>
+      prev.map((panel) => (panel.id === id ? { ...panel, ...updates } : panel))
     );
   }, []);
 
-  // Remove camera
-  const removeCamera = useCallback((id: string) => {
-    setCameras((prev) => prev.filter((cam) => cam.id !== id));
-    setCameraOrder((prev) => prev.filter((camId) => camId !== id));
+  // Remove panel
+  const removePanel = useCallback((id: string) => {
+    setPanels((prev) => prev.filter((panel) => panel.id !== id));
+    setPanelOrder((prev) => prev.filter((panelId) => panelId !== id));
     if (maximizedId === id) {
       setMaximizedId(null);
     }
   }, [maximizedId]);
 
-  // Add camera
-  const addCamera = useCallback(() => {
-    const newId = generateCameraId();
-    const newCamera: CameraConfig = {
-      id: newId,
-      name: `Camera ${cameras.length + 1}`,
-      topic: '',
-    };
-    setCameras((prev) => [...prev, newCamera]);
-    setCameraOrder((prev) => [...prev, newId]);
-  }, [cameras.length]);
+  // Add panel
+  const addPanel = useCallback((type: PanelType) => {
+    const newId = generatePanelId(type);
+    const count = panels.filter((p) => p.type === type).length + 1;
+    const newPanel: PanelConfig = type === 'camera'
+      ? {
+          id: newId,
+          name: `Camera ${count}`,
+          topic: '',
+          type: 'camera',
+        }
+      : {
+          id: newId,
+          name: `JSON ${count}`,
+          topic: '',
+          type: 'json',
+        };
+    setPanels((prev) => [...prev, newPanel]);
+    setPanelOrder((prev) => [...prev, newId]);
+    setShowAddMenu(false);
+  }, [panels]);
 
   // Toggle maximize
   const toggleMaximize = useCallback((id: string) => {
     setMaximizedId((prev) => (prev === id ? null : id));
   }, []);
 
-  // Get ordered cameras
-  const orderedCameras = cameraOrder
-    .map((id) => cameras.find((c) => c.id === id))
-    .filter((c): c is CameraConfig => c !== undefined);
+  // Get ordered panels
+  const orderedPanels = panelOrder
+    .map((id) => panels.find((p) => p.id === id))
+    .filter((p): p is PanelConfig => p !== undefined);
 
-  // Calculate grid columns based on number of cameras and maximize state
+  // Calculate grid columns based on number of panels and maximize state
   const getGridCols = () => {
     if (maximizedId) return 1;
-    const count = orderedCameras.length;
+    const count = orderedPanels.length;
     if (count <= 1) return 1;
     if (count <= 4) return 2;
     return 3;
@@ -152,58 +168,104 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
   return (
     <div className="dashboard">
       <div className="dashboard-header">
-        <span className="dashboard-title">Cameras ({cameras.length})</span>
-        <button className="add-camera-btn" onClick={addCamera}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-          Add Camera
-        </button>
+        <span className="dashboard-title">Panels ({panels.length})</span>
+        <div className="add-panel-container">
+          <button className="add-panel-btn" onClick={() => setShowAddMenu(!showAddMenu)}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            Add Panel
+          </button>
+          {showAddMenu && (
+            <div className="add-panel-menu">
+              <button className="add-panel-option" onClick={() => addPanel('camera')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" />
+                  <circle cx="12" cy="13" r="4" />
+                </svg>
+                Camera Panel
+              </button>
+              <button className="add-panel-option" onClick={() => addPanel('json')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                  <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
+                </svg>
+                JSON Panel
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
-      {orderedCameras.length > 0 ? (
+      {orderedPanels.length > 0 ? (
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={handleDragEnd}
         >
-          <SortableContext items={cameraOrder} strategy={rectSortingStrategy}>
+          <SortableContext items={panelOrder} strategy={rectSortingStrategy}>
             <div
-              className="camera-grid"
+              className="panel-grid"
               style={{
                 gridTemplateColumns: `repeat(${getGridCols()}, 1fr)`,
               }}
             >
-              {orderedCameras.map((camera) => (
-                <SortableCameraCard
-                  key={camera.id}
-                  id={camera.id}
-                  session={session}
-                  cameraName={camera.name}
-                  topic={camera.topic}
-                  isMaximized={maximizedId === camera.id}
-                  onMaximize={() => toggleMaximize(camera.id)}
-                  onTopicChange={(topic) => updateCamera(camera.id, { topic })}
-                  onNameChange={(name) => updateCamera(camera.id, { name })}
-                  onRemove={() => removeCamera(camera.id)}
-                  availableTopics={availableTopics}
-                />
-              ))}
+              {orderedPanels.map((panel) =>
+                panel.type === 'camera' ? (
+                  <SortableCameraCard
+                    key={panel.id}
+                    id={panel.id}
+                    session={session}
+                    cameraName={panel.name}
+                    topic={panel.topic}
+                    isMaximized={maximizedId === panel.id}
+                    onMaximize={() => toggleMaximize(panel.id)}
+                    onTopicChange={(topic) => updatePanel(panel.id, { topic })}
+                    onNameChange={(name) => updatePanel(panel.id, { name })}
+                    onRemove={() => removePanel(panel.id)}
+                    availableTopics={availableTopics}
+                  />
+                ) : (
+                  <SortableJsonCard
+                    key={panel.id}
+                    id={panel.id}
+                    session={session}
+                    panelName={panel.name}
+                    topic={panel.topic}
+                    isMaximized={maximizedId === panel.id}
+                    onMaximize={() => toggleMaximize(panel.id)}
+                    onTopicChange={(topic) => updatePanel(panel.id, { topic })}
+                    onNameChange={(name) => updatePanel(panel.id, { name })}
+                    onRemove={() => removePanel(panel.id)}
+                    availableTopics={availableTopics}
+                  />
+                )
+              )}
             </div>
           </SortableContext>
         </DndContext>
       ) : (
-        <div className="no-cameras">
-          <div className="no-cameras-content">
-            <span className="no-cameras-icon">📹</span>
-            <h3>No cameras configured</h3>
-            <p>Click "Add Camera" to start adding camera streams</p>
-            <button className="add-camera-btn large" onClick={addCamera}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-              Add Camera
-            </button>
+        <div className="no-panels">
+          <div className="no-panels-content">
+            <span className="no-panels-icon">📊</span>
+            <h3>No panels configured</h3>
+            <p>Click "Add Panel" to start adding camera or JSON panels</p>
+            <div className="no-panels-buttons">
+              <button className="add-panel-btn large" onClick={() => addPanel('camera')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" />
+                  <circle cx="12" cy="13" r="4" />
+                </svg>
+                Add Camera
+              </button>
+              <button className="add-panel-btn large" onClick={() => addPanel('json')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                  <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
+                </svg>
+                Add JSON
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -231,7 +293,11 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
           color: var(--text-secondary);
         }
 
-        .add-camera-btn {
+        .add-panel-container {
+          position: relative;
+        }
+
+        .add-panel-btn {
           display: flex;
           align-items: center;
           gap: 6px;
@@ -246,18 +312,56 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
           transition: all 0.15s;
         }
 
-        .add-camera-btn:hover {
+        .add-panel-btn:hover {
           background: var(--bg-card);
           border-color: var(--accent-primary);
           color: var(--accent-primary);
         }
 
-        .add-camera-btn.large {
+        .add-panel-btn.large {
           padding: 12px 24px;
           font-size: 14px;
         }
 
-        .camera-grid {
+        .add-panel-menu {
+          position: absolute;
+          top: 100%;
+          right: 0;
+          margin-top: 4px;
+          background: var(--bg-card);
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+          overflow: hidden;
+          z-index: 100;
+          min-width: 160px;
+        }
+
+        .add-panel-option {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          width: 100%;
+          padding: 12px 16px;
+          background: transparent;
+          border: none;
+          color: var(--text-secondary);
+          font-size: 13px;
+          cursor: pointer;
+          transition: all 0.15s;
+          text-align: left;
+        }
+
+        .add-panel-option:hover {
+          background: var(--bg-tertiary);
+          color: var(--text-primary);
+        }
+
+        .add-panel-option:not(:last-child) {
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .panel-grid {
           display: grid;
           gap: 24px;
           max-width: 1800px;
@@ -265,38 +369,44 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
           overflow: hidden;
         }
 
-        .camera-grid > * {
+        .panel-grid > * {
           min-width: 0;
         }
 
-        .no-cameras {
+        .no-panels {
           display: flex;
           align-items: center;
           justify-content: center;
           min-height: 400px;
         }
 
-        .no-cameras-content {
+        .no-panels-content {
           text-align: center;
           color: var(--text-muted);
         }
 
-        .no-cameras-icon {
+        .no-panels-icon {
           font-size: 48px;
           display: block;
           margin-bottom: 16px;
         }
 
-        .no-cameras-content h3 {
+        .no-panels-content h3 {
           font-size: 18px;
           font-weight: 500;
           color: var(--text-secondary);
           margin-bottom: 8px;
         }
 
-        .no-cameras-content p {
+        .no-panels-content p {
           font-size: 14px;
           margin-bottom: 20px;
+        }
+
+        .no-panels-buttons {
+          display: flex;
+          gap: 12px;
+          justify-content: center;
         }
       `}</style>
     </div>

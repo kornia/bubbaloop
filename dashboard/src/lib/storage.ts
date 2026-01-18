@@ -3,71 +3,135 @@
  */
 
 const STORAGE_KEYS = {
+  PANELS: 'bubbaloop-panels',
+  PANEL_ORDER: 'bubbaloop-panel-order',
+  // Legacy keys for migration
   CAMERAS: 'bubbaloop-cameras',
   CAMERA_ORDER: 'bubbaloop-camera-order',
 } as const;
 
-export interface CameraConfig {
+export type PanelType = 'camera' | 'json';
+
+export interface BasePanelConfig {
+  id: string;
+  name: string;
+  topic: string;
+  type: PanelType;
+}
+
+export interface CameraPanelConfig extends BasePanelConfig {
+  type: 'camera';
+}
+
+export interface JsonPanelConfig extends BasePanelConfig {
+  type: 'json';
+}
+
+export type PanelConfig = CameraPanelConfig | JsonPanelConfig;
+
+// Legacy type for migration
+export interface LegacyCameraConfig {
   id: string;
   name: string;
   topic: string;
 }
 
 /**
- * Load camera configurations from localStorage
+ * Migrate legacy camera configs to new panel format
  */
-export function loadCameras(): CameraConfig[] | null {
+function migrateLegacyCameras(): PanelConfig[] | null {
   try {
     const stored = localStorage.getItem(STORAGE_KEYS.CAMERAS);
     if (stored) {
-      return JSON.parse(stored);
+      const cameras: LegacyCameraConfig[] = JSON.parse(stored);
+      // Convert to new format
+      const panels: PanelConfig[] = cameras.map((c) => ({
+        ...c,
+        type: 'camera' as const,
+      }));
+      // Save in new format and clean up legacy
+      localStorage.setItem(STORAGE_KEYS.PANELS, JSON.stringify(panels));
+      localStorage.removeItem(STORAGE_KEYS.CAMERAS);
+      // Migrate order too
+      const order = localStorage.getItem(STORAGE_KEYS.CAMERA_ORDER);
+      if (order) {
+        localStorage.setItem(STORAGE_KEYS.PANEL_ORDER, order);
+        localStorage.removeItem(STORAGE_KEYS.CAMERA_ORDER);
+      }
+      return panels;
     }
   } catch (e) {
-    console.warn('[Storage] Failed to load cameras:', e);
+    console.warn('[Storage] Failed to migrate legacy cameras:', e);
   }
   return null;
 }
 
 /**
- * Save camera configurations to localStorage
+ * Load panel configurations from localStorage
  */
-export function saveCameras(cameras: CameraConfig[]): void {
+export function loadPanels(): PanelConfig[] | null {
   try {
-    localStorage.setItem(STORAGE_KEYS.CAMERAS, JSON.stringify(cameras));
-  } catch (e) {
-    console.warn('[Storage] Failed to save cameras:', e);
-  }
-}
-
-/**
- * Load camera order from localStorage
- */
-export function loadCameraOrder(): string[] | null {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEYS.CAMERA_ORDER);
+    const stored = localStorage.getItem(STORAGE_KEYS.PANELS);
     if (stored) {
       return JSON.parse(stored);
     }
+    // Try migrating legacy format
+    return migrateLegacyCameras();
   } catch (e) {
-    console.warn('[Storage] Failed to load camera order:', e);
+    console.warn('[Storage] Failed to load panels:', e);
   }
   return null;
 }
 
 /**
- * Save camera order to localStorage
+ * Save panel configurations to localStorage
  */
-export function saveCameraOrder(order: string[]): void {
+export function savePanels(panels: PanelConfig[]): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.CAMERA_ORDER, JSON.stringify(order));
+    localStorage.setItem(STORAGE_KEYS.PANELS, JSON.stringify(panels));
   } catch (e) {
-    console.warn('[Storage] Failed to save camera order:', e);
+    console.warn('[Storage] Failed to save panels:', e);
   }
 }
 
 /**
- * Generate a unique ID for a new camera
+ * Load panel order from localStorage
  */
-export function generateCameraId(): string {
-  return `cam-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+export function loadPanelOrder(): string[] | null {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.PANEL_ORDER);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+    // Try legacy key
+    const legacy = localStorage.getItem(STORAGE_KEYS.CAMERA_ORDER);
+    if (legacy) {
+      const order = JSON.parse(legacy);
+      localStorage.setItem(STORAGE_KEYS.PANEL_ORDER, legacy);
+      localStorage.removeItem(STORAGE_KEYS.CAMERA_ORDER);
+      return order;
+    }
+  } catch (e) {
+    console.warn('[Storage] Failed to load panel order:', e);
+  }
+  return null;
+}
+
+/**
+ * Save panel order to localStorage
+ */
+export function savePanelOrder(order: string[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.PANEL_ORDER, JSON.stringify(order));
+  } catch (e) {
+    console.warn('[Storage] Failed to save panel order:', e);
+  }
+}
+
+/**
+ * Generate a unique ID for a new panel
+ */
+export function generatePanelId(type: PanelType): string {
+  const prefix = type === 'camera' ? 'cam' : 'json';
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
