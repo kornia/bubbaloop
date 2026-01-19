@@ -1,0 +1,19 @@
+# Open-Meteo weather configuration
+# If no config file is provided, location is auto-discovered from IP
+
+# Location configuration (optional)
+location:
+  # Set auto_discover to true to detect location from IP (default)
+  auto_discover: true
+  # Or specify explicit coordinates:
+  # latitude: 40.7128
+  # longitude: -74.0060
+  # timezone: "America/New_York"
+
+# Fetch configuration (optional, defaults shown)
+fetch:
+  current_interval_secs: 30      # Poll current weather every 30 seconds
+  hourly_interval_secs: 1800     # Poll hourly forecast every 30 minutes
+  daily_interval_secs: 10800     # Poll daily forecast every 3 hours
+  hourly_forecast_hours: 48      # Fetch 48 hours of hourly forecast
+  daily_forecast_days: 7         # Fetch 7 days of daily forecast
