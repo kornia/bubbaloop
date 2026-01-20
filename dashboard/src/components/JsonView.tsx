@@ -1,6 +1,7 @@
 import { useCallback, useState, useRef } from 'react';
-import { Session, Sample } from '@eclipse-zenoh/zenoh-ts';
-import { useZenohSubscriber, getSamplePayload } from '../lib/zenoh';
+import { Sample } from '@eclipse-zenoh/zenoh-ts';
+import { getSamplePayload } from '../lib/zenoh';
+import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { decodeCompressedImage } from '../proto/camera';
 import { decodeCurrentWeather, decodeHourlyForecast, decodeDailyForecast } from '../proto/weather';
 import JsonView from 'react18-json-view';
@@ -160,10 +161,7 @@ interface DragHandleProps {
 }
 
 interface RawDataViewPanelProps {
-  session: Session;
   topic: string;
-  isMaximized?: boolean;
-  onMaximize?: () => void;
   onTopicChange?: (topic: string) => void;
   onRemove?: () => void;
   availableTopics?: string[];
@@ -171,10 +169,7 @@ interface RawDataViewPanelProps {
 }
 
 export function RawDataViewPanel({
-  session,
   topic,
-  isMaximized = false,
-  onMaximize,
   onTopicChange,
   onRemove,
   availableTopics = [],
@@ -207,7 +202,7 @@ export function RawDataViewPanel({
   }, []);
 
   // Subscribe to topic
-  const { fps, messageCount } = useZenohSubscriber(session, topic, handleSample);
+  useZenohSubscription(topic, handleSample);
 
   // Handle topic change from dropdown
   const handleTopicSelect = (newTopic: string) => {
@@ -217,7 +212,7 @@ export function RawDataViewPanel({
   };
 
   return (
-    <div className={`rawdata-view-panel ${isMaximized ? 'maximized' : ''}`}>
+    <div className="rawdata-view-panel">
       <div className="panel-header">
         <div className="panel-header-left">
           {dragHandleProps && (
@@ -235,27 +230,6 @@ export function RawDataViewPanel({
           <span className="panel-type-badge">{schemaName || 'RAW DATA'}</span>
         </div>
         <div className="panel-stats">
-          <span className="stat">
-            <span className="stat-value">{fps}</span>
-            <span className="stat-label">msg/s</span>
-          </span>
-          <span className="stat">
-            <span className="stat-value mono">{messageCount.toLocaleString()}</span>
-            <span className="stat-label">total</span>
-          </span>
-          {onMaximize && (
-            <button className="icon-btn maximize-btn" onClick={onMaximize} title={isMaximized ? 'Restore' : 'Maximize'}>
-              {isMaximized ? (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" />
-                </svg>
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
-                </svg>
-              )}
-            </button>
-          )}
           {onRemove && (
             <button className="icon-btn danger" onClick={onRemove} title="Remove panel">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -453,21 +427,28 @@ export function RawDataViewPanel({
         }
 
         .rawdata-content-container {
-          flex: 1;
-          min-height: 200px;
-          max-height: 500px;
-          overflow: auto;
+          position: relative;
+          aspect-ratio: 16 / 9;
+          min-height: 240px;
+          overflow-y: auto;
+          overflow-x: hidden;
           background: var(--bg-primary);
+        }
+
+        .rawdata-view-panel.maximized .rawdata-content-container {
+          aspect-ratio: unset;
+          flex: 1;
+          min-height: 400px;
         }
 
         .rawdata-placeholder,
         .rawdata-waiting {
+          position: absolute;
+          inset: 0;
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          height: 100%;
-          min-height: 200px;
           color: var(--text-muted);
           gap: 12px;
         }
@@ -589,8 +570,7 @@ export function RawDataViewPanel({
           }
 
           .rawdata-content-container {
-            min-height: 150px;
-            max-height: none;
+            min-height: 180px;
           }
 
           .rawdata-content {

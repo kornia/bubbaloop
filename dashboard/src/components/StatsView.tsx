@@ -1,129 +1,49 @@
-import { useState, useEffect, useRef } from 'react';
-import { Session, Sample } from '@eclipse-zenoh/zenoh-ts';
+import { useState, useEffect } from 'react';
+import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 
 interface DragHandleProps {
   [key: string]: unknown;
 }
 
 interface StatsViewProps {
-  session: Session;
-  isMaximized?: boolean;
-  onMaximize?: () => void;
   onRemove?: () => void;
   dragHandleProps?: DragHandleProps;
 }
 
-interface TopicStats {
+interface DisplayStats {
   topic: string;
   messageCount: number;
-  fps: number;
-  lastSeen: number;
-  bytesPerSec: number;
-  lastBytes: number;
+  hz: number;
 }
 
 export function StatsViewPanel({
-  session,
-  isMaximized = false,
-  onMaximize,
   onRemove,
   dragHandleProps,
 }: StatsViewProps) {
-  const [stats, setStats] = useState<Map<string, TopicStats>>(new Map());
-  const statsRef = useRef<Map<string, TopicStats>>(new Map());
-  const subscriberRef = useRef<any>(null);
+  const { getAllStats } = useZenohSubscriptionContext();
+  const [stats, setStats] = useState<DisplayStats[]>([]);
 
-  // Subscribe to all topics
+  // Poll stats from centralized manager
   useEffect(() => {
-    if (!session) return;
-
-    let mounted = true;
-
-    const setupSubscriber = async () => {
-      try {
-        const subscriber = await session.declareSubscriber('**', {
-          handler: (sample: Sample) => {
-            if (!mounted) return;
-
-            const topic = sample.keyexpr().toString();
-            const payload = sample.payload();
-            const bytes = payload && typeof payload.toBytes === 'function'
-              ? payload.toBytes().length
-              : 0;
-
-            const now = Date.now();
-            const existing = statsRef.current.get(topic);
-
-            if (existing) {
-              existing.messageCount++;
-              existing.lastSeen = now;
-              existing.lastBytes += bytes;
-            } else {
-              statsRef.current.set(topic, {
-                topic,
-                messageCount: 1,
-                fps: 0,
-                lastSeen: now,
-                bytesPerSec: 0,
-                lastBytes: bytes,
-              });
-            }
-          },
-        });
-
-        subscriberRef.current = subscriber;
-        console.log('[StatsView] Subscribed to all topics');
-      } catch (e) {
-        console.error('[StatsView] Failed to subscribe:', e);
-      }
-    };
-
-    setupSubscriber();
-
-    // Update stats every second
     const interval = setInterval(() => {
-      const newStats = new Map<string, TopicStats>();
+      const allStats = getAllStats();
+      const displayStats: DisplayStats[] = [];
 
-      statsRef.current.forEach((stat, topic) => {
-        // Keep track of previous count for FPS calculation
-        const prevCount = (stat as any)._prevCount || 0;
-        const fps = stat.messageCount - prevCount;
-        (stat as any)._prevCount = stat.messageCount;
-
-        // Calculate bytes per second
-        const bytesPerSec = stat.lastBytes;
-        stat.lastBytes = 0;
-
-        newStats.set(topic, {
-          ...stat,
-          fps,
-          bytesPerSec,
+      allStats.forEach((stat, topic) => {
+        displayStats.push({
+          topic,
+          messageCount: stat.messageCount,
+          hz: stat.fps,
         });
       });
 
-      setStats(new Map(newStats));
+      // Sort by Hz descending
+      displayStats.sort((a, b) => b.hz - a.hz);
+      setStats(displayStats);
     }, 1000);
 
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-      if (subscriberRef.current) {
-        subscriberRef.current.undeclare().catch(console.error);
-        subscriberRef.current = null;
-      }
-    };
-  }, [session]);
-
-  // Sort topics by FPS descending
-  const sortedStats = Array.from(stats.values()).sort((a, b) => b.fps - a.fps);
-  const totalMessages = sortedStats.reduce((sum, s) => sum + s.messageCount, 0);
-  const totalFps = sortedStats.reduce((sum, s) => sum + s.fps, 0);
-
-  const formatBytes = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B/s`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB/s`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB/s`;
-  };
+    return () => clearInterval(interval);
+  }, [getAllStats]);
 
   const shortenTopic = (topic: string) => {
     // Shorten ros-z style topics for display
@@ -135,11 +55,19 @@ export function StatsViewPanel({
       const typeName = typeParts[typeParts.length - 1];
       return `${topicName} (${typeName})`;
     }
+    // Handle wildcard patterns like 0/weather%current/**
+    if (topic.endsWith('/**')) {
+      const withoutWildcard = topic.slice(0, -3);
+      const parts = withoutWildcard.split('/');
+      if (parts.length >= 2) {
+        return parts[1].replace(/%/g, '/') + '/*';
+      }
+    }
     return topic;
   };
 
   return (
-    <div className={`stats-panel ${isMaximized ? 'maximized' : ''}`}>
+    <div className="stats-panel">
       <div className="panel-header" {...dragHandleProps}>
         <div className="panel-title">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -148,21 +76,6 @@ export function StatsViewPanel({
           <span className="panel-type-badge">STATS</span>
         </div>
         <div className="panel-actions">
-          <button
-            className="panel-action-btn maximize-btn"
-            onClick={onMaximize}
-            title={isMaximized ? 'Restore' : 'Maximize'}
-          >
-            {isMaximized ? (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" />
-              </svg>
-            ) : (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
-              </svg>
-            )}
-          </button>
           <button
             className="panel-action-btn danger"
             onClick={onRemove}
@@ -176,42 +89,25 @@ export function StatsViewPanel({
       </div>
 
       <div className="stats-content">
-        <div className="stats-summary">
-          <div className="stat-item">
-            <span className="stat-label">Topics</span>
-            <span className="stat-value">{sortedStats.length}</span>
-          </div>
-          <div className="stat-item">
-            <span className="stat-label">Total Messages</span>
-            <span className="stat-value">{totalMessages.toLocaleString()}</span>
-          </div>
-          <div className="stat-item">
-            <span className="stat-label">Total FPS</span>
-            <span className="stat-value">{totalFps}</span>
-          </div>
-        </div>
-
         <div className="stats-table">
           <div className="stats-table-header">
             <span className="col-topic">Topic</span>
-            <span className="col-fps">FPS</span>
+            <span className="col-hz">Hz</span>
             <span className="col-msgs">Msgs</span>
-            <span className="col-bw">BW</span>
           </div>
           <div className="stats-table-body">
-            {sortedStats.length === 0 ? (
-              <div className="no-data">Waiting for data...</div>
+            {stats.length === 0 ? (
+              <div className="no-data">Waiting for subscriptions...</div>
             ) : (
-              sortedStats.map((stat) => (
+              stats.map((stat) => (
                 <div key={stat.topic} className="stats-row">
                   <span className="col-topic" title={stat.topic}>
                     {shortenTopic(stat.topic)}
                   </span>
-                  <span className={`col-fps ${stat.fps > 0 ? 'active' : 'inactive'}`}>
-                    {stat.fps}
+                  <span className={`col-hz ${stat.hz > 0 ? 'active' : 'inactive'}`}>
+                    {stat.hz.toFixed(2)}
                   </span>
                   <span className="col-msgs">{stat.messageCount.toLocaleString()}</span>
-                  <span className="col-bw">{formatBytes(stat.bytesPerSec)}</span>
                 </div>
               ))
             )}
@@ -219,6 +115,9 @@ export function StatsViewPanel({
         </div>
       </div>
 
+      <div className="panel-footer">
+        <span className="footer-info">Subscription Statistics</span>
+      </div>
 
       <style>{`
         .stats-panel {
@@ -299,49 +198,28 @@ export function StatsViewPanel({
         }
 
         .stats-content {
+          position: relative;
+          aspect-ratio: 16 / 9;
+          min-height: 240px;
+          overflow-y: auto;
+          overflow-x: hidden;
+          background: var(--bg-primary);
+        }
+
+        .stats-panel.maximized .stats-content {
+          aspect-ratio: unset;
           flex: 1;
-          display: flex;
-          flex-direction: column;
-          overflow: hidden;
-        }
-
-        .stats-summary {
-          display: flex;
-          gap: 16px;
-          padding: 12px 16px;
-          border-bottom: 1px solid var(--border-color);
-          background: var(--bg-secondary);
-        }
-
-        .stat-item {
-          display: flex;
-          flex-direction: column;
-          gap: 2px;
-        }
-
-        .stat-label {
-          font-size: 11px;
-          color: var(--text-muted);
-          text-transform: uppercase;
-        }
-
-        .stat-value {
-          font-size: 18px;
-          font-weight: 600;
-          color: var(--accent-secondary);
-          font-family: 'JetBrains Mono', monospace;
+          min-height: 400px;
         }
 
         .stats-table {
-          flex: 1;
           display: flex;
           flex-direction: column;
-          overflow: hidden;
         }
 
         .stats-table-header {
           display: grid;
-          grid-template-columns: 1fr 50px 70px 80px;
+          grid-template-columns: 1fr 60px 80px;
           gap: 8px;
           padding: 8px 16px;
           background: var(--bg-tertiary);
@@ -360,7 +238,7 @@ export function StatsViewPanel({
 
         .stats-row {
           display: grid;
-          grid-template-columns: 1fr 50px 70px 80px;
+          grid-template-columns: 1fr 60px 80px;
           gap: 8px;
           padding: 6px 16px;
           font-size: 12px;
@@ -378,16 +256,16 @@ export function StatsViewPanel({
           color: var(--text-secondary);
         }
 
-        .col-fps {
+        .col-hz {
           text-align: right;
           font-weight: 600;
         }
 
-        .col-fps.active {
+        .col-hz.active {
           color: var(--success);
         }
 
-        .col-fps.inactive {
+        .col-hz.inactive {
           color: var(--text-muted);
         }
 
@@ -396,16 +274,22 @@ export function StatsViewPanel({
           color: var(--text-secondary);
         }
 
-        .col-bw {
-          text-align: right;
-          color: var(--accent-secondary);
-        }
-
         .no-data {
           padding: 24px;
           text-align: center;
           color: var(--text-muted);
           font-size: 13px;
+        }
+
+        .panel-footer {
+          padding: 8px 12px;
+          background: var(--bg-tertiary);
+          border-top: 1px solid var(--border-color);
+        }
+
+        .footer-info {
+          font-size: 11px;
+          color: var(--text-muted);
         }
 
         @media (max-width: 768px) {
@@ -418,18 +302,13 @@ export function StatsViewPanel({
             display: none;
           }
 
-          .stats-summary {
-            flex-wrap: wrap;
-            gap: 12px;
-          }
-
-          .stat-item {
-            min-width: 80px;
+          .stats-content {
+            min-height: 180px;
           }
 
           .stats-table-header,
           .stats-row {
-            grid-template-columns: 1fr 40px 60px 70px;
+            grid-template-columns: 1fr 50px 70px;
             font-size: 11px;
           }
         }

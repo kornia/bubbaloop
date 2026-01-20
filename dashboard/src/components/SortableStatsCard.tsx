@@ -1,23 +1,18 @@
 import React from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Session } from '@eclipse-zenoh/zenoh-ts';
 import { StatsViewPanel } from './StatsView';
 
 interface SortableStatsCardProps {
   id: string;
-  session: Session;
   panelName: string; // Kept for compatibility with Dashboard
-  isMaximized: boolean;
-  onMaximize: () => void;
+  isHidden?: boolean;
   onRemove: () => void;
 }
 
 export function SortableStatsCard({
   id,
-  session,
-  isMaximized,
-  onMaximize,
+  isHidden = false,
   onRemove,
 }: SortableStatsCardProps) {
   const {
@@ -33,17 +28,14 @@ export function SortableStatsCard({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
-    gridColumn: isMaximized ? '1 / -1' : undefined,
     minWidth: 0,
     overflow: 'hidden',
+    display: isHidden ? 'none' : undefined,
   };
 
   return (
     <div ref={setNodeRef} style={style}>
       <StatsViewPanel
-        session={session}
-        isMaximized={isMaximized}
-        onMaximize={onMaximize}
         onRemove={onRemove}
         dragHandleProps={{ ...attributes, ...listeners }}
       />

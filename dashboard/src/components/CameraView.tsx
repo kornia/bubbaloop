@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
-import { Session, Sample } from '@eclipse-zenoh/zenoh-ts';
-import { useZenohSubscriber, getSamplePayload } from '../lib/zenoh';
+import { Sample } from '@eclipse-zenoh/zenoh-ts';
+import { getSamplePayload } from '../lib/zenoh';
+import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { H264Decoder } from '../lib/h264-decoder';
 import { decodeCompressedImage, Header } from '../proto/camera';
 
@@ -9,7 +10,6 @@ interface DragHandleProps {
 }
 
 interface CameraViewProps {
-  session: Session;
   cameraName: string;
   topic: string;
   isMaximized?: boolean;
@@ -21,7 +21,6 @@ interface CameraViewProps {
 }
 
 export function CameraView({
-  session,
   cameraName,
   topic,
   isMaximized = false,
@@ -138,7 +137,7 @@ export function CameraView({
   }, []);
 
   // Subscribe to camera topic
-  const { fps, messageCount } = useZenohSubscriber(session, topic, handleSample);
+  useZenohSubscription(topic, handleSample);
 
   // Periodically update metadata state when info panel is visible
   useEffect(() => {
@@ -184,14 +183,6 @@ export function CameraView({
           <span className="panel-type-badge">CAMERA</span>
         </div>
         <div className="camera-stats">
-          <span className="stat">
-            <span className="stat-value">{fps}</span>
-            <span className="stat-label">FPS</span>
-          </span>
-          <span className="stat">
-            <span className="stat-value mono">{messageCount.toLocaleString()}</span>
-            <span className="stat-label">frames</span>
-          </span>
           {dimensions && (
             <span className="stat">
               <span className="stat-value mono">{dimensions.width}x{dimensions.height}</span>
@@ -346,6 +337,7 @@ export function CameraView({
 
         .camera-view.maximized {
           border-color: var(--accent-primary);
+          height: calc(100vh - 140px);
         }
 
         .camera-header {
@@ -487,19 +479,30 @@ export function CameraView({
         }
 
         .camera-canvas-container {
-          flex: 1;
           display: flex;
           align-items: center;
           justify-content: center;
           background: #000;
           min-height: 240px;
+          aspect-ratio: 16 / 9;
           position: relative;
+        }
+
+        .camera-view.maximized .camera-canvas-container {
+          aspect-ratio: unset;
+          flex: 1;
+          min-height: 60vh;
         }
 
         .camera-canvas {
           max-width: 100%;
           max-height: 100%;
           object-fit: contain;
+        }
+
+        .camera-view.maximized .camera-canvas {
+          width: 100%;
+          height: 100%;
         }
 
         .camera-error {

@@ -1,5 +1,4 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Session } from '@eclipse-zenoh/zenoh-ts';
 import {
   DndContext,
   closestCenter,
@@ -30,12 +29,11 @@ import {
 } from '../lib/storage';
 
 interface DashboardProps {
-  session: Session;
   cameras: Array<{ name: string; topic: string }>;
   availableTopics?: string[];
 }
 
-export function Dashboard({ session, cameras: initialCameras, availableTopics = [] }: DashboardProps) {
+export function Dashboard({ cameras: initialCameras, availableTopics = [] }: DashboardProps) {
   // Initialize panels from localStorage or props
   const [panels, setPanels] = useState<PanelConfig[]>(() => {
     const stored = loadPanels();
@@ -260,16 +258,17 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
               }}
             >
               {orderedPanels.map((panel) => {
+                const isHidden = maximizedId !== null && maximizedId !== panel.id;
                 switch (panel.type) {
                   case 'camera':
                     return (
                       <SortableCameraCard
                         key={panel.id}
                         id={panel.id}
-                        session={session}
                         cameraName={panel.name}
                         topic={panel.topic}
                         isMaximized={maximizedId === panel.id}
+                        isHidden={isHidden}
                         onMaximize={() => toggleMaximize(panel.id)}
                         onTopicChange={(topic) => updatePanel(panel.id, { topic })}
                         onRemove={() => removePanel(panel.id)}
@@ -282,11 +281,9 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                       <SortableJsonCard
                         key={panel.id}
                         id={panel.id}
-                        session={session}
                         panelName={panel.name}
                         topic={panel.topic}
-                        isMaximized={maximizedId === panel.id}
-                        onMaximize={() => toggleMaximize(panel.id)}
+                        isHidden={isHidden}
                         onTopicChange={(topic) => updatePanel(panel.id, { topic })}
                         onRemove={() => removePanel(panel.id)}
                         availableTopics={availableTopics}
@@ -297,11 +294,9 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                       <SortableWeatherCard
                         key={panel.id}
                         id={panel.id}
-                        session={session}
                         panelName={panel.name}
                         topic={panel.topic}
-                        isMaximized={maximizedId === panel.id}
-                        onMaximize={() => toggleMaximize(panel.id)}
+                        isHidden={isHidden}
                         onRemove={() => removePanel(panel.id)}
                       />
                     );
@@ -310,10 +305,8 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                       <SortableStatsCard
                         key={panel.id}
                         id={panel.id}
-                        session={session}
                         panelName={panel.name}
-                        isMaximized={maximizedId === panel.id}
-                        onMaximize={() => toggleMaximize(panel.id)}
+                        isHidden={isHidden}
                         onRemove={() => removePanel(panel.id)}
                       />
                     );

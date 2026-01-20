@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useZenohSession, useZenohTopicDiscovery, ConnectionStatus } from './lib/zenoh';
+import { ZenohSubscriptionProvider } from './contexts/ZenohSubscriptionContext';
 import { Dashboard } from './components/Dashboard';
 import { H264Decoder } from './lib/h264-decoder';
 
@@ -209,7 +210,9 @@ export default function App() {
       )}
 
       {session ? (
-        <Dashboard session={session} cameras={DEFAULT_CAMERAS} availableTopics={availableTopics} />
+        <ZenohSubscriptionProvider session={session}>
+          <Dashboard cameras={DEFAULT_CAMERAS} availableTopics={availableTopics} />
+        </ZenohSubscriptionProvider>
       ) : (
         <div className="connecting-placeholder">
           <div className="placeholder-content">

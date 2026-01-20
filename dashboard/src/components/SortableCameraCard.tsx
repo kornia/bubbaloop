@@ -1,15 +1,14 @@
 import React from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Session } from '@eclipse-zenoh/zenoh-ts';
 import { CameraView } from './CameraView';
 
 interface SortableCameraCardProps {
   id: string;
-  session: Session;
   cameraName: string;
   topic: string;
   isMaximized: boolean;
+  isHidden?: boolean;
   onMaximize: () => void;
   onTopicChange: (topic: string) => void;
   onRemove: () => void;
@@ -18,10 +17,10 @@ interface SortableCameraCardProps {
 
 export function SortableCameraCard({
   id,
-  session,
   cameraName,
   topic,
   isMaximized,
+  isHidden = false,
   onMaximize,
   onTopicChange,
   onRemove,
@@ -43,12 +42,12 @@ export function SortableCameraCard({
     gridColumn: isMaximized ? '1 / -1' : undefined,
     minWidth: 0,
     overflow: 'hidden',
+    display: isHidden ? 'none' : undefined,
   };
 
   return (
     <div ref={setNodeRef} style={style}>
       <CameraView
-        session={session}
         cameraName={cameraName}
         topic={topic}
         isMaximized={isMaximized}

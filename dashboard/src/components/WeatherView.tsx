@@ -1,6 +1,8 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
-import { Session, Sample, IntoZBytes } from '@eclipse-zenoh/zenoh-ts';
-import { useZenohSubscriber, getSamplePayload } from '../lib/zenoh';
+import { Sample, IntoZBytes } from '@eclipse-zenoh/zenoh-ts';
+import { getSamplePayload } from '../lib/zenoh';
+import { useZenohSubscription } from '../hooks/useZenohSubscription';
+import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 import {
   decodeCurrentWeather,
   decodeHourlyForecast,
@@ -18,10 +20,7 @@ interface DragHandleProps {
 }
 
 interface WeatherViewPanelProps {
-  session: Session;
   topic?: string; // Not used - weather topics are fixed
-  isMaximized?: boolean;
-  onMaximize?: () => void;
   onRemove?: () => void;
   dragHandleProps?: DragHandleProps;
 }
@@ -37,12 +36,11 @@ function formatHour(timestamp: bigint): string {
 }
 
 export function WeatherViewPanel({
-  session,
-  isMaximized = false,
-  onMaximize,
   onRemove,
   dragHandleProps,
 }: WeatherViewPanelProps) {
+  // Get session from context for publishing
+  const { getSession } = useZenohSubscriptionContext();
   // Store all three types of weather data
   const [currentWeather, setCurrentWeather] = useState<CurrentWeather | null>(null);
   const [hourlyForecast, setHourlyForecast] = useState<HourlyForecast | null>(null);
@@ -102,9 +100,9 @@ export function WeatherViewPanel({
   }, []);
 
   // Subscribe to all three topics
-  const { messageCount: currentCount } = useZenohSubscriber(session, currentTopic, handleCurrentSample);
-  const { messageCount: hourlyCount } = useZenohSubscriber(session, hourlyTopic, handleHourlySample);
-  const { messageCount: dailyCount } = useZenohSubscriber(session, dailyTopic, handleDailySample);
+  const { messageCount: currentCount } = useZenohSubscription(currentTopic, handleCurrentSample);
+  const { messageCount: hourlyCount } = useZenohSubscription(hourlyTopic, handleHourlySample);
+  const { messageCount: dailyCount } = useZenohSubscription(dailyTopic, handleDailySample);
 
   const totalMessages = currentCount + hourlyCount + dailyCount;
 
@@ -122,6 +120,13 @@ export function WeatherViewPanel({
 
   // Send location update to server via Zenoh publish
   const handleSendLocation = useCallback(async () => {
+    const session = getSession();
+    if (!session) {
+      console.error('[WeatherView] No session available for publishing');
+      setLocationUpdateStatus('error');
+      return;
+    }
+
     const lat = parseFloat(editLatitude);
     const lon = parseFloat(editLongitude);
 
@@ -177,7 +182,7 @@ export function WeatherViewPanel({
     } finally {
       setIsSendingLocation(false);
     }
-  }, [session, editLatitude, editLongitude]);
+  }, [getSession, editLatitude, editLongitude]);
 
   const renderCurrentWeather = (weather: CurrentWeather) => {
     const desc = getWeatherDescription(weather.weatherCode);
@@ -287,7 +292,7 @@ export function WeatherViewPanel({
   const hasAnyData = currentWeather || hourlyForecast || dailyForecast;
 
   return (
-    <div className={`weather-view-panel ${isMaximized ? 'maximized' : ''}`}>
+    <div className="weather-view-panel">
       <div className="panel-header">
         <div className="panel-header-left">
           {dragHandleProps && (
@@ -309,19 +314,6 @@ export function WeatherViewPanel({
             <span className="stat-value mono">{totalMessages.toLocaleString()}</span>
             <span className="stat-label">msgs</span>
           </span>
-          {onMaximize && (
-            <button className="icon-btn maximize-btn" onClick={onMaximize} title={isMaximized ? 'Restore' : 'Maximize'}>
-              {isMaximized ? (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" />
-                </svg>
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
-                </svg>
-              )}
-            </button>
-          )}
           <button className="icon-btn" onClick={() => setIsEditing(!isEditing)} title="Edit location">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" />
@@ -355,6 +347,10 @@ export function WeatherViewPanel({
             {dailyForecast && renderDailyForecast(dailyForecast)}
           </div>
         )}
+      </div>
+
+      <div className="panel-footer">
+        <span className="footer-info">weather/current, weather/hourly, weather/daily</span>
       </div>
 
       {isEditing && (
@@ -572,20 +568,27 @@ export function WeatherViewPanel({
         }
 
         .weather-content-container {
-          flex: 1;
-          min-height: 200px;
-          max-height: 600px;
-          overflow: auto;
+          position: relative;
+          aspect-ratio: 16 / 9;
+          min-height: 240px;
+          overflow-y: auto;
+          overflow-x: hidden;
           background: var(--bg-primary);
         }
 
+        .weather-panel.maximized .weather-content-container {
+          aspect-ratio: unset;
+          flex: 1;
+          min-height: 400px;
+        }
+
         .weather-waiting {
+          position: absolute;
+          inset: 0;
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          height: 100%;
-          min-height: 200px;
           color: var(--text-muted);
           gap: 12px;
           padding: 20px;
@@ -820,6 +823,18 @@ export function WeatherViewPanel({
           font-size: 10px;
           color: var(--accent-secondary);
           flex-shrink: 0;
+        }
+
+        .panel-footer {
+          padding: 8px 12px;
+          background: var(--bg-tertiary);
+          border-top: 1px solid var(--border-color);
+        }
+
+        .footer-info {
+          font-size: 11px;
+          color: var(--text-muted);
+          font-family: 'JetBrains Mono', monospace;
         }
 
         /* Edit Footer Styles */
@@ -1133,8 +1148,7 @@ export function WeatherViewPanel({
           }
 
           .weather-content-container {
-            min-height: 150px;
-            max-height: none;
+            min-height: 180px;
           }
 
           .weather-content {
