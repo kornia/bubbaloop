@@ -1,5 +1,5 @@
 site_name: Bubbaloop
-site_description: Multi-camera RTSP streaming with ROS-Z and Foxglove
+site_description: Orchestration system for Physical AI - sensors, actuators, and services
 site_author: Edgar Riba
 
 repo_name: kornia/bubbaloop
@@ -23,6 +23,7 @@ theme:
   features:
     - navigation.sections
     - navigation.expand
+    - navigation.indexes
     - content.code.copy
     - content.code.annotate
   icon:
@@ -50,10 +51,39 @@ extra_javascript:
 nav:
   - Home: index.md
   - Getting Started:
-    - Quickstart: quickstart.md
-    - Configuration: configuration.md
-  - Architecture: architecture.md
-  - Visualization: visualization.md
+    - Quickstart: getting-started/quickstart.md
+    - Installation: getting-started/installation.md
+    - Configuration: getting-started/configuration.md
+  - Concepts:
+    - Architecture: concepts/architecture.md
+    - Messaging: concepts/messaging.md
+    - Topics: concepts/topics.md
+  - Components:
+    - Overview: components/index.md
+    - Sensors:
+      - Overview: components/sensors/index.md
+      - RTSP Camera: components/sensors/rtsp-camera.md
+    - Services:
+      - Overview: components/services/index.md
+      - OpenMeteo Weather: components/services/openmeteo.md
+    - Actuators:
+      - Overview: components/actuators/index.md
+  - Dashboard:
+    - Overview: dashboard/index.md
+    - Panels:
+      - Camera: dashboard/panels/camera.md
+      - Raw Data: dashboard/panels/raw-data.md
+      - Weather: dashboard/panels/weather.md
+      - Stats & Metrics: dashboard/panels/stats.md
+    - Remote Access: dashboard/remote-access.md
+  - API Reference:
+    - Overview: api/index.md
+    - Header: api/header.md
+    - Camera Messages: api/camera.md
+    - Weather Messages: api/weather.md
+  - Reference:
+    - CLI Commands: reference/cli.md
+    - Troubleshooting: reference/troubleshooting.md
 
 extra:
   social:
