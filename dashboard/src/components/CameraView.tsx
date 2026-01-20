@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
-import { Session, Sample } from '@eclipse-zenoh/zenoh-ts';
-import { useZenohSubscriber, getSamplePayload } from '../lib/zenoh';
+import { Sample } from '@eclipse-zenoh/zenoh-ts';
+import { getSamplePayload } from '../lib/zenoh';
+import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { H264Decoder } from '../lib/h264-decoder';
 import { decodeCompressedImage, Header } from '../proto/camera';
 
@@ -9,39 +10,33 @@ interface DragHandleProps {
 }
 
 interface CameraViewProps {
-  session: Session;
   cameraName: string;
   topic: string;
   isMaximized?: boolean;
   onMaximize?: () => void;
   onTopicChange?: (topic: string) => void;
-  onNameChange?: (name: string) => void;
   onRemove?: () => void;
   availableTopics?: string[];
   dragHandleProps?: DragHandleProps;
 }
 
 export function CameraView({
-  session,
   cameraName,
   topic,
   isMaximized = false,
   onMaximize,
   onTopicChange,
-  onNameChange,
   onRemove,
   availableTopics = [],
   dragHandleProps,
 }: CameraViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const decoderRef = useRef<H264Decoder | null>(null);
   const [decoderError, setDecoderError] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
   const frameCountRef = useRef(0);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(cameraName);
-  const [editTopic, setEditTopic] = useState(topic);
   const [showInfo, setShowInfo] = useState(false);
   const lastMetaRef = useRef<{
     header?: Header;
@@ -121,7 +116,8 @@ export function CameraView({
         dataSize: msg.data.length,
       };
 
-      if (msg.format !== 'h264') {
+      // Skip non-h264 formats (but allow empty format in case field is missing)
+      if (msg.format && msg.format !== 'h264') {
         console.warn(`[CameraView] Unexpected format: ${msg.format}`);
         return;
       }
@@ -141,7 +137,7 @@ export function CameraView({
   }, []);
 
   // Subscribe to camera topic
-  const { fps, messageCount } = useZenohSubscriber(session, topic, handleSample);
+  useZenohSubscription(topic, handleSample);
 
   // Periodically update metadata state when info panel is visible
   useEffect(() => {
@@ -161,24 +157,15 @@ export function CameraView({
     };
   }, [showInfo]);
 
-  const handleSaveEdit = () => {
-    if (editName !== cameraName && onNameChange) {
-      onNameChange(editName);
+  // Handle topic change from dropdown
+  const handleTopicSelect = (newTopic: string) => {
+    if (newTopic && newTopic !== topic && onTopicChange) {
+      onTopicChange(newTopic);
     }
-    if (editTopic !== topic && onTopicChange) {
-      onTopicChange(editTopic);
-    }
-    setIsEditing(false);
-  };
-
-  const handleCancelEdit = () => {
-    setEditName(cameraName);
-    setEditTopic(topic);
-    setIsEditing(false);
   };
 
   return (
-    <div className={`camera-view ${isMaximized ? 'maximized' : ''}`}>
+    <div ref={panelRef} className={`camera-view ${isMaximized ? 'maximized' : ''}`}>
       <div className="camera-header">
         <div className="camera-header-left">
           {dragHandleProps && (
@@ -193,27 +180,9 @@ export function CameraView({
               </svg>
             </button>
           )}
-          {isEditing ? (
-            <input
-              type="text"
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              className="camera-name-input"
-              autoFocus
-            />
-          ) : (
-            <span className="camera-name">{cameraName}</span>
-          )}
+          <span className="panel-type-badge">CAMERA</span>
         </div>
         <div className="camera-stats">
-          <span className="stat">
-            <span className="stat-value">{fps}</span>
-            <span className="stat-label">FPS</span>
-          </span>
-          <span className="stat">
-            <span className="stat-value mono">{messageCount.toLocaleString()}</span>
-            <span className="stat-label">frames</span>
-          </span>
           {dimensions && (
             <span className="stat">
               <span className="stat-value mono">{dimensions.width}x{dimensions.height}</span>
@@ -224,7 +193,7 @@ export function CameraView({
             {isReady ? 'LIVE' : 'INIT'}
           </span>
           {onMaximize && (
-            <button className="icon-btn" onClick={onMaximize} title={isMaximized ? 'Restore' : 'Maximize'}>
+            <button className="icon-btn maximize-btn" onClick={onMaximize} title={isMaximized ? 'Restore' : 'Maximize'}>
               {isMaximized ? (
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" />
@@ -240,12 +209,6 @@ export function CameraView({
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="10" />
               <path d="M12 16v-4M12 8h.01" />
-            </svg>
-          </button>
-          <button className="icon-btn" onClick={() => setIsEditing(!isEditing)} title="Edit camera">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
-              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
             </svg>
           </button>
           {onRemove && (
@@ -333,40 +296,26 @@ export function CameraView({
         </div>
       )}
 
-      {isEditing ? (
-        <div className="camera-edit-footer">
-          <div className="topic-selector">
-            <label>Topic:</label>
-            {availableTopics.length > 0 ? (
-              <select
-                value={editTopic}
-                onChange={(e) => setEditTopic(e.target.value)}
-                className="topic-select"
-              >
-                <option value="">-- Select topic --</option>
-                {availableTopics.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            ) : null}
-            <input
-              type="text"
-              value={editTopic}
-              onChange={(e) => setEditTopic(e.target.value)}
-              placeholder="Enter topic pattern..."
-              className="topic-input mono"
-            />
-          </div>
-          <div className="edit-actions">
-            <button className="btn-secondary" onClick={handleCancelEdit}>Cancel</button>
-            <button className="btn-primary" onClick={handleSaveEdit}>Save</button>
-          </div>
-        </div>
-      ) : (
-        <div className="camera-footer">
-          <span className="topic mono">{topic}</span>
-        </div>
-      )}
+      <div className="camera-footer">
+        {(() => {
+          // Filter to only show CompressedImage topics
+          const cameraTopics = availableTopics.filter(t => t.includes('CompressedImage'));
+          return cameraTopics.length > 0 ? (
+            <select
+              className="topic-select"
+              value={topic}
+              onChange={(e) => handleTopicSelect(e.target.value)}
+            >
+              {!topic && <option value="">-- Select camera --</option>}
+              {cameraTopics.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          ) : (
+            <span className="topic mono">{topic || 'No camera topics available'}</span>
+          );
+        })()}
+      </div>
 
       <style>{`
         .camera-view {
@@ -388,6 +337,7 @@ export function CameraView({
 
         .camera-view.maximized {
           border-color: var(--accent-primary);
+          height: calc(100vh - 140px);
         }
 
         .camera-header {
@@ -440,15 +390,16 @@ export function CameraView({
           text-overflow: ellipsis;
         }
 
-        .camera-name-input {
-          font-weight: 600;
-          font-size: 14px;
-          color: var(--text-primary);
-          background: var(--bg-primary);
-          border: 1px solid var(--accent-primary);
+        .panel-type-badge {
+          padding: 2px 8px;
           border-radius: 4px;
-          padding: 2px 6px;
-          width: 120px;
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.5px;
+          background: rgba(0, 229, 255, 0.15);
+          color: var(--accent-secondary);
+          text-transform: uppercase;
+          white-space: nowrap;
         }
 
         .camera-stats {
@@ -528,20 +479,27 @@ export function CameraView({
         }
 
         .camera-canvas-container {
-          flex: 1;
           display: flex;
           align-items: center;
           justify-content: center;
           background: #000;
           min-height: 240px;
+          aspect-ratio: 16 / 9;
           position: relative;
         }
 
+        .camera-view.maximized .camera-canvas-container {
+          aspect-ratio: unset;
+          flex: 1;
+          min-height: 60vh;
+        }
+
         .camera-canvas {
-          max-width: 100%;
-          max-height: 100%;
+          width: 100%;
+          height: 100%;
           object-fit: contain;
         }
+
 
         .camera-error {
           display: flex;
@@ -625,97 +583,21 @@ export function CameraView({
           word-break: break-all;
         }
 
-        .camera-edit-footer {
-          padding: 12px;
-          background: var(--bg-tertiary);
-          border-top: 1px solid var(--border-color);
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-          min-width: 0;
-          overflow: hidden;
-        }
-
-        .topic-selector {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-          min-width: 0;
-          width: 100%;
-        }
-
-        .topic-selector label {
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          color: var(--text-muted);
-        }
-
         .topic-select {
-          padding: 6px 10px;
+          width: 100%;
+          padding: 6px 8px;
           background: var(--bg-primary);
           border: 1px solid var(--border-color);
-          border-radius: 6px;
+          border-radius: 4px;
           color: var(--text-primary);
-          font-size: 12px;
-          width: 100%;
-          box-sizing: border-box;
-          min-width: 0;
-        }
-
-        .topic-input {
-          padding: 6px 10px;
-          background: var(--bg-primary);
-          border: 1px solid var(--border-color);
-          border-radius: 6px;
-          color: var(--text-primary);
-          font-size: 12px;
-          width: 100%;
-          box-sizing: border-box;
-          min-width: 0;
-        }
-
-        .topic-input:focus,
-        .topic-select:focus {
-          border-color: var(--accent-primary);
-          outline: none;
-        }
-
-        .edit-actions {
-          display: flex;
-          gap: 8px;
-          justify-content: flex-end;
-        }
-
-        .btn-primary,
-        .btn-secondary {
-          padding: 6px 16px;
-          border-radius: 6px;
-          font-size: 12px;
-          font-weight: 500;
+          font-size: 11px;
+          font-family: 'JetBrains Mono', monospace;
           cursor: pointer;
-          transition: all 0.15s;
         }
 
-        .btn-primary {
-          background: var(--accent-primary);
-          border: none;
-          color: white;
-        }
-
-        .btn-primary:hover {
-          background: #5c7cfa;
-        }
-
-        .btn-secondary {
-          background: transparent;
-          border: 1px solid var(--border-color);
-          color: var(--text-secondary);
-        }
-
-        .btn-secondary:hover {
-          background: var(--bg-primary);
-          border-color: var(--text-muted);
+        .topic-select:focus {
+          outline: none;
+          border-color: var(--accent-primary);
         }
 
         .topic {
@@ -725,6 +607,114 @@ export function CameraView({
           overflow: hidden;
           text-overflow: ellipsis;
           display: block;
+        }
+
+        /* Mobile responsive styles */
+        @media (max-width: 768px) {
+          .camera-header {
+            padding: 8px 10px;
+            flex-wrap: wrap;
+          }
+
+          .camera-header-left {
+            gap: 6px;
+          }
+
+          .camera-name {
+            font-size: 13px;
+          }
+
+          .panel-type-badge {
+            padding: 2px 6px;
+            font-size: 9px;
+          }
+
+          .camera-stats {
+            gap: 8px;
+          }
+
+          .stat {
+            gap: 2px;
+          }
+
+          .stat-value {
+            font-size: 12px;
+          }
+
+          .stat-label {
+            font-size: 9px;
+          }
+
+          .status-badge {
+            padding: 2px 6px;
+            font-size: 9px;
+          }
+
+          .icon-btn {
+            width: 32px;
+            height: 32px;
+            min-width: 32px;
+          }
+
+          .maximize-btn {
+            display: none;
+          }
+
+          .camera-canvas-container {
+            min-height: 180px;
+          }
+
+          .camera-footer {
+            padding: 6px 10px;
+          }
+
+          .camera-info-panel {
+            padding: 10px;
+          }
+
+          .info-grid {
+            gap: 6px;
+          }
+
+          .info-label {
+            font-size: 9px;
+          }
+
+          .info-value {
+            font-size: 11px;
+          }
+
+          .topic-select {
+            padding: 10px 8px;
+            font-size: 14px;
+          }
+
+          .topic {
+            font-size: 10px;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .camera-header {
+            padding: 6px 8px;
+          }
+
+          .camera-stats .stat:not(:last-child) {
+            display: none;
+          }
+
+          .camera-canvas-container {
+            min-height: 150px;
+          }
+
+          .info-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .icon-btn {
+            width: 36px;
+            height: 36px;
+          }
         }
       `}</style>
     </div>

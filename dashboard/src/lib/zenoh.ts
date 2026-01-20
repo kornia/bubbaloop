@@ -237,8 +237,8 @@ export function useZenohTopicDiscovery(
       const subscriber = await session.declareSubscriber(pattern, {
         handler: (sample: Sample) => {
           const keyExpr = sample.keyexpr().toString();
-          // Filter for compressed image topics
-          if (keyExpr.includes('compressed') && !topicsSetRef.current.has(keyExpr)) {
+          // Collect all topics
+          if (!topicsSetRef.current.has(keyExpr)) {
             topicsSetRef.current.add(keyExpr);
             setTopics(Array.from(topicsSetRef.current).sort());
           }

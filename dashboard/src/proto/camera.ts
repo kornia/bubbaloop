@@ -1,10 +1,10 @@
 // Re-export compiled protobuf types and provide helper functions
-import { bubbaloop } from './camera.pb.js';
+import { bubbaloop } from './messages.pb.js';
 import Long from 'long';
 
 // Re-export the proto types
 export const CompressedImageProto = bubbaloop.camera.v1.CompressedImage;
-export const HeaderProto = bubbaloop.camera.v1.Header;
+export const HeaderProto = bubbaloop.header.v1.Header;
 
 // TypeScript interfaces for convenience
 export interface Header {
@@ -52,7 +52,7 @@ export function decodeCompressedImage(data: Uint8Array): CompressedImage {
       data: message.data ?? new Uint8Array(0),
     };
   } catch (error) {
-    console.error('[Proto] Failed to decode CompressedImage:', error);
+    console.error('[Proto] Failed to decode CompressedImage:', error, 'data length:', data.length);
     return {
       format: '',
       data: new Uint8Array(0),

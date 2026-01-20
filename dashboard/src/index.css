@@ -70,3 +70,22 @@ code, pre, .mono {
   background: var(--accent-primary);
   color: white;
 }
+
+/* Prevent iOS zoom on input focus */
+@media screen and (max-width: 768px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Prevent double-tap zoom and other touch behaviors */
+html {
+  touch-action: manipulation;
+}
+
+/* Ensure inputs don't cause layout shifts */
+input, select, textarea, button {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}

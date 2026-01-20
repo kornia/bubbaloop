@@ -45,3 +45,16 @@ processes:
     availability:
       restart: on_failure
       max_restarts: 3
+
+  weather:
+    command: pixi run openmeteo
+    namespace: nodes
+    depends_on:
+      build:
+        condition: process_completed_successfully
+      bridge:
+        condition: process_started
+        wait_for: 2s
+    availability:
+      restart: on_failure
+      max_restarts: 3
