@@ -5,9 +5,11 @@ use crate::api::{
 use crate::config::{FetchConfig, LocationConfig};
 use bubbaloop::schemas::{
     CurrentWeather, DailyForecast, DailyForecastEntry, Header, HourlyForecast, HourlyForecastEntry,
+    LocationConfig as LocationConfigProto,
 };
 use ros_z::{context::ZContext, msg::ProtobufSerdes, pubsub::ZPub, Builder, Result as ZResult};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 
 /// Resolved location with coordinates
@@ -71,7 +73,12 @@ fn convert_hourly_forecast(
         .enumerate()
         .map(|(i, &time)| HourlyForecastEntry {
             time: time as u64,
-            temperature_2m: response.hourly.temperature_2m.get(i).copied().unwrap_or(0.0),
+            temperature_2m: response
+                .hourly
+                .temperature_2m
+                .get(i)
+                .copied()
+                .unwrap_or(0.0),
             relative_humidity_2m: response
                 .hourly
                 .relative_humidity_2m
@@ -86,7 +93,12 @@ fn convert_hourly_forecast(
                 .unwrap_or(0.0),
             precipitation: response.hourly.precipitation.get(i).copied().unwrap_or(0.0),
             weather_code: response.hourly.weather_code.get(i).copied().unwrap_or(0),
-            wind_speed_10m: response.hourly.wind_speed_10m.get(i).copied().unwrap_or(0.0),
+            wind_speed_10m: response
+                .hourly
+                .wind_speed_10m
+                .get(i)
+                .copied()
+                .unwrap_or(0.0),
             wind_direction_10m: response
                 .hourly
                 .wind_direction_10m
@@ -194,12 +206,7 @@ fn convert_daily_forecast(
                 .get(i)
                 .copied()
                 .unwrap_or(0.0),
-            sunrise: response
-                .daily
-                .sunrise
-                .get(i)
-                .cloned()
-                .unwrap_or_default(),
+            sunrise: response.daily.sunrise.get(i).cloned().unwrap_or_default(),
             sunset: response.daily.sunset.get(i).cloned().unwrap_or_default(),
         })
         .collect();
@@ -282,19 +289,22 @@ impl OpenMeteoNode {
 
     pub async fn run(self, shutdown_tx: tokio::sync::watch::Sender<()>) -> ZResult<()> {
         let mut shutdown_rx = shutdown_tx.subscribe();
-        let location_label = self
-            .location
+
+        // Mutable location that can be updated via Zenoh
+        let mut location = self.location.clone();
+        let mut location_label = location
             .city
             .clone()
-            .unwrap_or_else(|| format!("{:.2},{:.2}", self.location.latitude, self.location.longitude));
+            .unwrap_or_else(|| format!("{:.2},{:.2}", location.latitude, location.longitude));
 
         // Create ROS-Z node
-        let node = self.ctx.create_node("weather").build()?;
+        let node = Arc::new(self.ctx.create_node("weather").build()?);
 
         // Create publishers with simple topic names
         let current_topic = "/weather/current";
         let hourly_topic = "/weather/hourly";
         let daily_topic = "/weather/daily";
+        let config_topic = "/weather/config/location";
 
         let current_pub: ZPub<CurrentWeather, ProtobufSerdes<CurrentWeather>> = node
             .create_pub::<CurrentWeather>(current_topic)
@@ -311,6 +321,39 @@ impl OpenMeteoNode {
             .with_serdes::<ProtobufSerdes<DailyForecast>>()
             .build()?;
 
+        // Create subscriber for location updates
+        let location_sub = node
+            .create_sub::<LocationConfigProto>(config_topic)
+            .with_serdes::<ProtobufSerdes<LocationConfigProto>>()
+            .build()?;
+
+        // Channel for location updates from subscriber task
+        let (location_tx, mut location_rx) = mpsc::channel::<LocationConfigProto>(10);
+
+        // Spawn location subscriber task
+        let mut shutdown_rx_loc = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx_loc.changed() => break,
+                    result = location_sub.async_recv() => {
+                        match result {
+                            Ok(config) => {
+                                if let Err(e) = location_tx.send(config).await {
+                                    log::error!("Failed to send location update: {}", e);
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("Error receiving location config: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            log::info!("Location subscriber task shutting down");
+        });
+
         log::info!(
             "[{}] Weather node started - current: {}s, hourly: {}s, daily: {}s",
             location_label,
@@ -318,7 +361,16 @@ impl OpenMeteoNode {
             self.fetch_config.hourly_interval_secs,
             self.fetch_config.daily_interval_secs,
         );
-        log::info!("Topics: {}, {}, {}", current_topic, hourly_topic, daily_topic);
+        log::info!(
+            "Topics: {}, {}, {}",
+            current_topic,
+            hourly_topic,
+            daily_topic
+        );
+        log::info!(
+            "Location config topic: {} (publish to change location)",
+            config_topic
+        );
 
         // Create intervals for each data type
         let mut current_interval =
@@ -341,11 +393,41 @@ impl OpenMeteoNode {
                     break;
                 }
 
+                // Handle location updates
+                Some(new_config) = location_rx.recv() => {
+                    log::info!(
+                        "Received location update: ({:.4}, {:.4}) timezone={}",
+                        new_config.latitude,
+                        new_config.longitude,
+                        if new_config.timezone.is_empty() { "auto" } else { &new_config.timezone }
+                    );
+
+                    // Update location
+                    location = ResolvedLocation {
+                        latitude: new_config.latitude,
+                        longitude: new_config.longitude,
+                        timezone: if new_config.timezone.is_empty() {
+                            None
+                        } else {
+                            Some(new_config.timezone)
+                        },
+                        city: None,
+                    };
+                    location_label = format!("{:.2},{:.2}", location.latitude, location.longitude);
+
+                    // Reset intervals to trigger immediate fetch with new location
+                    current_interval.reset();
+                    hourly_interval.reset();
+                    daily_interval.reset();
+
+                    log::info!("[{}] Location updated, fetching weather data...", location_label);
+                }
+
                 _ = current_interval.tick() => {
                     match self.client.fetch_current(
-                        self.location.latitude,
-                        self.location.longitude,
-                        self.location.timezone.as_deref(),
+                        location.latitude,
+                        location.longitude,
+                        location.timezone.as_deref(),
                     ).await {
                         Ok(response) => {
                             let temp = response.current.temperature_2m;
@@ -363,9 +445,9 @@ impl OpenMeteoNode {
 
                 _ = hourly_interval.tick() => {
                     match self.client.fetch_hourly(
-                        self.location.latitude,
-                        self.location.longitude,
-                        self.location.timezone.as_deref(),
+                        location.latitude,
+                        location.longitude,
+                        location.timezone.as_deref(),
                         self.fetch_config.hourly_forecast_hours,
                     ).await {
                         Ok(response) => {
@@ -384,9 +466,9 @@ impl OpenMeteoNode {
 
                 _ = daily_interval.tick() => {
                     match self.client.fetch_daily(
-                        self.location.latitude,
-                        self.location.longitude,
-                        self.location.timezone.as_deref(),
+                        location.latitude,
+                        location.longitude,
+                        location.timezone.as_deref(),
                         self.fetch_config.daily_forecast_days,
                     ).await {
                         Ok(response) => {

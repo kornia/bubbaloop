@@ -103,8 +103,8 @@ impl Default for Config {
 impl Config {
     /// Load configuration from a YAML file
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
-        let contents =
-            std::fs::read_to_string(path.as_ref()).map_err(|e| ConfigError::IoError(e.to_string()))?;
+        let contents = std::fs::read_to_string(path.as_ref())
+            .map_err(|e| ConfigError::IoError(e.to_string()))?;
         Self::parse(&contents)
     }
 
