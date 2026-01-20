@@ -81,3 +81,10 @@ message DailyForecast {
     // Forecast entries (typically 7-16 days)
     repeated DailyForecastEntry entries = 5;
 }
+
+// Location configuration for setting weather location
+message LocationConfig {
+    double latitude = 1;
+    double longitude = 2;
+    string timezone = 3;     // Optional timezone (e.g., "Europe/Madrid")
+}
