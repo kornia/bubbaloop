@@ -81,7 +81,7 @@ impl Default for FetchConfig {
 }
 
 /// Root configuration structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// Location configuration (optional, auto-discovers if not specified)
     #[serde(default)]
@@ -89,15 +89,6 @@ pub struct Config {
     /// Fetch configuration (optional, uses defaults if not specified)
     #[serde(default)]
     pub fetch: FetchConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            location: LocationConfig::default(),
-            fetch: FetchConfig::default(),
-        }
-    }
 }
 
 impl Config {
