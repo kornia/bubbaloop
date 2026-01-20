@@ -99,6 +99,7 @@ export function JsonViewPanel({
   const [editName, setEditName] = useState(panelName);
   const [editTopic, setEditTopic] = useState(topic);
   const lastUpdateRef = useRef<number>(0);
+  const editFooterRef = useRef<HTMLDivElement>(null);
 
   // Handle incoming samples from Zenoh
   const handleSample = useCallback((sample: Sample) => {
@@ -119,6 +120,15 @@ export function JsonViewPanel({
 
   // Subscribe to topic
   const { fps, messageCount } = useZenohSubscriber(session, topic, handleSample);
+
+  // Scroll edit footer into view when editing starts
+  useEffect(() => {
+    if (isEditing && editFooterRef.current) {
+      setTimeout(() => {
+        editFooterRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 100);
+    }
+  }, [isEditing]);
 
   const handleSaveEdit = () => {
     if (editName !== panelName && onNameChange) {
@@ -244,7 +254,7 @@ export function JsonViewPanel({
       </div>
 
       {isEditing ? (
-        <div className="panel-edit-footer">
+        <div ref={editFooterRef} className="panel-edit-footer">
           <div className="topic-selector">
             <label>Topic:</label>
             {availableTopics.length > 0 ? (
@@ -588,6 +598,104 @@ export function JsonViewPanel({
           overflow: hidden;
           text-overflow: ellipsis;
           display: block;
+        }
+
+        /* Mobile responsive styles */
+        @media (max-width: 768px) {
+          .panel-header {
+            padding: 8px 10px;
+            flex-wrap: wrap;
+          }
+
+          .panel-header-left {
+            gap: 6px;
+          }
+
+          .panel-name {
+            font-size: 13px;
+          }
+
+          .panel-type-badge {
+            padding: 2px 6px;
+            font-size: 9px;
+          }
+
+          .panel-stats {
+            gap: 8px;
+          }
+
+          .stat {
+            gap: 2px;
+          }
+
+          .stat-value {
+            font-size: 12px;
+          }
+
+          .stat-label {
+            font-size: 9px;
+          }
+
+          .icon-btn {
+            width: 32px;
+            height: 32px;
+            min-width: 32px;
+          }
+
+          .json-content-container {
+            min-height: 150px;
+            max-height: none;
+          }
+
+          .json-content {
+            padding: 10px;
+          }
+
+          .panel-footer {
+            padding: 6px 10px;
+          }
+
+          .panel-edit-footer {
+            padding: 16px;
+            gap: 16px;
+          }
+
+          .topic-input,
+          .topic-select {
+            padding: 14px 12px;
+            font-size: 16px;
+          }
+
+          .edit-actions {
+            flex-direction: column;
+            gap: 10px;
+          }
+
+          .btn-primary,
+          .btn-secondary {
+            width: 100%;
+            padding: 14px 24px;
+            font-size: 15px;
+          }
+
+          .topic {
+            font-size: 10px;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .panel-header {
+            padding: 6px 8px;
+          }
+
+          .panel-stats .stat:not(:last-child) {
+            display: none;
+          }
+
+          .icon-btn {
+            width: 36px;
+            height: 36px;
+          }
         }
       `}</style>
     </div>

@@ -4,7 +4,7 @@ import Long from 'long';
 
 // Re-export the proto types
 export const CompressedImageProto = bubbaloop.camera.v1.CompressedImage;
-export const HeaderProto = bubbaloop.camera.v1.Header;
+export const HeaderProto = bubbaloop.header.v1.Header;
 
 // TypeScript interfaces for convenience
 export interface Header {

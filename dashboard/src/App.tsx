@@ -91,6 +91,25 @@ function StatusIndicator({ status, endpoint, onReconnect }: { status: Connection
           0%, 100% { opacity: 1; }
           50% { opacity: 0.4; }
         }
+
+        /* Mobile responsive styles */
+        @media (max-width: 768px) {
+          .status-indicator {
+            gap: 6px;
+          }
+
+          .status-endpoint {
+            display: none;
+          }
+
+          .status-label {
+            font-size: 11px;
+          }
+
+          .reconnect-btn {
+            padding: 4px 10px;
+          }
+        }
       `}</style>
     </div>
   );
@@ -307,6 +326,42 @@ export default function App() {
 
         @keyframes spin {
           to { transform: rotate(360deg); }
+        }
+
+        /* Mobile responsive styles */
+        @media (max-width: 768px) {
+          .app-header {
+            padding: 12px 16px;
+            flex-wrap: wrap;
+            gap: 8px;
+          }
+
+          .header-left {
+            gap: 8px;
+          }
+
+          .app-header h1 {
+            font-size: 16px;
+          }
+
+          .header-subtitle {
+            display: none;
+          }
+
+          .error-banner {
+            padding: 8px 16px;
+            font-size: 12px;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .app-header {
+            padding: 10px 12px;
+          }
+
+          .app-header h1 {
+            font-size: 14px;
+          }
         }
       `}</style>
     </div>

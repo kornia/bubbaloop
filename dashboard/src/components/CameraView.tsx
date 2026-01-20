@@ -34,6 +34,8 @@ export function CameraView({
   dragHandleProps,
 }: CameraViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const editFooterRef = useRef<HTMLDivElement>(null);
   const decoderRef = useRef<H264Decoder | null>(null);
   const [decoderError, setDecoderError] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
@@ -161,6 +163,16 @@ export function CameraView({
     };
   }, [showInfo]);
 
+  // Scroll edit footer into view when editing starts
+  useEffect(() => {
+    if (isEditing && editFooterRef.current) {
+      // Small delay to let the DOM update
+      setTimeout(() => {
+        editFooterRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 100);
+    }
+  }, [isEditing]);
+
   const handleSaveEdit = () => {
     if (editName !== cameraName && onNameChange) {
       onNameChange(editName);
@@ -178,7 +190,7 @@ export function CameraView({
   };
 
   return (
-    <div className={`camera-view ${isMaximized ? 'maximized' : ''}`}>
+    <div ref={panelRef} className={`camera-view ${isMaximized ? 'maximized' : ''}`}>
       <div className="camera-header">
         <div className="camera-header-left">
           {dragHandleProps && (
@@ -334,7 +346,7 @@ export function CameraView({
       )}
 
       {isEditing ? (
-        <div className="camera-edit-footer">
+        <div ref={editFooterRef} className="camera-edit-footer">
           <div className="topic-selector">
             <label>Topic:</label>
             {availableTopics.length > 0 ? (
@@ -725,6 +737,123 @@ export function CameraView({
           overflow: hidden;
           text-overflow: ellipsis;
           display: block;
+        }
+
+        /* Mobile responsive styles */
+        @media (max-width: 768px) {
+          .camera-header {
+            padding: 8px 10px;
+            flex-wrap: wrap;
+          }
+
+          .camera-header-left {
+            gap: 6px;
+          }
+
+          .camera-name {
+            font-size: 13px;
+          }
+
+          .camera-stats {
+            gap: 8px;
+          }
+
+          .stat {
+            gap: 2px;
+          }
+
+          .stat-value {
+            font-size: 12px;
+          }
+
+          .stat-label {
+            font-size: 9px;
+          }
+
+          .status-badge {
+            padding: 2px 6px;
+            font-size: 9px;
+          }
+
+          .icon-btn {
+            width: 32px;
+            height: 32px;
+            min-width: 32px;
+          }
+
+          .camera-canvas-container {
+            min-height: 180px;
+          }
+
+          .camera-footer {
+            padding: 6px 10px;
+          }
+
+          .camera-info-panel {
+            padding: 10px;
+          }
+
+          .info-grid {
+            gap: 6px;
+          }
+
+          .info-label {
+            font-size: 9px;
+          }
+
+          .info-value {
+            font-size: 11px;
+          }
+
+          .camera-edit-footer {
+            padding: 16px;
+            gap: 16px;
+          }
+
+          .topic-input,
+          .topic-select {
+            padding: 14px 12px;
+            font-size: 16px;
+          }
+
+          .edit-actions {
+            flex-direction: column;
+            gap: 10px;
+          }
+
+          .btn-primary,
+          .btn-secondary {
+            width: 100%;
+            padding: 14px 24px;
+            font-size: 15px;
+          }
+
+          .topic {
+            font-size: 10px;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .camera-header {
+            padding: 6px 8px;
+          }
+
+          .camera-stats .stat:not(:last-child) {
+            display: none;
+          }
+
+          .camera-canvas-container {
+            min-height: 150px;
+          }
+
+          .info-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .icon-btn {
+            width: 36px;
+            height: 36px;
+          }
         }
       `}</style>
     </div>

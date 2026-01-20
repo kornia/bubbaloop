@@ -17,6 +17,8 @@ import {
 } from '@dnd-kit/sortable';
 import { SortableCameraCard } from './SortableCameraCard';
 import { SortableJsonCard } from './SortableJsonCard';
+import { SortableWeatherCard } from './SortableWeatherCard';
+import { SortableStatsCard } from './SortableStatsCard';
 import {
   PanelConfig,
   PanelType,
@@ -128,19 +130,45 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
   const addPanel = useCallback((type: PanelType) => {
     const newId = generatePanelId(type);
     const count = panels.filter((p) => p.type === type).length + 1;
-    const newPanel: PanelConfig = type === 'camera'
-      ? {
+    let newPanel: PanelConfig;
+
+    switch (type) {
+      case 'camera':
+        newPanel = {
           id: newId,
           name: `Camera ${count}`,
           topic: '',
           type: 'camera',
-        }
-      : {
+        };
+        break;
+      case 'json':
+        newPanel = {
           id: newId,
           name: `JSON ${count}`,
           topic: '',
           type: 'json',
         };
+        break;
+      case 'weather':
+        newPanel = {
+          id: newId,
+          name: `Weather ${count}`,
+          topic: '0/weather%current/**',
+          type: 'weather',
+        };
+        break;
+      case 'stats':
+        newPanel = {
+          id: newId,
+          name: `Stats ${count}`,
+          topic: '',
+          type: 'stats',
+        };
+        break;
+      default:
+        return;
+    }
+
     setPanels((prev) => [...prev, newPanel]);
     setPanelOrder((prev) => [...prev, newId]);
     setShowAddMenu(false);
@@ -192,6 +220,19 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                 </svg>
                 JSON Panel
               </button>
+              <button className="add-panel-option" onClick={() => addPanel('weather')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+                  <circle cx="12" cy="12" r="5" />
+                </svg>
+                Weather Panel
+              </button>
+              <button className="add-panel-option" onClick={() => addPanel('stats')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 20V10M12 20V4M6 20v-6" />
+                </svg>
+                Stats Panel
+              </button>
             </div>
           )}
         </div>
@@ -210,37 +251,71 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                 gridTemplateColumns: `repeat(${getGridCols()}, 1fr)`,
               }}
             >
-              {orderedPanels.map((panel) =>
-                panel.type === 'camera' ? (
-                  <SortableCameraCard
-                    key={panel.id}
-                    id={panel.id}
-                    session={session}
-                    cameraName={panel.name}
-                    topic={panel.topic}
-                    isMaximized={maximizedId === panel.id}
-                    onMaximize={() => toggleMaximize(panel.id)}
-                    onTopicChange={(topic) => updatePanel(panel.id, { topic })}
-                    onNameChange={(name) => updatePanel(panel.id, { name })}
-                    onRemove={() => removePanel(panel.id)}
-                    availableTopics={availableTopics}
-                  />
-                ) : (
-                  <SortableJsonCard
-                    key={panel.id}
-                    id={panel.id}
-                    session={session}
-                    panelName={panel.name}
-                    topic={panel.topic}
-                    isMaximized={maximizedId === panel.id}
-                    onMaximize={() => toggleMaximize(panel.id)}
-                    onTopicChange={(topic) => updatePanel(panel.id, { topic })}
-                    onNameChange={(name) => updatePanel(panel.id, { name })}
-                    onRemove={() => removePanel(panel.id)}
-                    availableTopics={availableTopics}
-                  />
-                )
-              )}
+              {orderedPanels.map((panel) => {
+                switch (panel.type) {
+                  case 'camera':
+                    return (
+                      <SortableCameraCard
+                        key={panel.id}
+                        id={panel.id}
+                        session={session}
+                        cameraName={panel.name}
+                        topic={panel.topic}
+                        isMaximized={maximizedId === panel.id}
+                        onMaximize={() => toggleMaximize(panel.id)}
+                        onTopicChange={(topic) => updatePanel(panel.id, { topic })}
+                        onNameChange={(name) => updatePanel(panel.id, { name })}
+                        onRemove={() => removePanel(panel.id)}
+                        availableTopics={availableTopics}
+                      />
+                    );
+                  case 'json':
+                    return (
+                      <SortableJsonCard
+                        key={panel.id}
+                        id={panel.id}
+                        session={session}
+                        panelName={panel.name}
+                        topic={panel.topic}
+                        isMaximized={maximizedId === panel.id}
+                        onMaximize={() => toggleMaximize(panel.id)}
+                        onTopicChange={(topic) => updatePanel(panel.id, { topic })}
+                        onNameChange={(name) => updatePanel(panel.id, { name })}
+                        onRemove={() => removePanel(panel.id)}
+                        availableTopics={availableTopics}
+                      />
+                    );
+                  case 'weather':
+                    return (
+                      <SortableWeatherCard
+                        key={panel.id}
+                        id={panel.id}
+                        session={session}
+                        panelName={panel.name}
+                        topic={panel.topic}
+                        isMaximized={maximizedId === panel.id}
+                        onMaximize={() => toggleMaximize(panel.id)}
+                        onNameChange={(name) => updatePanel(panel.id, { name })}
+                        onRemove={() => removePanel(panel.id)}
+                      />
+                    );
+                  case 'stats':
+                    return (
+                      <SortableStatsCard
+                        key={panel.id}
+                        id={panel.id}
+                        session={session}
+                        panelName={panel.name}
+                        isMaximized={maximizedId === panel.id}
+                        onMaximize={() => toggleMaximize(panel.id)}
+                        onNameChange={(name) => updatePanel(panel.id, { name })}
+                        onRemove={() => removePanel(panel.id)}
+                      />
+                    );
+                  default:
+                    return null;
+                }
+              })}
             </div>
           </SortableContext>
         </DndContext>
@@ -264,6 +339,19 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                   <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
                 </svg>
                 Add JSON
+              </button>
+              <button className="add-panel-btn large" onClick={() => addPanel('weather')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+                  <circle cx="12" cy="12" r="5" />
+                </svg>
+                Add Weather
+              </button>
+              <button className="add-panel-btn large" onClick={() => addPanel('stats')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 20V10M12 20V4M6 20v-6" />
+                </svg>
+                Add Stats
               </button>
             </div>
           </div>
@@ -407,6 +495,82 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
           display: flex;
           gap: 12px;
           justify-content: center;
+          flex-wrap: wrap;
+        }
+
+        /* Mobile responsive styles */
+        @media (max-width: 768px) {
+          .dashboard {
+            padding: 12px;
+          }
+
+          .dashboard-header {
+            margin-bottom: 12px;
+          }
+
+          .dashboard-title {
+            font-size: 12px;
+          }
+
+          .add-panel-btn {
+            padding: 10px 14px;
+            font-size: 12px;
+          }
+
+          .add-panel-btn.large {
+            padding: 10px 16px;
+            font-size: 13px;
+          }
+
+          .add-panel-menu {
+            min-width: 140px;
+          }
+
+          .add-panel-option {
+            padding: 14px 16px;
+            font-size: 14px;
+          }
+
+          .panel-grid {
+            gap: 12px;
+            grid-template-columns: 1fr !important;
+          }
+
+          .no-panels {
+            min-height: 300px;
+            padding: 20px;
+          }
+
+          .no-panels-icon {
+            font-size: 36px;
+          }
+
+          .no-panels-content h3 {
+            font-size: 16px;
+          }
+
+          .no-panels-content p {
+            font-size: 13px;
+          }
+
+          .no-panels-buttons {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .no-panels-buttons .add-panel-btn {
+            justify-content: center;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .dashboard {
+            padding: 8px;
+          }
+
+          .panel-grid {
+            gap: 8px;
+          }
         }
       `}</style>
     </div>
