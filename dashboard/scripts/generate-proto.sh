@@ -17,10 +17,14 @@ sed -i 's|import "bubbaloop/header.proto";|import "header.proto";|' "$TMP_DIR/we
 # Generate the proto files
 cd "$(dirname "$0")/.."
 
-# Camera proto
-pbjs -t static-module -w es6 -I "$TMP_DIR" -o src/proto/camera.pb.js "$TMP_DIR/camera.proto"
-pbts -o src/proto/camera.pb.d.ts src/proto/camera.pb.js
+# Generate ALL protos into a single file to avoid $root.bubbaloop being overwritten
+# Order: header first (dependency), then camera, then weather
+pbjs -t static-module -w es6 -o src/proto/messages.pb.js \
+  "$TMP_DIR/header.proto" \
+  "$TMP_DIR/camera.proto" \
+  "$TMP_DIR/weather.proto"
+pbts -o src/proto/messages.pb.d.ts src/proto/messages.pb.js
 
-# Weather proto
-pbjs -t static-module -w es6 -I "$TMP_DIR" -o src/proto/weather.pb.js "$TMP_DIR/weather.proto"
-pbts -o src/proto/weather.pb.d.ts src/proto/weather.pb.js
+# Fix protobufjs 7.x bug that adds incorrect 'error' parameter to decode functions
+sed -i 's/function decode(reader, length, error)/function decode(reader, length)/g' src/proto/messages.pb.js
+sed -i 's/if (tag === error)/if (false)/g' src/proto/messages.pb.js

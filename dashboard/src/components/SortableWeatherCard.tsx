@@ -7,22 +7,19 @@ import { WeatherViewPanel } from './WeatherView';
 interface SortableWeatherCardProps {
   id: string;
   session: Session;
-  panelName: string;
-  topic: string;
+  panelName: string; // Kept for compatibility, not used by WeatherViewPanel
+  topic: string;     // Kept for compatibility, not used by WeatherViewPanel
   isMaximized: boolean;
   onMaximize: () => void;
-  onNameChange: (name: string) => void;
   onRemove: () => void;
 }
 
 export function SortableWeatherCard({
   id,
   session,
-  panelName,
   topic,
   isMaximized,
   onMaximize,
-  onNameChange,
   onRemove,
 }: SortableWeatherCardProps) {
   const {
@@ -47,11 +44,9 @@ export function SortableWeatherCard({
     <div ref={setNodeRef} style={style}>
       <WeatherViewPanel
         session={session}
-        panelName={panelName}
         topic={topic}
         isMaximized={isMaximized}
         onMaximize={onMaximize}
-        onNameChange={onNameChange}
         onRemove={onRemove}
         dragHandleProps={{ ...attributes, ...listeners }}
       />

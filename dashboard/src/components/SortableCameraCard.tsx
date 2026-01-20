@@ -12,7 +12,6 @@ interface SortableCameraCardProps {
   isMaximized: boolean;
   onMaximize: () => void;
   onTopicChange: (topic: string) => void;
-  onNameChange: (name: string) => void;
   onRemove: () => void;
   availableTopics: string[];
 }
@@ -25,7 +24,6 @@ export function SortableCameraCard({
   isMaximized,
   onMaximize,
   onTopicChange,
-  onNameChange,
   onRemove,
   availableTopics,
 }: SortableCameraCardProps) {
@@ -56,7 +54,6 @@ export function SortableCameraCard({
         isMaximized={isMaximized}
         onMaximize={onMaximize}
         onTopicChange={onTopicChange}
-        onNameChange={onNameChange}
         onRemove={onRemove}
         availableTopics={availableTopics}
         dragHandleProps={{ ...attributes, ...listeners }}

@@ -7,20 +7,17 @@ import { StatsViewPanel } from './StatsView';
 interface SortableStatsCardProps {
   id: string;
   session: Session;
-  panelName: string;
+  panelName: string; // Kept for compatibility with Dashboard
   isMaximized: boolean;
   onMaximize: () => void;
-  onNameChange: (name: string) => void;
   onRemove: () => void;
 }
 
 export function SortableStatsCard({
   id,
   session,
-  panelName,
   isMaximized,
   onMaximize,
-  onNameChange,
   onRemove,
 }: SortableStatsCardProps) {
   const {
@@ -45,10 +42,8 @@ export function SortableStatsCard({
     <div ref={setNodeRef} style={style}>
       <StatsViewPanel
         session={session}
-        panelName={panelName}
         isMaximized={isMaximized}
         onMaximize={onMaximize}
-        onNameChange={onNameChange}
         onRemove={onRemove}
         dragHandleProps={{ ...attributes, ...listeners }}
       />

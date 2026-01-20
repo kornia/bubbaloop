@@ -149,6 +149,14 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
           type: 'json',
         };
         break;
+      case 'rawdata':
+        newPanel = {
+          id: newId,
+          name: `Raw Data ${count}`,
+          topic: '',
+          type: 'rawdata',
+        };
+        break;
       case 'weather':
         newPanel = {
           id: newId,
@@ -213,12 +221,12 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                 </svg>
                 Camera Panel
               </button>
-              <button className="add-panel-option" onClick={() => addPanel('json')}>
+              <button className="add-panel-option" onClick={() => addPanel('rawdata')}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
                   <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
                 </svg>
-                JSON Panel
+                Raw Data Panel
               </button>
               <button className="add-panel-option" onClick={() => addPanel('weather')}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -264,12 +272,12 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                         isMaximized={maximizedId === panel.id}
                         onMaximize={() => toggleMaximize(panel.id)}
                         onTopicChange={(topic) => updatePanel(panel.id, { topic })}
-                        onNameChange={(name) => updatePanel(panel.id, { name })}
                         onRemove={() => removePanel(panel.id)}
                         availableTopics={availableTopics}
                       />
                     );
                   case 'json':
+                  case 'rawdata':
                     return (
                       <SortableJsonCard
                         key={panel.id}
@@ -280,7 +288,6 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                         isMaximized={maximizedId === panel.id}
                         onMaximize={() => toggleMaximize(panel.id)}
                         onTopicChange={(topic) => updatePanel(panel.id, { topic })}
-                        onNameChange={(name) => updatePanel(panel.id, { name })}
                         onRemove={() => removePanel(panel.id)}
                         availableTopics={availableTopics}
                       />
@@ -295,7 +302,6 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                         topic={panel.topic}
                         isMaximized={maximizedId === panel.id}
                         onMaximize={() => toggleMaximize(panel.id)}
-                        onNameChange={(name) => updatePanel(panel.id, { name })}
                         onRemove={() => removePanel(panel.id)}
                       />
                     );
@@ -308,7 +314,6 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                         panelName={panel.name}
                         isMaximized={maximizedId === panel.id}
                         onMaximize={() => toggleMaximize(panel.id)}
-                        onNameChange={(name) => updatePanel(panel.id, { name })}
                         onRemove={() => removePanel(panel.id)}
                       />
                     );
@@ -324,7 +329,7 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
           <div className="no-panels-content">
             <span className="no-panels-icon">📊</span>
             <h3>No panels configured</h3>
-            <p>Click "Add Panel" to start adding camera or JSON panels</p>
+            <p>Click "Add Panel" to start adding camera, raw data, or weather panels</p>
             <div className="no-panels-buttons">
               <button className="add-panel-btn large" onClick={() => addPanel('camera')}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -333,12 +338,12 @@ export function Dashboard({ session, cameras: initialCameras, availableTopics = 
                 </svg>
                 Add Camera
               </button>
-              <button className="add-panel-btn large" onClick={() => addPanel('json')}>
+              <button className="add-panel-btn large" onClick={() => addPanel('rawdata')}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
                   <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
                 </svg>
-                Add JSON
+                Add Raw Data
               </button>
               <button className="add-panel-btn large" onClick={() => addPanel('weather')}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

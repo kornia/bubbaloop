@@ -7,10 +7,8 @@ interface DragHandleProps {
 
 interface StatsViewProps {
   session: Session;
-  panelName: string;
   isMaximized?: boolean;
   onMaximize?: () => void;
-  onNameChange?: (name: string) => void;
   onRemove?: () => void;
   dragHandleProps?: DragHandleProps;
 }
@@ -26,16 +24,12 @@ interface TopicStats {
 
 export function StatsViewPanel({
   session,
-  panelName,
   isMaximized = false,
   onMaximize,
-  onNameChange,
   onRemove,
   dragHandleProps,
 }: StatsViewProps) {
   const [stats, setStats] = useState<Map<string, TopicStats>>(new Map());
-  const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(panelName);
   const statsRef = useRef<Map<string, TopicStats>>(new Map());
   const subscriberRef = useRef<any>(null);
 
@@ -120,18 +114,6 @@ export function StatsViewPanel({
     };
   }, [session]);
 
-  const handleSaveEdit = () => {
-    if (editName !== panelName && onNameChange) {
-      onNameChange(editName);
-    }
-    setIsEditing(false);
-  };
-
-  const handleCancelEdit = () => {
-    setEditName(panelName);
-    setIsEditing(false);
-  };
-
   // Sort topics by FPS descending
   const sortedStats = Array.from(stats.values()).sort((a, b) => b.fps - a.fps);
   const totalMessages = sortedStats.reduce((sum, s) => sum + s.messageCount, 0);
@@ -163,21 +145,11 @@ export function StatsViewPanel({
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M18 20V10M12 20V4M6 20v-6" />
           </svg>
-          <span>{panelName}</span>
+          <span className="panel-type-badge">STATS</span>
         </div>
         <div className="panel-actions">
           <button
-            className="panel-action-btn"
-            onClick={() => setIsEditing(!isEditing)}
-            title="Edit"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
-              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-            </svg>
-          </button>
-          <button
-            className="panel-action-btn"
+            className="panel-action-btn maximize-btn"
             onClick={onMaximize}
             title={isMaximized ? 'Restore' : 'Maximize'}
           >
@@ -247,27 +219,6 @@ export function StatsViewPanel({
         </div>
       </div>
 
-      {isEditing && (
-        <div className="edit-footer">
-          <div className="edit-field">
-            <label>Panel Name</label>
-            <input
-              type="text"
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSaveEdit()}
-            />
-          </div>
-          <div className="edit-actions">
-            <button className="btn-cancel" onClick={handleCancelEdit}>
-              Cancel
-            </button>
-            <button className="btn-save" onClick={handleSaveEdit}>
-              Save
-            </button>
-          </div>
-        </div>
-      )}
 
       <style>{`
         .stats-panel {
@@ -304,6 +255,18 @@ export function StatsViewPanel({
           font-size: 14px;
           font-weight: 500;
           color: var(--text-primary);
+        }
+
+        .panel-type-badge {
+          padding: 2px 8px;
+          border-radius: 4px;
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.5px;
+          background: rgba(0, 229, 255, 0.15);
+          color: var(--accent-secondary);
+          text-transform: uppercase;
+          white-space: nowrap;
         }
 
         .panel-actions {
@@ -445,77 +408,16 @@ export function StatsViewPanel({
           font-size: 13px;
         }
 
-        .edit-footer {
-          padding: 16px;
-          background: var(--bg-secondary);
-          border-top: 1px solid var(--border-color);
-        }
-
-        .edit-field {
-          margin-bottom: 12px;
-        }
-
-        .edit-field label {
-          display: block;
-          font-size: 11px;
-          font-weight: 600;
-          color: var(--text-muted);
-          text-transform: uppercase;
-          margin-bottom: 6px;
-        }
-
-        .edit-field input {
-          width: 100%;
-          padding: 8px 12px;
-          background: var(--bg-primary);
-          border: 1px solid var(--border-color);
-          border-radius: 6px;
-          color: var(--text-primary);
-          font-size: 13px;
-        }
-
-        .edit-field input:focus {
-          outline: none;
-          border-color: var(--accent-primary);
-        }
-
-        .edit-actions {
-          display: flex;
-          gap: 8px;
-          justify-content: flex-end;
-        }
-
-        .btn-cancel,
-        .btn-save {
-          padding: 8px 16px;
-          border-radius: 6px;
-          font-size: 13px;
-          font-weight: 500;
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-
-        .btn-cancel {
-          background: transparent;
-          border: 1px solid var(--border-color);
-          color: var(--text-secondary);
-        }
-
-        .btn-cancel:hover {
-          background: var(--bg-tertiary);
-        }
-
-        .btn-save {
-          background: var(--accent-primary);
-          border: none;
-          color: white;
-        }
-
-        .btn-save:hover {
-          filter: brightness(1.1);
-        }
-
         @media (max-width: 768px) {
+          .panel-type-badge {
+            padding: 2px 6px;
+            font-size: 9px;
+          }
+
+          .maximize-btn {
+            display: none;
+          }
+
           .stats-summary {
             flex-wrap: wrap;
             gap: 12px;

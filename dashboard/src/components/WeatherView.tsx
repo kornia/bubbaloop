@@ -1,5 +1,5 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
-import { Session, Sample } from '@eclipse-zenoh/zenoh-ts';
+import { Session, Sample, IntoZBytes } from '@eclipse-zenoh/zenoh-ts';
 import { useZenohSubscriber, getSamplePayload } from '../lib/zenoh';
 import {
   decodeCurrentWeather,
@@ -7,6 +7,7 @@ import {
   decodeDailyForecast,
   getWeatherDescription,
   getWindDirection,
+  encodeLocationConfig,
   CurrentWeather,
   HourlyForecast,
   DailyForecast,
@@ -18,12 +19,9 @@ interface DragHandleProps {
 
 interface WeatherViewPanelProps {
   session: Session;
-  panelName: string;
-  topic: string; // Base topic pattern, we'll derive all 3 from it
+  topic?: string; // Not used - weather topics are fixed
   isMaximized?: boolean;
   onMaximize?: () => void;
-  onTopicChange?: (topic: string) => void;
-  onNameChange?: (name: string) => void;
   onRemove?: () => void;
   dragHandleProps?: DragHandleProps;
 }
@@ -40,10 +38,8 @@ function formatHour(timestamp: bigint): string {
 
 export function WeatherViewPanel({
   session,
-  panelName,
   isMaximized = false,
   onMaximize,
-  onNameChange,
   onRemove,
   dragHandleProps,
 }: WeatherViewPanelProps) {
@@ -52,8 +48,13 @@ export function WeatherViewPanel({
   const [hourlyForecast, setHourlyForecast] = useState<HourlyForecast | null>(null);
   const [dailyForecast, setDailyForecast] = useState<DailyForecast | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(panelName);
   const lastUpdateRef = useRef<number>(0);
+
+  // Location editing state
+  const [editLatitude, setEditLatitude] = useState('');
+  const [editLongitude, setEditLongitude] = useState('');
+  const [isSendingLocation, setIsSendingLocation] = useState(false);
+  const [locationUpdateStatus, setLocationUpdateStatus] = useState<'idle' | 'sent' | 'error'>('idle');
 
   // Fixed weather topic patterns
   const currentTopic = '0/weather%current/**';
@@ -107,22 +108,76 @@ export function WeatherViewPanel({
 
   const totalMessages = currentCount + hourlyCount + dailyCount;
 
-  const handleSaveEdit = () => {
-    if (editName !== panelName && onNameChange) {
-      onNameChange(editName);
-    }
+  const handleCloseEdit = () => {
     setIsEditing(false);
   };
 
-  const handleCancelEdit = () => {
-    setEditName(panelName);
-    setIsEditing(false);
-  };
-
-  // Update edit state when props change
+  // Initialize location edit fields from current weather data
   useEffect(() => {
-    setEditName(panelName);
-  }, [panelName]);
+    if (currentWeather && isEditing) {
+      setEditLatitude(currentWeather.latitude.toFixed(4));
+      setEditLongitude(currentWeather.longitude.toFixed(4));
+    }
+  }, [currentWeather, isEditing]);
+
+  // Send location update to server via Zenoh publish
+  const handleSendLocation = useCallback(async () => {
+    const lat = parseFloat(editLatitude);
+    const lon = parseFloat(editLongitude);
+
+    if (isNaN(lat) || isNaN(lon)) {
+      console.error('[WeatherView] Invalid coordinates');
+      setLocationUpdateStatus('error');
+      return;
+    }
+
+    if (lat < -90 || lat > 90) {
+      console.error('[WeatherView] Latitude must be between -90 and 90');
+      setLocationUpdateStatus('error');
+      return;
+    }
+
+    if (lon < -180 || lon > 180) {
+      console.error('[WeatherView] Longitude must be between -180 and 180');
+      setLocationUpdateStatus('error');
+      return;
+    }
+
+    setIsSendingLocation(true);
+    setLocationUpdateStatus('idle');
+
+    try {
+      // Encode the location config message (timezone empty = auto)
+      const payload = encodeLocationConfig({
+        latitude: lat,
+        longitude: lon,
+        timezone: '',
+      });
+
+      // Publish to the config topic using ros-z format
+      // The topic format is: domain_id/topic_name/schema/hash
+      const configKey = '0/weather%config%location/bubbaloop.weather.v1.LocationConfig/RIHS01_0000000000000000000000000000000000000000000000000000000000000000';
+
+      console.log('[WeatherView] Publishing location update to:', configKey);
+      console.log('[WeatherView] Location:', { lat, lon });
+
+      // Get publisher and send
+      const publisher = await session.declarePublisher(configKey);
+      await publisher.put(payload as unknown as IntoZBytes);
+      await publisher.undeclare();
+
+      console.log('[WeatherView] Location update sent successfully');
+      setLocationUpdateStatus('sent');
+
+      // Reset status after a few seconds
+      setTimeout(() => setLocationUpdateStatus('idle'), 3000);
+    } catch (error) {
+      console.error('[WeatherView] Failed to send location update:', error);
+      setLocationUpdateStatus('error');
+    } finally {
+      setIsSendingLocation(false);
+    }
+  }, [session, editLatitude, editLongitude]);
 
   const renderCurrentWeather = (weather: CurrentWeather) => {
     const desc = getWeatherDescription(weather.weatherCode);
@@ -135,6 +190,11 @@ export function WeatherViewPanel({
           </div>
           <div className="weather-desc">{desc.text}</div>
           {weather.timezone && <div className="weather-location">{weather.timezone}</div>}
+          {(weather.latitude !== 0 || weather.longitude !== 0) && (
+            <div className="weather-coords">
+              {weather.latitude.toFixed(4)}°N, {weather.longitude.toFixed(4)}°E
+            </div>
+          )}
         </div>
         <div className="weather-details">
           <div className="detail-row">
@@ -242,17 +302,6 @@ export function WeatherViewPanel({
               </svg>
             </button>
           )}
-          {isEditing ? (
-            <input
-              type="text"
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              className="panel-name-input"
-              autoFocus
-            />
-          ) : (
-            <span className="panel-name">{panelName}</span>
-          )}
           <span className="panel-type-badge">WEATHER</span>
         </div>
         <div className="panel-stats">
@@ -261,7 +310,7 @@ export function WeatherViewPanel({
             <span className="stat-label">msgs</span>
           </span>
           {onMaximize && (
-            <button className="icon-btn" onClick={onMaximize} title={isMaximized ? 'Restore' : 'Maximize'}>
+            <button className="icon-btn maximize-btn" onClick={onMaximize} title={isMaximized ? 'Restore' : 'Maximize'}>
               {isMaximized ? (
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" />
@@ -273,10 +322,10 @@ export function WeatherViewPanel({
               )}
             </button>
           )}
-          <button className="icon-btn" onClick={() => setIsEditing(!isEditing)} title="Edit panel">
+          <button className="icon-btn" onClick={() => setIsEditing(!isEditing)} title="Edit location">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
-              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" />
+              <circle cx="12" cy="10" r="3" />
             </svg>
           </button>
           {onRemove && (
@@ -310,27 +359,64 @@ export function WeatherViewPanel({
 
       {isEditing && (
         <div className="panel-edit-footer">
-          <div className="edit-field">
-            <label>Panel Name:</label>
-            <input
-              type="text"
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              className="edit-input"
-              placeholder="Enter panel name..."
-            />
-          </div>
-          <div className="edit-info">
-            <span className="info-label">Subscribed Topics:</span>
-            <div className="topic-list">
-              <span className="topic-item">0/weather%current/**</span>
-              <span className="topic-item">0/weather%hourly/**</span>
-              <span className="topic-item">0/weather%daily/**</span>
+          <div className="edit-section">
+            <span className="section-label">Update Location</span>
+            <div className="location-edit-form">
+              <div className="coord-input-row">
+                <label htmlFor="lat-input">Latitude:</label>
+                <input
+                  id="lat-input"
+                  type="number"
+                  step="0.0001"
+                  min="-90"
+                  max="90"
+                  value={editLatitude}
+                  onChange={(e) => setEditLatitude(e.target.value)}
+                  className="coord-input"
+                  placeholder="41.4167"
+                />
+              </div>
+              <div className="coord-input-row">
+                <label htmlFor="lon-input">Longitude:</label>
+                <input
+                  id="lon-input"
+                  type="number"
+                  step="0.0001"
+                  min="-180"
+                  max="180"
+                  value={editLongitude}
+                  onChange={(e) => setEditLongitude(e.target.value)}
+                  className="coord-input"
+                  placeholder="1.9667"
+                />
+              </div>
+              <button
+                className="btn-update-location"
+                onClick={handleSendLocation}
+                disabled={isSendingLocation}
+              >
+                {isSendingLocation ? 'Sending...' : 'Update Location'}
+              </button>
+              {locationUpdateStatus === 'sent' && (
+                <div className="location-status success">Location update sent!</div>
+              )}
+              {locationUpdateStatus === 'error' && (
+                <div className="location-status error">Failed to send location update</div>
+              )}
+            </div>
+            <div className="config-hint">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+              <span>
+                Changes are applied in real-time. Timezone is auto-detected based on coordinates.
+              </span>
             </div>
           </div>
           <div className="edit-actions">
-            <button className="btn-secondary" onClick={handleCancelEdit}>Cancel</button>
-            <button className="btn-primary" onClick={handleSaveEdit}>Save</button>
+            <button className="btn-secondary" onClick={handleCloseEdit}>Close</button>
           </div>
         </div>
       )}
@@ -586,6 +672,13 @@ export function WeatherViewPanel({
           margin-top: 4px;
         }
 
+        .weather-coords {
+          font-size: 11px;
+          color: var(--text-muted);
+          font-family: 'JetBrains Mono', 'Fira Code', monospace;
+          margin-top: 2px;
+        }
+
         .weather-details {
           display: grid;
           grid-template-columns: repeat(2, 1fr);
@@ -768,6 +861,166 @@ export function WeatherViewPanel({
           outline: none;
         }
 
+        .edit-section {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .section-label {
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: var(--text-muted);
+        }
+
+        .location-display {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          padding: 12px;
+          background: var(--bg-primary);
+          border-radius: 8px;
+          border: 1px solid var(--border-color);
+        }
+
+        .coord-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+
+        .coord-label {
+          font-size: 12px;
+          color: var(--text-muted);
+        }
+
+        .coord-value {
+          font-size: 13px;
+          font-weight: 500;
+          color: var(--text-primary);
+          font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        }
+
+        .no-data {
+          font-size: 12px;
+          color: var(--text-muted);
+          font-style: italic;
+          text-align: center;
+          padding: 8px;
+        }
+
+        .config-hint {
+          display: flex;
+          gap: 10px;
+          padding: 12px;
+          background: rgba(99, 102, 241, 0.1);
+          border: 1px solid rgba(99, 102, 241, 0.3);
+          border-radius: 8px;
+          color: var(--text-secondary);
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        .config-hint svg {
+          flex-shrink: 0;
+          color: var(--accent-primary);
+          margin-top: 2px;
+        }
+
+        .config-hint code {
+          font-family: 'JetBrains Mono', 'Fira Code', monospace;
+          font-size: 11px;
+          background: rgba(0, 0, 0, 0.2);
+          padding: 2px 6px;
+          border-radius: 4px;
+          color: var(--accent-secondary);
+        }
+
+        .location-edit-form {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          padding: 12px;
+          background: var(--bg-primary);
+          border-radius: 8px;
+          border: 1px solid var(--border-color);
+        }
+
+        .coord-input-row {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .coord-input-row label {
+          font-size: 12px;
+          color: var(--text-muted);
+          min-width: 80px;
+        }
+
+        .coord-input {
+          flex: 1;
+          padding: 8px 12px;
+          background: var(--bg-tertiary);
+          border: 1px solid var(--border-color);
+          border-radius: 6px;
+          color: var(--text-primary);
+          font-size: 13px;
+          font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        }
+
+        .coord-input:focus {
+          border-color: var(--accent-primary);
+          outline: none;
+        }
+
+        .coord-input::placeholder {
+          color: var(--text-muted);
+          opacity: 0.6;
+        }
+
+        .btn-update-location {
+          margin-top: 8px;
+          padding: 10px 16px;
+          background: var(--accent-secondary);
+          border: none;
+          border-radius: 6px;
+          color: var(--bg-primary);
+          font-size: 13px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+
+        .btn-update-location:hover:not(:disabled) {
+          opacity: 0.9;
+        }
+
+        .btn-update-location:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .location-status {
+          font-size: 12px;
+          padding: 8px;
+          border-radius: 6px;
+          text-align: center;
+        }
+
+        .location-status.success {
+          background: rgba(52, 211, 153, 0.1);
+          color: var(--success);
+          border: 1px solid rgba(52, 211, 153, 0.3);
+        }
+
+        .location-status.error {
+          background: rgba(255, 23, 68, 0.1);
+          color: var(--error);
+          border: 1px solid rgba(255, 23, 68, 0.3);
+        }
+
         .edit-info {
           display: flex;
           flex-direction: column;
@@ -852,15 +1105,6 @@ export function WeatherViewPanel({
             min-width: 0;
           }
 
-          .panel-name {
-            font-size: 13px;
-          }
-
-          .panel-name-input {
-            font-size: 14px;
-            padding: 8px 12px;
-          }
-
           .panel-type-badge {
             padding: 3px 8px;
             font-size: 9px;
@@ -868,6 +1112,11 @@ export function WeatherViewPanel({
 
           .panel-stats {
             gap: 6px;
+          }
+
+          /* Hide maximize button on mobile */
+          .maximize-btn {
+            display: none;
           }
 
           .stat-value {

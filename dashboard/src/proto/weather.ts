@@ -1,5 +1,5 @@
 // Re-export compiled protobuf types and provide helper functions
-import { bubbaloop } from './weather.pb.js';
+import { bubbaloop } from './messages.pb.js';
 import Long from 'long';
 
 // Re-export the proto types
@@ -8,6 +8,7 @@ export const HourlyForecastProto = bubbaloop.weather.v1.HourlyForecast;
 export const DailyForecastProto = bubbaloop.weather.v1.DailyForecast;
 export const HourlyForecastEntryProto = bubbaloop.weather.v1.HourlyForecastEntry;
 export const DailyForecastEntryProto = bubbaloop.weather.v1.DailyForecastEntry;
+export const LocationConfigProto = bubbaloop.weather.v1.LocationConfig;
 
 // TypeScript interfaces for convenience
 export interface Header {
@@ -76,6 +77,12 @@ export interface DailyForecast {
   longitude: number;
   timezone: string;
   entries: DailyForecastEntry[];
+}
+
+export interface LocationConfig {
+  latitude: number;
+  longitude: number;
+  timezone: string;
 }
 
 // Convert protobufjs Long to BigInt
@@ -209,4 +216,14 @@ export function getWindDirection(degrees: number): string {
   const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
   const index = Math.round(degrees / 45) % 8;
   return directions[index];
+}
+
+// Encode LocationConfig to Uint8Array for publishing
+export function encodeLocationConfig(config: LocationConfig): Uint8Array {
+  const message = LocationConfigProto.create({
+    latitude: config.latitude,
+    longitude: config.longitude,
+    timezone: config.timezone || '',
+  });
+  return LocationConfigProto.encode(message).finish();
 }

@@ -1,28 +1,111 @@
-import { useCallback, useState, useRef, useEffect } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { Session, Sample } from '@eclipse-zenoh/zenoh-ts';
 import { useZenohSubscriber, getSamplePayload } from '../lib/zenoh';
 import { decodeCompressedImage } from '../proto/camera';
+import { decodeCurrentWeather, decodeHourlyForecast, decodeDailyForecast } from '../proto/weather';
 import JsonView from 'react18-json-view';
 import 'react18-json-view/src/style.css';
 
-// Try to decode payload in various formats
-function decodePayload(payload: Uint8Array): { data: unknown; format: string; error?: string } {
+// Extract schema name from ros-z topic format: <domain_id>/<topic>/<schema>/<hash>
+// e.g., "0/weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_..."
+function extractSchemaFromTopic(topic: string): string | null {
+  const parts = topic.split('/');
+  // Schema is typically the third-to-last or second-to-last part
+  for (let i = parts.length - 2; i >= 1; i--) {
+    const part = parts[i];
+    // Schema looks like "bubbaloop.weather.v1.CurrentWeather"
+    if (part.includes('.') && !part.startsWith('RIHS')) {
+      return part;
+    }
+  }
+  return null;
+}
+
+// Convert BigInt values to strings for JSON serialization
+function bigIntToString(obj: unknown): unknown {
+  if (typeof obj === 'bigint') {
+    return obj.toString();
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(bigIntToString);
+  }
+  if (obj !== null && typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = bigIntToString(value);
+    }
+    return result;
+  }
+  return obj;
+}
+
+// Try to decode payload in various formats, using schema hint from topic
+function decodePayload(payload: Uint8Array, topic: string): { data: unknown; schema: string; error?: string } {
+  const schemaFromTopic = extractSchemaFromTopic(topic);
   const text = new TextDecoder().decode(payload);
 
   // 1. Try JSON first
   try {
     const parsed = JSON.parse(text);
-    return { data: parsed, format: 'json' };
+    return { data: parsed, schema: 'JSON' };
   } catch {
     // Not JSON, continue
   }
 
-  // 2. Try CompressedImage protobuf
+  // 2. Try decoding based on schema hint from topic
+  if (schemaFromTopic) {
+    // Weather types
+    if (schemaFromTopic.includes('CurrentWeather')) {
+      const msg = decodeCurrentWeather(payload);
+      if (msg) {
+        return { data: bigIntToString(msg), schema: schemaFromTopic };
+      }
+    }
+    if (schemaFromTopic.includes('HourlyForecast')) {
+      const msg = decodeHourlyForecast(payload);
+      if (msg) {
+        return { data: bigIntToString(msg), schema: schemaFromTopic };
+      }
+    }
+    if (schemaFromTopic.includes('DailyForecast')) {
+      const msg = decodeDailyForecast(payload);
+      if (msg) {
+        return { data: bigIntToString(msg), schema: schemaFromTopic };
+      }
+    }
+    // Camera types
+    if (schemaFromTopic.includes('CompressedImage')) {
+      const msg = decodeCompressedImage(payload);
+      if (msg.format || msg.header) {
+        const jsonData: Record<string, unknown> = {
+          format: msg.format,
+          dataSize: msg.data.length,
+        };
+        if (msg.header) {
+          jsonData.header = {
+            acqTime: msg.header.acqTime.toString(),
+            pubTime: msg.header.pubTime.toString(),
+            sequence: msg.header.sequence,
+            frameId: msg.header.frameId,
+          };
+          if (msg.header.acqTime > 0n && msg.header.pubTime > 0n) {
+            const latencyNs = msg.header.pubTime - msg.header.acqTime;
+            const latencyMs = Number(latencyNs) / 1_000_000;
+            if (latencyMs > 0 && latencyMs < 10000) {
+              jsonData.latencyMs = latencyMs.toFixed(2);
+            }
+          }
+        }
+        return { data: jsonData, schema: schemaFromTopic };
+      }
+    }
+  }
+
+  // 3. Fallback: try all known protobuf decoders
+  // Try CompressedImage
   try {
     const msg = decodeCompressedImage(payload);
-    // Check if it looks like a valid CompressedImage (has format or header)
     if (msg.format || msg.header) {
-      // Convert to JSON-serializable format (BigInt -> string)
       const jsonData: Record<string, unknown> = {
         format: msg.format,
         dataSize: msg.data.length,
@@ -34,7 +117,6 @@ function decodePayload(payload: Uint8Array): { data: unknown; format: string; er
           sequence: msg.header.sequence,
           frameId: msg.header.frameId,
         };
-        // Calculate latency if both times are valid
         if (msg.header.acqTime > 0n && msg.header.pubTime > 0n) {
           const latencyNs = msg.header.pubTime - msg.header.acqTime;
           const latencyMs = Number(latencyNs) / 1_000_000;
@@ -43,13 +125,23 @@ function decodePayload(payload: Uint8Array): { data: unknown; format: string; er
           }
         }
       }
-      return { data: jsonData, format: 'protobuf (CompressedImage)' };
+      return { data: jsonData, schema: 'bubbaloop.camera.v1.CompressedImage' };
     }
   } catch {
-    // Not a valid CompressedImage, continue
+    // Not a valid CompressedImage
   }
 
-  // 3. Show raw data preview
+  // Try CurrentWeather
+  try {
+    const msg = decodeCurrentWeather(payload);
+    if (msg && msg.timezone) {
+      return { data: bigIntToString(msg), schema: 'bubbaloop.weather.v1.CurrentWeather' };
+    }
+  } catch {
+    // Not a valid CurrentWeather
+  }
+
+  // 4. Show raw data preview
   const preview = payload.slice(0, 100);
   const hex = Array.from(preview).map(b => b.toString(16).padStart(2, '0')).join(' ');
   return {
@@ -58,7 +150,7 @@ function decodePayload(payload: Uint8Array): { data: unknown; format: string; er
       _size: payload.length,
       _hexPreview: hex + (payload.length > 100 ? '...' : ''),
     },
-    format: 'binary',
+    schema: 'Binary',
     error: 'Unknown binary format - showing hex preview',
   };
 }
@@ -67,53 +159,49 @@ interface DragHandleProps {
   [key: string]: unknown;
 }
 
-interface JsonViewPanelProps {
+interface RawDataViewPanelProps {
   session: Session;
-  panelName: string;
   topic: string;
   isMaximized?: boolean;
   onMaximize?: () => void;
   onTopicChange?: (topic: string) => void;
-  onNameChange?: (name: string) => void;
   onRemove?: () => void;
   availableTopics?: string[];
   dragHandleProps?: DragHandleProps;
 }
 
-export function JsonViewPanel({
+export function RawDataViewPanel({
   session,
-  panelName,
   topic,
   isMaximized = false,
   onMaximize,
   onTopicChange,
-  onNameChange,
   onRemove,
   availableTopics = [],
   dragHandleProps,
-}: JsonViewPanelProps) {
+}: RawDataViewPanelProps) {
   const [jsonData, setJsonData] = useState<unknown>(null);
-  const [dataFormat, setDataFormat] = useState<string | null>(null);
+  const [schemaName, setSchemaName] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(panelName);
-  const [editTopic, setEditTopic] = useState(topic);
+  // Track the actual topic the data came from (for debugging/display purposes)
+  const [, setCurrentTopic] = useState<string>('');
   const lastUpdateRef = useRef<number>(0);
-  const editFooterRef = useRef<HTMLDivElement>(null);
 
   // Handle incoming samples from Zenoh
   const handleSample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
-      const result = decodePayload(payload);
+      const sampleTopic = sample.keyexpr().toString();
+      const result = decodePayload(payload, sampleTopic);
 
       setJsonData(result.data);
-      setDataFormat(result.format);
+      setSchemaName(result.schema);
       setParseError(result.error || null);
+      setCurrentTopic(sampleTopic);
 
       lastUpdateRef.current = Date.now();
     } catch (e) {
-      console.error('[JsonView] Failed to process sample:', e);
+      console.error('[RawDataView] Failed to process sample:', e);
       setParseError(e instanceof Error ? e.message : 'Failed to process sample');
     }
   }, []);
@@ -121,39 +209,15 @@ export function JsonViewPanel({
   // Subscribe to topic
   const { fps, messageCount } = useZenohSubscriber(session, topic, handleSample);
 
-  // Scroll edit footer into view when editing starts
-  useEffect(() => {
-    if (isEditing && editFooterRef.current) {
-      setTimeout(() => {
-        editFooterRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }, 100);
+  // Handle topic change from dropdown
+  const handleTopicSelect = (newTopic: string) => {
+    if (newTopic && newTopic !== topic && onTopicChange) {
+      onTopicChange(newTopic);
     }
-  }, [isEditing]);
-
-  const handleSaveEdit = () => {
-    if (editName !== panelName && onNameChange) {
-      onNameChange(editName);
-    }
-    if (editTopic !== topic && onTopicChange) {
-      onTopicChange(editTopic);
-    }
-    setIsEditing(false);
   };
-
-  const handleCancelEdit = () => {
-    setEditName(panelName);
-    setEditTopic(topic);
-    setIsEditing(false);
-  };
-
-  // Update edit state when props change
-  useEffect(() => {
-    setEditName(panelName);
-    setEditTopic(topic);
-  }, [panelName, topic]);
 
   return (
-    <div className={`json-view-panel ${isMaximized ? 'maximized' : ''}`}>
+    <div className={`rawdata-view-panel ${isMaximized ? 'maximized' : ''}`}>
       <div className="panel-header">
         <div className="panel-header-left">
           {dragHandleProps && (
@@ -168,18 +232,7 @@ export function JsonViewPanel({
               </svg>
             </button>
           )}
-          {isEditing ? (
-            <input
-              type="text"
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              className="panel-name-input"
-              autoFocus
-            />
-          ) : (
-            <span className="panel-name">{panelName}</span>
-          )}
-          <span className="panel-type-badge">{dataFormat || 'DATA'}</span>
+          <span className="panel-type-badge">{schemaName || 'RAW DATA'}</span>
         </div>
         <div className="panel-stats">
           <span className="stat">
@@ -191,7 +244,7 @@ export function JsonViewPanel({
             <span className="stat-label">total</span>
           </span>
           {onMaximize && (
-            <button className="icon-btn" onClick={onMaximize} title={isMaximized ? 'Restore' : 'Maximize'}>
+            <button className="icon-btn maximize-btn" onClick={onMaximize} title={isMaximized ? 'Restore' : 'Maximize'}>
               {isMaximized ? (
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" />
@@ -203,12 +256,6 @@ export function JsonViewPanel({
               )}
             </button>
           )}
-          <button className="icon-btn" onClick={() => setIsEditing(!isEditing)} title="Edit panel">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
-              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-            </svg>
-          </button>
           {onRemove && (
             <button className="icon-btn danger" onClick={onRemove} title="Remove panel">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -219,19 +266,19 @@ export function JsonViewPanel({
         </div>
       </div>
 
-      <div className="json-content-container">
+      <div className="rawdata-content-container">
         {!topic ? (
-          <div className="json-placeholder">
+          <div className="rawdata-placeholder">
             <span className="placeholder-icon">{ }</span>
-            <p>Select a topic to start receiving JSON data</p>
+            <p>Select a topic to start receiving data</p>
           </div>
         ) : jsonData === null ? (
-          <div className="json-waiting">
+          <div className="rawdata-waiting">
             <div className="spinner" />
             <span>Waiting for data...</span>
           </div>
         ) : (
-          <div className="json-content">
+          <div className="rawdata-content">
             <JsonView
               src={jsonData}
               collapseStringsAfterLength={80}
@@ -245,7 +292,7 @@ export function JsonViewPanel({
               }}
             />
             {parseError && (
-              <div className="json-parse-error">
+              <div className="rawdata-parse-error">
                 <span>⚠</span> {parseError}
               </div>
             )}
@@ -253,43 +300,25 @@ export function JsonViewPanel({
         )}
       </div>
 
-      {isEditing ? (
-        <div ref={editFooterRef} className="panel-edit-footer">
-          <div className="topic-selector">
-            <label>Topic:</label>
-            {availableTopics.length > 0 ? (
-              <select
-                value={editTopic}
-                onChange={(e) => setEditTopic(e.target.value)}
-                className="topic-select"
-              >
-                <option value="">-- Select topic --</option>
-                {availableTopics.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            ) : null}
-            <input
-              type="text"
-              value={editTopic}
-              onChange={(e) => setEditTopic(e.target.value)}
-              placeholder="Enter topic pattern..."
-              className="topic-input mono"
-            />
-          </div>
-          <div className="edit-actions">
-            <button className="btn-secondary" onClick={handleCancelEdit}>Cancel</button>
-            <button className="btn-primary" onClick={handleSaveEdit}>Save</button>
-          </div>
-        </div>
-      ) : (
-        <div className="panel-footer">
+      <div className="panel-footer">
+        {availableTopics.length > 0 ? (
+          <select
+            className="topic-select"
+            value={topic}
+            onChange={(e) => handleTopicSelect(e.target.value)}
+          >
+            <option value="">-- Select topic --</option>
+            {availableTopics.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        ) : (
           <span className="topic mono">{topic || 'No topic selected'}</span>
-        </div>
-      )}
+        )}
+      </div>
 
       <style>{`
-        .json-view-panel {
+        .rawdata-view-panel {
           background: var(--bg-card);
           border: 1px solid var(--border-color);
           border-radius: 12px;
@@ -301,12 +330,12 @@ export function JsonViewPanel({
           max-width: 100%;
         }
 
-        .json-view-panel:hover {
+        .rawdata-view-panel:hover {
           border-color: var(--border-glow);
           box-shadow: var(--shadow-glow);
         }
 
-        .json-view-panel.maximized {
+        .rawdata-view-panel.maximized {
           border-color: var(--accent-primary);
         }
 
@@ -357,17 +386,6 @@ export function JsonViewPanel({
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
-        }
-
-        .panel-name-input {
-          font-weight: 600;
-          font-size: 14px;
-          color: var(--text-primary);
-          background: var(--bg-primary);
-          border: 1px solid var(--accent-primary);
-          border-radius: 4px;
-          padding: 2px 6px;
-          width: 120px;
         }
 
         .panel-type-badge {
@@ -434,7 +452,7 @@ export function JsonViewPanel({
           color: var(--error);
         }
 
-        .json-content-container {
+        .rawdata-content-container {
           flex: 1;
           min-height: 200px;
           max-height: 500px;
@@ -442,8 +460,8 @@ export function JsonViewPanel({
           background: var(--bg-primary);
         }
 
-        .json-placeholder,
-        .json-waiting {
+        .rawdata-placeholder,
+        .rawdata-waiting {
           display: flex;
           flex-direction: column;
           align-items: center;
@@ -460,7 +478,7 @@ export function JsonViewPanel({
           color: var(--text-muted);
         }
 
-        .json-waiting .spinner {
+        .rawdata-waiting .spinner {
           width: 24px;
           height: 24px;
           border: 2px solid var(--border-color);
@@ -473,11 +491,11 @@ export function JsonViewPanel({
           to { transform: rotate(360deg); }
         }
 
-        .json-content {
+        .rawdata-content {
           padding: 12px;
         }
 
-        .json-parse-error {
+        .rawdata-parse-error {
           display: flex;
           align-items: center;
           gap: 6px;
@@ -498,97 +516,21 @@ export function JsonViewPanel({
           overflow: hidden;
         }
 
-        .panel-edit-footer {
-          padding: 12px;
-          background: var(--bg-tertiary);
-          border-top: 1px solid var(--border-color);
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-          min-width: 0;
-          overflow: hidden;
-        }
-
-        .topic-selector {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-          min-width: 0;
-          width: 100%;
-        }
-
-        .topic-selector label {
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          color: var(--text-muted);
-        }
-
         .topic-select {
-          padding: 6px 10px;
+          width: 100%;
+          padding: 6px 8px;
           background: var(--bg-primary);
           border: 1px solid var(--border-color);
-          border-radius: 6px;
+          border-radius: 4px;
           color: var(--text-primary);
-          font-size: 12px;
-          width: 100%;
-          box-sizing: border-box;
-          min-width: 0;
-        }
-
-        .topic-input {
-          padding: 6px 10px;
-          background: var(--bg-primary);
-          border: 1px solid var(--border-color);
-          border-radius: 6px;
-          color: var(--text-primary);
-          font-size: 12px;
-          width: 100%;
-          box-sizing: border-box;
-          min-width: 0;
-        }
-
-        .topic-input:focus,
-        .topic-select:focus {
-          border-color: var(--accent-primary);
-          outline: none;
-        }
-
-        .edit-actions {
-          display: flex;
-          gap: 8px;
-          justify-content: flex-end;
-        }
-
-        .btn-primary,
-        .btn-secondary {
-          padding: 6px 16px;
-          border-radius: 6px;
-          font-size: 12px;
-          font-weight: 500;
+          font-size: 11px;
+          font-family: 'JetBrains Mono', monospace;
           cursor: pointer;
-          transition: all 0.15s;
         }
 
-        .btn-primary {
-          background: var(--accent-primary);
-          border: none;
-          color: white;
-        }
-
-        .btn-primary:hover {
-          background: #5c7cfa;
-        }
-
-        .btn-secondary {
-          background: transparent;
-          border: 1px solid var(--border-color);
-          color: var(--text-secondary);
-        }
-
-        .btn-secondary:hover {
-          background: var(--bg-primary);
-          border-color: var(--text-muted);
+        .topic-select:focus {
+          outline: none;
+          border-color: var(--accent-primary);
         }
 
         .topic {
@@ -642,12 +584,16 @@ export function JsonViewPanel({
             min-width: 32px;
           }
 
-          .json-content-container {
+          .maximize-btn {
+            display: none;
+          }
+
+          .rawdata-content-container {
             min-height: 150px;
             max-height: none;
           }
 
-          .json-content {
+          .rawdata-content {
             padding: 10px;
           }
 
@@ -655,27 +601,9 @@ export function JsonViewPanel({
             padding: 6px 10px;
           }
 
-          .panel-edit-footer {
-            padding: 16px;
-            gap: 16px;
-          }
-
-          .topic-input,
           .topic-select {
-            padding: 14px 12px;
-            font-size: 16px;
-          }
-
-          .edit-actions {
-            flex-direction: column;
-            gap: 10px;
-          }
-
-          .btn-primary,
-          .btn-secondary {
-            width: 100%;
-            padding: 14px 24px;
-            font-size: 15px;
+            padding: 10px 8px;
+            font-size: 14px;
           }
 
           .topic {
@@ -701,3 +629,6 @@ export function JsonViewPanel({
     </div>
   );
 }
+
+// Legacy alias for backward compatibility
+export const JsonViewPanel = RawDataViewPanel;
