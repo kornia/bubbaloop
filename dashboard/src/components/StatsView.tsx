@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 
 interface DragHandleProps {
@@ -14,19 +14,41 @@ interface DisplayStats {
   topic: string;
   messageCount: number;
   hz: number;
+  hasActiveListeners: boolean;
+  listenerCount: number;
 }
 
 export function StatsViewPanel({
   onRemove,
   dragHandleProps,
 }: StatsViewProps) {
-  const { getAllStats } = useZenohSubscriptionContext();
+  const { getAllMonitoredStats, startMonitoring, isMonitoringEnabled } = useZenohSubscriptionContext();
   const [stats, setStats] = useState<DisplayStats[]>([]);
+  const [monitoringStarted, setMonitoringStarted] = useState(false);
+  const startedRef = useRef(false);
+
+  // Start monitoring when component mounts
+  useEffect(() => {
+    // Prevent double-start in strict mode
+    if (startedRef.current) return;
+    startedRef.current = true;
+
+    if (!isMonitoringEnabled()) {
+      startMonitoring().then(() => {
+        setMonitoringStarted(true);
+      });
+    } else {
+      setMonitoringStarted(true);
+    }
+
+    // Don't stop monitoring on unmount - other components may need it
+    // and we want to persist topic discovery across panel toggles
+  }, [startMonitoring, isMonitoringEnabled]);
 
   // Poll stats from centralized manager
   useEffect(() => {
     const interval = setInterval(() => {
-      const allStats = getAllStats();
+      const allStats = getAllMonitoredStats();
       const displayStats: DisplayStats[] = [];
 
       allStats.forEach((stat, topic) => {
@@ -34,35 +56,34 @@ export function StatsViewPanel({
           topic,
           messageCount: stat.messageCount,
           hz: stat.fps,
+          hasActiveListeners: stat.hasActiveListeners,
+          listenerCount: stat.listenerCount,
         });
       });
 
-      // Sort by Hz descending
-      displayStats.sort((a, b) => b.hz - a.hz);
+      // Sort by topic name alphabetically
+      displayStats.sort((a, b) => a.topic.localeCompare(b.topic));
       setStats(displayStats);
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [getAllStats]);
+  }, [getAllMonitoredStats]);
 
   const shortenTopic = (topic: string) => {
-    // Shorten ros-z style topics for display
+    // Handle two formats:
+    // 1. ros-z encoded: "0/camera%terrace%raw_shm" -> "camera/terrace/raw_shm"
+    // 2. Raw zenoh key: "camera/terrace/raw_shm" (already normalized, type/hash stripped)
     const parts = topic.split('/');
-    if (parts.length >= 3 && parts[2].startsWith('bubbaloop.')) {
-      // Format: 0/topic%name/bubbaloop.x.v1.Type/RIHS...
-      const topicName = parts[1].replace(/%/g, '/');
-      const typeParts = parts[2].split('.');
-      const typeName = typeParts[typeParts.length - 1];
-      return `${topicName} (${typeName})`;
+
+    // Check if it's ros-z format (starts with domain ID like "0/")
+    if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
+      // ros-z format: domain/encoded_topic
+      // Skip domain ID (parts[0]), decode topic name (parts[1])
+      return parts[1].replace(/%/g, '/');
     }
-    // Handle wildcard patterns like 0/weather%current/**
-    if (topic.endsWith('/**')) {
-      const withoutWildcard = topic.slice(0, -3);
-      const parts = withoutWildcard.split('/');
-      if (parts.length >= 2) {
-        return parts[1].replace(/%/g, '/') + '/*';
-      }
-    }
+
+    // Raw format: already normalized, just return as-is
+    // The normalizeTopicPattern in subscription-manager strips type/hash
     return topic;
   };
 
@@ -97,14 +118,17 @@ export function StatsViewPanel({
           </div>
           <div className="stats-table-body">
             {stats.length === 0 ? (
-              <div className="no-data">Waiting for subscriptions...</div>
+              <div className="no-data">
+                {monitoringStarted ? 'Waiting for messages...' : 'Starting topic monitor...'}
+              </div>
             ) : (
               stats.map((stat) => (
-                <div key={stat.topic} className="stats-row">
+                <div key={stat.topic} className={`stats-row ${stat.hasActiveListeners ? 'has-listeners' : ''}`}>
                   <span className="col-topic" title={stat.topic}>
+                    {stat.hasActiveListeners && <span className="listener-indicator">●</span>}
                     {shortenTopic(stat.topic)}
                   </span>
-                  <span className={`col-hz ${stat.hz > 0 ? 'active' : 'inactive'}`}>
+                  <span className={`col-hz ${stat.hasActiveListeners && stat.hz > 0 ? 'active' : 'inactive'}`}>
                     {stat.hz.toFixed(2)}
                   </span>
                   <span className="col-msgs">{stat.messageCount.toLocaleString()}</span>
@@ -116,7 +140,9 @@ export function StatsViewPanel({
       </div>
 
       <div className="panel-footer">
-        <span className="footer-info">Subscription Statistics</span>
+        <span className="footer-info">
+          <span className="listener-indicator">●</span> = active listener | {stats.length} topics
+        </span>
       </div>
 
       <style>{`
@@ -249,6 +275,20 @@ export function StatsViewPanel({
           background: var(--bg-tertiary);
         }
 
+        .stats-row.has-listeners {
+          background: rgba(0, 229, 255, 0.05);
+        }
+
+        .stats-row.has-listeners:hover {
+          background: rgba(0, 229, 255, 0.1);
+        }
+
+        .listener-indicator {
+          color: var(--accent-primary);
+          margin-right: 6px;
+          font-size: 10px;
+        }
+
         .col-topic {
           overflow: hidden;
           text-overflow: ellipsis;
@@ -290,6 +330,13 @@ export function StatsViewPanel({
         .footer-info {
           font-size: 11px;
           color: var(--text-muted);
+          display: flex;
+          align-items: center;
+          gap: 2px;
+        }
+
+        .footer-info .listener-indicator {
+          margin-right: 2px;
         }
 
         @media (max-width: 768px) {

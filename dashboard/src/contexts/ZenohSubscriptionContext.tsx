@@ -3,6 +3,7 @@ import { Session } from '@eclipse-zenoh/zenoh-ts';
 import {
   ZenohSubscriptionManager,
   TopicStats,
+  MonitoredTopicStatsWithMeta,
   SampleCallback,
   EndpointConfig,
 } from '../lib/subscription-manager';
@@ -15,9 +16,14 @@ interface ZenohSubscriptionContextValue {
   unsubscribe: (topic: string, listenerId: string, endpointId?: string) => void;
   getTopicStats: (topic: string, endpointId?: string) => TopicStats | null;
   getAllStats: () => Map<string, TopicStats>;
+  getAllMonitoredStats: () => Map<string, MonitoredTopicStatsWithMeta>;
   getActiveSubscriptions: (endpointId?: string) => string[];
+  getDiscoveredTopics: (endpointId?: string) => string[];
   addRemoteEndpoint: (config: EndpointConfig) => void;
   removeEndpoint: (endpointId: string) => void;
+  startMonitoring: (endpointId?: string) => Promise<void>;
+  stopMonitoring: (endpointId?: string) => Promise<void>;
+  isMonitoringEnabled: (endpointId?: string) => boolean;
 }
 
 const ZenohSubscriptionContext = createContext<ZenohSubscriptionContextValue | null>(null);
@@ -41,6 +47,10 @@ export function ZenohSubscriptionProvider({
   // Create manager once (lazy initialization)
   if (!managerRef.current) {
     managerRef.current = new ZenohSubscriptionManager();
+    // Expose for debugging
+    if (typeof window !== 'undefined') {
+      (window as unknown as { __zenohSubManager?: ZenohSubscriptionManager }).__zenohSubManager = managerRef.current;
+    }
   }
 
   // Keep session ref updated
@@ -69,9 +79,14 @@ export function ZenohSubscriptionProvider({
       unsubscribe: (topic, listenerId, endpointId) => manager.unsubscribe(topic, listenerId, endpointId),
       getTopicStats: (topic, endpointId) => manager.getTopicStats(topic, endpointId),
       getAllStats: () => manager.getAllStats(),
+      getAllMonitoredStats: () => manager.getAllMonitoredStats(),
       getActiveSubscriptions: (endpointId) => manager.getActiveSubscriptions(endpointId),
+      getDiscoveredTopics: (endpointId) => manager.getDiscoveredTopics(endpointId),
       addRemoteEndpoint: (config) => manager.addRemoteEndpoint(config),
       removeEndpoint: (endpointId) => manager.removeEndpoint(endpointId),
+      startMonitoring: (endpointId) => manager.startMonitoring(endpointId),
+      stopMonitoring: (endpointId) => manager.stopMonitoring(endpointId),
+      isMonitoringEnabled: (endpointId) => manager.isMonitoringEnabled(endpointId),
     };
   }, []); // Empty deps - manager is created once via ref
 
