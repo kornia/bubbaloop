@@ -78,6 +78,26 @@ function toSubscriptionPattern(baseTopic: string): string {
   return baseTopic + '/**';
 }
 
+/**
+ * Extract the display name from a topic (for matching across formats).
+ * Handles both ros-z format (0/camera%terrace%raw_shm) and raw format (camera/terrace/raw_shm).
+ * Returns: camera/terrace/raw_shm
+ */
+function toDisplayName(topic: string): string {
+  if (!topic) return topic;
+
+  const parts = topic.split('/');
+
+  // Check if it's ros-z format (starts with domain ID like "0/")
+  if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
+    // ros-z format: decode percent encoding in the second part
+    return parts[1].replace(/%/g, '/');
+  }
+
+  // Raw format: already in display form
+  return topic;
+}
+
 export interface TopicStats {
   messageCount: number;
   fps: number;
@@ -654,10 +674,18 @@ export class ZenohSubscriptionManager {
         // Compute Hz from ring buffer
         const hz = stats.hzBuffer.getHz(now);
 
-        // Check if this topic has active listeners
-        const subscription = endpoint.subscriptions.get(topic);
-        const hasActiveListeners = (subscription?.listeners.size ?? 0) > 0;
-        const listenerCount = subscription?.listeners.size ?? 0;
+        // Check if this topic has active listeners by matching display names
+        // (monitor uses raw format, subscriptions use ros-z format)
+        const topicDisplayName = toDisplayName(topic);
+        let hasActiveListeners = false;
+        let listenerCount = 0;
+
+        endpoint.subscriptions.forEach((sub, subTopic) => {
+          if (toDisplayName(subTopic) === topicDisplayName && sub.listeners.size > 0) {
+            hasActiveListeners = true;
+            listenerCount = sub.listeners.size;
+          }
+        });
 
         // Include endpoint prefix for non-local endpoints
         const key = endpoint.config.id === DEFAULT_ENDPOINT_ID
