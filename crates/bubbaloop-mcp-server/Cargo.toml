@@ -1,0 +1,43 @@
+[package]
+name = "bubbaloop-mcp-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "MCP server exposing Bubbaloop to AI assistants via MCP protocol"
+
+[[bin]]
+name = "bubbaloop-mcp-server"
+path = "src/main.rs"
+
+[dependencies]
+# Bubbaloop
+bubbaloop = { path = "../bubbaloop" }
+
+# Zenoh
+zenoh = { workspace = true }
+
+# Protobuf decoding
+prost = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization (MCP uses JSON-RPC)
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = "1.0"
+thiserror = { workspace = true }
+
+# Logging
+log = { workspace = true }
+env_logger = { workspace = true }
+
+# CLI
+argh = { workspace = true }
+
+# Async IO
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = { workspace = true }
