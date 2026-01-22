@@ -16,10 +16,7 @@ use super::error::NodeError;
 /// Use the `bubble_metadata!` macro to generate this from Cargo.toml:
 /// ```rust,ignore
 /// fn metadata() -> BubbleMetadata {
-///     bubble_metadata!(
-///         topics_published: &["/my/topic"],
-///         topics_subscribed: &[],
-///     )
+///     bubble_metadata!()
 /// }
 /// ```
 #[derive(Debug, Clone)]
@@ -30,38 +27,26 @@ pub struct BubbleMetadata {
     pub version: &'static str,
     /// Human-readable description from CARGO_PKG_DESCRIPTION
     pub description: &'static str,
-    /// Topics this node publishes to
-    pub topics_published: &'static [&'static str],
-    /// Topics this node subscribes to
-    pub topics_subscribed: &'static [&'static str],
 }
 
 /// Macro to generate BubbleMetadata from Cargo.toml manifest.
 ///
 /// This macro extracts name, version, and description from the package's
-/// Cargo.toml, so you only need to specify the topics.
+/// Cargo.toml automatically at compile time.
 ///
 /// # Example
 /// ```rust,ignore
 /// fn metadata() -> BubbleMetadata {
-///     bubble_metadata!(
-///         topics_published: &["/weather/current", "/weather/hourly"],
-///         topics_subscribed: &["/weather/config/location"],
-///     )
+///     bubble_metadata!()
 /// }
 /// ```
 #[macro_export]
 macro_rules! bubble_metadata {
-    (
-        topics_published: $pub:expr,
-        topics_subscribed: $sub:expr $(,)?
-    ) => {
+    () => {
         $crate::plugin::BubbleMetadata {
             name: env!("CARGO_PKG_NAME"),
             version: env!("CARGO_PKG_VERSION"),
             description: env!("CARGO_PKG_DESCRIPTION"),
-            topics_published: $pub,
-            topics_subscribed: $sub,
         }
     };
 }
@@ -93,13 +78,7 @@ macro_rules! bubble_metadata {
 ///     type Config = MyConfig;
 ///
 ///     fn metadata() -> BubbleMetadata {
-///         BubbleMetadata {
-///             name: "my-node",
-///             version: "0.1.0",
-///             description: "My custom node",
-///             topics_published: &["/my/topic"],
-///             topics_subscribed: &[],
-///         }
+///         bubble_metadata!()
 ///     }
 ///
 ///     fn new(ctx: Arc<ZContext>, config: Self::Config) -> Result<Self, NodeError> {

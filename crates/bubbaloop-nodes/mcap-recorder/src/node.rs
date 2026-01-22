@@ -193,10 +193,7 @@ impl BubbleNode for McapRecorderNode {
     type Config = Config;
 
     fn metadata() -> BubbleMetadata {
-        bubble_metadata!(
-            topics_published: &[],
-            topics_subscribed: &["/camera/*/compressed"],
-        )
+        bubble_metadata!()
     }
 
     fn new(ctx: Arc<ZContext>, config: Self::Config) -> Result<Self, NodeError> {

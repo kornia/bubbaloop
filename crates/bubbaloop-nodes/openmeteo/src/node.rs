@@ -273,10 +273,7 @@ impl BubbleNode for OpenMeteoNode {
     type Config = Config;
 
     fn metadata() -> BubbleMetadata {
-        bubble_metadata!(
-            topics_published: &["/weather/current", "/weather/hourly", "/weather/daily"],
-            topics_subscribed: &["/weather/config/location"],
-        )
+        bubble_metadata!()
     }
 
     fn new(ctx: Arc<ZContext>, config: Self::Config) -> Result<Self, NodeError> {

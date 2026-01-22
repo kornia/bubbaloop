@@ -360,10 +360,7 @@ impl BubbleNode for CamerasNode {
     type Config = Config;
 
     fn metadata() -> BubbleMetadata {
-        bubble_metadata!(
-            topics_published: &["/camera/*/compressed", "/camera/*/raw_shm"],
-            topics_subscribed: &[],
-        )
+        bubble_metadata!()
     }
 
     fn new(ctx: Arc<ZContext>, config: Self::Config) -> Result<Self, NodeError> {
