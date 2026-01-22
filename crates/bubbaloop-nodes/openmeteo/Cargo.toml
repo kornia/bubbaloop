@@ -1,0 +1,40 @@
+[package]
+name = "openmeteo-node"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "Open-Meteo weather data publisher for Bubbaloop"
+
+[[bin]]
+name = "openmeteo-node"
+path = "src/main.rs"
+
+[dependencies]
+# Core library
+bubbaloop.workspace = true
+
+# CLI and logging
+argh.workspace = true
+ctrlc.workspace = true
+env_logger.workspace = true
+log.workspace = true
+
+# Async runtime
+tokio.workspace = true
+
+# ROS-Z pub/sub
+ros-z.workspace = true
+zenoh.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+
+# Error handling
+thiserror.workspace = true
+async-trait.workspace = true
+
+# HTTP client for weather API
+reqwest.workspace = true

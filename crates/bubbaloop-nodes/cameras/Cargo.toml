@@ -1,0 +1,46 @@
+[package]
+name = "cameras-node"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "Multi-camera RTSP streaming with H264 capture and decoding for Bubbaloop"
+
+[[bin]]
+name = "cameras-node"
+path = "src/main.rs"
+
+[dependencies]
+# Core library
+bubbaloop.workspace = true
+
+# CLI and logging
+argh.workspace = true
+ctrlc.workspace = true
+env_logger.workspace = true
+log.workspace = true
+
+# Async runtime
+tokio.workspace = true
+flume.workspace = true
+
+# ROS-Z pub/sub
+ros-z.workspace = true
+zenoh.workspace = true
+
+# Protobuf serialization
+prost.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+
+# Error handling
+thiserror.workspace = true
+async-trait.workspace = true
+
+# GStreamer for H264 capture and decode
+gstreamer.workspace = true
+gstreamer-app.workspace = true
+gstreamer-video.workspace = true
