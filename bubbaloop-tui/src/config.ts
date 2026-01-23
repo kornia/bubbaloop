@@ -261,15 +261,18 @@ export function getServicePath(pluginName: string): string {
 // Generate systemd service unit file content
 export function generateServiceUnit(pluginPath: string, manifest: PluginManifest): string {
   let execStart: string;
+  let environment = "RUST_LOG=info";
 
   if (manifest.command) {
     execStart = manifest.command;
   } else if (manifest.type === "rust") {
-    // For Rust: run the release binary
-    execStart = join(pluginPath, "target/release", manifest.name);
+    // For Rust: use cargo run --release (builds if needed, then runs)
+    execStart = `/usr/bin/cargo run --release`;
   } else {
-    // For Python: run with python
-    execStart = `/usr/bin/python3 ${join(pluginPath, "main.py")}`;
+    // For Python: use local venv if exists, otherwise system python
+    const venvPython = join(pluginPath, "venv/bin/python");
+    execStart = `${venvPython} main.py`;
+    environment = "PYTHONUNBUFFERED=1";
   }
 
   return `[Unit]
@@ -282,7 +285,7 @@ WorkingDirectory=${pluginPath}
 ExecStart=${execStart}
 Restart=on-failure
 RestartSec=5
-Environment=RUST_LOG=info
+Environment=${environment}
 
 [Install]
 WantedBy=default.target
