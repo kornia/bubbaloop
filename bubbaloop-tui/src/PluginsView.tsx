@@ -1,12 +1,23 @@
 import React, { useState, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
+import TextInput from "ink-text-input";
 import { spawn } from "child_process";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  statSync,
+} from "fs";
+import { join, relative } from "path";
 import {
   listPlugins,
   PluginManifest,
   PLUGINS_DIR,
   findProjectRoot,
   getTemplatesDir,
+  ensureDirectories,
 } from "./config.js";
 
 interface PluginsViewProps {
@@ -19,11 +30,91 @@ interface PluginInfo {
   status: "installed" | "running" | "error";
 }
 
+type CreateStep = "type" | "name" | "description" | "creating";
+
+interface CreateState {
+  step: CreateStep;
+  type: "rust" | "python";
+  name: string;
+  description: string;
+}
+
+// Convert kebab-case or snake_case to PascalCase
+function toPascalCase(s: string): string {
+  return s
+    .split(/[-_]/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join("");
+}
+
+// Process template content with variable substitution
+function processTemplate(content: string, vars: Record<string, string>): string {
+  let result = content;
+  for (const [key, value] of Object.entries(vars)) {
+    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
+  }
+  return result;
+}
+
+// Recursively walk directory
+function walkDir(dir: string): string[] {
+  const files: string[] = [];
+  const entries = readdirSync(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...walkDir(fullPath));
+    } else {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
+}
+
+// Copy and process template directory
+function copyTemplate(
+  templateDir: string,
+  outputDir: string,
+  vars: Record<string, string>
+): void {
+  // Create output directory
+  mkdirSync(outputDir, { recursive: true });
+
+  // Get all files in template
+  const files = walkDir(templateDir);
+
+  for (const srcPath of files) {
+    // Get relative path
+    const relPath = relative(templateDir, srcPath);
+
+    // Process filename (remove .template suffix)
+    const destName = relPath.replace(/\.template$/, "");
+    const destPath = join(outputDir, destName);
+
+    // Create parent directories
+    const destDir = join(destPath, "..");
+    mkdirSync(destDir, { recursive: true });
+
+    // Read, process, and write
+    const content = readFileSync(srcPath, "utf-8");
+    const processed = processTemplate(content, vars);
+    writeFileSync(destPath, processed);
+  }
+}
+
 const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [createState, setCreateState] = useState<CreateState>({
+    step: "type",
+    type: "rust",
+    name: "",
+    description: "A Bubbaloop plugin",
+  });
 
   // Load plugins
   const loadPlugins = () => {
@@ -40,78 +131,119 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
     loadPlugins();
   }, []);
 
-  // Handle keyboard input
-  useInput((input, key) => {
-    if (key.escape || input === "q") {
-      if (showCreate) {
-        setShowCreate(false);
-      } else {
-        onBack();
-      }
-      return;
-    }
-
-    if (showCreate) {
-      if (input === "r") {
-        createPlugin("rust");
-        setShowCreate(false);
-      } else if (input === "p") {
-        createPlugin("python");
-        setShowCreate(false);
-      }
-      return;
-    }
-
-    // Navigation
-    if (key.upArrow || input === "k") {
-      setSelectedIndex((prev) => Math.max(0, prev - 1));
-    } else if (key.downArrow || input === "j") {
-      setSelectedIndex((prev) => Math.min(plugins.length - 1, prev + 1));
-    }
-
-    // Actions
-    if (input === "n") {
-      setShowCreate(true);
-    } else if (input === "r" && plugins[selectedIndex]) {
-      loadPlugins();
-      setMessage("Refreshed plugin list");
-      setTimeout(() => setMessage(null), 2000);
-    } else if (input === "o" && plugins[selectedIndex]) {
-      openInEditor(plugins[selectedIndex].path);
-    }
-  });
-
-  // Create a new plugin
-  const createPlugin = (type: "rust" | "python") => {
-    const name = `my-${type}-plugin-${Date.now()}`;
-    const projectRoot = findProjectRoot();
-
-    if (!projectRoot) {
-      setMessage("Error: Could not find project root");
-      setTimeout(() => setMessage(null), 3000);
-      return;
-    }
-
-    const bubbaloop = `${projectRoot}/target/debug/bubbaloop`;
-    const child = spawn(bubbaloop, ["plugin", "init", name, "-t", type], {
-      cwd: projectRoot,
+  // Reset create state
+  const resetCreate = () => {
+    setCreateState({
+      step: "type",
+      type: "rust",
+      name: "",
+      description: "A Bubbaloop plugin",
     });
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        setMessage(`Created ${type} plugin: ${name}`);
-        loadPlugins();
-      } else {
-        setMessage(`Failed to create plugin (exit code ${code})`);
-      }
-      setTimeout(() => setMessage(null), 3000);
-    });
-
-    child.on("error", (err) => {
-      setMessage(`Error: ${err.message}`);
-      setTimeout(() => setMessage(null), 3000);
-    });
+    setShowCreate(false);
   };
+
+  // Create the plugin
+  const doCreatePlugin = () => {
+    // Ensure directories exist
+    ensureDirectories();
+
+    const templatesDir = getTemplatesDir();
+    if (!templatesDir) {
+      setMessage("Error: Templates directory not found");
+      setTimeout(() => setMessage(null), 3000);
+      resetCreate();
+      return;
+    }
+
+    const templateDir = join(templatesDir, `${createState.type}-plugin`);
+    if (!existsSync(templateDir)) {
+      setMessage(`Error: Template not found: ${templateDir}`);
+      setTimeout(() => setMessage(null), 3000);
+      resetCreate();
+      return;
+    }
+
+    const outputDir = join(PLUGINS_DIR, createState.name);
+    if (existsSync(outputDir)) {
+      setMessage(`Error: Plugin already exists: ${createState.name}`);
+      setTimeout(() => setMessage(null), 3000);
+      resetCreate();
+      return;
+    }
+
+    // Template variables
+    const vars = {
+      plugin_name: createState.name,
+      plugin_name_pascal: toPascalCase(createState.name),
+      author: process.env.USER || "Anonymous",
+      description: createState.description,
+    };
+
+    try {
+      copyTemplate(templateDir, outputDir, vars);
+      setMessage(`Created ${createState.type} plugin: ${createState.name}`);
+      loadPlugins();
+    } catch (err) {
+      setMessage(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    setTimeout(() => setMessage(null), 3000);
+    resetCreate();
+  };
+
+  // Handle keyboard input
+  useInput(
+    (input, key) => {
+      // Handle escape
+      if (key.escape) {
+        if (showCreate) {
+          resetCreate();
+        } else {
+          onBack();
+        }
+        return;
+      }
+
+      // In create wizard - type selection
+      if (showCreate && createState.step === "type") {
+        if (input === "r") {
+          setCreateState((prev) => ({ ...prev, type: "rust", step: "name" }));
+        } else if (input === "p") {
+          setCreateState((prev) => ({ ...prev, type: "python", step: "name" }));
+        }
+        return;
+      }
+
+      // Main view input handling
+      if (!showCreate) {
+        if (input === "q") {
+          onBack();
+          return;
+        }
+
+        // Navigation
+        if (key.upArrow || input === "k") {
+          setSelectedIndex((prev) => Math.max(0, prev - 1));
+        } else if (key.downArrow || input === "j") {
+          setSelectedIndex((prev) => Math.min(plugins.length - 1, prev + 1));
+        }
+
+        // Actions
+        if (input === "n") {
+          setShowCreate(true);
+        } else if (input === "r" && plugins.length > 0) {
+          loadPlugins();
+          setMessage("Refreshed plugin list");
+          setTimeout(() => setMessage(null), 2000);
+        } else if (input === "o" && plugins[selectedIndex]) {
+          openInEditor(plugins[selectedIndex].path);
+        } else if (input === "d" && plugins[selectedIndex]) {
+          deletePlugin(plugins[selectedIndex]);
+        }
+      }
+    },
+    { isActive: !showCreate || createState.step === "type" }
+  );
 
   // Open plugin directory in editor
   const openInEditor = (path: string) => {
@@ -121,13 +253,45 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
     setTimeout(() => setMessage(null), 2000);
   };
 
-  // Create plugin dialog
-  if (showCreate) {
+  // Delete plugin
+  const deletePlugin = (plugin: PluginInfo) => {
+    // Just show message - actual deletion would need confirmation
+    setMessage(`Delete not implemented. Remove: ${plugin.path}`);
+    setTimeout(() => setMessage(null), 3000);
+  };
+
+  // Handle name input submit
+  const handleNameSubmit = (value: string) => {
+    const name = value.trim();
+    if (!name) {
+      setMessage("Plugin name cannot be empty");
+      setTimeout(() => setMessage(null), 2000);
+      return;
+    }
+    // Validate name (alphanumeric, dashes, underscores)
+    if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name)) {
+      setMessage("Invalid name. Use letters, numbers, dashes, underscores");
+      setTimeout(() => setMessage(null), 2000);
+      return;
+    }
+    setCreateState((prev) => ({ ...prev, name, step: "description" }));
+  };
+
+  // Handle description input submit
+  const handleDescriptionSubmit = (value: string) => {
+    const description = value.trim() || "A Bubbaloop plugin";
+    setCreateState((prev) => ({ ...prev, description, step: "creating" }));
+    // Trigger creation after state update
+    setTimeout(() => doCreatePlugin(), 0);
+  };
+
+  // Create plugin wizard - type selection
+  if (showCreate && createState.step === "type") {
     return (
       <Box flexDirection="column" padding={1}>
         <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1}>
           <Text color="#4ECDC4" bold>
-            Create New Plugin
+            Create New Plugin (1/3)
           </Text>
         </Box>
 
@@ -149,6 +313,95 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
     );
   }
 
+  // Create plugin wizard - name input
+  if (showCreate && createState.step === "name") {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1}>
+          <Text color="#4ECDC4" bold>
+            Create New Plugin (2/3) - {createState.type}
+          </Text>
+        </Box>
+
+        <Box flexDirection="column" marginTop={1} paddingX={1}>
+          <Text>Enter plugin name (e.g., my-sensor):</Text>
+          <Box marginTop={1}>
+            <Text color="#4ECDC4">{"❯ "}</Text>
+            <TextInput
+              value={createState.name}
+              onChange={(value) =>
+                setCreateState((prev) => ({ ...prev, name: value }))
+              }
+              onSubmit={handleNameSubmit}
+              placeholder="my-plugin"
+            />
+          </Box>
+          <Text> </Text>
+          <Text color="#888">
+            <Text color="#4ECDC4">enter</Text> confirm •{" "}
+            <Text color="#4ECDC4">esc</Text> cancel
+          </Text>
+        </Box>
+
+        {message && (
+          <Box marginX={1} marginTop={1}>
+            <Text color="#FF6B6B">{message}</Text>
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
+  // Create plugin wizard - description input
+  if (showCreate && createState.step === "description") {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1}>
+          <Text color="#4ECDC4" bold>
+            Create New Plugin (3/3) - {createState.name}
+          </Text>
+        </Box>
+
+        <Box flexDirection="column" marginTop={1} paddingX={1}>
+          <Text>Enter plugin description:</Text>
+          <Box marginTop={1}>
+            <Text color="#4ECDC4">{"❯ "}</Text>
+            <TextInput
+              value={createState.description}
+              onChange={(value) =>
+                setCreateState((prev) => ({ ...prev, description: value }))
+              }
+              onSubmit={handleDescriptionSubmit}
+              placeholder="A Bubbaloop plugin"
+            />
+          </Box>
+          <Text> </Text>
+          <Text color="#888">
+            <Text color="#4ECDC4">enter</Text> confirm •{" "}
+            <Text color="#4ECDC4">esc</Text> cancel
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  // Creating state
+  if (showCreate && createState.step === "creating") {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1}>
+          <Text color="#4ECDC4" bold>
+            Creating Plugin...
+          </Text>
+        </Box>
+        <Box marginTop={1} paddingX={1}>
+          <Text color="#FFD93D">Creating {createState.name}...</Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  // Main plugins list view
   return (
     <Box flexDirection="column" padding={0}>
       {/* Header */}
