@@ -4,16 +4,34 @@ version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Protobuf schemas for bubbaloop"
+description = "Bubbaloop - Physical AI camera streaming platform"
+
+[[bin]]
+name = "bubbaloop"
+path = "src/bin/bubbaloop.rs"
 
 [dependencies]
+# Protobuf
 prost.workspace = true
 prost-types.workspace = true
 prost-reflect.workspace = true
+
+# Serialization
 serde.workspace = true
 serde_yaml.workspace = true
+
+# Error handling
 thiserror.workspace = true
+anyhow = "1.0"
+
+# ROS-Z
 ros-z.workspace = true
+
+# CLI
+argh.workspace = true
+log.workspace = true
+env_logger.workspace = true
+walkdir = "2"
 
 [build-dependencies]
 prost-build.workspace = true

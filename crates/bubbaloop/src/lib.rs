@@ -6,6 +6,9 @@ use std::sync::OnceLock;
 /// Configuration for topics
 pub mod config;
 
+/// CLI commands
+pub mod cli;
+
 /// Protobuf schemas for bubbaloop
 pub mod schemas {
     pub mod camera {

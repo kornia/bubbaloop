@@ -1,0 +1,3 @@
+# My Plugin Configuration
+topic: "my-plugin/data"
+interval_secs: 10

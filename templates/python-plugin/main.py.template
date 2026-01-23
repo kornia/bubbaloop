@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""{{plugin_name}} - A Bubbaloop plugin using official Zenoh Python.
+
+{{description}}
+
+This plugin follows the BubbleNode pattern from the Rust SDK:
+- Metadata: Static plugin information
+- Config: YAML-based configuration
+- Run loop: Async main loop with graceful shutdown
+"""
+
+import argparse
+import json
+import logging
+import signal
+import sys
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import yaml
+import zenoh
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger("{{plugin_name}}")
+
+
+# =============================================================================
+# BubbleNode Pattern (mirrors Rust SDK)
+# =============================================================================
+
+
+@dataclass
+class BubbleMetadata:
+    """Metadata about a Bubble plugin."""
+    name: str
+    version: str
+    description: str
+    topics_published: List[str]
+    topics_subscribed: List[str]
+
+
+class BubbleNode(ABC):
+    """
+    Base class for Bubbaloop plugins (Python equivalent of Rust BubbleNode trait).
+
+    Implement this class to create a plugin with standardized lifecycle:
+    1. metadata() - Static information about the node
+    2. __init__() - Construct with Zenoh session and configuration
+    3. run() - Execute main loop until shutdown signal
+    """
+
+    @staticmethod
+    @abstractmethod
+    def metadata() -> BubbleMetadata:
+        """Return metadata about this plugin."""
+        pass
+
+    @abstractmethod
+    def run(self, shutdown_event) -> None:
+        """
+        Run the node's main loop.
+
+        Args:
+            shutdown_event: threading.Event that signals when to stop
+        """
+        pass
+
+
+def load_config(config_path: str) -> Dict[str, Any]:
+    """Load plugin configuration from YAML file."""
+    path = Path(config_path)
+    if path.exists():
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    logger.warning(f"Config file not found: {config_path}, using defaults")
+    return {}
+
+
+def run_node(node_class: type, args: Optional[argparse.Namespace] = None) -> None:
+    """
+    Run a BubbleNode with standard CLI handling and lifecycle management.
+
+    This is the Python equivalent of Rust's run_node::<N>().
+    Handles:
+    - CLI argument parsing
+    - Logging setup
+    - Configuration loading
+    - Zenoh connection
+    - Graceful shutdown on Ctrl+C / SIGTERM
+    """
+    import threading
+
+    # Parse CLI args if not provided
+    if args is None:
+        parser = argparse.ArgumentParser(
+            description=f"{node_class.metadata().name} - Bubbaloop plugin"
+        )
+        parser.add_argument(
+            "-c", "--config",
+            default="config.yaml",
+            help="Path to configuration file",
+        )
+        parser.add_argument(
+            "-e", "--endpoint",
+            default="tcp/localhost:7447",
+            help="Zenoh endpoint to connect to",
+        )
+        args = parser.parse_args()
+
+    # Load metadata and config
+    meta = node_class.metadata()
+    config = load_config(args.config)
+
+    logger.info(f"Starting {meta.name} v{meta.version}")
+    logger.info(f"  {meta.description}")
+    logger.info(f"Connecting to Zenoh at: {args.endpoint}")
+
+    # Configure Zenoh connection
+    zenoh_config = zenoh.Config()
+    zenoh_config.insert_json5(
+        "connect/endpoints",
+        json.dumps([args.endpoint]),
+    )
+
+    # Setup shutdown handling
+    shutdown_event = threading.Event()
+
+    def signal_handler(signum, frame):
+        logger.info("Received shutdown signal")
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    # Connect and run
+    with zenoh.open(zenoh_config) as session:
+        logger.info("Connected to Zenoh")
+        logger.info("Node running. Press Ctrl+C to stop.")
+
+        node = node_class(session, config)
+        node.run(shutdown_event)
+
+    logger.info("Node stopped")
+
+
+# =============================================================================
+# Plugin Implementation
+# =============================================================================
+
+
+@dataclass
+class Config:
+    """Plugin configuration."""
+    topic: str = "{{plugin_name}}/data"
+    interval_secs: int = 60
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Config":
+        return cls(
+            topic=data.get("topic", cls.topic),
+            interval_secs=data.get("interval_secs", cls.interval_secs),
+        )
+
+
+class {{plugin_name_pascal}}Node(BubbleNode):
+    """{{description}}"""
+
+    def __init__(self, session: zenoh.Session, config_dict: Dict[str, Any]):
+        self.session = session
+        self.config = Config.from_dict(config_dict)
+
+        logger.info(f"Initializing {{plugin_name}} node")
+        logger.info(f"  Topic: {self.config.topic}")
+        logger.info(f"  Interval: {self.config.interval_secs}s")
+
+    @staticmethod
+    def metadata() -> BubbleMetadata:
+        return BubbleMetadata(
+            name="{{plugin_name}}",
+            version="0.1.0",
+            description="{{description}}",
+            topics_published=["{{plugin_name}}/data"],
+            topics_subscribed=[],
+        )
+
+    def run(self, shutdown_event) -> None:
+        """Main loop - publishes data until shutdown."""
+        publisher = self.session.declare_publisher(self.config.topic)
+        logger.info(f"Publishing to: {self.config.topic}")
+
+        counter = 0
+        while not shutdown_event.is_set():
+            try:
+                # Generate data (replace with your plugin logic)
+                data = {
+                    "value": 42.0 + (counter * 0.1),
+                    "timestamp": int(time.time()),
+                    "message": f"Hello from {{plugin_name}}! Count: {counter}",
+                }
+
+                # Serialize and publish
+                payload = json.dumps(data)
+                publisher.put(payload)
+                logger.debug(f"Published: {data}")
+
+                counter += 1
+
+                # Wait for interval or shutdown
+                shutdown_event.wait(timeout=self.config.interval_secs)
+
+            except Exception as e:
+                logger.error(f"Error: {e}")
+                shutdown_event.wait(timeout=1)
+
+        logger.info("{{plugin_name}} node stopped")
+
+
+if __name__ == "__main__":
+    run_node({{plugin_name_pascal}}Node)
