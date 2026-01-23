@@ -8,7 +8,9 @@ import {
   readdirSync,
   readFileSync,
   writeFileSync,
-  statSync,
+  symlinkSync,
+  lstatSync,
+  unlinkSync,
 } from "fs";
 import { join, relative } from "path";
 import {
@@ -28,15 +30,21 @@ interface PluginInfo {
   path: string;
   manifest: PluginManifest;
   status: "installed" | "running" | "error";
+  isLinked: boolean;
 }
 
 type CreateStep = "type" | "name" | "description" | "creating";
+type DialogMode = "none" | "create" | "link";
 
 interface CreateState {
   step: CreateStep;
   type: "rust" | "python";
   name: string;
   description: string;
+}
+
+interface LinkState {
+  path: string;
 }
 
 // Convert kebab-case or snake_case to PascalCase
@@ -104,17 +112,27 @@ function copyTemplate(
   }
 }
 
+// Check if a path is a symlink
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
+  const [dialogMode, setDialogMode] = useState<DialogMode>("none");
   const [createState, setCreateState] = useState<CreateState>({
     step: "type",
     type: "rust",
     name: "",
     description: "A Bubbaloop plugin",
   });
+  const [linkState, setLinkState] = useState<LinkState>({ path: "" });
 
   // Load plugins
   const loadPlugins = () => {
@@ -123,6 +141,7 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
       installed.map((p) => ({
         ...p,
         status: "installed" as const,
+        isLinked: isSymlink(p.path),
       }))
     );
   };
@@ -139,7 +158,13 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
       name: "",
       description: "A Bubbaloop plugin",
     });
-    setShowCreate(false);
+    setDialogMode("none");
+  };
+
+  // Reset link state
+  const resetLink = () => {
+    setLinkState({ path: "" });
+    setDialogMode("none");
   };
 
   // Create the plugin
@@ -191,13 +216,103 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
     resetCreate();
   };
 
+  // Link an external plugin
+  const doLinkPlugin = () => {
+    ensureDirectories();
+
+    const externalPath = linkState.path.trim();
+    if (!externalPath) {
+      setMessage("Path cannot be empty");
+      setTimeout(() => setMessage(null), 2000);
+      return;
+    }
+
+    // Expand ~ to home directory
+    const expandedPath = externalPath.startsWith("~")
+      ? join(process.env.HOME || "", externalPath.slice(1))
+      : externalPath;
+
+    // Check if directory exists
+    if (!existsSync(expandedPath)) {
+      setMessage(`Error: Directory not found: ${expandedPath}`);
+      setTimeout(() => setMessage(null), 3000);
+      resetLink();
+      return;
+    }
+
+    // Check for plugin.yaml
+    const manifestPath = join(expandedPath, "plugin.yaml");
+    if (!existsSync(manifestPath)) {
+      setMessage(`Error: No plugin.yaml found in ${expandedPath}`);
+      setTimeout(() => setMessage(null), 3000);
+      resetLink();
+      return;
+    }
+
+    // Get plugin name from manifest
+    let pluginName: string;
+    try {
+      const content = readFileSync(manifestPath, "utf-8");
+      const match = content.match(/^name:\s*["']?([^"'\n]+)["']?$/m);
+      pluginName = match ? match[1].trim() : "";
+      if (!pluginName) {
+        throw new Error("No name found in manifest");
+      }
+    } catch (err) {
+      setMessage(`Error reading manifest: ${err instanceof Error ? err.message : String(err)}`);
+      setTimeout(() => setMessage(null), 3000);
+      resetLink();
+      return;
+    }
+
+    // Create symlink
+    const linkPath = join(PLUGINS_DIR, pluginName);
+    if (existsSync(linkPath)) {
+      setMessage(`Error: Plugin "${pluginName}" already exists`);
+      setTimeout(() => setMessage(null), 3000);
+      resetLink();
+      return;
+    }
+
+    try {
+      symlinkSync(expandedPath, linkPath);
+      setMessage(`Linked plugin: ${pluginName} -> ${expandedPath}`);
+      loadPlugins();
+    } catch (err) {
+      setMessage(`Error creating symlink: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    setTimeout(() => setMessage(null), 3000);
+    resetLink();
+  };
+
+  // Unlink a plugin (remove symlink only)
+  const unlinkPlugin = (plugin: PluginInfo) => {
+    if (!plugin.isLinked) {
+      setMessage("Cannot unlink: not a linked plugin");
+      setTimeout(() => setMessage(null), 2000);
+      return;
+    }
+
+    try {
+      unlinkSync(plugin.path);
+      setMessage(`Unlinked plugin: ${plugin.manifest.name}`);
+      loadPlugins();
+    } catch (err) {
+      setMessage(`Error unlinking: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    setTimeout(() => setMessage(null), 2000);
+  };
+
   // Handle keyboard input
   useInput(
     (input, key) => {
       // Handle escape
       if (key.escape) {
-        if (showCreate) {
+        if (dialogMode === "create") {
           resetCreate();
+        } else if (dialogMode === "link") {
+          resetLink();
         } else {
           onBack();
         }
@@ -205,7 +320,7 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
       }
 
       // In create wizard - type selection
-      if (showCreate && createState.step === "type") {
+      if (dialogMode === "create" && createState.step === "type") {
         if (input === "r") {
           setCreateState((prev) => ({ ...prev, type: "rust", step: "name" }));
         } else if (input === "p") {
@@ -215,7 +330,7 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
       }
 
       // Main view input handling
-      if (!showCreate) {
+      if (dialogMode === "none") {
         if (input === "q") {
           onBack();
           return;
@@ -230,19 +345,23 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
 
         // Actions
         if (input === "n") {
-          setShowCreate(true);
+          setDialogMode("create");
+        } else if (input === "l") {
+          setDialogMode("link");
         } else if (input === "r" && plugins.length > 0) {
           loadPlugins();
           setMessage("Refreshed plugin list");
           setTimeout(() => setMessage(null), 2000);
         } else if (input === "o" && plugins[selectedIndex]) {
           openInEditor(plugins[selectedIndex].path);
+        } else if (input === "u" && plugins[selectedIndex]?.isLinked) {
+          unlinkPlugin(plugins[selectedIndex]);
         } else if (input === "d" && plugins[selectedIndex]) {
           deletePlugin(plugins[selectedIndex]);
         }
       }
     },
-    { isActive: !showCreate || createState.step === "type" }
+    { isActive: dialogMode === "none" || (dialogMode === "create" && createState.step === "type") }
   );
 
   // Open plugin directory in editor
@@ -285,8 +404,52 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
     setTimeout(() => doCreatePlugin(), 0);
   };
 
+  // Handle link path input submit
+  const handleLinkSubmit = (value: string) => {
+    setLinkState({ path: value });
+    setTimeout(() => doLinkPlugin(), 0);
+  };
+
+  // Link plugin dialog
+  if (dialogMode === "link") {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1}>
+          <Text color="#4ECDC4" bold>
+            Link External Plugin
+          </Text>
+        </Box>
+
+        <Box flexDirection="column" marginTop={1} paddingX={1}>
+          <Text>Enter path to plugin directory:</Text>
+          <Text color="#888">(must contain plugin.yaml)</Text>
+          <Box marginTop={1}>
+            <Text color="#4ECDC4">{"❯ "}</Text>
+            <TextInput
+              value={linkState.path}
+              onChange={(value) => setLinkState({ path: value })}
+              onSubmit={handleLinkSubmit}
+              placeholder="/path/to/my-plugin or ~/repos/my-plugin"
+            />
+          </Box>
+          <Text> </Text>
+          <Text color="#888">
+            <Text color="#4ECDC4">enter</Text> confirm •{" "}
+            <Text color="#4ECDC4">esc</Text> cancel
+          </Text>
+        </Box>
+
+        {message && (
+          <Box marginX={1} marginTop={1}>
+            <Text color="#FF6B6B">{message}</Text>
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
   // Create plugin wizard - type selection
-  if (showCreate && createState.step === "type") {
+  if (dialogMode === "create" && createState.step === "type") {
     return (
       <Box flexDirection="column" padding={1}>
         <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1}>
@@ -314,7 +477,7 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
   }
 
   // Create plugin wizard - name input
-  if (showCreate && createState.step === "name") {
+  if (dialogMode === "create" && createState.step === "name") {
     return (
       <Box flexDirection="column" padding={1}>
         <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1}>
@@ -353,7 +516,7 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
   }
 
   // Create plugin wizard - description input
-  if (showCreate && createState.step === "description") {
+  if (dialogMode === "create" && createState.step === "description") {
     return (
       <Box flexDirection="column" padding={1}>
         <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1}>
@@ -386,7 +549,7 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
   }
 
   // Creating state
-  if (showCreate && createState.step === "creating") {
+  if (dialogMode === "create" && createState.step === "creating") {
     return (
       <Box flexDirection="column" padding={1}>
         <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1}>
@@ -478,6 +641,7 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
                 <Box width="25%">
                   <Text color={isSelected ? "#4ECDC4" : "#CCC"}>
                     {isSelected ? "❯ " : "  "}
+                    {plugin.isLinked ? "🔗 " : ""}
                     {plugin.manifest.name || "unknown"}
                   </Text>
                 </Box>
@@ -514,7 +678,13 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
       <Box marginX={1} marginTop={1}>
         <Text color="#666">
           <Text color="#4ECDC4">[n]</Text>ew{" "}
-          <Text color="#4ECDC4">[o]</Text>pen in editor{" "}
+          <Text color="#4ECDC4">[l]</Text>ink{" "}
+          <Text color="#4ECDC4">[o]</Text>pen{" "}
+          {plugins[selectedIndex]?.isLinked && (
+            <>
+              <Text color="#4ECDC4">[u]</Text>nlink{" "}
+            </>
+          )}
           <Text color="#4ECDC4">[r]</Text>efresh{" "}
           <Text color="#4ECDC4">[q]</Text>back
         </Text>
