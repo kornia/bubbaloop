@@ -322,6 +322,10 @@ dependencies = [
 name = "bubbaloop"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "argh",
+ "env_logger",
+ "log",
  "prost 0.14.1",
  "prost-build",
  "prost-reflect",
@@ -330,6 +334,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "thiserror 2.0.17",
+ "walkdir",
 ]
 
 [[package]]
