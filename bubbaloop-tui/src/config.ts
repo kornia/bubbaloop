@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -9,9 +9,146 @@ export interface BubbaloopConfig {
   serverEndpoint?: string;
 }
 
-const CONFIG_DIR = join(homedir(), ".bubbaloop");
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
-const ZENOH_CLI_CONFIG = join(CONFIG_DIR, "zenoh.cli.json5");
+// Standard bubbaloop directories
+export const BUBBALOOP_HOME = join(homedir(), ".bubbaloop");
+export const CONFIG_DIR = BUBBALOOP_HOME;
+export const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+export const ZENOH_CLI_CONFIG = join(CONFIG_DIR, "zenoh.cli.json5");
+export const PLUGINS_DIR = join(BUBBALOOP_HOME, "plugins");
+export const LAUNCH_DIR = join(BUBBALOOP_HOME, "launch");
+
+// Find project root (where Cargo.toml is)
+export function findProjectRoot(): string | null {
+  // Check BUBBALOOP_ROOT env var first
+  const envRoot = process.env.BUBBALOOP_ROOT;
+  if (envRoot && existsSync(join(envRoot, "Cargo.toml"))) {
+    return envRoot;
+  }
+
+  // Walk up from cwd
+  let dir = process.cwd();
+  while (dir !== "/") {
+    if (existsSync(join(dir, "Cargo.toml"))) {
+      return dir;
+    }
+    dir = join(dir, "..");
+  }
+
+  return null;
+}
+
+// Get templates directory
+export function getTemplatesDir(): string | null {
+  const projectRoot = findProjectRoot();
+  if (projectRoot) {
+    const templatesDir = join(projectRoot, "templates");
+    if (existsSync(templatesDir)) {
+      return templatesDir;
+    }
+  }
+
+  // Check standard locations
+  const locations = [
+    join(BUBBALOOP_HOME, "templates"),
+    "/usr/share/bubbaloop/templates",
+  ];
+
+  for (const loc of locations) {
+    if (existsSync(loc)) {
+      return loc;
+    }
+  }
+
+  return null;
+}
+
+// Get launch files directory
+export function getLaunchDir(): string | null {
+  const projectRoot = findProjectRoot();
+  if (projectRoot) {
+    const launchDir = join(projectRoot, "launch");
+    if (existsSync(launchDir)) {
+      return launchDir;
+    }
+  }
+
+  if (existsSync(LAUNCH_DIR)) {
+    return LAUNCH_DIR;
+  }
+
+  return null;
+}
+
+// List available launch files
+export function listLaunchFiles(): string[] {
+  const launchDir = getLaunchDir();
+  if (!launchDir) return [];
+
+  try {
+    return readdirSync(launchDir)
+      .filter((f) => f.endsWith(".launch.yaml") || f.endsWith(".yaml"))
+      .map((f) => join(launchDir, f));
+  } catch {
+    return [];
+  }
+}
+
+// Plugin manifest
+export interface PluginManifest {
+  name: string;
+  version: string;
+  type: "rust" | "python";
+  description: string;
+  author?: string;
+}
+
+// List installed plugins
+export function listPlugins(): { path: string; manifest: PluginManifest }[] {
+  const plugins: { path: string; manifest: PluginManifest }[] = [];
+
+  if (!existsSync(PLUGINS_DIR)) {
+    return plugins;
+  }
+
+  try {
+    const dirs = readdirSync(PLUGINS_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => join(PLUGINS_DIR, d.name));
+
+    for (const dir of dirs) {
+      const manifestPath = join(dir, "plugin.yaml");
+      if (existsSync(manifestPath)) {
+        try {
+          const content = readFileSync(manifestPath, "utf-8");
+          // Simple YAML parsing for manifest
+          const manifest = parseSimpleYaml(content) as PluginManifest;
+          plugins.push({ path: dir, manifest });
+        } catch {
+          // Skip invalid manifests
+        }
+      }
+    }
+  } catch {
+    // Ignore errors
+  }
+
+  return plugins;
+}
+
+// Simple YAML parser for plugin manifests
+function parseSimpleYaml(content: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  const lines = content.split("\n");
+
+  for (const line of lines) {
+    const match = line.match(/^(\w+):\s*["']?([^"'\n]+)["']?$/);
+    if (match) {
+      result[match[1]] = match[2].trim();
+    }
+  }
+
+  return result;
+}
 
 export function loadConfig(): BubbaloopConfig {
   try {
@@ -69,6 +206,20 @@ export function updateZenohCliConfig(serverEndpoint: string): void {
 
 export function getZenohCliConfigPath(): string {
   return ZENOH_CLI_CONFIG;
+}
+
+// Ensure all bubbaloop directories exist
+export function ensureDirectories(): void {
+  const dirs = [BUBBALOOP_HOME, PLUGINS_DIR, LAUNCH_DIR];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) {
+      try {
+        mkdirSync(dir, { recursive: true });
+      } catch {
+        // Ignore
+      }
+    }
+  }
 }
 
 export const DEFAULT_ENDPOINT = "ws://127.0.0.1:10000";
