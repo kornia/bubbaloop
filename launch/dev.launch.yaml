@@ -1,0 +1,32 @@
+# Development Launch Configuration
+#
+# Minimal setup for local development with debug logging.
+#
+# Usage:
+#   bubbaloop_launch launch/dev.launch.yaml
+
+version: "1.0"
+
+args:
+  zenoh_endpoint:
+    default: "tcp/127.0.0.1:7447"
+
+env:
+  RUST_LOG: "debug"
+  ZENOH_ENDPOINT: "$(arg zenoh_endpoint)"
+
+nodes:
+  # Zenoh bridge for WebSocket connections
+  bridge:
+    executable: "zenoh-ts/target/release/zenoh-bridge-remote-api"
+    raw_args: ["--listen", "tcp/0.0.0.0:7447", "--ws-port", "10000"]
+    group: core
+    startup_delay_ms: 1000
+
+  # Weather data only (lightweight for testing)
+  weather:
+    package: openmeteo
+    binary: openmeteo_node
+    depends_on:
+      - bridge: started
+    group: sensors

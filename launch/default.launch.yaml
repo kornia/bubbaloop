@@ -1,0 +1,72 @@
+# Default Bubbaloop Launch Configuration
+#
+# Usage:
+#   bubbaloop_launch launch/default.launch.yaml
+#   bubbaloop_launch launch/default.launch.yaml -a camera_config:=crates/rtsp_camera/configs/config_jetson.yaml
+#   bubbaloop_launch launch/default.launch.yaml -a enable_recording:=true
+#   bubbaloop_launch launch/default.launch.yaml -g perception,visualization
+#   bubbaloop_launch launch/default.launch.yaml --enable foxglove --disable weather
+
+version: "1.0"
+
+args:
+  camera_config:
+    default: "crates/rtsp_camera/configs/config_cpu.yaml"
+    description: "Path to camera configuration file"
+  enable_recording:
+    default: false
+    description: "Enable MCAP recording"
+  zenoh_endpoint:
+    default: "tcp/127.0.0.1:7447"
+    description: "Zenoh endpoint for nodes to connect to"
+
+env:
+  RUST_LOG: "info"
+  ZENOH_ENDPOINT: "$(arg zenoh_endpoint)"
+
+nodes:
+  # Core infrastructure
+  bridge:
+    executable: "zenoh-ts/target/release/zenoh-bridge-remote-api"
+    raw_args: ["--listen", "tcp/0.0.0.0:7447", "--ws-port", "10000"]
+    group: core
+    startup_delay_ms: 2000
+
+  # Camera processing
+  cameras:
+    package: rtsp_camera
+    binary: cameras_node
+    args:
+      config: "$(arg camera_config)"
+    depends_on:
+      - bridge: started
+    group: perception
+
+  # Weather data
+  weather:
+    package: openmeteo
+    binary: openmeteo_node
+    depends_on:
+      - bridge: started
+    group: sensors
+    enabled: true
+
+  # Foxglove visualization bridge
+  foxglove:
+    package: foxglove_bridge
+    binary: foxglove_bridge
+    depends_on:
+      - cameras: started
+    group: visualization
+    enabled: false
+
+  # MCAP recording
+  recorder:
+    package: mcap_recorder
+    binary: mcap_recorder
+    args:
+      output: "recordings/$(timestamp).mcap"
+    depends_on:
+      - cameras: started
+    enabled: "$(arg enable_recording)"
+    group: recording

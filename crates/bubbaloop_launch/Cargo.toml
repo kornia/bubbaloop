@@ -1,0 +1,42 @@
+[package]
+name = "bubbaloop_launch"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "ROS2-inspired launch system for bubbaloop services"
+
+[dependencies]
+# CLI and logging
+argh.workspace = true
+ctrlc.workspace = true
+env_logger.workspace = true
+log.workspace = true
+
+# Async runtime
+tokio.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Ordered maps for deterministic ordering
+indexmap = { version = "2.0", features = ["serde"] }
+
+# Regex for substitution patterns
+regex = "1.10"
+
+# Time for timestamps
+chrono = "0.4"
+
+# Unix signal handling
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal"] }
+
+[[bin]]
+name = "bubbaloop_launch"
+path = "src/bin/bubbaloop_launch.rs"
