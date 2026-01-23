@@ -1,50 +1,53 @@
 import React, { useState, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
-import { spawn } from "child_process";
+import { execSync, spawn } from "child_process";
 import {
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   writeFileSync,
-  symlinkSync,
-  lstatSync,
   unlinkSync,
 } from "fs";
-import { join, relative } from "path";
+import { join, relative, basename } from "path";
 import {
   listPlugins,
   PluginManifest,
-  PLUGINS_DIR,
+  PLUGINS_FILE,
   findProjectRoot,
   getTemplatesDir,
   ensureDirectories,
+  registerPlugin,
+  unregisterPlugin,
+  getServiceName,
+  getServicePath,
+  generateServiceUnit,
+  SYSTEMD_USER_DIR,
 } from "./config.js";
 
 interface PluginsViewProps {
   onBack: () => void;
 }
 
+type ServiceStatus = "stopped" | "running" | "failed" | "not-installed";
+
 interface PluginInfo {
   path: string;
   manifest: PluginManifest;
-  status: "installed" | "running" | "error";
-  isLinked: boolean;
+  valid: boolean;
+  serviceStatus: ServiceStatus;
+  enabled: boolean;
 }
 
+type DialogMode = "none" | "create" | "register";
 type CreateStep = "type" | "name" | "description" | "creating";
-type DialogMode = "none" | "create" | "link";
 
 interface CreateState {
   step: CreateStep;
   type: "rust" | "python";
   name: string;
   description: string;
-}
-
-interface LinkState {
-  path: string;
 }
 
 // Convert kebab-case or snake_case to PascalCase
@@ -87,37 +90,129 @@ function copyTemplate(
   outputDir: string,
   vars: Record<string, string>
 ): void {
-  // Create output directory
   mkdirSync(outputDir, { recursive: true });
 
-  // Get all files in template
   const files = walkDir(templateDir);
 
   for (const srcPath of files) {
-    // Get relative path
     const relPath = relative(templateDir, srcPath);
-
-    // Process filename (remove .template suffix)
     const destName = relPath.replace(/\.template$/, "");
     const destPath = join(outputDir, destName);
 
-    // Create parent directories
     const destDir = join(destPath, "..");
     mkdirSync(destDir, { recursive: true });
 
-    // Read, process, and write
     const content = readFileSync(srcPath, "utf-8");
     const processed = processTemplate(content, vars);
     writeFileSync(destPath, processed);
   }
 }
 
-// Check if a path is a symlink
-function isSymlink(path: string): boolean {
+// Get systemd service status
+function getServiceStatus(serviceName: string): { status: ServiceStatus; enabled: boolean } {
   try {
-    return lstatSync(path).isSymbolicLink();
+    const result = execSync(`systemctl --user is-active ${serviceName} 2>/dev/null`, {
+      encoding: "utf-8",
+    }).trim();
+
+    let enabled = false;
+    try {
+      const enabledResult = execSync(`systemctl --user is-enabled ${serviceName} 2>/dev/null`, {
+        encoding: "utf-8",
+      }).trim();
+      enabled = enabledResult === "enabled";
+    } catch {
+      enabled = false;
+    }
+
+    if (result === "active") {
+      return { status: "running", enabled };
+    } else if (result === "failed") {
+      return { status: "failed", enabled };
+    } else {
+      return { status: "stopped", enabled };
+    }
   } catch {
-    return false;
+    return { status: "not-installed", enabled: false };
+  }
+}
+
+// systemd commands
+function installService(pluginPath: string, manifest: PluginManifest): { success: boolean; error?: string } {
+  try {
+    ensureDirectories();
+    const servicePath = getServicePath(manifest.name);
+    const unitContent = generateServiceUnit(pluginPath, manifest);
+    writeFileSync(servicePath, unitContent);
+    execSync("systemctl --user daemon-reload", { encoding: "utf-8" });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function uninstallService(manifest: PluginManifest): { success: boolean; error?: string } {
+  try {
+    const serviceName = getServiceName(manifest.name);
+    const servicePath = getServicePath(manifest.name);
+
+    // Stop and disable first
+    try {
+      execSync(`systemctl --user stop ${serviceName}`, { encoding: "utf-8" });
+    } catch { /* ignore */ }
+    try {
+      execSync(`systemctl --user disable ${serviceName}`, { encoding: "utf-8" });
+    } catch { /* ignore */ }
+
+    // Remove service file
+    if (existsSync(servicePath)) {
+      unlinkSync(servicePath);
+    }
+
+    execSync("systemctl --user daemon-reload", { encoding: "utf-8" });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function startService(manifest: PluginManifest): { success: boolean; error?: string } {
+  try {
+    const serviceName = getServiceName(manifest.name);
+    execSync(`systemctl --user start ${serviceName}`, { encoding: "utf-8" });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function stopService(manifest: PluginManifest): { success: boolean; error?: string } {
+  try {
+    const serviceName = getServiceName(manifest.name);
+    execSync(`systemctl --user stop ${serviceName}`, { encoding: "utf-8" });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function enableService(manifest: PluginManifest): { success: boolean; error?: string } {
+  try {
+    const serviceName = getServiceName(manifest.name);
+    execSync(`systemctl --user enable ${serviceName}`, { encoding: "utf-8" });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function disableService(manifest: PluginManifest): { success: boolean; error?: string } {
+  try {
+    const serviceName = getServiceName(manifest.name);
+    execSync(`systemctl --user disable ${serviceName}`, { encoding: "utf-8" });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -126,31 +221,35 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [dialogMode, setDialogMode] = useState<DialogMode>("none");
+  const [registerPath, setRegisterPath] = useState("");
   const [createState, setCreateState] = useState<CreateState>({
     step: "type",
     type: "rust",
     name: "",
     description: "A Bubbaloop plugin",
   });
-  const [linkState, setLinkState] = useState<LinkState>({ path: "" });
 
-  // Load plugins
+  // Load plugins with service status
   const loadPlugins = () => {
-    const installed = listPlugins();
-    setPlugins(
-      installed.map((p) => ({
+    const registered = listPlugins();
+    const withStatus = registered.map((p) => {
+      const { status, enabled } = getServiceStatus(getServiceName(p.manifest.name));
+      return {
         ...p,
-        status: "installed" as const,
-        isLinked: isSymlink(p.path),
-      }))
-    );
+        serviceStatus: status,
+        enabled,
+      };
+    });
+    setPlugins(withStatus);
   };
 
   useEffect(() => {
     loadPlugins();
+    // Refresh status periodically
+    const interval = setInterval(loadPlugins, 5000);
+    return () => clearInterval(interval);
   }, []);
 
-  // Reset create state
   const resetCreate = () => {
     setCreateState({
       step: "type",
@@ -161,15 +260,13 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
     setDialogMode("none");
   };
 
-  // Reset link state
-  const resetLink = () => {
-    setLinkState({ path: "" });
+  const resetRegister = () => {
+    setRegisterPath("");
     setDialogMode("none");
   };
 
-  // Create the plugin
+  // Create a new plugin from template
   const doCreatePlugin = () => {
-    // Ensure directories exist
     ensureDirectories();
 
     const templatesDir = getTemplatesDir();
@@ -188,15 +285,15 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
       return;
     }
 
-    const outputDir = join(PLUGINS_DIR, createState.name);
+    // Create in current directory or home
+    const outputDir = join(process.cwd(), createState.name);
     if (existsSync(outputDir)) {
-      setMessage(`Error: Plugin already exists: ${createState.name}`);
+      setMessage(`Error: Directory already exists: ${outputDir}`);
       setTimeout(() => setMessage(null), 3000);
       resetCreate();
       return;
     }
 
-    // Template variables
     const vars = {
       plugin_name: createState.name,
       plugin_name_pascal: toPascalCase(createState.name),
@@ -206,120 +303,48 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
 
     try {
       copyTemplate(templateDir, outputDir, vars);
-      setMessage(`Created ${createState.type} plugin: ${createState.name}`);
-      loadPlugins();
+      // Auto-register the new plugin
+      const result = registerPlugin(outputDir);
+      if (result.success) {
+        setMessage(`Created and registered: ${createState.name} at ${outputDir}`);
+        loadPlugins();
+      } else {
+        setMessage(`Created at ${outputDir}, but failed to register: ${result.error}`);
+      }
     } catch (err) {
       setMessage(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    setTimeout(() => setMessage(null), 3000);
+    setTimeout(() => setMessage(null), 4000);
     resetCreate();
   };
 
-  // Link an external plugin
-  const doLinkPlugin = () => {
-    ensureDirectories();
-
-    const externalPath = linkState.path.trim();
-    if (!externalPath) {
-      setMessage("Path cannot be empty");
-      setTimeout(() => setMessage(null), 2000);
-      return;
-    }
-
-    // Expand ~ to home directory
-    const expandedPath = externalPath.startsWith("~")
-      ? join(process.env.HOME || "", externalPath.slice(1))
-      : externalPath;
-
-    // Check if directory exists
-    if (!existsSync(expandedPath)) {
-      setMessage(`Error: Directory not found: ${expandedPath}`);
-      setTimeout(() => setMessage(null), 3000);
-      resetLink();
-      return;
-    }
-
-    // Check for plugin.yaml
-    const manifestPath = join(expandedPath, "plugin.yaml");
-    if (!existsSync(manifestPath)) {
-      setMessage(`Error: No plugin.yaml found in ${expandedPath}`);
-      setTimeout(() => setMessage(null), 3000);
-      resetLink();
-      return;
-    }
-
-    // Get plugin name from manifest
-    let pluginName: string;
-    try {
-      const content = readFileSync(manifestPath, "utf-8");
-      const match = content.match(/^name:\s*["']?([^"'\n]+)["']?$/m);
-      pluginName = match ? match[1].trim() : "";
-      if (!pluginName) {
-        throw new Error("No name found in manifest");
-      }
-    } catch (err) {
-      setMessage(`Error reading manifest: ${err instanceof Error ? err.message : String(err)}`);
-      setTimeout(() => setMessage(null), 3000);
-      resetLink();
-      return;
-    }
-
-    // Create symlink
-    const linkPath = join(PLUGINS_DIR, pluginName);
-    if (existsSync(linkPath)) {
-      setMessage(`Error: Plugin "${pluginName}" already exists`);
-      setTimeout(() => setMessage(null), 3000);
-      resetLink();
-      return;
-    }
-
-    try {
-      symlinkSync(expandedPath, linkPath);
-      setMessage(`Linked plugin: ${pluginName} -> ${expandedPath}`);
+  // Register an existing plugin
+  const doRegisterPlugin = () => {
+    const result = registerPlugin(registerPath);
+    if (result.success) {
+      setMessage(`Registered plugin from: ${registerPath}`);
       loadPlugins();
-    } catch (err) {
-      setMessage(`Error creating symlink: ${err instanceof Error ? err.message : String(err)}`);
+    } else {
+      setMessage(`Error: ${result.error}`);
     }
-
     setTimeout(() => setMessage(null), 3000);
-    resetLink();
-  };
-
-  // Unlink a plugin (remove symlink only)
-  const unlinkPlugin = (plugin: PluginInfo) => {
-    if (!plugin.isLinked) {
-      setMessage("Cannot unlink: not a linked plugin");
-      setTimeout(() => setMessage(null), 2000);
-      return;
-    }
-
-    try {
-      unlinkSync(plugin.path);
-      setMessage(`Unlinked plugin: ${plugin.manifest.name}`);
-      loadPlugins();
-    } catch (err) {
-      setMessage(`Error unlinking: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    setTimeout(() => setMessage(null), 2000);
+    resetRegister();
   };
 
   // Handle keyboard input
   useInput(
     (input, key) => {
-      // Handle escape
       if (key.escape) {
-        if (dialogMode === "create") {
-          resetCreate();
-        } else if (dialogMode === "link") {
-          resetLink();
+        if (dialogMode !== "none") {
+          if (dialogMode === "create") resetCreate();
+          else resetRegister();
         } else {
           onBack();
         }
         return;
       }
 
-      // In create wizard - type selection
       if (dialogMode === "create" && createState.step === "type") {
         if (input === "r") {
           setCreateState((prev) => ({ ...prev, type: "rust", step: "name" }));
@@ -329,7 +354,6 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
         return;
       }
 
-      // Main view input handling
       if (dialogMode === "none") {
         if (input === "q") {
           onBack();
@@ -343,28 +367,99 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
           setSelectedIndex((prev) => Math.min(plugins.length - 1, prev + 1));
         }
 
+        const plugin = plugins[selectedIndex];
+
         // Actions
         if (input === "n") {
           setDialogMode("create");
-        } else if (input === "l") {
-          setDialogMode("link");
-        } else if (input === "r" && plugins.length > 0) {
+        } else if (input === "a") {
+          setDialogMode("register");
+        } else if (input === "R") {
           loadPlugins();
           setMessage("Refreshed plugin list");
           setTimeout(() => setMessage(null), 2000);
-        } else if (input === "o" && plugins[selectedIndex]) {
-          openInEditor(plugins[selectedIndex].path);
-        } else if (input === "u" && plugins[selectedIndex]?.isLinked) {
-          unlinkPlugin(plugins[selectedIndex]);
-        } else if (input === "d" && plugins[selectedIndex]) {
-          deletePlugin(plugins[selectedIndex]);
+        } else if (input === "o" && plugin) {
+          openInEditor(plugin.path);
+        } else if (input === "x" && plugin) {
+          // Unregister
+          const result = unregisterPlugin(plugin.path);
+          if (result.success) {
+            // Also uninstall service if installed
+            if (plugin.serviceStatus !== "not-installed") {
+              uninstallService(plugin.manifest);
+            }
+            setMessage(`Unregistered: ${plugin.manifest.name}`);
+            loadPlugins();
+          } else {
+            setMessage(`Error: ${result.error}`);
+          }
+          setTimeout(() => setMessage(null), 2000);
+        } else if (input === "i" && plugin && plugin.serviceStatus === "not-installed") {
+          // Install service
+          const result = installService(plugin.path, plugin.manifest);
+          if (result.success) {
+            setMessage(`Installed service: ${plugin.manifest.name}`);
+            loadPlugins();
+          } else {
+            setMessage(`Error: ${result.error}`);
+          }
+          setTimeout(() => setMessage(null), 2000);
+        } else if (input === "u" && plugin && plugin.serviceStatus !== "not-installed") {
+          // Uninstall service
+          const result = uninstallService(plugin.manifest);
+          if (result.success) {
+            setMessage(`Uninstalled service: ${plugin.manifest.name}`);
+            loadPlugins();
+          } else {
+            setMessage(`Error: ${result.error}`);
+          }
+          setTimeout(() => setMessage(null), 2000);
+        } else if (input === "s" && plugin && plugin.serviceStatus === "stopped") {
+          // Start service
+          const result = startService(plugin.manifest);
+          if (result.success) {
+            setMessage(`Started: ${plugin.manifest.name}`);
+            loadPlugins();
+          } else {
+            setMessage(`Error: ${result.error}`);
+          }
+          setTimeout(() => setMessage(null), 2000);
+        } else if (input === "s" && plugin && plugin.serviceStatus === "running") {
+          // Stop service
+          const result = stopService(plugin.manifest);
+          if (result.success) {
+            setMessage(`Stopped: ${plugin.manifest.name}`);
+            loadPlugins();
+          } else {
+            setMessage(`Error: ${result.error}`);
+          }
+          setTimeout(() => setMessage(null), 2000);
+        } else if (input === "e" && plugin && plugin.serviceStatus !== "not-installed") {
+          // Toggle enable/disable
+          if (plugin.enabled) {
+            const result = disableService(plugin.manifest);
+            if (result.success) {
+              setMessage(`Disabled autostart: ${plugin.manifest.name}`);
+              loadPlugins();
+            } else {
+              setMessage(`Error: ${result.error}`);
+            }
+          } else {
+            const result = enableService(plugin.manifest);
+            if (result.success) {
+              setMessage(`Enabled autostart: ${plugin.manifest.name}`);
+              loadPlugins();
+            } else {
+              setMessage(`Error: ${result.error}`);
+            }
+          }
+          setTimeout(() => setMessage(null), 2000);
         }
       }
     },
     { isActive: dialogMode === "none" || (dialogMode === "create" && createState.step === "type") }
   );
 
-  // Open plugin directory in editor
   const openInEditor = (path: string) => {
     const editor = process.env.EDITOR || "code";
     spawn(editor, [path], { detached: true, stdio: "ignore" }).unref();
@@ -372,14 +467,6 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
     setTimeout(() => setMessage(null), 2000);
   };
 
-  // Delete plugin
-  const deletePlugin = (plugin: PluginInfo) => {
-    // Just show message - actual deletion would need confirmation
-    setMessage(`Delete not implemented. Remove: ${plugin.path}`);
-    setTimeout(() => setMessage(null), 3000);
-  };
-
-  // Handle name input submit
   const handleNameSubmit = (value: string) => {
     const name = value.trim();
     if (!name) {
@@ -387,7 +474,6 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
       setTimeout(() => setMessage(null), 2000);
       return;
     }
-    // Validate name (alphanumeric, dashes, underscores)
     if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name)) {
       setMessage("Invalid name. Use letters, numbers, dashes, underscores");
       setTimeout(() => setMessage(null), 2000);
@@ -396,27 +482,41 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
     setCreateState((prev) => ({ ...prev, name, step: "description" }));
   };
 
-  // Handle description input submit
   const handleDescriptionSubmit = (value: string) => {
     const description = value.trim() || "A Bubbaloop plugin";
     setCreateState((prev) => ({ ...prev, description, step: "creating" }));
-    // Trigger creation after state update
     setTimeout(() => doCreatePlugin(), 0);
   };
 
-  // Handle link path input submit
-  const handleLinkSubmit = (value: string) => {
-    setLinkState({ path: value });
-    setTimeout(() => doLinkPlugin(), 0);
+  const handleRegisterSubmit = (value: string) => {
+    setRegisterPath(value);
+    setTimeout(() => doRegisterPlugin(), 0);
   };
 
-  // Link plugin dialog
-  if (dialogMode === "link") {
+  // Status indicator
+  const StatusBadge: React.FC<{ status: ServiceStatus; enabled: boolean }> = ({ status, enabled }) => {
+    const config: Record<ServiceStatus, { color: string; symbol: string }> = {
+      running: { color: "#95E1D3", symbol: "●" },
+      stopped: { color: "#888", symbol: "○" },
+      failed: { color: "#FF6B6B", symbol: "✗" },
+      "not-installed": { color: "#666", symbol: "-" },
+    };
+    const { color, symbol } = config[status];
+    return (
+      <Text>
+        <Text color={color}>{symbol}</Text>
+        {enabled && status !== "not-installed" && <Text color="#FFD93D"> ⚡</Text>}
+      </Text>
+    );
+  };
+
+  // Register plugin dialog
+  if (dialogMode === "register") {
     return (
       <Box flexDirection="column" padding={1}>
         <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1}>
           <Text color="#4ECDC4" bold>
-            Link External Plugin
+            Register Plugin
           </Text>
         </Box>
 
@@ -426,10 +526,10 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
           <Box marginTop={1}>
             <Text color="#4ECDC4">{"❯ "}</Text>
             <TextInput
-              value={linkState.path}
-              onChange={(value) => setLinkState({ path: value })}
-              onSubmit={handleLinkSubmit}
-              placeholder="/path/to/my-plugin or ~/repos/my-plugin"
+              value={registerPath}
+              onChange={setRegisterPath}
+              onSubmit={handleRegisterSubmit}
+              placeholder="/path/to/plugin or ~/projects/my-plugin"
             />
           </Box>
           <Text> </Text>
@@ -492,9 +592,7 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
             <Text color="#4ECDC4">{"❯ "}</Text>
             <TextInput
               value={createState.name}
-              onChange={(value) =>
-                setCreateState((prev) => ({ ...prev, name: value }))
-              }
+              onChange={(value) => setCreateState((prev) => ({ ...prev, name: value }))}
               onSubmit={handleNameSubmit}
               placeholder="my-plugin"
             />
@@ -531,9 +629,7 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
             <Text color="#4ECDC4">{"❯ "}</Text>
             <TextInput
               value={createState.description}
-              onChange={(value) =>
-                setCreateState((prev) => ({ ...prev, description: value }))
-              }
+              onChange={(value) => setCreateState((prev) => ({ ...prev, description: value }))}
               onSubmit={handleDescriptionSubmit}
               placeholder="A Bubbaloop plugin"
             />
@@ -564,6 +660,8 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
     );
   }
 
+  const plugin = plugins[selectedIndex];
+
   // Main plugins list view
   return (
     <Box flexDirection="column" padding={0}>
@@ -578,7 +676,7 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
           Plugins
         </Text>
         <Text color="#888">
-          {plugins.length} installed •{" "}
+          {plugins.length} registered •{" "}
           <Text color="#666">esc/q back</Text>
         </Text>
       </Box>
@@ -586,12 +684,12 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
       {/* Info */}
       <Box marginX={1} marginTop={1}>
         <Text color="#888">
-          Plugin directory: <Text color="#4ECDC4">{PLUGINS_DIR}</Text>
+          Registry: <Text color="#4ECDC4">{PLUGINS_FILE}</Text>
         </Text>
       </Box>
       <Box marginX={1}>
         <Text color="#888">
-          Templates: <Text color="#4ECDC4">{getTemplatesDir() || "not found"}</Text>
+          Services: <Text color="#4ECDC4">{SYSTEMD_USER_DIR}</Text>
         </Text>
       </Box>
 
@@ -604,25 +702,20 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
       >
         {/* Table header */}
         <Box paddingX={1} borderBottom borderColor="#444">
-          <Box width="25%">
-            <Text color="#4ECDC4" bold>
-              Name
-            </Text>
+          <Box width={3}>
+            <Text color="#4ECDC4" bold>St</Text>
           </Box>
-          <Box width="15%">
-            <Text color="#4ECDC4" bold>
-              Version
-            </Text>
+          <Box width="20%">
+            <Text color="#4ECDC4" bold>Name</Text>
           </Box>
-          <Box width="15%">
-            <Text color="#4ECDC4" bold>
-              Type
-            </Text>
+          <Box width="10%">
+            <Text color="#4ECDC4" bold>Version</Text>
           </Box>
-          <Box width="45%">
-            <Text color="#4ECDC4" bold>
-              Description
-            </Text>
+          <Box width="10%">
+            <Text color="#4ECDC4" bold>Type</Text>
+          </Box>
+          <Box width="55%">
+            <Text color="#4ECDC4" bold>Path</Text>
           </Box>
         </Box>
 
@@ -630,35 +723,35 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
         {plugins.length === 0 ? (
           <Box paddingX={1} paddingY={1}>
             <Text color="#888">
-              No plugins installed. Press <Text color="#4ECDC4">n</Text> to create one.
+              No plugins registered. Press <Text color="#4ECDC4">n</Text> to create or{" "}
+              <Text color="#4ECDC4">a</Text> to add existing.
             </Text>
           </Box>
         ) : (
-          plugins.map((plugin, index) => {
+          plugins.map((p, index) => {
             const isSelected = index === selectedIndex;
             return (
-              <Box key={plugin.path} paddingX={1}>
-                <Box width="25%">
-                  <Text color={isSelected ? "#4ECDC4" : "#CCC"}>
+              <Box key={p.path} paddingX={1}>
+                <Box width={3}>
+                  <StatusBadge status={p.serviceStatus} enabled={p.enabled} />
+                </Box>
+                <Box width="20%">
+                  <Text color={isSelected ? "#4ECDC4" : p.valid ? "#CCC" : "#FF6B6B"}>
                     {isSelected ? "❯ " : "  "}
-                    {plugin.isLinked ? "🔗 " : ""}
-                    {plugin.manifest.name || "unknown"}
+                    {p.manifest.name}
                   </Text>
                 </Box>
-                <Box width="15%">
-                  <Text color="#95E1D3">
-                    {plugin.manifest.version || "0.0.0"}
+                <Box width="10%">
+                  <Text color="#95E1D3">{p.manifest.version}</Text>
+                </Box>
+                <Box width="10%">
+                  <Text color={p.manifest.type === "rust" ? "#FFD93D" : "#4ECDC4"}>
+                    {p.manifest.type}
                   </Text>
                 </Box>
-                <Box width="15%">
-                  <Text color={plugin.manifest.type === "rust" ? "#FFD93D" : "#4ECDC4"}>
-                    {plugin.manifest.type || "unknown"}
-                  </Text>
-                </Box>
-                <Box width="45%">
+                <Box width="55%">
                   <Text color="#888">
-                    {(plugin.manifest.description || "").slice(0, 40)}
-                    {(plugin.manifest.description || "").length > 40 ? "..." : ""}
+                    {p.path.length > 45 ? "..." + p.path.slice(-42) : p.path}
                   </Text>
                 </Box>
               </Box>
@@ -675,18 +768,37 @@ const PluginsView: React.FC<PluginsViewProps> = ({ onBack }) => {
       )}
 
       {/* Footer with keybindings */}
-      <Box marginX={1} marginTop={1}>
+      <Box marginX={1} marginTop={1} flexDirection="column">
         <Text color="#666">
           <Text color="#4ECDC4">[n]</Text>ew{" "}
-          <Text color="#4ECDC4">[l]</Text>ink{" "}
+          <Text color="#4ECDC4">[a]</Text>dd existing{" "}
+          <Text color="#4ECDC4">[x]</Text> unregister{" "}
           <Text color="#4ECDC4">[o]</Text>pen{" "}
-          {plugins[selectedIndex]?.isLinked && (
-            <>
-              <Text color="#4ECDC4">[u]</Text>nlink{" "}
-            </>
-          )}
-          <Text color="#4ECDC4">[r]</Text>efresh{" "}
-          <Text color="#4ECDC4">[q]</Text>back
+          <Text color="#4ECDC4">[R]</Text>efresh
+        </Text>
+        {plugin && (
+          <Text color="#666">
+            {plugin.serviceStatus === "not-installed" ? (
+              <><Text color="#4ECDC4">[i]</Text>nstall service</>
+            ) : (
+              <>
+                <Text color="#4ECDC4">[s]</Text>{plugin.serviceStatus === "running" ? "top" : "tart"}{" "}
+                <Text color="#4ECDC4">[e]</Text>{plugin.enabled ? " disable" : " enable"} autostart{" "}
+                <Text color="#4ECDC4">[u]</Text>ninstall service
+              </>
+            )}
+          </Text>
+        )}
+      </Box>
+
+      {/* Legend */}
+      <Box marginX={1} marginTop={1}>
+        <Text color="#666">
+          <Text color="#95E1D3">●</Text> running{" "}
+          <Text color="#888">○</Text> stopped{" "}
+          <Text color="#FF6B6B">✗</Text> failed{" "}
+          <Text color="#666">-</Text> no service{" "}
+          <Text color="#FFD93D">⚡</Text> autostart
         </Text>
       </Box>
     </Box>

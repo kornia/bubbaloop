@@ -14,8 +14,9 @@ export const BUBBALOOP_HOME = join(homedir(), ".bubbaloop");
 export const CONFIG_DIR = BUBBALOOP_HOME;
 export const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 export const ZENOH_CLI_CONFIG = join(CONFIG_DIR, "zenoh.cli.json5");
-export const PLUGINS_DIR = join(BUBBALOOP_HOME, "plugins");
+export const PLUGINS_FILE = join(BUBBALOOP_HOME, "plugins.json");
 export const LAUNCH_DIR = join(BUBBALOOP_HOME, "launch");
+export const SYSTEMD_USER_DIR = join(homedir(), ".config/systemd/user");
 
 // Find project root (where Cargo.toml is)
 export function findProjectRoot(): string | null {
@@ -93,46 +94,101 @@ export function listLaunchFiles(): string[] {
   }
 }
 
-// Plugin manifest
+// Plugin manifest (from plugin.yaml)
 export interface PluginManifest {
   name: string;
   version: string;
   type: "rust" | "python";
   description: string;
   author?: string;
+  // Optional: command to run (defaults based on type)
+  command?: string;
 }
 
-// List installed plugins
-export function listPlugins(): { path: string; manifest: PluginManifest }[] {
-  const plugins: { path: string; manifest: PluginManifest }[] = [];
+// Plugin registry entry (stored in plugins.json)
+export interface PluginEntry {
+  path: string;
+  addedAt: string;
+}
 
-  if (!existsSync(PLUGINS_DIR)) {
-    return plugins;
-  }
+// Plugins registry
+export interface PluginsRegistry {
+  plugins: PluginEntry[];
+}
 
+// Load plugins registry
+export function loadPluginsRegistry(): PluginsRegistry {
   try {
-    const dirs = readdirSync(PLUGINS_DIR, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => join(PLUGINS_DIR, d.name));
-
-    for (const dir of dirs) {
-      const manifestPath = join(dir, "plugin.yaml");
-      if (existsSync(manifestPath)) {
-        try {
-          const content = readFileSync(manifestPath, "utf-8");
-          // Simple YAML parsing for manifest
-          const manifest = parseSimpleYaml(content) as PluginManifest;
-          plugins.push({ path: dir, manifest });
-        } catch {
-          // Skip invalid manifests
-        }
-      }
+    if (existsSync(PLUGINS_FILE)) {
+      const data = readFileSync(PLUGINS_FILE, "utf-8");
+      return JSON.parse(data);
     }
   } catch {
     // Ignore errors
   }
+  return { plugins: [] };
+}
 
-  return plugins;
+// Save plugins registry
+export function savePluginsRegistry(registry: PluginsRegistry): void {
+  try {
+    if (!existsSync(CONFIG_DIR)) {
+      mkdirSync(CONFIG_DIR, { recursive: true });
+    }
+    writeFileSync(PLUGINS_FILE, JSON.stringify(registry, null, 2));
+  } catch {
+    // Ignore save errors
+  }
+}
+
+// Register a plugin (add to registry)
+export function registerPlugin(pluginPath: string): { success: boolean; error?: string } {
+  // Expand ~ to home directory
+  const expandedPath = pluginPath.startsWith("~")
+    ? join(homedir(), pluginPath.slice(1))
+    : pluginPath;
+
+  // Check if directory exists
+  if (!existsSync(expandedPath)) {
+    return { success: false, error: `Directory not found: ${expandedPath}` };
+  }
+
+  // Check for plugin.yaml
+  const manifestPath = join(expandedPath, "plugin.yaml");
+  if (!existsSync(manifestPath)) {
+    return { success: false, error: `No plugin.yaml found in ${expandedPath}` };
+  }
+
+  // Load registry
+  const registry = loadPluginsRegistry();
+
+  // Check if already registered
+  if (registry.plugins.some((p) => p.path === expandedPath)) {
+    return { success: false, error: "Plugin already registered" };
+  }
+
+  // Add to registry
+  registry.plugins.push({
+    path: expandedPath,
+    addedAt: new Date().toISOString(),
+  });
+
+  savePluginsRegistry(registry);
+  return { success: true };
+}
+
+// Unregister a plugin (remove from registry)
+export function unregisterPlugin(pluginPath: string): { success: boolean; error?: string } {
+  const registry = loadPluginsRegistry();
+  const index = registry.plugins.findIndex((p) => p.path === pluginPath);
+
+  if (index === -1) {
+    return { success: false, error: "Plugin not found in registry" };
+  }
+
+  registry.plugins.splice(index, 1);
+  savePluginsRegistry(registry);
+  return { success: true };
 }
 
 // Simple YAML parser for plugin manifests
@@ -148,6 +204,89 @@ function parseSimpleYaml(content: string): Record<string, string> {
   }
 
   return result;
+}
+
+// Read plugin manifest from path
+export function readPluginManifest(pluginPath: string): PluginManifest | null {
+  const manifestPath = join(pluginPath, "plugin.yaml");
+  if (!existsSync(manifestPath)) {
+    return null;
+  }
+
+  try {
+    const content = readFileSync(manifestPath, "utf-8");
+    return parseSimpleYaml(content) as PluginManifest;
+  } catch {
+    return null;
+  }
+}
+
+// List registered plugins with their manifests
+export function listPlugins(): { path: string; manifest: PluginManifest; valid: boolean }[] {
+  const registry = loadPluginsRegistry();
+  const plugins: { path: string; manifest: PluginManifest; valid: boolean }[] = [];
+
+  for (const entry of registry.plugins) {
+    const manifest = readPluginManifest(entry.path);
+    if (manifest) {
+      plugins.push({ path: entry.path, manifest, valid: true });
+    } else {
+      // Plugin path no longer valid, but keep in list to show error
+      plugins.push({
+        path: entry.path,
+        manifest: {
+          name: "unknown",
+          version: "0.0.0",
+          type: "rust",
+          description: "Plugin not found",
+        },
+        valid: false,
+      });
+    }
+  }
+
+  return plugins;
+}
+
+// Get systemd service name for a plugin
+export function getServiceName(pluginName: string): string {
+  return `bubbaloop-plugin-${pluginName}.service`;
+}
+
+// Get systemd service file path
+export function getServicePath(pluginName: string): string {
+  return join(SYSTEMD_USER_DIR, getServiceName(pluginName));
+}
+
+// Generate systemd service unit file content
+export function generateServiceUnit(pluginPath: string, manifest: PluginManifest): string {
+  let execStart: string;
+
+  if (manifest.command) {
+    execStart = manifest.command;
+  } else if (manifest.type === "rust") {
+    // For Rust: run the release binary
+    execStart = join(pluginPath, "target/release", manifest.name);
+  } else {
+    // For Python: run with python
+    execStart = `/usr/bin/python3 ${join(pluginPath, "main.py")}`;
+  }
+
+  return `[Unit]
+Description=Bubbaloop Plugin: ${manifest.name}
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${pluginPath}
+ExecStart=${execStart}
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target
+`;
 }
 
 export function loadConfig(): BubbaloopConfig {
@@ -210,7 +349,7 @@ export function getZenohCliConfigPath(): string {
 
 // Ensure all bubbaloop directories exist
 export function ensureDirectories(): void {
-  const dirs = [BUBBALOOP_HOME, PLUGINS_DIR, LAUNCH_DIR];
+  const dirs = [BUBBALOOP_HOME, LAUNCH_DIR, SYSTEMD_USER_DIR];
   for (const dir of dirs) {
     if (!existsSync(dir)) {
       try {
