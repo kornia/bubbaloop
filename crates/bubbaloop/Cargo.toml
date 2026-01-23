@@ -22,7 +22,6 @@ serde_yaml.workspace = true
 
 # Error handling
 thiserror.workspace = true
-anyhow = "1.0"
 
 # ROS-Z
 ros-z.workspace = true

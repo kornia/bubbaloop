@@ -7,9 +7,8 @@
 //!   bubbaloop plugin init my-sensor --type python
 //!   bubbaloop plugin list
 
-use anyhow::Result;
 use argh::FromArgs;
-use bubbaloop::cli::PluginCommand;
+use bubbaloop::cli::{PluginCommand, PluginError};
 
 /// Bubbaloop - Physical AI camera streaming platform
 #[derive(FromArgs)]
@@ -24,7 +23,7 @@ enum Command {
     Plugin(PluginCommand),
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<(), PluginError> {
     // Initialize logging
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stderr)

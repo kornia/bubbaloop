@@ -2,4 +2,4 @@
 
 pub mod plugin;
 
-pub use plugin::PluginCommand;
+pub use plugin::{PluginCommand, PluginError};

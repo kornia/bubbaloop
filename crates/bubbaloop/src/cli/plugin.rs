@@ -1,9 +1,31 @@
 //! Plugin management commands
 
-use anyhow::{anyhow, Result};
 use argh::FromArgs;
 use std::fs;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum PluginError {
+    #[error("Invalid plugin type '{0}'. Use 'rust' or 'python'")]
+    InvalidType(String),
+    #[error("HOME environment variable not set")]
+    HomeNotSet,
+    #[error("Plugin directory already exists: {0}")]
+    DirectoryExists(String),
+    #[error("Template directory not found for type '{0}'")]
+    TemplateNotFound(String),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("YAML error: {0}")]
+    Yaml(#[from] serde_yaml::Error),
+    #[error("Path error: {0}")]
+    StripPrefix(#[from] std::path::StripPrefixError),
+    #[error("Walk error: {0}")]
+    Walk(#[from] walkdir::Error),
+}
+
+pub type Result<T> = std::result::Result<T, PluginError>;
 
 /// Plugin management commands
 #[derive(FromArgs)]
@@ -63,17 +85,14 @@ fn init_plugin(args: InitArgs) -> Result<()> {
     // Validate plugin type
     let plugin_type = args.plugin_type.to_lowercase();
     if plugin_type != "rust" && plugin_type != "python" {
-        return Err(anyhow!(
-            "Invalid plugin type '{}'. Use 'rust' or 'python'",
-            args.plugin_type
-        ));
+        return Err(PluginError::InvalidType(args.plugin_type));
     }
 
     // Determine output directory
     let output_dir = if let Some(output) = args.output {
         PathBuf::from(output)
     } else {
-        let home = std::env::var("HOME").map_err(|_| anyhow!("HOME not set"))?;
+        let home = std::env::var("HOME").map_err(|_| PluginError::HomeNotSet)?;
         PathBuf::from(home)
             .join(".bubbaloop")
             .join("plugins")
@@ -82,10 +101,7 @@ fn init_plugin(args: InitArgs) -> Result<()> {
 
     // Check if directory already exists
     if output_dir.exists() {
-        return Err(anyhow!(
-            "Plugin directory already exists: {}",
-            output_dir.display()
-        ));
+        return Err(PluginError::DirectoryExists(output_dir.display().to_string()));
     }
 
     // Find template directory
@@ -126,7 +142,7 @@ fn init_plugin(args: InitArgs) -> Result<()> {
 }
 
 fn list_plugins(_args: ListArgs) -> Result<()> {
-    let home = std::env::var("HOME").map_err(|_| anyhow!("HOME not set"))?;
+    let home = std::env::var("HOME").map_err(|_| PluginError::HomeNotSet)?;
     let plugins_dir = PathBuf::from(home).join(".bubbaloop").join("plugins");
 
     if !plugins_dir.exists() {
@@ -217,11 +233,7 @@ fn find_template_dir(plugin_type: &str) -> Result<PathBuf> {
         }
     }
 
-    Err(anyhow!(
-        "Template directory not found for type '{}'. Searched: {:?}",
-        plugin_type,
-        search_paths
-    ))
+    Err(PluginError::TemplateNotFound(plugin_type.to_string()))
 }
 
 fn copy_template(template_dir: &Path, output_dir: &Path, vars: &TemplateVars) -> Result<()> {
