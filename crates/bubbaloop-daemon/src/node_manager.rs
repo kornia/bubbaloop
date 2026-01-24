@@ -86,9 +86,7 @@ impl CachedNode {
             version: manifest
                 .map(|m| m.version.clone())
                 .unwrap_or_else(|| "0.0.0".to_string()),
-            description: manifest
-                .map(|m| m.description.clone())
-                .unwrap_or_default(),
+            description: manifest.map(|m| m.description.clone()).unwrap_or_default(),
             node_type: manifest
                 .map(|m| m.node_type.clone())
                 .unwrap_or_else(|| "unknown".to_string()),
@@ -162,7 +160,10 @@ impl NodeManager {
             let active_state = self.systemd.get_active_state(&service_name).await?;
             let installed = systemd::is_service_installed(&name);
             let autostart_enabled = if installed {
-                self.systemd.is_enabled(&service_name).await.unwrap_or(false)
+                self.systemd
+                    .is_enabled(&service_name)
+                    .await
+                    .unwrap_or(false)
             } else {
                 false
             };
@@ -232,12 +233,7 @@ impl NodeManager {
         let nodes = self.nodes.read().await;
         nodes
             .values()
-            .find(|n| {
-                n.manifest
-                    .as_ref()
-                    .map(|m| m.name == name)
-                    .unwrap_or(false)
-            })
+            .find(|n| n.manifest.as_ref().map(|m| m.name == name).unwrap_or(false))
             .map(|n| n.to_proto())
     }
 
@@ -278,9 +274,7 @@ impl NodeManager {
             CommandType::DisableAutostart => self.disable_autostart(&cmd.node_name).await,
             CommandType::AddNode => self.add_node(&cmd.node_path).await,
             CommandType::RemoveNode => self.remove_node(&cmd.node_name).await,
-            CommandType::Refresh => {
-                self.refresh_all().await.map(|_| "Refreshed".to_string())
-            }
+            CommandType::Refresh => self.refresh_all().await.map(|_| "Refreshed".to_string()),
             CommandType::GetLogs => unreachable!(), // Handled above
         };
 
@@ -310,12 +304,7 @@ impl NodeManager {
         let nodes = self.nodes.read().await;
         nodes
             .values()
-            .find(|n| {
-                n.manifest
-                    .as_ref()
-                    .map(|m| m.name == name)
-                    .unwrap_or(false)
-            })
+            .find(|n| n.manifest.as_ref().map(|m| m.name == name).unwrap_or(false))
             .map(|n| n.path.clone())
             .ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))
     }
@@ -405,7 +394,9 @@ impl NodeManager {
     async fn install_node(&self, name: &str) -> Result<String> {
         let path = self.find_node_path(name).await?;
         let nodes = self.nodes.read().await;
-        let node = nodes.get(&path).ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))?;
+        let node = nodes
+            .get(&path)
+            .ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))?;
 
         let manifest = node
             .manifest
@@ -447,11 +438,15 @@ impl NodeManager {
         // Get build command
         let build_cmd = {
             let nodes = self.nodes.read().await;
-            let node = nodes.get(&path).ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))?;
+            let node = nodes
+                .get(&path)
+                .ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))?;
             node.manifest
                 .as_ref()
                 .and_then(|m| m.build.clone())
-                .ok_or_else(|| NodeManagerError::BuildError("No build command defined".to_string()))?
+                .ok_or_else(|| {
+                    NodeManagerError::BuildError("No build command defined".to_string())
+                })?
         };
 
         // Update status to building
@@ -613,11 +608,7 @@ impl NodeManager {
 }
 
 /// Run a build/clean command and stream output to the node's build state
-async fn run_build_command(
-    manager: &Arc<NodeManager>,
-    path: &str,
-    cmd: &str,
-) -> Result<()> {
+async fn run_build_command(manager: &Arc<NodeManager>, path: &str, cmd: &str) -> Result<()> {
     let mut child = Command::new("sh")
         .args(["-c", cmd])
         .current_dir(path)

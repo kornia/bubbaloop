@@ -90,10 +90,7 @@ impl ZenohService {
         log::info!("Starting Zenoh service...");
 
         // Declare queryable for commands
-        let queryable = self
-            .session
-            .declare_queryable(keys::COMMAND)
-            .await?;
+        let queryable = self.session.declare_queryable(keys::COMMAND).await?;
 
         log::info!("Declared queryable on {}", keys::COMMAND);
 
@@ -114,7 +111,10 @@ impl ZenohService {
         let initial_list = self.node_manager.get_node_list().await;
         let initial_bytes = Self::encode_proto(&initial_list);
         list_publisher.put(initial_bytes).await?;
-        log::info!("Published initial node list ({} nodes)", initial_list.nodes.len());
+        log::info!(
+            "Published initial node list ({} nodes)",
+            initial_list.nodes.len()
+        );
 
         // Create periodic publish timer
         let mut interval = tokio::time::interval(Duration::from_secs(5));

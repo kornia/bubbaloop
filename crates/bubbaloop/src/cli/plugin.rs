@@ -101,7 +101,9 @@ fn init_plugin(args: InitArgs) -> Result<()> {
 
     // Check if directory already exists
     if output_dir.exists() {
-        return Err(PluginError::DirectoryExists(output_dir.display().to_string()));
+        return Err(PluginError::DirectoryExists(
+            output_dir.display().to_string(),
+        ));
     }
 
     // Find template directory
@@ -122,7 +124,11 @@ fn init_plugin(args: InitArgs) -> Result<()> {
     // Copy and process template files
     copy_template(&template_dir, &output_dir, &vars)?;
 
-    println!("Plugin '{}' created at: {}", args.name, output_dir.display());
+    println!(
+        "Plugin '{}' created at: {}",
+        args.name,
+        output_dir.display()
+    );
     println!();
     println!("Next steps:");
 
@@ -146,7 +152,10 @@ fn list_plugins(_args: ListArgs) -> Result<()> {
     let plugins_dir = PathBuf::from(home).join(".bubbaloop").join("plugins");
 
     if !plugins_dir.exists() {
-        println!("No plugins installed (directory does not exist: {})", plugins_dir.display());
+        println!(
+            "No plugins installed (directory does not exist: {})",
+            plugins_dir.display()
+        );
         return Ok(());
     }
 
@@ -250,9 +259,7 @@ fn copy_template(template_dir: &Path, output_dir: &Path, vars: &TemplateVars) ->
         }
 
         // Process filename (remove .template suffix if present)
-        let dest_name = rel_path
-            .to_string_lossy()
-            .replace(".template", "");
+        let dest_name = rel_path.to_string_lossy().replace(".template", "");
         let dest_path = output_dir.join(&dest_name);
 
         if src_path.is_dir() {

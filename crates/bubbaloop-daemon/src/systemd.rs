@@ -90,11 +90,8 @@ trait SystemdManager {
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
 
     /// Restart a unit
-    fn restart_unit(
-        &self,
-        name: &str,
-        mode: &str,
-    ) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
+    fn restart_unit(&self, name: &str, mode: &str)
+        -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
 
     /// Reload systemd daemon
     fn reload(&self) -> zbus::Result<()>;
@@ -218,17 +215,18 @@ impl SystemdClient {
         manager
             .start_unit(unit_name, "replace")
             .await
-            .map_err(|e| SystemdError::OperationFailed(format!("Failed to start {}: {}", unit_name, e)))?;
+            .map_err(|e| {
+                SystemdError::OperationFailed(format!("Failed to start {}: {}", unit_name, e))
+            })?;
         Ok(())
     }
 
     /// Stop a unit
     pub async fn stop_unit(&self, unit_name: &str) -> Result<()> {
         let manager = self.manager().await?;
-        manager
-            .stop_unit(unit_name, "replace")
-            .await
-            .map_err(|e| SystemdError::OperationFailed(format!("Failed to stop {}: {}", unit_name, e)))?;
+        manager.stop_unit(unit_name, "replace").await.map_err(|e| {
+            SystemdError::OperationFailed(format!("Failed to stop {}: {}", unit_name, e))
+        })?;
         Ok(())
     }
 
@@ -238,7 +236,9 @@ impl SystemdClient {
         manager
             .restart_unit(unit_name, "replace")
             .await
-            .map_err(|e| SystemdError::OperationFailed(format!("Failed to restart {}: {}", unit_name, e)))?;
+            .map_err(|e| {
+                SystemdError::OperationFailed(format!("Failed to restart {}: {}", unit_name, e))
+            })?;
         Ok(())
     }
 
@@ -248,7 +248,9 @@ impl SystemdClient {
         manager
             .enable_unit_files(&[unit_name], false, false)
             .await
-            .map_err(|e| SystemdError::OperationFailed(format!("Failed to enable {}: {}", unit_name, e)))?;
+            .map_err(|e| {
+                SystemdError::OperationFailed(format!("Failed to enable {}: {}", unit_name, e))
+            })?;
         Ok(())
     }
 
@@ -258,7 +260,9 @@ impl SystemdClient {
         manager
             .disable_unit_files(&[unit_name], false)
             .await
-            .map_err(|e| SystemdError::OperationFailed(format!("Failed to disable {}: {}", unit_name, e)))?;
+            .map_err(|e| {
+                SystemdError::OperationFailed(format!("Failed to disable {}: {}", unit_name, e))
+            })?;
         Ok(())
     }
 
