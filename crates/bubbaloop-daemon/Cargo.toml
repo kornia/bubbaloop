@@ -45,9 +45,5 @@ thiserror.workspace = true
 dirs = "6"
 uuid = { version = "1", features = ["v4"] }
 
-# HTTP server for TUI/dashboard access
-axum = "0.8"
-tower-http = { version = "0.6", features = ["cors"] }
-
 [build-dependencies]
 prost-build.workspace = true

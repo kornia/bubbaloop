@@ -1,6 +1,6 @@
 //! Bubbaloop Daemon
 //!
-//! Central service for managing bubbaloop nodes via Zenoh and HTTP.
+//! Central service for managing bubbaloop nodes via Zenoh.
 //!
 //! # Features
 //!
@@ -8,11 +8,11 @@
 //! - Communicates with systemd via D-Bus (native, no shell spawning)
 //! - Publishes state to Zenoh topics (protobuf-encoded)
 //! - Accepts commands via Zenoh queryables
-//! - Provides HTTP REST API for TUI/dashboard access
+//! - Provides REST-like API via Zenoh queryables (JSON)
 //! - Runs as a systemd user service
 
 use argh::FromArgs;
-use bubbaloop_daemon::{http_server, NodeManager, ZenohService};
+use bubbaloop_daemon::{create_session, run_zenoh_api_server, NodeManager, ZenohService};
 use tokio::sync::watch;
 
 #[derive(FromArgs)]
@@ -22,14 +22,6 @@ struct Args {
     /// Default: connects to local zenohd via default discovery
     #[argh(option, short = 'z')]
     zenoh_endpoint: Option<String>,
-
-    /// HTTP server port (default: 8088)
-    #[argh(option, short = 'p', default = "8088")]
-    http_port: u16,
-
-    /// disable Zenoh service (HTTP only mode)
-    #[argh(switch)]
-    http_only: bool,
 }
 
 #[tokio::main]
@@ -75,37 +67,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Start HTTP server
-    let http_manager = node_manager.clone();
-    let http_port = args.http_port;
-    let http_task = tokio::spawn(async move {
-        if let Err(e) = http_server::run_http_server(http_manager, http_port).await {
-            log::error!("HTTP server error: {}", e);
+    // Create shared Zenoh session
+    log::info!("Connecting to Zenoh...");
+    let session = create_session(args.zenoh_endpoint.as_deref()).await?;
+
+    // Start Zenoh API service (REST-like queryables with JSON responses)
+    let api_manager = node_manager.clone();
+    let api_session = session.clone();
+    let api_shutdown = shutdown_rx.clone();
+    let api_task = tokio::spawn(async move {
+        if let Err(e) = run_zenoh_api_server(api_session, api_manager, api_shutdown).await {
+            log::error!("Zenoh API service error: {}", e);
         }
     });
 
-    // Start Zenoh service (unless in HTTP-only mode)
-    if !args.http_only {
-        log::info!("Connecting to Zenoh...");
-        let zenoh_service = ZenohService::new(node_manager, args.zenoh_endpoint.as_deref()).await?;
+    // Create and run Zenoh service (pub/sub with protobuf)
+    let zenoh_service = ZenohService::new(session, node_manager);
 
-        log::info!("Bubbaloop daemon running. Press Ctrl+C to exit.");
-        log::info!("  HTTP API: http://localhost:{}", args.http_port);
-        log::info!("  Zenoh topics: bubbaloop/daemon/*");
+    log::info!("Bubbaloop daemon running. Press Ctrl+C to exit.");
+    log::info!("  Zenoh pub/sub topics: bubbaloop/daemon/*");
+    log::info!("  Zenoh API queryables: bubbaloop/daemon/api/*");
 
-        // Run the Zenoh service (blocks until shutdown)
-        zenoh_service.run(shutdown_rx).await?;
-    } else {
-        log::info!("Bubbaloop daemon running in HTTP-only mode. Press Ctrl+C to exit.");
-        log::info!("  HTTP API: http://localhost:{}", args.http_port);
+    // Run the Zenoh service (blocks until shutdown)
+    zenoh_service.run(shutdown_rx).await?;
 
-        // Wait for shutdown signal
-        let mut shutdown_rx = shutdown_rx;
-        shutdown_rx.changed().await.ok();
-    }
-
-    // Abort HTTP server
-    http_task.abort();
+    // Abort API service
+    api_task.abort();
 
     log::info!("Bubbaloop daemon stopped.");
 

@@ -46,36 +46,41 @@ pub mod keys {
     }
 }
 
+/// Create a Zenoh session with optional endpoint configuration
+pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>> {
+    // Configure Zenoh session
+    let mut config = zenoh::Config::default();
+
+    // If endpoint provided, connect to it
+    if let Some(ep) = endpoint {
+        config
+            .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
+            .ok();
+    }
+
+    // Enable shared memory if available
+    config
+        .insert_json5("transport/shared_memory/enabled", "true")
+        .ok();
+
+    let session = zenoh::open(config).await?;
+
+    Ok(Arc::new(session))
+}
+
 /// Zenoh service for the daemon
 pub struct ZenohService {
-    session: Session,
+    session: Arc<Session>,
     node_manager: Arc<NodeManager>,
 }
 
 impl ZenohService {
-    /// Create a new Zenoh service
-    pub async fn new(node_manager: Arc<NodeManager>, endpoint: Option<&str>) -> Result<Self> {
-        // Configure Zenoh session
-        let mut config = zenoh::Config::default();
-
-        // If endpoint provided, connect to it
-        if let Some(ep) = endpoint {
-            config
-                .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
-                .ok();
-        }
-
-        // Enable shared memory if available
-        config
-            .insert_json5("transport/shared_memory/enabled", "true")
-            .ok();
-
-        let session = zenoh::open(config).await?;
-
-        Ok(Self {
+    /// Create a new Zenoh service with an existing session
+    pub fn new(session: Arc<Session>, node_manager: Arc<NodeManager>) -> Self {
+        Self {
             session,
             node_manager,
-        })
+        }
     }
 
     /// Encode a protobuf message to ZBytes
