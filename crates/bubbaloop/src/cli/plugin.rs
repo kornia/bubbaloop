@@ -200,7 +200,7 @@ struct TemplateVars {
 
 /// Convert a kebab-case or snake_case string to PascalCase
 fn to_pascal_case(s: &str) -> String {
-    s.split(|c| c == '-' || c == '_')
+    s.split(['-', '_'])
         .map(|word| {
             let mut chars = word.chars();
             match chars.next() {
