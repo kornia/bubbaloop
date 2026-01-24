@@ -259,9 +259,8 @@ impl ZenohApiService {
             nodes: list.nodes.iter().map(node_state_to_response).collect(),
             timestamp_ms: list.timestamp_ms,
         };
-        serde_json::to_string(&response).unwrap_or_else(|e| {
-            format!(r#"{{"error":"Failed to serialize: {}","code":500}}"#, e)
-        })
+        serde_json::to_string(&response)
+            .unwrap_or_else(|e| format!(r#"{{"error":"Failed to serialize: {}","code":500}}"#, e))
     }
 
     /// Handle POST /nodes/add
@@ -338,9 +337,11 @@ impl ZenohApiService {
     /// Handle GET /nodes/{name}
     async fn handle_get_node(&self, name: &str) -> String {
         match self.node_manager.get_node(name).await {
-            Some(node) => serde_json::to_string(&node_state_to_response(&node)).unwrap_or_else(
-                |e| format!(r#"{{"error":"Failed to serialize: {}","code":500}}"#, e),
-            ),
+            Some(node) => {
+                serde_json::to_string(&node_state_to_response(&node)).unwrap_or_else(|e| {
+                    format!(r#"{{"error":"Failed to serialize: {}","code":500}}"#, e)
+                })
+            }
             None => serde_json::to_string(&ErrorResponse {
                 error: format!("Node '{}' not found", name),
                 code: 404,
