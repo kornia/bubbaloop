@@ -1217,4 +1217,651 @@ export namespace bubbaloop {
             }
         }
     }
+
+    /** Namespace daemon. */
+    namespace daemon {
+
+        /** Namespace v1. */
+        namespace v1 {
+
+            /** NodeStatus enum. */
+            enum NodeStatus {
+                NODE_STATUS_UNKNOWN = 0,
+                NODE_STATUS_STOPPED = 1,
+                NODE_STATUS_RUNNING = 2,
+                NODE_STATUS_FAILED = 3,
+                NODE_STATUS_INSTALLING = 4,
+                NODE_STATUS_BUILDING = 5,
+                NODE_STATUS_NOT_INSTALLED = 6
+            }
+
+            /** Properties of a NodeState. */
+            interface INodeState {
+
+                /** NodeState name */
+                name?: (string|null);
+
+                /** NodeState path */
+                path?: (string|null);
+
+                /** NodeState status */
+                status?: (bubbaloop.daemon.v1.NodeStatus|null);
+
+                /** NodeState installed */
+                installed?: (boolean|null);
+
+                /** NodeState autostartEnabled */
+                autostartEnabled?: (boolean|null);
+
+                /** NodeState version */
+                version?: (string|null);
+
+                /** NodeState description */
+                description?: (string|null);
+
+                /** NodeState nodeType */
+                nodeType?: (string|null);
+
+                /** NodeState isBuilt */
+                isBuilt?: (boolean|null);
+
+                /** NodeState lastUpdatedMs */
+                lastUpdatedMs?: (number|Long|null);
+
+                /** NodeState buildOutput */
+                buildOutput?: (string[]|null);
+            }
+
+            /** Represents a NodeState. */
+            class NodeState implements INodeState {
+
+                /**
+                 * Constructs a new NodeState.
+                 * @param [properties] Properties to set
+                 */
+                constructor(properties?: bubbaloop.daemon.v1.INodeState);
+
+                /** NodeState name. */
+                public name: string;
+
+                /** NodeState path. */
+                public path: string;
+
+                /** NodeState status. */
+                public status: bubbaloop.daemon.v1.NodeStatus;
+
+                /** NodeState installed. */
+                public installed: boolean;
+
+                /** NodeState autostartEnabled. */
+                public autostartEnabled: boolean;
+
+                /** NodeState version. */
+                public version: string;
+
+                /** NodeState description. */
+                public description: string;
+
+                /** NodeState nodeType. */
+                public nodeType: string;
+
+                /** NodeState isBuilt. */
+                public isBuilt: boolean;
+
+                /** NodeState lastUpdatedMs. */
+                public lastUpdatedMs: (number|Long);
+
+                /** NodeState buildOutput. */
+                public buildOutput: string[];
+
+                /**
+                 * Creates a new NodeState instance using the specified properties.
+                 * @param [properties] Properties to set
+                 * @returns NodeState instance
+                 */
+                public static create(properties?: bubbaloop.daemon.v1.INodeState): bubbaloop.daemon.v1.NodeState;
+
+                /**
+                 * Encodes the specified NodeState message. Does not implicitly {@link bubbaloop.daemon.v1.NodeState.verify|verify} messages.
+                 * @param message NodeState message or plain object to encode
+                 * @param [writer] Writer to encode to
+                 * @returns Writer
+                 */
+                public static encode(message: bubbaloop.daemon.v1.INodeState, writer?: $protobuf.Writer): $protobuf.Writer;
+
+                /**
+                 * Encodes the specified NodeState message, length delimited. Does not implicitly {@link bubbaloop.daemon.v1.NodeState.verify|verify} messages.
+                 * @param message NodeState message or plain object to encode
+                 * @param [writer] Writer to encode to
+                 * @returns Writer
+                 */
+                public static encodeDelimited(message: bubbaloop.daemon.v1.INodeState, writer?: $protobuf.Writer): $protobuf.Writer;
+
+                /**
+                 * Decodes a NodeState message from the specified reader or buffer.
+                 * @param reader Reader or buffer to decode from
+                 * @param [length] Message length if known beforehand
+                 * @returns NodeState
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): bubbaloop.daemon.v1.NodeState;
+
+                /**
+                 * Decodes a NodeState message from the specified reader or buffer, length delimited.
+                 * @param reader Reader or buffer to decode from
+                 * @returns NodeState
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): bubbaloop.daemon.v1.NodeState;
+
+                /**
+                 * Verifies a NodeState message.
+                 * @param message Plain object to verify
+                 * @returns `null` if valid, otherwise the reason why it is not
+                 */
+                public static verify(message: { [k: string]: any }): (string|null);
+
+                /**
+                 * Creates a NodeState message from a plain object. Also converts values to their respective internal types.
+                 * @param object Plain object
+                 * @returns NodeState
+                 */
+                public static fromObject(object: { [k: string]: any }): bubbaloop.daemon.v1.NodeState;
+
+                /**
+                 * Creates a plain object from a NodeState message. Also converts values to other types if specified.
+                 * @param message NodeState
+                 * @param [options] Conversion options
+                 * @returns Plain object
+                 */
+                public static toObject(message: bubbaloop.daemon.v1.NodeState, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+                /**
+                 * Converts this NodeState to JSON.
+                 * @returns JSON object
+                 */
+                public toJSON(): { [k: string]: any };
+
+                /**
+                 * Gets the default type url for NodeState
+                 * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+                 * @returns The default type url
+                 */
+                public static getTypeUrl(typeUrlPrefix?: string): string;
+            }
+
+            /** Properties of a NodeList. */
+            interface INodeList {
+
+                /** NodeList nodes */
+                nodes?: (bubbaloop.daemon.v1.INodeState[]|null);
+
+                /** NodeList timestampMs */
+                timestampMs?: (number|Long|null);
+            }
+
+            /** Represents a NodeList. */
+            class NodeList implements INodeList {
+
+                /**
+                 * Constructs a new NodeList.
+                 * @param [properties] Properties to set
+                 */
+                constructor(properties?: bubbaloop.daemon.v1.INodeList);
+
+                /** NodeList nodes. */
+                public nodes: bubbaloop.daemon.v1.INodeState[];
+
+                /** NodeList timestampMs. */
+                public timestampMs: (number|Long);
+
+                /**
+                 * Creates a new NodeList instance using the specified properties.
+                 * @param [properties] Properties to set
+                 * @returns NodeList instance
+                 */
+                public static create(properties?: bubbaloop.daemon.v1.INodeList): bubbaloop.daemon.v1.NodeList;
+
+                /**
+                 * Encodes the specified NodeList message. Does not implicitly {@link bubbaloop.daemon.v1.NodeList.verify|verify} messages.
+                 * @param message NodeList message or plain object to encode
+                 * @param [writer] Writer to encode to
+                 * @returns Writer
+                 */
+                public static encode(message: bubbaloop.daemon.v1.INodeList, writer?: $protobuf.Writer): $protobuf.Writer;
+
+                /**
+                 * Encodes the specified NodeList message, length delimited. Does not implicitly {@link bubbaloop.daemon.v1.NodeList.verify|verify} messages.
+                 * @param message NodeList message or plain object to encode
+                 * @param [writer] Writer to encode to
+                 * @returns Writer
+                 */
+                public static encodeDelimited(message: bubbaloop.daemon.v1.INodeList, writer?: $protobuf.Writer): $protobuf.Writer;
+
+                /**
+                 * Decodes a NodeList message from the specified reader or buffer.
+                 * @param reader Reader or buffer to decode from
+                 * @param [length] Message length if known beforehand
+                 * @returns NodeList
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): bubbaloop.daemon.v1.NodeList;
+
+                /**
+                 * Decodes a NodeList message from the specified reader or buffer, length delimited.
+                 * @param reader Reader or buffer to decode from
+                 * @returns NodeList
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): bubbaloop.daemon.v1.NodeList;
+
+                /**
+                 * Verifies a NodeList message.
+                 * @param message Plain object to verify
+                 * @returns `null` if valid, otherwise the reason why it is not
+                 */
+                public static verify(message: { [k: string]: any }): (string|null);
+
+                /**
+                 * Creates a NodeList message from a plain object. Also converts values to their respective internal types.
+                 * @param object Plain object
+                 * @returns NodeList
+                 */
+                public static fromObject(object: { [k: string]: any }): bubbaloop.daemon.v1.NodeList;
+
+                /**
+                 * Creates a plain object from a NodeList message. Also converts values to other types if specified.
+                 * @param message NodeList
+                 * @param [options] Conversion options
+                 * @returns Plain object
+                 */
+                public static toObject(message: bubbaloop.daemon.v1.NodeList, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+                /**
+                 * Converts this NodeList to JSON.
+                 * @returns JSON object
+                 */
+                public toJSON(): { [k: string]: any };
+
+                /**
+                 * Gets the default type url for NodeList
+                 * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+                 * @returns The default type url
+                 */
+                public static getTypeUrl(typeUrlPrefix?: string): string;
+            }
+
+            /** CommandType enum. */
+            enum CommandType {
+                COMMAND_TYPE_START = 0,
+                COMMAND_TYPE_STOP = 1,
+                COMMAND_TYPE_RESTART = 2,
+                COMMAND_TYPE_INSTALL = 3,
+                COMMAND_TYPE_UNINSTALL = 4,
+                COMMAND_TYPE_BUILD = 5,
+                COMMAND_TYPE_CLEAN = 6,
+                COMMAND_TYPE_ENABLE_AUTOSTART = 7,
+                COMMAND_TYPE_DISABLE_AUTOSTART = 8,
+                COMMAND_TYPE_ADD_NODE = 9,
+                COMMAND_TYPE_REMOVE_NODE = 10,
+                COMMAND_TYPE_REFRESH = 11,
+                COMMAND_TYPE_GET_LOGS = 12
+            }
+
+            /** Properties of a NodeCommand. */
+            interface INodeCommand {
+
+                /** NodeCommand command */
+                command?: (bubbaloop.daemon.v1.CommandType|null);
+
+                /** NodeCommand nodeName */
+                nodeName?: (string|null);
+
+                /** NodeCommand nodePath */
+                nodePath?: (string|null);
+
+                /** NodeCommand requestId */
+                requestId?: (string|null);
+            }
+
+            /** Represents a NodeCommand. */
+            class NodeCommand implements INodeCommand {
+
+                /**
+                 * Constructs a new NodeCommand.
+                 * @param [properties] Properties to set
+                 */
+                constructor(properties?: bubbaloop.daemon.v1.INodeCommand);
+
+                /** NodeCommand command. */
+                public command: bubbaloop.daemon.v1.CommandType;
+
+                /** NodeCommand nodeName. */
+                public nodeName: string;
+
+                /** NodeCommand nodePath. */
+                public nodePath: string;
+
+                /** NodeCommand requestId. */
+                public requestId: string;
+
+                /**
+                 * Creates a new NodeCommand instance using the specified properties.
+                 * @param [properties] Properties to set
+                 * @returns NodeCommand instance
+                 */
+                public static create(properties?: bubbaloop.daemon.v1.INodeCommand): bubbaloop.daemon.v1.NodeCommand;
+
+                /**
+                 * Encodes the specified NodeCommand message. Does not implicitly {@link bubbaloop.daemon.v1.NodeCommand.verify|verify} messages.
+                 * @param message NodeCommand message or plain object to encode
+                 * @param [writer] Writer to encode to
+                 * @returns Writer
+                 */
+                public static encode(message: bubbaloop.daemon.v1.INodeCommand, writer?: $protobuf.Writer): $protobuf.Writer;
+
+                /**
+                 * Encodes the specified NodeCommand message, length delimited. Does not implicitly {@link bubbaloop.daemon.v1.NodeCommand.verify|verify} messages.
+                 * @param message NodeCommand message or plain object to encode
+                 * @param [writer] Writer to encode to
+                 * @returns Writer
+                 */
+                public static encodeDelimited(message: bubbaloop.daemon.v1.INodeCommand, writer?: $protobuf.Writer): $protobuf.Writer;
+
+                /**
+                 * Decodes a NodeCommand message from the specified reader or buffer.
+                 * @param reader Reader or buffer to decode from
+                 * @param [length] Message length if known beforehand
+                 * @returns NodeCommand
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): bubbaloop.daemon.v1.NodeCommand;
+
+                /**
+                 * Decodes a NodeCommand message from the specified reader or buffer, length delimited.
+                 * @param reader Reader or buffer to decode from
+                 * @returns NodeCommand
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): bubbaloop.daemon.v1.NodeCommand;
+
+                /**
+                 * Verifies a NodeCommand message.
+                 * @param message Plain object to verify
+                 * @returns `null` if valid, otherwise the reason why it is not
+                 */
+                public static verify(message: { [k: string]: any }): (string|null);
+
+                /**
+                 * Creates a NodeCommand message from a plain object. Also converts values to their respective internal types.
+                 * @param object Plain object
+                 * @returns NodeCommand
+                 */
+                public static fromObject(object: { [k: string]: any }): bubbaloop.daemon.v1.NodeCommand;
+
+                /**
+                 * Creates a plain object from a NodeCommand message. Also converts values to other types if specified.
+                 * @param message NodeCommand
+                 * @param [options] Conversion options
+                 * @returns Plain object
+                 */
+                public static toObject(message: bubbaloop.daemon.v1.NodeCommand, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+                /**
+                 * Converts this NodeCommand to JSON.
+                 * @returns JSON object
+                 */
+                public toJSON(): { [k: string]: any };
+
+                /**
+                 * Gets the default type url for NodeCommand
+                 * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+                 * @returns The default type url
+                 */
+                public static getTypeUrl(typeUrlPrefix?: string): string;
+            }
+
+            /** Properties of a CommandResult. */
+            interface ICommandResult {
+
+                /** CommandResult requestId */
+                requestId?: (string|null);
+
+                /** CommandResult success */
+                success?: (boolean|null);
+
+                /** CommandResult message */
+                message?: (string|null);
+
+                /** CommandResult output */
+                output?: (string|null);
+
+                /** CommandResult nodeState */
+                nodeState?: (bubbaloop.daemon.v1.INodeState|null);
+            }
+
+            /** Represents a CommandResult. */
+            class CommandResult implements ICommandResult {
+
+                /**
+                 * Constructs a new CommandResult.
+                 * @param [properties] Properties to set
+                 */
+                constructor(properties?: bubbaloop.daemon.v1.ICommandResult);
+
+                /** CommandResult requestId. */
+                public requestId: string;
+
+                /** CommandResult success. */
+                public success: boolean;
+
+                /** CommandResult message. */
+                public message: string;
+
+                /** CommandResult output. */
+                public output: string;
+
+                /** CommandResult nodeState. */
+                public nodeState?: (bubbaloop.daemon.v1.INodeState|null);
+
+                /**
+                 * Creates a new CommandResult instance using the specified properties.
+                 * @param [properties] Properties to set
+                 * @returns CommandResult instance
+                 */
+                public static create(properties?: bubbaloop.daemon.v1.ICommandResult): bubbaloop.daemon.v1.CommandResult;
+
+                /**
+                 * Encodes the specified CommandResult message. Does not implicitly {@link bubbaloop.daemon.v1.CommandResult.verify|verify} messages.
+                 * @param message CommandResult message or plain object to encode
+                 * @param [writer] Writer to encode to
+                 * @returns Writer
+                 */
+                public static encode(message: bubbaloop.daemon.v1.ICommandResult, writer?: $protobuf.Writer): $protobuf.Writer;
+
+                /**
+                 * Encodes the specified CommandResult message, length delimited. Does not implicitly {@link bubbaloop.daemon.v1.CommandResult.verify|verify} messages.
+                 * @param message CommandResult message or plain object to encode
+                 * @param [writer] Writer to encode to
+                 * @returns Writer
+                 */
+                public static encodeDelimited(message: bubbaloop.daemon.v1.ICommandResult, writer?: $protobuf.Writer): $protobuf.Writer;
+
+                /**
+                 * Decodes a CommandResult message from the specified reader or buffer.
+                 * @param reader Reader or buffer to decode from
+                 * @param [length] Message length if known beforehand
+                 * @returns CommandResult
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): bubbaloop.daemon.v1.CommandResult;
+
+                /**
+                 * Decodes a CommandResult message from the specified reader or buffer, length delimited.
+                 * @param reader Reader or buffer to decode from
+                 * @returns CommandResult
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): bubbaloop.daemon.v1.CommandResult;
+
+                /**
+                 * Verifies a CommandResult message.
+                 * @param message Plain object to verify
+                 * @returns `null` if valid, otherwise the reason why it is not
+                 */
+                public static verify(message: { [k: string]: any }): (string|null);
+
+                /**
+                 * Creates a CommandResult message from a plain object. Also converts values to their respective internal types.
+                 * @param object Plain object
+                 * @returns CommandResult
+                 */
+                public static fromObject(object: { [k: string]: any }): bubbaloop.daemon.v1.CommandResult;
+
+                /**
+                 * Creates a plain object from a CommandResult message. Also converts values to other types if specified.
+                 * @param message CommandResult
+                 * @param [options] Conversion options
+                 * @returns Plain object
+                 */
+                public static toObject(message: bubbaloop.daemon.v1.CommandResult, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+                /**
+                 * Converts this CommandResult to JSON.
+                 * @returns JSON object
+                 */
+                public toJSON(): { [k: string]: any };
+
+                /**
+                 * Gets the default type url for CommandResult
+                 * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+                 * @returns The default type url
+                 */
+                public static getTypeUrl(typeUrlPrefix?: string): string;
+            }
+
+            /** Properties of a NodeEvent. */
+            interface INodeEvent {
+
+                /** NodeEvent eventType */
+                eventType?: (string|null);
+
+                /** NodeEvent nodeName */
+                nodeName?: (string|null);
+
+                /** NodeEvent state */
+                state?: (bubbaloop.daemon.v1.INodeState|null);
+
+                /** NodeEvent timestampMs */
+                timestampMs?: (number|Long|null);
+            }
+
+            /** Represents a NodeEvent. */
+            class NodeEvent implements INodeEvent {
+
+                /**
+                 * Constructs a new NodeEvent.
+                 * @param [properties] Properties to set
+                 */
+                constructor(properties?: bubbaloop.daemon.v1.INodeEvent);
+
+                /** NodeEvent eventType. */
+                public eventType: string;
+
+                /** NodeEvent nodeName. */
+                public nodeName: string;
+
+                /** NodeEvent state. */
+                public state?: (bubbaloop.daemon.v1.INodeState|null);
+
+                /** NodeEvent timestampMs. */
+                public timestampMs: (number|Long);
+
+                /**
+                 * Creates a new NodeEvent instance using the specified properties.
+                 * @param [properties] Properties to set
+                 * @returns NodeEvent instance
+                 */
+                public static create(properties?: bubbaloop.daemon.v1.INodeEvent): bubbaloop.daemon.v1.NodeEvent;
+
+                /**
+                 * Encodes the specified NodeEvent message. Does not implicitly {@link bubbaloop.daemon.v1.NodeEvent.verify|verify} messages.
+                 * @param message NodeEvent message or plain object to encode
+                 * @param [writer] Writer to encode to
+                 * @returns Writer
+                 */
+                public static encode(message: bubbaloop.daemon.v1.INodeEvent, writer?: $protobuf.Writer): $protobuf.Writer;
+
+                /**
+                 * Encodes the specified NodeEvent message, length delimited. Does not implicitly {@link bubbaloop.daemon.v1.NodeEvent.verify|verify} messages.
+                 * @param message NodeEvent message or plain object to encode
+                 * @param [writer] Writer to encode to
+                 * @returns Writer
+                 */
+                public static encodeDelimited(message: bubbaloop.daemon.v1.INodeEvent, writer?: $protobuf.Writer): $protobuf.Writer;
+
+                /**
+                 * Decodes a NodeEvent message from the specified reader or buffer.
+                 * @param reader Reader or buffer to decode from
+                 * @param [length] Message length if known beforehand
+                 * @returns NodeEvent
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): bubbaloop.daemon.v1.NodeEvent;
+
+                /**
+                 * Decodes a NodeEvent message from the specified reader or buffer, length delimited.
+                 * @param reader Reader or buffer to decode from
+                 * @returns NodeEvent
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): bubbaloop.daemon.v1.NodeEvent;
+
+                /**
+                 * Verifies a NodeEvent message.
+                 * @param message Plain object to verify
+                 * @returns `null` if valid, otherwise the reason why it is not
+                 */
+                public static verify(message: { [k: string]: any }): (string|null);
+
+                /**
+                 * Creates a NodeEvent message from a plain object. Also converts values to their respective internal types.
+                 * @param object Plain object
+                 * @returns NodeEvent
+                 */
+                public static fromObject(object: { [k: string]: any }): bubbaloop.daemon.v1.NodeEvent;
+
+                /**
+                 * Creates a plain object from a NodeEvent message. Also converts values to other types if specified.
+                 * @param message NodeEvent
+                 * @param [options] Conversion options
+                 * @returns Plain object
+                 */
+                public static toObject(message: bubbaloop.daemon.v1.NodeEvent, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+                /**
+                 * Converts this NodeEvent to JSON.
+                 * @returns JSON object
+                 */
+                public toJSON(): { [k: string]: any };
+
+                /**
+                 * Gets the default type url for NodeEvent
+                 * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+                 * @returns The default type url
+                 */
+                public static getTypeUrl(typeUrlPrefix?: string): string;
+            }
+        }
+    }
 }

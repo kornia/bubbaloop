@@ -1,0 +1,143 @@
+//! {{node_name}} node implementation
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use zenoh::prelude::*;
+
+/// Node configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    /// Topic to publish to
+    pub publish_topic: String,
+
+    /// Topic to subscribe to (optional)
+    pub subscribe_topic: Option<String>,
+
+    /// Publishing rate in Hz
+    pub rate_hz: f64,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            publish_topic: "/{{node_name}}/output".to_string(),
+            subscribe_topic: None,
+            rate_hz: 1.0,
+        }
+    }
+}
+
+/// {{node_name_pascal}} node
+pub struct {{node_name_pascal}}Node {
+    config: Config,
+    session: zenoh::Session,
+}
+
+impl {{node_name_pascal}}Node {
+    /// Create a new node instance
+    pub async fn new(config_path: &Path, endpoint: Option<String>) -> Result<Self> {
+        // Load configuration
+        let config = if config_path.exists() {
+            let content = std::fs::read_to_string(config_path)
+                .context("Failed to read config file")?;
+            serde_yaml::from_str(&content)
+                .context("Failed to parse config file")?
+        } else {
+            log::warn!("Config file not found, using defaults");
+            Config::default()
+        };
+
+        // Create zenoh session
+        let mut zenoh_config = zenoh::Config::default();
+        if let Some(ep) = endpoint {
+            zenoh_config
+                .connect
+                .endpoints
+                .set(vec![ep.parse().unwrap()])
+                .unwrap();
+        }
+
+        let session = zenoh::open(zenoh_config)
+            .await
+            .context("Failed to open zenoh session")?;
+
+        log::info!("Connected to zenoh");
+        log::info!("Publishing to: {}", config.publish_topic);
+        if let Some(ref topic) = config.subscribe_topic {
+            log::info!("Subscribing to: {}", topic);
+        }
+
+        Ok(Self { config, session })
+    }
+
+    /// Run the node main loop
+    pub async fn run(&mut self, running: Arc<AtomicBool>) -> Result<()> {
+        let publisher = self.session
+            .declare_publisher(&self.config.publish_topic)
+            .await
+            .context("Failed to create publisher")?;
+
+        // Optional subscriber
+        let subscriber = if let Some(ref topic) = self.config.subscribe_topic {
+            Some(
+                self.session
+                    .declare_subscriber(topic)
+                    .await
+                    .context("Failed to create subscriber")?
+            )
+        } else {
+            None
+        };
+
+        let interval = std::time::Duration::from_secs_f64(1.0 / self.config.rate_hz);
+        let mut sequence: u64 = 0;
+
+        while running.load(Ordering::SeqCst) {
+            // Check for incoming messages
+            if let Some(ref sub) = subscriber {
+                while let Ok(sample) = sub.try_recv() {
+                    self.handle_message(&sample).await?;
+                }
+            }
+
+            // Publish output
+            let output = self.process(sequence).await?;
+            publisher
+                .put(output)
+                .await
+                .context("Failed to publish")?;
+
+            sequence += 1;
+            tokio::time::sleep(interval).await;
+        }
+
+        Ok(())
+    }
+
+    /// Handle incoming message
+    async fn handle_message(&self, sample: &zenoh::sample::Sample) -> Result<()> {
+        let payload = sample.payload().to_bytes();
+        log::debug!(
+            "Received {} bytes from {}",
+            payload.len(),
+            sample.key_expr()
+        );
+        // TODO: Process incoming message
+        Ok(())
+    }
+
+    /// Process and generate output
+    async fn process(&self, sequence: u64) -> Result<Vec<u8>> {
+        // TODO: Implement your processing logic here
+        let output = serde_json::json!({
+            "sequence": sequence,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "data": "Hello from {{node_name}}"
+        });
+
+        Ok(serde_json::to_vec(&output)?)
+    }
+}

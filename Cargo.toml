@@ -1,11 +1,12 @@
 [workspace]
 members = [
     "crates/bubbaloop",
-    "crates/rtsp_camera",
-    "crates/inference",
-    "crates/foxglove_bridge",
-    "crates/mcap_recorder",
-    "crates/openmeteo",
+    "crates/bubbaloop-daemon",
+    "crates/bubbaloop-nodes/rtsp-camera",
+    "crates/bubbaloop-nodes/inference",
+    "crates/bubbaloop-nodes/foxglove",
+    "crates/bubbaloop-nodes/recorder",
+    "crates/bubbaloop-nodes/openmeteo",
 ]
 resolver = "2"
 

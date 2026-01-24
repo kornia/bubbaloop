@@ -3304,6 +3304,1811 @@ export const bubbaloop = $root.bubbaloop = (() => {
         return weather;
     })();
 
+    bubbaloop.daemon = (function() {
+
+        /**
+         * Namespace daemon.
+         * @memberof bubbaloop
+         * @namespace
+         */
+        const daemon = {};
+
+        daemon.v1 = (function() {
+
+            /**
+             * Namespace v1.
+             * @memberof bubbaloop.daemon
+             * @namespace
+             */
+            const v1 = {};
+
+            /**
+             * NodeStatus enum.
+             * @name bubbaloop.daemon.v1.NodeStatus
+             * @enum {number}
+             * @property {number} NODE_STATUS_UNKNOWN=0 NODE_STATUS_UNKNOWN value
+             * @property {number} NODE_STATUS_STOPPED=1 NODE_STATUS_STOPPED value
+             * @property {number} NODE_STATUS_RUNNING=2 NODE_STATUS_RUNNING value
+             * @property {number} NODE_STATUS_FAILED=3 NODE_STATUS_FAILED value
+             * @property {number} NODE_STATUS_INSTALLING=4 NODE_STATUS_INSTALLING value
+             * @property {number} NODE_STATUS_BUILDING=5 NODE_STATUS_BUILDING value
+             * @property {number} NODE_STATUS_NOT_INSTALLED=6 NODE_STATUS_NOT_INSTALLED value
+             */
+            v1.NodeStatus = (function() {
+                const valuesById = {}, values = Object.create(valuesById);
+                values[valuesById[0] = "NODE_STATUS_UNKNOWN"] = 0;
+                values[valuesById[1] = "NODE_STATUS_STOPPED"] = 1;
+                values[valuesById[2] = "NODE_STATUS_RUNNING"] = 2;
+                values[valuesById[3] = "NODE_STATUS_FAILED"] = 3;
+                values[valuesById[4] = "NODE_STATUS_INSTALLING"] = 4;
+                values[valuesById[5] = "NODE_STATUS_BUILDING"] = 5;
+                values[valuesById[6] = "NODE_STATUS_NOT_INSTALLED"] = 6;
+                return values;
+            })();
+
+            v1.NodeState = (function() {
+
+                /**
+                 * Properties of a NodeState.
+                 * @memberof bubbaloop.daemon.v1
+                 * @interface INodeState
+                 * @property {string|null} [name] NodeState name
+                 * @property {string|null} [path] NodeState path
+                 * @property {bubbaloop.daemon.v1.NodeStatus|null} [status] NodeState status
+                 * @property {boolean|null} [installed] NodeState installed
+                 * @property {boolean|null} [autostartEnabled] NodeState autostartEnabled
+                 * @property {string|null} [version] NodeState version
+                 * @property {string|null} [description] NodeState description
+                 * @property {string|null} [nodeType] NodeState nodeType
+                 * @property {boolean|null} [isBuilt] NodeState isBuilt
+                 * @property {number|Long|null} [lastUpdatedMs] NodeState lastUpdatedMs
+                 * @property {Array.<string>|null} [buildOutput] NodeState buildOutput
+                 */
+
+                /**
+                 * Constructs a new NodeState.
+                 * @memberof bubbaloop.daemon.v1
+                 * @classdesc Represents a NodeState.
+                 * @implements INodeState
+                 * @constructor
+                 * @param {bubbaloop.daemon.v1.INodeState=} [properties] Properties to set
+                 */
+                function NodeState(properties) {
+                    this.buildOutput = [];
+                    if (properties)
+                        for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                            if (properties[keys[i]] != null)
+                                this[keys[i]] = properties[keys[i]];
+                }
+
+                /**
+                 * NodeState name.
+                 * @member {string} name
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 */
+                NodeState.prototype.name = "";
+
+                /**
+                 * NodeState path.
+                 * @member {string} path
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 */
+                NodeState.prototype.path = "";
+
+                /**
+                 * NodeState status.
+                 * @member {bubbaloop.daemon.v1.NodeStatus} status
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 */
+                NodeState.prototype.status = 0;
+
+                /**
+                 * NodeState installed.
+                 * @member {boolean} installed
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 */
+                NodeState.prototype.installed = false;
+
+                /**
+                 * NodeState autostartEnabled.
+                 * @member {boolean} autostartEnabled
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 */
+                NodeState.prototype.autostartEnabled = false;
+
+                /**
+                 * NodeState version.
+                 * @member {string} version
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 */
+                NodeState.prototype.version = "";
+
+                /**
+                 * NodeState description.
+                 * @member {string} description
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 */
+                NodeState.prototype.description = "";
+
+                /**
+                 * NodeState nodeType.
+                 * @member {string} nodeType
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 */
+                NodeState.prototype.nodeType = "";
+
+                /**
+                 * NodeState isBuilt.
+                 * @member {boolean} isBuilt
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 */
+                NodeState.prototype.isBuilt = false;
+
+                /**
+                 * NodeState lastUpdatedMs.
+                 * @member {number|Long} lastUpdatedMs
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 */
+                NodeState.prototype.lastUpdatedMs = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
+
+                /**
+                 * NodeState buildOutput.
+                 * @member {Array.<string>} buildOutput
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 */
+                NodeState.prototype.buildOutput = $util.emptyArray;
+
+                /**
+                 * Creates a new NodeState instance using the specified properties.
+                 * @function create
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeState=} [properties] Properties to set
+                 * @returns {bubbaloop.daemon.v1.NodeState} NodeState instance
+                 */
+                NodeState.create = function create(properties) {
+                    return new NodeState(properties);
+                };
+
+                /**
+                 * Encodes the specified NodeState message. Does not implicitly {@link bubbaloop.daemon.v1.NodeState.verify|verify} messages.
+                 * @function encode
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeState} message NodeState message or plain object to encode
+                 * @param {$protobuf.Writer} [writer] Writer to encode to
+                 * @returns {$protobuf.Writer} Writer
+                 */
+                NodeState.encode = function encode(message, writer) {
+                    if (!writer)
+                        writer = $Writer.create();
+                    if (message.name != null && Object.hasOwnProperty.call(message, "name"))
+                        writer.uint32(/* id 1, wireType 2 =*/10).string(message.name);
+                    if (message.path != null && Object.hasOwnProperty.call(message, "path"))
+                        writer.uint32(/* id 2, wireType 2 =*/18).string(message.path);
+                    if (message.status != null && Object.hasOwnProperty.call(message, "status"))
+                        writer.uint32(/* id 3, wireType 0 =*/24).int32(message.status);
+                    if (message.installed != null && Object.hasOwnProperty.call(message, "installed"))
+                        writer.uint32(/* id 4, wireType 0 =*/32).bool(message.installed);
+                    if (message.autostartEnabled != null && Object.hasOwnProperty.call(message, "autostartEnabled"))
+                        writer.uint32(/* id 5, wireType 0 =*/40).bool(message.autostartEnabled);
+                    if (message.version != null && Object.hasOwnProperty.call(message, "version"))
+                        writer.uint32(/* id 6, wireType 2 =*/50).string(message.version);
+                    if (message.description != null && Object.hasOwnProperty.call(message, "description"))
+                        writer.uint32(/* id 7, wireType 2 =*/58).string(message.description);
+                    if (message.nodeType != null && Object.hasOwnProperty.call(message, "nodeType"))
+                        writer.uint32(/* id 8, wireType 2 =*/66).string(message.nodeType);
+                    if (message.isBuilt != null && Object.hasOwnProperty.call(message, "isBuilt"))
+                        writer.uint32(/* id 9, wireType 0 =*/72).bool(message.isBuilt);
+                    if (message.lastUpdatedMs != null && Object.hasOwnProperty.call(message, "lastUpdatedMs"))
+                        writer.uint32(/* id 10, wireType 0 =*/80).int64(message.lastUpdatedMs);
+                    if (message.buildOutput != null && message.buildOutput.length)
+                        for (let i = 0; i < message.buildOutput.length; ++i)
+                            writer.uint32(/* id 11, wireType 2 =*/90).string(message.buildOutput[i]);
+                    return writer;
+                };
+
+                /**
+                 * Encodes the specified NodeState message, length delimited. Does not implicitly {@link bubbaloop.daemon.v1.NodeState.verify|verify} messages.
+                 * @function encodeDelimited
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeState} message NodeState message or plain object to encode
+                 * @param {$protobuf.Writer} [writer] Writer to encode to
+                 * @returns {$protobuf.Writer} Writer
+                 */
+                NodeState.encodeDelimited = function encodeDelimited(message, writer) {
+                    return this.encode(message, writer).ldelim();
+                };
+
+                /**
+                 * Decodes a NodeState message from the specified reader or buffer.
+                 * @function decode
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @static
+                 * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+                 * @param {number} [length] Message length if known beforehand
+                 * @returns {bubbaloop.daemon.v1.NodeState} NodeState
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                NodeState.decode = function decode(reader, length) {
+                    if (!(reader instanceof $Reader))
+                        reader = $Reader.create(reader);
+                    let end = length === undefined ? reader.len : reader.pos + length, message = new $root.bubbaloop.daemon.v1.NodeState();
+                    while (reader.pos < end) {
+                        let tag = reader.uint32();
+                        if (false)
+                            break;
+                        switch (tag >>> 3) {
+                        case 1: {
+                                message.name = reader.string();
+                                break;
+                            }
+                        case 2: {
+                                message.path = reader.string();
+                                break;
+                            }
+                        case 3: {
+                                message.status = reader.int32();
+                                break;
+                            }
+                        case 4: {
+                                message.installed = reader.bool();
+                                break;
+                            }
+                        case 5: {
+                                message.autostartEnabled = reader.bool();
+                                break;
+                            }
+                        case 6: {
+                                message.version = reader.string();
+                                break;
+                            }
+                        case 7: {
+                                message.description = reader.string();
+                                break;
+                            }
+                        case 8: {
+                                message.nodeType = reader.string();
+                                break;
+                            }
+                        case 9: {
+                                message.isBuilt = reader.bool();
+                                break;
+                            }
+                        case 10: {
+                                message.lastUpdatedMs = reader.int64();
+                                break;
+                            }
+                        case 11: {
+                                if (!(message.buildOutput && message.buildOutput.length))
+                                    message.buildOutput = [];
+                                message.buildOutput.push(reader.string());
+                                break;
+                            }
+                        default:
+                            reader.skipType(tag & 7);
+                            break;
+                        }
+                    }
+                    return message;
+                };
+
+                /**
+                 * Decodes a NodeState message from the specified reader or buffer, length delimited.
+                 * @function decodeDelimited
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @static
+                 * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+                 * @returns {bubbaloop.daemon.v1.NodeState} NodeState
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                NodeState.decodeDelimited = function decodeDelimited(reader) {
+                    if (!(reader instanceof $Reader))
+                        reader = new $Reader(reader);
+                    return this.decode(reader, reader.uint32());
+                };
+
+                /**
+                 * Verifies a NodeState message.
+                 * @function verify
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @static
+                 * @param {Object.<string,*>} message Plain object to verify
+                 * @returns {string|null} `null` if valid, otherwise the reason why it is not
+                 */
+                NodeState.verify = function verify(message) {
+                    if (typeof message !== "object" || message === null)
+                        return "object expected";
+                    if (message.name != null && message.hasOwnProperty("name"))
+                        if (!$util.isString(message.name))
+                            return "name: string expected";
+                    if (message.path != null && message.hasOwnProperty("path"))
+                        if (!$util.isString(message.path))
+                            return "path: string expected";
+                    if (message.status != null && message.hasOwnProperty("status"))
+                        switch (message.status) {
+                        default:
+                            return "status: enum value expected";
+                        case 0:
+                        case 1:
+                        case 2:
+                        case 3:
+                        case 4:
+                        case 5:
+                        case 6:
+                            break;
+                        }
+                    if (message.installed != null && message.hasOwnProperty("installed"))
+                        if (typeof message.installed !== "boolean")
+                            return "installed: boolean expected";
+                    if (message.autostartEnabled != null && message.hasOwnProperty("autostartEnabled"))
+                        if (typeof message.autostartEnabled !== "boolean")
+                            return "autostartEnabled: boolean expected";
+                    if (message.version != null && message.hasOwnProperty("version"))
+                        if (!$util.isString(message.version))
+                            return "version: string expected";
+                    if (message.description != null && message.hasOwnProperty("description"))
+                        if (!$util.isString(message.description))
+                            return "description: string expected";
+                    if (message.nodeType != null && message.hasOwnProperty("nodeType"))
+                        if (!$util.isString(message.nodeType))
+                            return "nodeType: string expected";
+                    if (message.isBuilt != null && message.hasOwnProperty("isBuilt"))
+                        if (typeof message.isBuilt !== "boolean")
+                            return "isBuilt: boolean expected";
+                    if (message.lastUpdatedMs != null && message.hasOwnProperty("lastUpdatedMs"))
+                        if (!$util.isInteger(message.lastUpdatedMs) && !(message.lastUpdatedMs && $util.isInteger(message.lastUpdatedMs.low) && $util.isInteger(message.lastUpdatedMs.high)))
+                            return "lastUpdatedMs: integer|Long expected";
+                    if (message.buildOutput != null && message.hasOwnProperty("buildOutput")) {
+                        if (!Array.isArray(message.buildOutput))
+                            return "buildOutput: array expected";
+                        for (let i = 0; i < message.buildOutput.length; ++i)
+                            if (!$util.isString(message.buildOutput[i]))
+                                return "buildOutput: string[] expected";
+                    }
+                    return null;
+                };
+
+                /**
+                 * Creates a NodeState message from a plain object. Also converts values to their respective internal types.
+                 * @function fromObject
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @static
+                 * @param {Object.<string,*>} object Plain object
+                 * @returns {bubbaloop.daemon.v1.NodeState} NodeState
+                 */
+                NodeState.fromObject = function fromObject(object) {
+                    if (object instanceof $root.bubbaloop.daemon.v1.NodeState)
+                        return object;
+                    let message = new $root.bubbaloop.daemon.v1.NodeState();
+                    if (object.name != null)
+                        message.name = String(object.name);
+                    if (object.path != null)
+                        message.path = String(object.path);
+                    switch (object.status) {
+                    default:
+                        if (typeof object.status === "number") {
+                            message.status = object.status;
+                            break;
+                        }
+                        break;
+                    case "NODE_STATUS_UNKNOWN":
+                    case 0:
+                        message.status = 0;
+                        break;
+                    case "NODE_STATUS_STOPPED":
+                    case 1:
+                        message.status = 1;
+                        break;
+                    case "NODE_STATUS_RUNNING":
+                    case 2:
+                        message.status = 2;
+                        break;
+                    case "NODE_STATUS_FAILED":
+                    case 3:
+                        message.status = 3;
+                        break;
+                    case "NODE_STATUS_INSTALLING":
+                    case 4:
+                        message.status = 4;
+                        break;
+                    case "NODE_STATUS_BUILDING":
+                    case 5:
+                        message.status = 5;
+                        break;
+                    case "NODE_STATUS_NOT_INSTALLED":
+                    case 6:
+                        message.status = 6;
+                        break;
+                    }
+                    if (object.installed != null)
+                        message.installed = Boolean(object.installed);
+                    if (object.autostartEnabled != null)
+                        message.autostartEnabled = Boolean(object.autostartEnabled);
+                    if (object.version != null)
+                        message.version = String(object.version);
+                    if (object.description != null)
+                        message.description = String(object.description);
+                    if (object.nodeType != null)
+                        message.nodeType = String(object.nodeType);
+                    if (object.isBuilt != null)
+                        message.isBuilt = Boolean(object.isBuilt);
+                    if (object.lastUpdatedMs != null)
+                        if ($util.Long)
+                            (message.lastUpdatedMs = $util.Long.fromValue(object.lastUpdatedMs)).unsigned = false;
+                        else if (typeof object.lastUpdatedMs === "string")
+                            message.lastUpdatedMs = parseInt(object.lastUpdatedMs, 10);
+                        else if (typeof object.lastUpdatedMs === "number")
+                            message.lastUpdatedMs = object.lastUpdatedMs;
+                        else if (typeof object.lastUpdatedMs === "object")
+                            message.lastUpdatedMs = new $util.LongBits(object.lastUpdatedMs.low >>> 0, object.lastUpdatedMs.high >>> 0).toNumber();
+                    if (object.buildOutput) {
+                        if (!Array.isArray(object.buildOutput))
+                            throw TypeError(".bubbaloop.daemon.v1.NodeState.buildOutput: array expected");
+                        message.buildOutput = [];
+                        for (let i = 0; i < object.buildOutput.length; ++i)
+                            message.buildOutput[i] = String(object.buildOutput[i]);
+                    }
+                    return message;
+                };
+
+                /**
+                 * Creates a plain object from a NodeState message. Also converts values to other types if specified.
+                 * @function toObject
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @static
+                 * @param {bubbaloop.daemon.v1.NodeState} message NodeState
+                 * @param {$protobuf.IConversionOptions} [options] Conversion options
+                 * @returns {Object.<string,*>} Plain object
+                 */
+                NodeState.toObject = function toObject(message, options) {
+                    if (!options)
+                        options = {};
+                    let object = {};
+                    if (options.arrays || options.defaults)
+                        object.buildOutput = [];
+                    if (options.defaults) {
+                        object.name = "";
+                        object.path = "";
+                        object.status = options.enums === String ? "NODE_STATUS_UNKNOWN" : 0;
+                        object.installed = false;
+                        object.autostartEnabled = false;
+                        object.version = "";
+                        object.description = "";
+                        object.nodeType = "";
+                        object.isBuilt = false;
+                        if ($util.Long) {
+                            let long = new $util.Long(0, 0, false);
+                            object.lastUpdatedMs = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                        } else
+                            object.lastUpdatedMs = options.longs === String ? "0" : 0;
+                    }
+                    if (message.name != null && message.hasOwnProperty("name"))
+                        object.name = message.name;
+                    if (message.path != null && message.hasOwnProperty("path"))
+                        object.path = message.path;
+                    if (message.status != null && message.hasOwnProperty("status"))
+                        object.status = options.enums === String ? $root.bubbaloop.daemon.v1.NodeStatus[message.status] === undefined ? message.status : $root.bubbaloop.daemon.v1.NodeStatus[message.status] : message.status;
+                    if (message.installed != null && message.hasOwnProperty("installed"))
+                        object.installed = message.installed;
+                    if (message.autostartEnabled != null && message.hasOwnProperty("autostartEnabled"))
+                        object.autostartEnabled = message.autostartEnabled;
+                    if (message.version != null && message.hasOwnProperty("version"))
+                        object.version = message.version;
+                    if (message.description != null && message.hasOwnProperty("description"))
+                        object.description = message.description;
+                    if (message.nodeType != null && message.hasOwnProperty("nodeType"))
+                        object.nodeType = message.nodeType;
+                    if (message.isBuilt != null && message.hasOwnProperty("isBuilt"))
+                        object.isBuilt = message.isBuilt;
+                    if (message.lastUpdatedMs != null && message.hasOwnProperty("lastUpdatedMs"))
+                        if (typeof message.lastUpdatedMs === "number")
+                            object.lastUpdatedMs = options.longs === String ? String(message.lastUpdatedMs) : message.lastUpdatedMs;
+                        else
+                            object.lastUpdatedMs = options.longs === String ? $util.Long.prototype.toString.call(message.lastUpdatedMs) : options.longs === Number ? new $util.LongBits(message.lastUpdatedMs.low >>> 0, message.lastUpdatedMs.high >>> 0).toNumber() : message.lastUpdatedMs;
+                    if (message.buildOutput && message.buildOutput.length) {
+                        object.buildOutput = [];
+                        for (let j = 0; j < message.buildOutput.length; ++j)
+                            object.buildOutput[j] = message.buildOutput[j];
+                    }
+                    return object;
+                };
+
+                /**
+                 * Converts this NodeState to JSON.
+                 * @function toJSON
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @instance
+                 * @returns {Object.<string,*>} JSON object
+                 */
+                NodeState.prototype.toJSON = function toJSON() {
+                    return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+                };
+
+                /**
+                 * Gets the default type url for NodeState
+                 * @function getTypeUrl
+                 * @memberof bubbaloop.daemon.v1.NodeState
+                 * @static
+                 * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+                 * @returns {string} The default type url
+                 */
+                NodeState.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                    if (typeUrlPrefix === undefined) {
+                        typeUrlPrefix = "type.googleapis.com";
+                    }
+                    return typeUrlPrefix + "/bubbaloop.daemon.v1.NodeState";
+                };
+
+                return NodeState;
+            })();
+
+            v1.NodeList = (function() {
+
+                /**
+                 * Properties of a NodeList.
+                 * @memberof bubbaloop.daemon.v1
+                 * @interface INodeList
+                 * @property {Array.<bubbaloop.daemon.v1.INodeState>|null} [nodes] NodeList nodes
+                 * @property {number|Long|null} [timestampMs] NodeList timestampMs
+                 */
+
+                /**
+                 * Constructs a new NodeList.
+                 * @memberof bubbaloop.daemon.v1
+                 * @classdesc Represents a NodeList.
+                 * @implements INodeList
+                 * @constructor
+                 * @param {bubbaloop.daemon.v1.INodeList=} [properties] Properties to set
+                 */
+                function NodeList(properties) {
+                    this.nodes = [];
+                    if (properties)
+                        for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                            if (properties[keys[i]] != null)
+                                this[keys[i]] = properties[keys[i]];
+                }
+
+                /**
+                 * NodeList nodes.
+                 * @member {Array.<bubbaloop.daemon.v1.INodeState>} nodes
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @instance
+                 */
+                NodeList.prototype.nodes = $util.emptyArray;
+
+                /**
+                 * NodeList timestampMs.
+                 * @member {number|Long} timestampMs
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @instance
+                 */
+                NodeList.prototype.timestampMs = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
+
+                /**
+                 * Creates a new NodeList instance using the specified properties.
+                 * @function create
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeList=} [properties] Properties to set
+                 * @returns {bubbaloop.daemon.v1.NodeList} NodeList instance
+                 */
+                NodeList.create = function create(properties) {
+                    return new NodeList(properties);
+                };
+
+                /**
+                 * Encodes the specified NodeList message. Does not implicitly {@link bubbaloop.daemon.v1.NodeList.verify|verify} messages.
+                 * @function encode
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeList} message NodeList message or plain object to encode
+                 * @param {$protobuf.Writer} [writer] Writer to encode to
+                 * @returns {$protobuf.Writer} Writer
+                 */
+                NodeList.encode = function encode(message, writer) {
+                    if (!writer)
+                        writer = $Writer.create();
+                    if (message.nodes != null && message.nodes.length)
+                        for (let i = 0; i < message.nodes.length; ++i)
+                            $root.bubbaloop.daemon.v1.NodeState.encode(message.nodes[i], writer.uint32(/* id 1, wireType 2 =*/10).fork()).ldelim();
+                    if (message.timestampMs != null && Object.hasOwnProperty.call(message, "timestampMs"))
+                        writer.uint32(/* id 2, wireType 0 =*/16).int64(message.timestampMs);
+                    return writer;
+                };
+
+                /**
+                 * Encodes the specified NodeList message, length delimited. Does not implicitly {@link bubbaloop.daemon.v1.NodeList.verify|verify} messages.
+                 * @function encodeDelimited
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeList} message NodeList message or plain object to encode
+                 * @param {$protobuf.Writer} [writer] Writer to encode to
+                 * @returns {$protobuf.Writer} Writer
+                 */
+                NodeList.encodeDelimited = function encodeDelimited(message, writer) {
+                    return this.encode(message, writer).ldelim();
+                };
+
+                /**
+                 * Decodes a NodeList message from the specified reader or buffer.
+                 * @function decode
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @static
+                 * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+                 * @param {number} [length] Message length if known beforehand
+                 * @returns {bubbaloop.daemon.v1.NodeList} NodeList
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                NodeList.decode = function decode(reader, length) {
+                    if (!(reader instanceof $Reader))
+                        reader = $Reader.create(reader);
+                    let end = length === undefined ? reader.len : reader.pos + length, message = new $root.bubbaloop.daemon.v1.NodeList();
+                    while (reader.pos < end) {
+                        let tag = reader.uint32();
+                        if (false)
+                            break;
+                        switch (tag >>> 3) {
+                        case 1: {
+                                if (!(message.nodes && message.nodes.length))
+                                    message.nodes = [];
+                                message.nodes.push($root.bubbaloop.daemon.v1.NodeState.decode(reader, reader.uint32()));
+                                break;
+                            }
+                        case 2: {
+                                message.timestampMs = reader.int64();
+                                break;
+                            }
+                        default:
+                            reader.skipType(tag & 7);
+                            break;
+                        }
+                    }
+                    return message;
+                };
+
+                /**
+                 * Decodes a NodeList message from the specified reader or buffer, length delimited.
+                 * @function decodeDelimited
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @static
+                 * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+                 * @returns {bubbaloop.daemon.v1.NodeList} NodeList
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                NodeList.decodeDelimited = function decodeDelimited(reader) {
+                    if (!(reader instanceof $Reader))
+                        reader = new $Reader(reader);
+                    return this.decode(reader, reader.uint32());
+                };
+
+                /**
+                 * Verifies a NodeList message.
+                 * @function verify
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @static
+                 * @param {Object.<string,*>} message Plain object to verify
+                 * @returns {string|null} `null` if valid, otherwise the reason why it is not
+                 */
+                NodeList.verify = function verify(message) {
+                    if (typeof message !== "object" || message === null)
+                        return "object expected";
+                    if (message.nodes != null && message.hasOwnProperty("nodes")) {
+                        if (!Array.isArray(message.nodes))
+                            return "nodes: array expected";
+                        for (let i = 0; i < message.nodes.length; ++i) {
+                            let error = $root.bubbaloop.daemon.v1.NodeState.verify(message.nodes[i]);
+                            if (error)
+                                return "nodes." + error;
+                        }
+                    }
+                    if (message.timestampMs != null && message.hasOwnProperty("timestampMs"))
+                        if (!$util.isInteger(message.timestampMs) && !(message.timestampMs && $util.isInteger(message.timestampMs.low) && $util.isInteger(message.timestampMs.high)))
+                            return "timestampMs: integer|Long expected";
+                    return null;
+                };
+
+                /**
+                 * Creates a NodeList message from a plain object. Also converts values to their respective internal types.
+                 * @function fromObject
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @static
+                 * @param {Object.<string,*>} object Plain object
+                 * @returns {bubbaloop.daemon.v1.NodeList} NodeList
+                 */
+                NodeList.fromObject = function fromObject(object) {
+                    if (object instanceof $root.bubbaloop.daemon.v1.NodeList)
+                        return object;
+                    let message = new $root.bubbaloop.daemon.v1.NodeList();
+                    if (object.nodes) {
+                        if (!Array.isArray(object.nodes))
+                            throw TypeError(".bubbaloop.daemon.v1.NodeList.nodes: array expected");
+                        message.nodes = [];
+                        for (let i = 0; i < object.nodes.length; ++i) {
+                            if (typeof object.nodes[i] !== "object")
+                                throw TypeError(".bubbaloop.daemon.v1.NodeList.nodes: object expected");
+                            message.nodes[i] = $root.bubbaloop.daemon.v1.NodeState.fromObject(object.nodes[i]);
+                        }
+                    }
+                    if (object.timestampMs != null)
+                        if ($util.Long)
+                            (message.timestampMs = $util.Long.fromValue(object.timestampMs)).unsigned = false;
+                        else if (typeof object.timestampMs === "string")
+                            message.timestampMs = parseInt(object.timestampMs, 10);
+                        else if (typeof object.timestampMs === "number")
+                            message.timestampMs = object.timestampMs;
+                        else if (typeof object.timestampMs === "object")
+                            message.timestampMs = new $util.LongBits(object.timestampMs.low >>> 0, object.timestampMs.high >>> 0).toNumber();
+                    return message;
+                };
+
+                /**
+                 * Creates a plain object from a NodeList message. Also converts values to other types if specified.
+                 * @function toObject
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @static
+                 * @param {bubbaloop.daemon.v1.NodeList} message NodeList
+                 * @param {$protobuf.IConversionOptions} [options] Conversion options
+                 * @returns {Object.<string,*>} Plain object
+                 */
+                NodeList.toObject = function toObject(message, options) {
+                    if (!options)
+                        options = {};
+                    let object = {};
+                    if (options.arrays || options.defaults)
+                        object.nodes = [];
+                    if (options.defaults)
+                        if ($util.Long) {
+                            let long = new $util.Long(0, 0, false);
+                            object.timestampMs = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                        } else
+                            object.timestampMs = options.longs === String ? "0" : 0;
+                    if (message.nodes && message.nodes.length) {
+                        object.nodes = [];
+                        for (let j = 0; j < message.nodes.length; ++j)
+                            object.nodes[j] = $root.bubbaloop.daemon.v1.NodeState.toObject(message.nodes[j], options);
+                    }
+                    if (message.timestampMs != null && message.hasOwnProperty("timestampMs"))
+                        if (typeof message.timestampMs === "number")
+                            object.timestampMs = options.longs === String ? String(message.timestampMs) : message.timestampMs;
+                        else
+                            object.timestampMs = options.longs === String ? $util.Long.prototype.toString.call(message.timestampMs) : options.longs === Number ? new $util.LongBits(message.timestampMs.low >>> 0, message.timestampMs.high >>> 0).toNumber() : message.timestampMs;
+                    return object;
+                };
+
+                /**
+                 * Converts this NodeList to JSON.
+                 * @function toJSON
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @instance
+                 * @returns {Object.<string,*>} JSON object
+                 */
+                NodeList.prototype.toJSON = function toJSON() {
+                    return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+                };
+
+                /**
+                 * Gets the default type url for NodeList
+                 * @function getTypeUrl
+                 * @memberof bubbaloop.daemon.v1.NodeList
+                 * @static
+                 * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+                 * @returns {string} The default type url
+                 */
+                NodeList.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                    if (typeUrlPrefix === undefined) {
+                        typeUrlPrefix = "type.googleapis.com";
+                    }
+                    return typeUrlPrefix + "/bubbaloop.daemon.v1.NodeList";
+                };
+
+                return NodeList;
+            })();
+
+            /**
+             * CommandType enum.
+             * @name bubbaloop.daemon.v1.CommandType
+             * @enum {number}
+             * @property {number} COMMAND_TYPE_START=0 COMMAND_TYPE_START value
+             * @property {number} COMMAND_TYPE_STOP=1 COMMAND_TYPE_STOP value
+             * @property {number} COMMAND_TYPE_RESTART=2 COMMAND_TYPE_RESTART value
+             * @property {number} COMMAND_TYPE_INSTALL=3 COMMAND_TYPE_INSTALL value
+             * @property {number} COMMAND_TYPE_UNINSTALL=4 COMMAND_TYPE_UNINSTALL value
+             * @property {number} COMMAND_TYPE_BUILD=5 COMMAND_TYPE_BUILD value
+             * @property {number} COMMAND_TYPE_CLEAN=6 COMMAND_TYPE_CLEAN value
+             * @property {number} COMMAND_TYPE_ENABLE_AUTOSTART=7 COMMAND_TYPE_ENABLE_AUTOSTART value
+             * @property {number} COMMAND_TYPE_DISABLE_AUTOSTART=8 COMMAND_TYPE_DISABLE_AUTOSTART value
+             * @property {number} COMMAND_TYPE_ADD_NODE=9 COMMAND_TYPE_ADD_NODE value
+             * @property {number} COMMAND_TYPE_REMOVE_NODE=10 COMMAND_TYPE_REMOVE_NODE value
+             * @property {number} COMMAND_TYPE_REFRESH=11 COMMAND_TYPE_REFRESH value
+             * @property {number} COMMAND_TYPE_GET_LOGS=12 COMMAND_TYPE_GET_LOGS value
+             */
+            v1.CommandType = (function() {
+                const valuesById = {}, values = Object.create(valuesById);
+                values[valuesById[0] = "COMMAND_TYPE_START"] = 0;
+                values[valuesById[1] = "COMMAND_TYPE_STOP"] = 1;
+                values[valuesById[2] = "COMMAND_TYPE_RESTART"] = 2;
+                values[valuesById[3] = "COMMAND_TYPE_INSTALL"] = 3;
+                values[valuesById[4] = "COMMAND_TYPE_UNINSTALL"] = 4;
+                values[valuesById[5] = "COMMAND_TYPE_BUILD"] = 5;
+                values[valuesById[6] = "COMMAND_TYPE_CLEAN"] = 6;
+                values[valuesById[7] = "COMMAND_TYPE_ENABLE_AUTOSTART"] = 7;
+                values[valuesById[8] = "COMMAND_TYPE_DISABLE_AUTOSTART"] = 8;
+                values[valuesById[9] = "COMMAND_TYPE_ADD_NODE"] = 9;
+                values[valuesById[10] = "COMMAND_TYPE_REMOVE_NODE"] = 10;
+                values[valuesById[11] = "COMMAND_TYPE_REFRESH"] = 11;
+                values[valuesById[12] = "COMMAND_TYPE_GET_LOGS"] = 12;
+                return values;
+            })();
+
+            v1.NodeCommand = (function() {
+
+                /**
+                 * Properties of a NodeCommand.
+                 * @memberof bubbaloop.daemon.v1
+                 * @interface INodeCommand
+                 * @property {bubbaloop.daemon.v1.CommandType|null} [command] NodeCommand command
+                 * @property {string|null} [nodeName] NodeCommand nodeName
+                 * @property {string|null} [nodePath] NodeCommand nodePath
+                 * @property {string|null} [requestId] NodeCommand requestId
+                 */
+
+                /**
+                 * Constructs a new NodeCommand.
+                 * @memberof bubbaloop.daemon.v1
+                 * @classdesc Represents a NodeCommand.
+                 * @implements INodeCommand
+                 * @constructor
+                 * @param {bubbaloop.daemon.v1.INodeCommand=} [properties] Properties to set
+                 */
+                function NodeCommand(properties) {
+                    if (properties)
+                        for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                            if (properties[keys[i]] != null)
+                                this[keys[i]] = properties[keys[i]];
+                }
+
+                /**
+                 * NodeCommand command.
+                 * @member {bubbaloop.daemon.v1.CommandType} command
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @instance
+                 */
+                NodeCommand.prototype.command = 0;
+
+                /**
+                 * NodeCommand nodeName.
+                 * @member {string} nodeName
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @instance
+                 */
+                NodeCommand.prototype.nodeName = "";
+
+                /**
+                 * NodeCommand nodePath.
+                 * @member {string} nodePath
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @instance
+                 */
+                NodeCommand.prototype.nodePath = "";
+
+                /**
+                 * NodeCommand requestId.
+                 * @member {string} requestId
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @instance
+                 */
+                NodeCommand.prototype.requestId = "";
+
+                /**
+                 * Creates a new NodeCommand instance using the specified properties.
+                 * @function create
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeCommand=} [properties] Properties to set
+                 * @returns {bubbaloop.daemon.v1.NodeCommand} NodeCommand instance
+                 */
+                NodeCommand.create = function create(properties) {
+                    return new NodeCommand(properties);
+                };
+
+                /**
+                 * Encodes the specified NodeCommand message. Does not implicitly {@link bubbaloop.daemon.v1.NodeCommand.verify|verify} messages.
+                 * @function encode
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeCommand} message NodeCommand message or plain object to encode
+                 * @param {$protobuf.Writer} [writer] Writer to encode to
+                 * @returns {$protobuf.Writer} Writer
+                 */
+                NodeCommand.encode = function encode(message, writer) {
+                    if (!writer)
+                        writer = $Writer.create();
+                    if (message.command != null && Object.hasOwnProperty.call(message, "command"))
+                        writer.uint32(/* id 1, wireType 0 =*/8).int32(message.command);
+                    if (message.nodeName != null && Object.hasOwnProperty.call(message, "nodeName"))
+                        writer.uint32(/* id 2, wireType 2 =*/18).string(message.nodeName);
+                    if (message.nodePath != null && Object.hasOwnProperty.call(message, "nodePath"))
+                        writer.uint32(/* id 3, wireType 2 =*/26).string(message.nodePath);
+                    if (message.requestId != null && Object.hasOwnProperty.call(message, "requestId"))
+                        writer.uint32(/* id 4, wireType 2 =*/34).string(message.requestId);
+                    return writer;
+                };
+
+                /**
+                 * Encodes the specified NodeCommand message, length delimited. Does not implicitly {@link bubbaloop.daemon.v1.NodeCommand.verify|verify} messages.
+                 * @function encodeDelimited
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeCommand} message NodeCommand message or plain object to encode
+                 * @param {$protobuf.Writer} [writer] Writer to encode to
+                 * @returns {$protobuf.Writer} Writer
+                 */
+                NodeCommand.encodeDelimited = function encodeDelimited(message, writer) {
+                    return this.encode(message, writer).ldelim();
+                };
+
+                /**
+                 * Decodes a NodeCommand message from the specified reader or buffer.
+                 * @function decode
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @static
+                 * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+                 * @param {number} [length] Message length if known beforehand
+                 * @returns {bubbaloop.daemon.v1.NodeCommand} NodeCommand
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                NodeCommand.decode = function decode(reader, length) {
+                    if (!(reader instanceof $Reader))
+                        reader = $Reader.create(reader);
+                    let end = length === undefined ? reader.len : reader.pos + length, message = new $root.bubbaloop.daemon.v1.NodeCommand();
+                    while (reader.pos < end) {
+                        let tag = reader.uint32();
+                        if (false)
+                            break;
+                        switch (tag >>> 3) {
+                        case 1: {
+                                message.command = reader.int32();
+                                break;
+                            }
+                        case 2: {
+                                message.nodeName = reader.string();
+                                break;
+                            }
+                        case 3: {
+                                message.nodePath = reader.string();
+                                break;
+                            }
+                        case 4: {
+                                message.requestId = reader.string();
+                                break;
+                            }
+                        default:
+                            reader.skipType(tag & 7);
+                            break;
+                        }
+                    }
+                    return message;
+                };
+
+                /**
+                 * Decodes a NodeCommand message from the specified reader or buffer, length delimited.
+                 * @function decodeDelimited
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @static
+                 * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+                 * @returns {bubbaloop.daemon.v1.NodeCommand} NodeCommand
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                NodeCommand.decodeDelimited = function decodeDelimited(reader) {
+                    if (!(reader instanceof $Reader))
+                        reader = new $Reader(reader);
+                    return this.decode(reader, reader.uint32());
+                };
+
+                /**
+                 * Verifies a NodeCommand message.
+                 * @function verify
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @static
+                 * @param {Object.<string,*>} message Plain object to verify
+                 * @returns {string|null} `null` if valid, otherwise the reason why it is not
+                 */
+                NodeCommand.verify = function verify(message) {
+                    if (typeof message !== "object" || message === null)
+                        return "object expected";
+                    if (message.command != null && message.hasOwnProperty("command"))
+                        switch (message.command) {
+                        default:
+                            return "command: enum value expected";
+                        case 0:
+                        case 1:
+                        case 2:
+                        case 3:
+                        case 4:
+                        case 5:
+                        case 6:
+                        case 7:
+                        case 8:
+                        case 9:
+                        case 10:
+                        case 11:
+                        case 12:
+                            break;
+                        }
+                    if (message.nodeName != null && message.hasOwnProperty("nodeName"))
+                        if (!$util.isString(message.nodeName))
+                            return "nodeName: string expected";
+                    if (message.nodePath != null && message.hasOwnProperty("nodePath"))
+                        if (!$util.isString(message.nodePath))
+                            return "nodePath: string expected";
+                    if (message.requestId != null && message.hasOwnProperty("requestId"))
+                        if (!$util.isString(message.requestId))
+                            return "requestId: string expected";
+                    return null;
+                };
+
+                /**
+                 * Creates a NodeCommand message from a plain object. Also converts values to their respective internal types.
+                 * @function fromObject
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @static
+                 * @param {Object.<string,*>} object Plain object
+                 * @returns {bubbaloop.daemon.v1.NodeCommand} NodeCommand
+                 */
+                NodeCommand.fromObject = function fromObject(object) {
+                    if (object instanceof $root.bubbaloop.daemon.v1.NodeCommand)
+                        return object;
+                    let message = new $root.bubbaloop.daemon.v1.NodeCommand();
+                    switch (object.command) {
+                    default:
+                        if (typeof object.command === "number") {
+                            message.command = object.command;
+                            break;
+                        }
+                        break;
+                    case "COMMAND_TYPE_START":
+                    case 0:
+                        message.command = 0;
+                        break;
+                    case "COMMAND_TYPE_STOP":
+                    case 1:
+                        message.command = 1;
+                        break;
+                    case "COMMAND_TYPE_RESTART":
+                    case 2:
+                        message.command = 2;
+                        break;
+                    case "COMMAND_TYPE_INSTALL":
+                    case 3:
+                        message.command = 3;
+                        break;
+                    case "COMMAND_TYPE_UNINSTALL":
+                    case 4:
+                        message.command = 4;
+                        break;
+                    case "COMMAND_TYPE_BUILD":
+                    case 5:
+                        message.command = 5;
+                        break;
+                    case "COMMAND_TYPE_CLEAN":
+                    case 6:
+                        message.command = 6;
+                        break;
+                    case "COMMAND_TYPE_ENABLE_AUTOSTART":
+                    case 7:
+                        message.command = 7;
+                        break;
+                    case "COMMAND_TYPE_DISABLE_AUTOSTART":
+                    case 8:
+                        message.command = 8;
+                        break;
+                    case "COMMAND_TYPE_ADD_NODE":
+                    case 9:
+                        message.command = 9;
+                        break;
+                    case "COMMAND_TYPE_REMOVE_NODE":
+                    case 10:
+                        message.command = 10;
+                        break;
+                    case "COMMAND_TYPE_REFRESH":
+                    case 11:
+                        message.command = 11;
+                        break;
+                    case "COMMAND_TYPE_GET_LOGS":
+                    case 12:
+                        message.command = 12;
+                        break;
+                    }
+                    if (object.nodeName != null)
+                        message.nodeName = String(object.nodeName);
+                    if (object.nodePath != null)
+                        message.nodePath = String(object.nodePath);
+                    if (object.requestId != null)
+                        message.requestId = String(object.requestId);
+                    return message;
+                };
+
+                /**
+                 * Creates a plain object from a NodeCommand message. Also converts values to other types if specified.
+                 * @function toObject
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @static
+                 * @param {bubbaloop.daemon.v1.NodeCommand} message NodeCommand
+                 * @param {$protobuf.IConversionOptions} [options] Conversion options
+                 * @returns {Object.<string,*>} Plain object
+                 */
+                NodeCommand.toObject = function toObject(message, options) {
+                    if (!options)
+                        options = {};
+                    let object = {};
+                    if (options.defaults) {
+                        object.command = options.enums === String ? "COMMAND_TYPE_START" : 0;
+                        object.nodeName = "";
+                        object.nodePath = "";
+                        object.requestId = "";
+                    }
+                    if (message.command != null && message.hasOwnProperty("command"))
+                        object.command = options.enums === String ? $root.bubbaloop.daemon.v1.CommandType[message.command] === undefined ? message.command : $root.bubbaloop.daemon.v1.CommandType[message.command] : message.command;
+                    if (message.nodeName != null && message.hasOwnProperty("nodeName"))
+                        object.nodeName = message.nodeName;
+                    if (message.nodePath != null && message.hasOwnProperty("nodePath"))
+                        object.nodePath = message.nodePath;
+                    if (message.requestId != null && message.hasOwnProperty("requestId"))
+                        object.requestId = message.requestId;
+                    return object;
+                };
+
+                /**
+                 * Converts this NodeCommand to JSON.
+                 * @function toJSON
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @instance
+                 * @returns {Object.<string,*>} JSON object
+                 */
+                NodeCommand.prototype.toJSON = function toJSON() {
+                    return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+                };
+
+                /**
+                 * Gets the default type url for NodeCommand
+                 * @function getTypeUrl
+                 * @memberof bubbaloop.daemon.v1.NodeCommand
+                 * @static
+                 * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+                 * @returns {string} The default type url
+                 */
+                NodeCommand.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                    if (typeUrlPrefix === undefined) {
+                        typeUrlPrefix = "type.googleapis.com";
+                    }
+                    return typeUrlPrefix + "/bubbaloop.daemon.v1.NodeCommand";
+                };
+
+                return NodeCommand;
+            })();
+
+            v1.CommandResult = (function() {
+
+                /**
+                 * Properties of a CommandResult.
+                 * @memberof bubbaloop.daemon.v1
+                 * @interface ICommandResult
+                 * @property {string|null} [requestId] CommandResult requestId
+                 * @property {boolean|null} [success] CommandResult success
+                 * @property {string|null} [message] CommandResult message
+                 * @property {string|null} [output] CommandResult output
+                 * @property {bubbaloop.daemon.v1.INodeState|null} [nodeState] CommandResult nodeState
+                 */
+
+                /**
+                 * Constructs a new CommandResult.
+                 * @memberof bubbaloop.daemon.v1
+                 * @classdesc Represents a CommandResult.
+                 * @implements ICommandResult
+                 * @constructor
+                 * @param {bubbaloop.daemon.v1.ICommandResult=} [properties] Properties to set
+                 */
+                function CommandResult(properties) {
+                    if (properties)
+                        for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                            if (properties[keys[i]] != null)
+                                this[keys[i]] = properties[keys[i]];
+                }
+
+                /**
+                 * CommandResult requestId.
+                 * @member {string} requestId
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @instance
+                 */
+                CommandResult.prototype.requestId = "";
+
+                /**
+                 * CommandResult success.
+                 * @member {boolean} success
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @instance
+                 */
+                CommandResult.prototype.success = false;
+
+                /**
+                 * CommandResult message.
+                 * @member {string} message
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @instance
+                 */
+                CommandResult.prototype.message = "";
+
+                /**
+                 * CommandResult output.
+                 * @member {string} output
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @instance
+                 */
+                CommandResult.prototype.output = "";
+
+                /**
+                 * CommandResult nodeState.
+                 * @member {bubbaloop.daemon.v1.INodeState|null|undefined} nodeState
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @instance
+                 */
+                CommandResult.prototype.nodeState = null;
+
+                /**
+                 * Creates a new CommandResult instance using the specified properties.
+                 * @function create
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @static
+                 * @param {bubbaloop.daemon.v1.ICommandResult=} [properties] Properties to set
+                 * @returns {bubbaloop.daemon.v1.CommandResult} CommandResult instance
+                 */
+                CommandResult.create = function create(properties) {
+                    return new CommandResult(properties);
+                };
+
+                /**
+                 * Encodes the specified CommandResult message. Does not implicitly {@link bubbaloop.daemon.v1.CommandResult.verify|verify} messages.
+                 * @function encode
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @static
+                 * @param {bubbaloop.daemon.v1.ICommandResult} message CommandResult message or plain object to encode
+                 * @param {$protobuf.Writer} [writer] Writer to encode to
+                 * @returns {$protobuf.Writer} Writer
+                 */
+                CommandResult.encode = function encode(message, writer) {
+                    if (!writer)
+                        writer = $Writer.create();
+                    if (message.requestId != null && Object.hasOwnProperty.call(message, "requestId"))
+                        writer.uint32(/* id 1, wireType 2 =*/10).string(message.requestId);
+                    if (message.success != null && Object.hasOwnProperty.call(message, "success"))
+                        writer.uint32(/* id 2, wireType 0 =*/16).bool(message.success);
+                    if (message.message != null && Object.hasOwnProperty.call(message, "message"))
+                        writer.uint32(/* id 3, wireType 2 =*/26).string(message.message);
+                    if (message.output != null && Object.hasOwnProperty.call(message, "output"))
+                        writer.uint32(/* id 4, wireType 2 =*/34).string(message.output);
+                    if (message.nodeState != null && Object.hasOwnProperty.call(message, "nodeState"))
+                        $root.bubbaloop.daemon.v1.NodeState.encode(message.nodeState, writer.uint32(/* id 5, wireType 2 =*/42).fork()).ldelim();
+                    return writer;
+                };
+
+                /**
+                 * Encodes the specified CommandResult message, length delimited. Does not implicitly {@link bubbaloop.daemon.v1.CommandResult.verify|verify} messages.
+                 * @function encodeDelimited
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @static
+                 * @param {bubbaloop.daemon.v1.ICommandResult} message CommandResult message or plain object to encode
+                 * @param {$protobuf.Writer} [writer] Writer to encode to
+                 * @returns {$protobuf.Writer} Writer
+                 */
+                CommandResult.encodeDelimited = function encodeDelimited(message, writer) {
+                    return this.encode(message, writer).ldelim();
+                };
+
+                /**
+                 * Decodes a CommandResult message from the specified reader or buffer.
+                 * @function decode
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @static
+                 * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+                 * @param {number} [length] Message length if known beforehand
+                 * @returns {bubbaloop.daemon.v1.CommandResult} CommandResult
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                CommandResult.decode = function decode(reader, length) {
+                    if (!(reader instanceof $Reader))
+                        reader = $Reader.create(reader);
+                    let end = length === undefined ? reader.len : reader.pos + length, message = new $root.bubbaloop.daemon.v1.CommandResult();
+                    while (reader.pos < end) {
+                        let tag = reader.uint32();
+                        if (false)
+                            break;
+                        switch (tag >>> 3) {
+                        case 1: {
+                                message.requestId = reader.string();
+                                break;
+                            }
+                        case 2: {
+                                message.success = reader.bool();
+                                break;
+                            }
+                        case 3: {
+                                message.message = reader.string();
+                                break;
+                            }
+                        case 4: {
+                                message.output = reader.string();
+                                break;
+                            }
+                        case 5: {
+                                message.nodeState = $root.bubbaloop.daemon.v1.NodeState.decode(reader, reader.uint32());
+                                break;
+                            }
+                        default:
+                            reader.skipType(tag & 7);
+                            break;
+                        }
+                    }
+                    return message;
+                };
+
+                /**
+                 * Decodes a CommandResult message from the specified reader or buffer, length delimited.
+                 * @function decodeDelimited
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @static
+                 * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+                 * @returns {bubbaloop.daemon.v1.CommandResult} CommandResult
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                CommandResult.decodeDelimited = function decodeDelimited(reader) {
+                    if (!(reader instanceof $Reader))
+                        reader = new $Reader(reader);
+                    return this.decode(reader, reader.uint32());
+                };
+
+                /**
+                 * Verifies a CommandResult message.
+                 * @function verify
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @static
+                 * @param {Object.<string,*>} message Plain object to verify
+                 * @returns {string|null} `null` if valid, otherwise the reason why it is not
+                 */
+                CommandResult.verify = function verify(message) {
+                    if (typeof message !== "object" || message === null)
+                        return "object expected";
+                    if (message.requestId != null && message.hasOwnProperty("requestId"))
+                        if (!$util.isString(message.requestId))
+                            return "requestId: string expected";
+                    if (message.success != null && message.hasOwnProperty("success"))
+                        if (typeof message.success !== "boolean")
+                            return "success: boolean expected";
+                    if (message.message != null && message.hasOwnProperty("message"))
+                        if (!$util.isString(message.message))
+                            return "message: string expected";
+                    if (message.output != null && message.hasOwnProperty("output"))
+                        if (!$util.isString(message.output))
+                            return "output: string expected";
+                    if (message.nodeState != null && message.hasOwnProperty("nodeState")) {
+                        let error = $root.bubbaloop.daemon.v1.NodeState.verify(message.nodeState);
+                        if (error)
+                            return "nodeState." + error;
+                    }
+                    return null;
+                };
+
+                /**
+                 * Creates a CommandResult message from a plain object. Also converts values to their respective internal types.
+                 * @function fromObject
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @static
+                 * @param {Object.<string,*>} object Plain object
+                 * @returns {bubbaloop.daemon.v1.CommandResult} CommandResult
+                 */
+                CommandResult.fromObject = function fromObject(object) {
+                    if (object instanceof $root.bubbaloop.daemon.v1.CommandResult)
+                        return object;
+                    let message = new $root.bubbaloop.daemon.v1.CommandResult();
+                    if (object.requestId != null)
+                        message.requestId = String(object.requestId);
+                    if (object.success != null)
+                        message.success = Boolean(object.success);
+                    if (object.message != null)
+                        message.message = String(object.message);
+                    if (object.output != null)
+                        message.output = String(object.output);
+                    if (object.nodeState != null) {
+                        if (typeof object.nodeState !== "object")
+                            throw TypeError(".bubbaloop.daemon.v1.CommandResult.nodeState: object expected");
+                        message.nodeState = $root.bubbaloop.daemon.v1.NodeState.fromObject(object.nodeState);
+                    }
+                    return message;
+                };
+
+                /**
+                 * Creates a plain object from a CommandResult message. Also converts values to other types if specified.
+                 * @function toObject
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @static
+                 * @param {bubbaloop.daemon.v1.CommandResult} message CommandResult
+                 * @param {$protobuf.IConversionOptions} [options] Conversion options
+                 * @returns {Object.<string,*>} Plain object
+                 */
+                CommandResult.toObject = function toObject(message, options) {
+                    if (!options)
+                        options = {};
+                    let object = {};
+                    if (options.defaults) {
+                        object.requestId = "";
+                        object.success = false;
+                        object.message = "";
+                        object.output = "";
+                        object.nodeState = null;
+                    }
+                    if (message.requestId != null && message.hasOwnProperty("requestId"))
+                        object.requestId = message.requestId;
+                    if (message.success != null && message.hasOwnProperty("success"))
+                        object.success = message.success;
+                    if (message.message != null && message.hasOwnProperty("message"))
+                        object.message = message.message;
+                    if (message.output != null && message.hasOwnProperty("output"))
+                        object.output = message.output;
+                    if (message.nodeState != null && message.hasOwnProperty("nodeState"))
+                        object.nodeState = $root.bubbaloop.daemon.v1.NodeState.toObject(message.nodeState, options);
+                    return object;
+                };
+
+                /**
+                 * Converts this CommandResult to JSON.
+                 * @function toJSON
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @instance
+                 * @returns {Object.<string,*>} JSON object
+                 */
+                CommandResult.prototype.toJSON = function toJSON() {
+                    return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+                };
+
+                /**
+                 * Gets the default type url for CommandResult
+                 * @function getTypeUrl
+                 * @memberof bubbaloop.daemon.v1.CommandResult
+                 * @static
+                 * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+                 * @returns {string} The default type url
+                 */
+                CommandResult.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                    if (typeUrlPrefix === undefined) {
+                        typeUrlPrefix = "type.googleapis.com";
+                    }
+                    return typeUrlPrefix + "/bubbaloop.daemon.v1.CommandResult";
+                };
+
+                return CommandResult;
+            })();
+
+            v1.NodeEvent = (function() {
+
+                /**
+                 * Properties of a NodeEvent.
+                 * @memberof bubbaloop.daemon.v1
+                 * @interface INodeEvent
+                 * @property {string|null} [eventType] NodeEvent eventType
+                 * @property {string|null} [nodeName] NodeEvent nodeName
+                 * @property {bubbaloop.daemon.v1.INodeState|null} [state] NodeEvent state
+                 * @property {number|Long|null} [timestampMs] NodeEvent timestampMs
+                 */
+
+                /**
+                 * Constructs a new NodeEvent.
+                 * @memberof bubbaloop.daemon.v1
+                 * @classdesc Represents a NodeEvent.
+                 * @implements INodeEvent
+                 * @constructor
+                 * @param {bubbaloop.daemon.v1.INodeEvent=} [properties] Properties to set
+                 */
+                function NodeEvent(properties) {
+                    if (properties)
+                        for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                            if (properties[keys[i]] != null)
+                                this[keys[i]] = properties[keys[i]];
+                }
+
+                /**
+                 * NodeEvent eventType.
+                 * @member {string} eventType
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @instance
+                 */
+                NodeEvent.prototype.eventType = "";
+
+                /**
+                 * NodeEvent nodeName.
+                 * @member {string} nodeName
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @instance
+                 */
+                NodeEvent.prototype.nodeName = "";
+
+                /**
+                 * NodeEvent state.
+                 * @member {bubbaloop.daemon.v1.INodeState|null|undefined} state
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @instance
+                 */
+                NodeEvent.prototype.state = null;
+
+                /**
+                 * NodeEvent timestampMs.
+                 * @member {number|Long} timestampMs
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @instance
+                 */
+                NodeEvent.prototype.timestampMs = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
+
+                /**
+                 * Creates a new NodeEvent instance using the specified properties.
+                 * @function create
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeEvent=} [properties] Properties to set
+                 * @returns {bubbaloop.daemon.v1.NodeEvent} NodeEvent instance
+                 */
+                NodeEvent.create = function create(properties) {
+                    return new NodeEvent(properties);
+                };
+
+                /**
+                 * Encodes the specified NodeEvent message. Does not implicitly {@link bubbaloop.daemon.v1.NodeEvent.verify|verify} messages.
+                 * @function encode
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeEvent} message NodeEvent message or plain object to encode
+                 * @param {$protobuf.Writer} [writer] Writer to encode to
+                 * @returns {$protobuf.Writer} Writer
+                 */
+                NodeEvent.encode = function encode(message, writer) {
+                    if (!writer)
+                        writer = $Writer.create();
+                    if (message.eventType != null && Object.hasOwnProperty.call(message, "eventType"))
+                        writer.uint32(/* id 1, wireType 2 =*/10).string(message.eventType);
+                    if (message.nodeName != null && Object.hasOwnProperty.call(message, "nodeName"))
+                        writer.uint32(/* id 2, wireType 2 =*/18).string(message.nodeName);
+                    if (message.state != null && Object.hasOwnProperty.call(message, "state"))
+                        $root.bubbaloop.daemon.v1.NodeState.encode(message.state, writer.uint32(/* id 3, wireType 2 =*/26).fork()).ldelim();
+                    if (message.timestampMs != null && Object.hasOwnProperty.call(message, "timestampMs"))
+                        writer.uint32(/* id 4, wireType 0 =*/32).int64(message.timestampMs);
+                    return writer;
+                };
+
+                /**
+                 * Encodes the specified NodeEvent message, length delimited. Does not implicitly {@link bubbaloop.daemon.v1.NodeEvent.verify|verify} messages.
+                 * @function encodeDelimited
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @static
+                 * @param {bubbaloop.daemon.v1.INodeEvent} message NodeEvent message or plain object to encode
+                 * @param {$protobuf.Writer} [writer] Writer to encode to
+                 * @returns {$protobuf.Writer} Writer
+                 */
+                NodeEvent.encodeDelimited = function encodeDelimited(message, writer) {
+                    return this.encode(message, writer).ldelim();
+                };
+
+                /**
+                 * Decodes a NodeEvent message from the specified reader or buffer.
+                 * @function decode
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @static
+                 * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+                 * @param {number} [length] Message length if known beforehand
+                 * @returns {bubbaloop.daemon.v1.NodeEvent} NodeEvent
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                NodeEvent.decode = function decode(reader, length) {
+                    if (!(reader instanceof $Reader))
+                        reader = $Reader.create(reader);
+                    let end = length === undefined ? reader.len : reader.pos + length, message = new $root.bubbaloop.daemon.v1.NodeEvent();
+                    while (reader.pos < end) {
+                        let tag = reader.uint32();
+                        if (false)
+                            break;
+                        switch (tag >>> 3) {
+                        case 1: {
+                                message.eventType = reader.string();
+                                break;
+                            }
+                        case 2: {
+                                message.nodeName = reader.string();
+                                break;
+                            }
+                        case 3: {
+                                message.state = $root.bubbaloop.daemon.v1.NodeState.decode(reader, reader.uint32());
+                                break;
+                            }
+                        case 4: {
+                                message.timestampMs = reader.int64();
+                                break;
+                            }
+                        default:
+                            reader.skipType(tag & 7);
+                            break;
+                        }
+                    }
+                    return message;
+                };
+
+                /**
+                 * Decodes a NodeEvent message from the specified reader or buffer, length delimited.
+                 * @function decodeDelimited
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @static
+                 * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+                 * @returns {bubbaloop.daemon.v1.NodeEvent} NodeEvent
+                 * @throws {Error} If the payload is not a reader or valid buffer
+                 * @throws {$protobuf.util.ProtocolError} If required fields are missing
+                 */
+                NodeEvent.decodeDelimited = function decodeDelimited(reader) {
+                    if (!(reader instanceof $Reader))
+                        reader = new $Reader(reader);
+                    return this.decode(reader, reader.uint32());
+                };
+
+                /**
+                 * Verifies a NodeEvent message.
+                 * @function verify
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @static
+                 * @param {Object.<string,*>} message Plain object to verify
+                 * @returns {string|null} `null` if valid, otherwise the reason why it is not
+                 */
+                NodeEvent.verify = function verify(message) {
+                    if (typeof message !== "object" || message === null)
+                        return "object expected";
+                    if (message.eventType != null && message.hasOwnProperty("eventType"))
+                        if (!$util.isString(message.eventType))
+                            return "eventType: string expected";
+                    if (message.nodeName != null && message.hasOwnProperty("nodeName"))
+                        if (!$util.isString(message.nodeName))
+                            return "nodeName: string expected";
+                    if (message.state != null && message.hasOwnProperty("state")) {
+                        let error = $root.bubbaloop.daemon.v1.NodeState.verify(message.state);
+                        if (error)
+                            return "state." + error;
+                    }
+                    if (message.timestampMs != null && message.hasOwnProperty("timestampMs"))
+                        if (!$util.isInteger(message.timestampMs) && !(message.timestampMs && $util.isInteger(message.timestampMs.low) && $util.isInteger(message.timestampMs.high)))
+                            return "timestampMs: integer|Long expected";
+                    return null;
+                };
+
+                /**
+                 * Creates a NodeEvent message from a plain object. Also converts values to their respective internal types.
+                 * @function fromObject
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @static
+                 * @param {Object.<string,*>} object Plain object
+                 * @returns {bubbaloop.daemon.v1.NodeEvent} NodeEvent
+                 */
+                NodeEvent.fromObject = function fromObject(object) {
+                    if (object instanceof $root.bubbaloop.daemon.v1.NodeEvent)
+                        return object;
+                    let message = new $root.bubbaloop.daemon.v1.NodeEvent();
+                    if (object.eventType != null)
+                        message.eventType = String(object.eventType);
+                    if (object.nodeName != null)
+                        message.nodeName = String(object.nodeName);
+                    if (object.state != null) {
+                        if (typeof object.state !== "object")
+                            throw TypeError(".bubbaloop.daemon.v1.NodeEvent.state: object expected");
+                        message.state = $root.bubbaloop.daemon.v1.NodeState.fromObject(object.state);
+                    }
+                    if (object.timestampMs != null)
+                        if ($util.Long)
+                            (message.timestampMs = $util.Long.fromValue(object.timestampMs)).unsigned = false;
+                        else if (typeof object.timestampMs === "string")
+                            message.timestampMs = parseInt(object.timestampMs, 10);
+                        else if (typeof object.timestampMs === "number")
+                            message.timestampMs = object.timestampMs;
+                        else if (typeof object.timestampMs === "object")
+                            message.timestampMs = new $util.LongBits(object.timestampMs.low >>> 0, object.timestampMs.high >>> 0).toNumber();
+                    return message;
+                };
+
+                /**
+                 * Creates a plain object from a NodeEvent message. Also converts values to other types if specified.
+                 * @function toObject
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @static
+                 * @param {bubbaloop.daemon.v1.NodeEvent} message NodeEvent
+                 * @param {$protobuf.IConversionOptions} [options] Conversion options
+                 * @returns {Object.<string,*>} Plain object
+                 */
+                NodeEvent.toObject = function toObject(message, options) {
+                    if (!options)
+                        options = {};
+                    let object = {};
+                    if (options.defaults) {
+                        object.eventType = "";
+                        object.nodeName = "";
+                        object.state = null;
+                        if ($util.Long) {
+                            let long = new $util.Long(0, 0, false);
+                            object.timestampMs = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                        } else
+                            object.timestampMs = options.longs === String ? "0" : 0;
+                    }
+                    if (message.eventType != null && message.hasOwnProperty("eventType"))
+                        object.eventType = message.eventType;
+                    if (message.nodeName != null && message.hasOwnProperty("nodeName"))
+                        object.nodeName = message.nodeName;
+                    if (message.state != null && message.hasOwnProperty("state"))
+                        object.state = $root.bubbaloop.daemon.v1.NodeState.toObject(message.state, options);
+                    if (message.timestampMs != null && message.hasOwnProperty("timestampMs"))
+                        if (typeof message.timestampMs === "number")
+                            object.timestampMs = options.longs === String ? String(message.timestampMs) : message.timestampMs;
+                        else
+                            object.timestampMs = options.longs === String ? $util.Long.prototype.toString.call(message.timestampMs) : options.longs === Number ? new $util.LongBits(message.timestampMs.low >>> 0, message.timestampMs.high >>> 0).toNumber() : message.timestampMs;
+                    return object;
+                };
+
+                /**
+                 * Converts this NodeEvent to JSON.
+                 * @function toJSON
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @instance
+                 * @returns {Object.<string,*>} JSON object
+                 */
+                NodeEvent.prototype.toJSON = function toJSON() {
+                    return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+                };
+
+                /**
+                 * Gets the default type url for NodeEvent
+                 * @function getTypeUrl
+                 * @memberof bubbaloop.daemon.v1.NodeEvent
+                 * @static
+                 * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+                 * @returns {string} The default type url
+                 */
+                NodeEvent.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                    if (typeUrlPrefix === undefined) {
+                        typeUrlPrefix = "type.googleapis.com";
+                    }
+                    return typeUrlPrefix + "/bubbaloop.daemon.v1.NodeEvent";
+                };
+
+                return NodeEvent;
+            })();
+
+            return v1;
+        })();
+
+        return daemon;
+    })();
+
     return bubbaloop;
 })();
 

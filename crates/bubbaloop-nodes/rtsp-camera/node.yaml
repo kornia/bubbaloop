@@ -1,0 +1,7 @@
+name: rtsp-camera
+version: "0.1.0"
+type: rust
+description: RTSP camera capture with hardware H264 decode
+author: Bubbaloop Team
+build: pixi run build
+command: ./target/release/cameras_node

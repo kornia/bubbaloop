@@ -31,6 +31,9 @@ docs = "mkdocs serve"
 docs-build = "mkdocs build"
 
 # individual nodes
+# Daemon manages all nodes via systemd and Zenoh
+daemon = "RUST_LOG=info cargo run --bin bubbaloop-daemon --package bubbaloop-daemon --release --"
+
 # Cameras connects to local zenohd by default (tcp/127.0.0.1:7447)
 # Override with: pixi run cameras -- -z tcp/other:7447
 cameras = "RUST_LOG=info cargo run --bin cameras_node --package rtsp_camera --release --"

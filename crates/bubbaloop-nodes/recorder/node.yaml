@@ -1,0 +1,7 @@
+name: recorder
+version: "0.1.0"
+type: rust
+description: MCAP recorder for ROS-Z topics
+author: Bubbaloop Team
+build: pixi run build
+command: ./target/release/mcap_recorder

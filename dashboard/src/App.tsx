@@ -226,7 +226,7 @@ export default function App() {
               <>
                 <span className="error-icon">❌</span>
                 <p>Failed to connect to {ZENOH_ENDPOINT}</p>
-                <p className="hint">Check that zenoh-bridge-remote-api is running on port 10000</p>
+                <p className="hint">Check that zenoh-bridge-remote-api is running (proxied via Vite)</p>
               </>
             ) : (
               <>

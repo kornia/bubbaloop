@@ -12,19 +12,19 @@ import {
   getZenohCliConfigPath,
   DEFAULT_ENDPOINT,
 } from "./config.js";
-import PluginsView from "./PluginsView.js";
+import NodesView from "./NodesView.js";
 
 const VERSION = "0.1.0";
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected";
 type InputMode = "command" | "endpoint" | "server";
-type ViewMode = "home" | "topics" | "plugins";
+type ViewMode = "home" | "topics" | "nodes";
 
 // Available slash commands
 const COMMANDS = [
   { cmd: "/connect", description: "Connect to local zenohd" },
   { cmd: "/topics", description: "List available topics" },
-  { cmd: "/plugins", description: "Manage plugins" },
+  { cmd: "/nodes", description: "Manage nodes" },
   { cmd: "/dashboard", description: "Open web dashboard" },
   { cmd: "/record", description: "Record topics to MCAP file" },
   { cmd: "/server", description: "Configure remote server endpoint" },
@@ -708,7 +708,7 @@ const App: React.FC = () => {
     setViewMode("home");
   }, []);
 
-  const handleExitPluginsView = useCallback(() => {
+  const handleExitNodesView = useCallback(() => {
     setViewMode("home");
   }, []);
 
@@ -785,8 +785,8 @@ const App: React.FC = () => {
         } else {
           handleTopics();
         }
-      } else if (cmd === "/plugins") {
-        setViewMode("plugins");
+      } else if (cmd === "/nodes") {
+        setViewMode("nodes");
       } else if (cmd === "/dashboard") {
         addMessage("└ Opening dashboard at http://localhost:5173", "#95E1D3");
         open("http://localhost:5173");
@@ -819,9 +819,9 @@ const App: React.FC = () => {
     return <TopicsView session={sessionRef.current} onExit={handleExitTopicsView} />;
   }
 
-  // If in plugins view, render PluginsView component
-  if (viewMode === "plugins") {
-    return <PluginsView onBack={handleExitPluginsView} />;
+  // If in nodes view, render NodesView component
+  if (viewMode === "nodes") {
+    return <NodesView onBack={handleExitNodesView} />;
   }
 
   return (

@@ -1,0 +1,7 @@
+name: inference
+version: "0.1.0"
+type: rust
+description: Inference node for camera processing
+author: Bubbaloop Team
+build: pixi run build
+command: ./target/release/inference_node

@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package bubbaloop.daemon.v1;
+
+// Node runtime status
+enum NodeStatus {
+  NODE_STATUS_UNKNOWN = 0;
+  NODE_STATUS_STOPPED = 1;
+  NODE_STATUS_RUNNING = 2;
+  NODE_STATUS_FAILED = 3;
+  NODE_STATUS_INSTALLING = 4;
+  NODE_STATUS_BUILDING = 5;
+  NODE_STATUS_NOT_INSTALLED = 6;
+}
+
+// State of a single node
+message NodeState {
+  // Unique node name from manifest
+  string name = 1;
+  // Absolute path to node directory
+  string path = 2;
+  // Current runtime status
+  NodeStatus status = 3;
+  // Whether the systemd service is installed
+  bool installed = 4;
+  // Whether autostart is enabled
+  bool autostart_enabled = 5;
+  // Version from node.yaml
+  string version = 6;
+  // Description from node.yaml
+  string description = 7;
+  // Node type (rust/python)
+  string node_type = 8;
+  // Whether the binary/script is built
+  bool is_built = 9;
+  // Last update timestamp (milliseconds since epoch)
+  int64 last_updated_ms = 10;
+  // Build output (last N lines)
+  repeated string build_output = 11;
+}
+
+// List of all nodes (published periodically)
+message NodeList {
+  repeated NodeState nodes = 1;
+  int64 timestamp_ms = 2;
+}
+
+// Command types for node operations
+enum CommandType {
+  COMMAND_TYPE_START = 0;
+  COMMAND_TYPE_STOP = 1;
+  COMMAND_TYPE_RESTART = 2;
+  COMMAND_TYPE_INSTALL = 3;
+  COMMAND_TYPE_UNINSTALL = 4;
+  COMMAND_TYPE_BUILD = 5;
+  COMMAND_TYPE_CLEAN = 6;
+  COMMAND_TYPE_ENABLE_AUTOSTART = 7;
+  COMMAND_TYPE_DISABLE_AUTOSTART = 8;
+  COMMAND_TYPE_ADD_NODE = 9;
+  COMMAND_TYPE_REMOVE_NODE = 10;
+  COMMAND_TYPE_REFRESH = 11;
+  COMMAND_TYPE_GET_LOGS = 12;
+}
+
+// Command to execute on a node
+message NodeCommand {
+  // Type of command to execute
+  CommandType command = 1;
+  // Target node name (for most commands)
+  string node_name = 2;
+  // Node path (for ADD_NODE command)
+  string node_path = 3;
+  // Unique request ID for tracking
+  string request_id = 4;
+}
+
+// Result of a command execution
+message CommandResult {
+  // Request ID from the command
+  string request_id = 1;
+  // Whether the command succeeded
+  bool success = 2;
+  // Human-readable message
+  string message = 3;
+  // Additional output (build output, logs, etc.)
+  string output = 4;
+  // Updated node state (if applicable)
+  NodeState node_state = 5;
+}
+
+// Event published when node state changes
+message NodeEvent {
+  // Type of event
+  string event_type = 1;
+  // Node name
+  string node_name = 2;
+  // New state of the node
+  NodeState state = 3;
+  // Timestamp
+  int64 timestamp_ms = 4;
+}

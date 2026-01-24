@@ -4,6 +4,7 @@ import { getSamplePayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { decodeCompressedImage } from '../proto/camera';
 import { decodeCurrentWeather, decodeHourlyForecast, decodeDailyForecast } from '../proto/weather';
+import { decodeNodeList, decodeNodeEvent } from '../proto/daemon';
 import JsonView from 'react18-json-view';
 import 'react18-json-view/src/style.css';
 
@@ -102,7 +103,21 @@ function decodePayload(payload: Uint8Array, topic: string): { data: unknown; sch
     }
   }
 
-  // 3. Fallback: try all known protobuf decoders
+  // 3. Try daemon topics (they use key expressions, not ros-z schema format)
+  if (topic.includes('bubbaloop/daemon/nodes')) {
+    const msg = decodeNodeList(payload);
+    if (msg && msg.nodes.length > 0) {
+      return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeList' };
+    }
+  }
+  if (topic.includes('bubbaloop/daemon/events')) {
+    const msg = decodeNodeEvent(payload);
+    if (msg && msg.eventType) {
+      return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeEvent' };
+    }
+  }
+
+  // 4. Fallback: try all known protobuf decoders
   // Try CompressedImage
   try {
     const msg = decodeCompressedImage(payload);
