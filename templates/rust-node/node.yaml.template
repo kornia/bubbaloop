@@ -1,0 +1,5 @@
+name: {{node_name}}
+version: "0.1.0"
+type: rust
+description: {{description}}
+author: {{author}}

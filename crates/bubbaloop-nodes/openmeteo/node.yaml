@@ -1,0 +1,7 @@
+name: openmeteo
+version: "0.1.0"
+type: rust
+description: Open-Meteo weather data publisher
+author: Bubbaloop Team
+build: pixi run build
+command: ./target/release/openmeteo_node

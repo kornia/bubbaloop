@@ -13,9 +13,11 @@ const isSocketCloseError = (err: Error & { code?: string }) => {
     msg.includes('socket hang up') ||
     msg.includes('write after end') ||
     msg.includes('ECONNRESET') ||
+    msg.includes('ECONNREFUSED') ||
     msg.includes('EPIPE') ||
     msg.includes('read ECONNRESET') ||
     code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
     code === 'EPIPE' ||
     code === 'ERR_STREAM_WRITE_AFTER_END'
   );
@@ -91,10 +93,17 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
-    // Proxy Zenoh WebSocket through Vite - no separate WSS port needed
+    // Proxy through Vite for cross-machine access
     proxy: {
+      // Daemon HTTP API proxy
+      '/daemon': {
+        target: 'http://127.0.0.1:8088',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/daemon/, ''),
+      },
+      // Zenoh WebSocket proxy
       '/zenoh': {
-        target: 'ws://127.0.0.1:10000',
+        target: 'ws://127.0.0.1:10001',
         ws: true,
         rewriteWsOrigin: true,
         // Suppress noisy socket errors on connection close

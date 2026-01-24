@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 
 export interface BubbaloopConfig {
   // WebSocket endpoint for TUI to connect to local zenohd (ws://...)
@@ -14,7 +14,8 @@ export const BUBBALOOP_HOME = join(homedir(), ".bubbaloop");
 export const CONFIG_DIR = BUBBALOOP_HOME;
 export const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 export const ZENOH_CLI_CONFIG = join(CONFIG_DIR, "zenoh.cli.json5");
-export const PLUGINS_FILE = join(BUBBALOOP_HOME, "plugins.json");
+export const NODES_DIR = join(BUBBALOOP_HOME, "nodes");
+export const NODES_FILE = join(BUBBALOOP_HOME, "nodes.json");
 export const LAUNCH_DIR = join(BUBBALOOP_HOME, "launch");
 export const SYSTEMD_USER_DIR = join(homedir(), ".config/systemd/user");
 
@@ -94,104 +95,106 @@ export function listLaunchFiles(): string[] {
   }
 }
 
-// Plugin manifest (from plugin.yaml)
-export interface PluginManifest {
+// Node manifest (from node.yaml)
+export interface NodeManifest {
   name: string;
   version: string;
   type: "rust" | "python";
   description: string;
   author?: string;
+  // Optional: build command (runs from project root)
+  build?: string;
   // Optional: command to run (defaults based on type)
   command?: string;
 }
 
-// Plugin registry entry (stored in plugins.json)
-export interface PluginEntry {
+// Node registry entry (stored in nodes.json)
+export interface NodeEntry {
   path: string;
   addedAt: string;
 }
 
-// Plugins registry
-export interface PluginsRegistry {
-  plugins: PluginEntry[];
+// Nodes registry
+export interface NodesRegistry {
+  nodes: NodeEntry[];
 }
 
-// Load plugins registry
-export function loadPluginsRegistry(): PluginsRegistry {
+// Load nodes registry
+export function loadNodesRegistry(): NodesRegistry {
   try {
-    if (existsSync(PLUGINS_FILE)) {
-      const data = readFileSync(PLUGINS_FILE, "utf-8");
+    if (existsSync(NODES_FILE)) {
+      const data = readFileSync(NODES_FILE, "utf-8");
       return JSON.parse(data);
     }
   } catch {
     // Ignore errors
   }
-  return { plugins: [] };
+  return { nodes: [] };
 }
 
-// Save plugins registry
-export function savePluginsRegistry(registry: PluginsRegistry): void {
+// Save nodes registry
+export function saveNodesRegistry(registry: NodesRegistry): void {
   try {
     if (!existsSync(CONFIG_DIR)) {
       mkdirSync(CONFIG_DIR, { recursive: true });
     }
-    writeFileSync(PLUGINS_FILE, JSON.stringify(registry, null, 2));
+    writeFileSync(NODES_FILE, JSON.stringify(registry, null, 2));
   } catch {
     // Ignore save errors
   }
 }
 
-// Register a plugin (add to registry)
-export function registerPlugin(pluginPath: string): { success: boolean; error?: string } {
+// Register a node (add to registry)
+export function registerNode(nodePath: string): { success: boolean; error?: string } {
   // Expand ~ to home directory
-  const expandedPath = pluginPath.startsWith("~")
-    ? join(homedir(), pluginPath.slice(1))
-    : pluginPath;
+  const expandedPath = nodePath.startsWith("~")
+    ? join(homedir(), nodePath.slice(1))
+    : nodePath;
 
   // Check if directory exists
   if (!existsSync(expandedPath)) {
     return { success: false, error: `Directory not found: ${expandedPath}` };
   }
 
-  // Check for plugin.yaml
-  const manifestPath = join(expandedPath, "plugin.yaml");
+  // Check for node.yaml
+  const manifestPath = join(expandedPath, "node.yaml");
   if (!existsSync(manifestPath)) {
-    return { success: false, error: `No plugin.yaml found in ${expandedPath}` };
+    return { success: false, error: `No node.yaml found in ${expandedPath}` };
   }
 
   // Load registry
-  const registry = loadPluginsRegistry();
+  const registry = loadNodesRegistry();
 
   // Check if already registered
-  if (registry.plugins.some((p) => p.path === expandedPath)) {
-    return { success: false, error: "Plugin already registered" };
+  if (registry.nodes.some((n) => n.path === expandedPath)) {
+    return { success: false, error: "Node already registered" };
   }
 
   // Add to registry
-  registry.plugins.push({
+  registry.nodes.push({
     path: expandedPath,
     addedAt: new Date().toISOString(),
   });
 
-  savePluginsRegistry(registry);
+  saveNodesRegistry(registry);
   return { success: true };
 }
 
-// Unregister a plugin (remove from registry)
-export function unregisterPlugin(pluginPath: string): { success: boolean; error?: string } {
-  const registry = loadPluginsRegistry();
-  const index = registry.plugins.findIndex((p) => p.path === pluginPath);
+// Unregister a node (remove from registry)
+export function unregisterNode(nodePath: string): { success: boolean; error?: string } {
+  const registry = loadNodesRegistry();
+  const index = registry.nodes.findIndex((n) => n.path === nodePath);
 
   if (index === -1) {
-    return { success: false, error: "Plugin not found in registry" };
+    return { success: false, error: "Node not found in registry" };
   }
 
-  registry.plugins.splice(index, 1);
-  savePluginsRegistry(registry);
+  registry.nodes.splice(index, 1);
+  saveNodesRegistry(registry);
   return { success: true };
 }
 
-// Simple YAML parser for plugin manifests
+// Simple YAML parser for node manifests
 function parseSimpleYaml(content: string): Record<string, string> {
   const result: Record<string, string> = {};
   const lines = content.split("\n");
@@ -206,86 +209,96 @@ function parseSimpleYaml(content: string): Record<string, string> {
   return result;
 }
 
-// Read plugin manifest from path
-export function readPluginManifest(pluginPath: string): PluginManifest | null {
-  const manifestPath = join(pluginPath, "plugin.yaml");
+// Read node manifest from path
+export function readNodeManifest(nodePath: string): NodeManifest | null {
+  const manifestPath = join(nodePath, "node.yaml");
   if (!existsSync(manifestPath)) {
     return null;
   }
 
   try {
     const content = readFileSync(manifestPath, "utf-8");
-    return parseSimpleYaml(content) as PluginManifest;
+    return parseSimpleYaml(content) as unknown as NodeManifest;
   } catch {
     return null;
   }
 }
 
-// List registered plugins with their manifests
-export function listPlugins(): { path: string; manifest: PluginManifest; valid: boolean }[] {
-  const registry = loadPluginsRegistry();
-  const plugins: { path: string; manifest: PluginManifest; valid: boolean }[] = [];
+// List registered nodes with their manifests
+export function listNodes(): { path: string; manifest: NodeManifest; valid: boolean }[] {
+  const registry = loadNodesRegistry();
+  const nodes: { path: string; manifest: NodeManifest; valid: boolean }[] = [];
 
-  for (const entry of registry.plugins) {
-    const manifest = readPluginManifest(entry.path);
+  for (const entry of registry.nodes) {
+    const manifest = readNodeManifest(entry.path);
     if (manifest) {
-      plugins.push({ path: entry.path, manifest, valid: true });
+      nodes.push({ path: entry.path, manifest, valid: true });
     } else {
-      // Plugin path no longer valid, but keep in list to show error
-      plugins.push({
+      // Node path no longer valid, but keep in list to show error
+      nodes.push({
         path: entry.path,
         manifest: {
           name: "unknown",
           version: "0.0.0",
           type: "rust",
-          description: "Plugin not found",
+          description: "Node not found",
         },
         valid: false,
       });
     }
   }
 
-  return plugins;
+  return nodes;
 }
 
-// Get systemd service name for a plugin
-export function getServiceName(pluginName: string): string {
-  return `bubbaloop-plugin-${pluginName}.service`;
+// Get systemd service name for a node
+export function getServiceName(nodeName: string): string {
+  return `bubbaloop-${nodeName}.service`;
 }
 
 // Get systemd service file path
-export function getServicePath(pluginName: string): string {
-  return join(SYSTEMD_USER_DIR, getServiceName(pluginName));
+export function getServicePath(nodeName: string): string {
+  return join(SYSTEMD_USER_DIR, getServiceName(nodeName));
 }
 
 // Generate systemd service unit file content
-export function generateServiceUnit(pluginPath: string, manifest: PluginManifest): string {
+export function generateServiceUnit(nodePath: string, manifest: NodeManifest): string {
   let execStart: string;
   let environment = "RUST_LOG=info";
+  const cargoPath = join(homedir(), ".cargo/bin/cargo");
+  const pixiBin = join(homedir(), ".pixi/bin");
+  const pathEnv = `PATH=${join(homedir(), ".cargo/bin")}:${pixiBin}:/usr/local/bin:/usr/bin:/bin`;
 
   if (manifest.command) {
-    execStart = manifest.command;
+    // If command starts with cargo, replace with full path
+    if (manifest.command.startsWith("cargo ")) {
+      execStart = manifest.command.replace(/^cargo /, `${cargoPath} `);
+    } else {
+      // Resolve relative paths to absolute paths (required by systemd)
+      execStart = resolve(nodePath, manifest.command);
+    }
   } else if (manifest.type === "rust") {
     // For Rust: use cargo run --release (builds if needed, then runs)
-    execStart = `/usr/bin/cargo run --release`;
+    execStart = `${cargoPath} run --release`;
   } else {
     // For Python: use local venv if exists, otherwise system python
-    const venvPython = join(pluginPath, "venv/bin/python");
+    const venvPython = join(nodePath, "venv/bin/python");
     execStart = `${venvPython} main.py`;
     environment = "PYTHONUNBUFFERED=1";
   }
 
   return `[Unit]
-Description=Bubbaloop Plugin: ${manifest.name}
+Description=Bubbaloop Node: ${manifest.name}
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=${pluginPath}
+WorkingDirectory=${nodePath}
 ExecStart=${execStart}
 Restart=on-failure
 RestartSec=5
 Environment=${environment}
+Environment=${pathEnv}
 
 [Install]
 WantedBy=default.target
@@ -352,7 +365,7 @@ export function getZenohCliConfigPath(): string {
 
 // Ensure all bubbaloop directories exist
 export function ensureDirectories(): void {
-  const dirs = [BUBBALOOP_HOME, LAUNCH_DIR, SYSTEMD_USER_DIR];
+  const dirs = [BUBBALOOP_HOME, NODES_DIR, LAUNCH_DIR, SYSTEMD_USER_DIR];
   for (const dir of dirs) {
     if (!existsSync(dir)) {
       try {

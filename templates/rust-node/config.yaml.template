@@ -1,0 +1,10 @@
+# {{node_name}} node configuration
+
+# Topic to publish output to
+publish_topic: /{{node_name}}/output
+
+# Topic to subscribe to (optional, comment out to disable)
+# subscribe_topic: /some/input/topic
+
+# Publishing rate in Hz
+rate_hz: 1.0

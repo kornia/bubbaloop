@@ -1,0 +1,55 @@
+//! {{node_name}} node - {{description}}
+
+use anyhow::Result;
+use argh::FromArgs;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+mod node;
+
+use node::{{node_name_pascal}}Node;
+
+/// {{description}}
+#[derive(FromArgs)]
+struct Args {
+    /// path to configuration file
+    #[argh(option, short = 'c', default = "default_config_path()")]
+    config: PathBuf,
+
+    /// zenoh endpoint to connect to
+    #[argh(option, short = 'e')]
+    endpoint: Option<String>,
+}
+
+fn default_config_path() -> PathBuf {
+    PathBuf::from("config.yaml")
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Initialize logging
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info")
+    ).init();
+
+    let args: Args = argh::from_env();
+
+    // Setup graceful shutdown
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        log::info!("Shutdown signal received");
+        r.store(false, Ordering::SeqCst);
+    })?;
+
+    // Create and run the node
+    let mut node = {{node_name_pascal}}Node::new(&args.config, args.endpoint).await?;
+
+    log::info!("{{node_name}} node started");
+
+    node.run(running).await?;
+
+    log::info!("{{node_name}} node stopped");
+    Ok(())
+}

@@ -18,6 +18,7 @@ import { SortableCameraCard } from './SortableCameraCard';
 import { SortableJsonCard } from './SortableJsonCard';
 import { SortableWeatherCard } from './SortableWeatherCard';
 import { SortableStatsCard } from './SortableStatsCard';
+import { SortableNodesCard } from './SortableNodesCard';
 import {
   PanelConfig,
   PanelType,
@@ -171,6 +172,14 @@ export function Dashboard({ cameras: initialCameras, availableTopics = [] }: Das
           type: 'stats',
         };
         break;
+      case 'nodes':
+        newPanel = {
+          id: newId,
+          name: `Nodes ${count}`,
+          topic: '',
+          type: 'nodes',
+        };
+        break;
       default:
         return;
     }
@@ -238,6 +247,13 @@ export function Dashboard({ cameras: initialCameras, availableTopics = [] }: Das
                   <path d="M18 20V10M12 20V4M6 20v-6" />
                 </svg>
                 Stats Panel
+              </button>
+              <button className="add-panel-option" onClick={() => addPanel('nodes')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                </svg>
+                Nodes Panel
               </button>
             </div>
           )}
@@ -310,6 +326,16 @@ export function Dashboard({ cameras: initialCameras, availableTopics = [] }: Das
                         onRemove={() => removePanel(panel.id)}
                       />
                     );
+                  case 'nodes':
+                    return (
+                      <SortableNodesCard
+                        key={panel.id}
+                        id={panel.id}
+                        panelName={panel.name}
+                        isHidden={isHidden}
+                        onRemove={() => removePanel(panel.id)}
+                      />
+                    );
                   default:
                     return null;
                 }
@@ -350,6 +376,13 @@ export function Dashboard({ cameras: initialCameras, availableTopics = [] }: Das
                   <path d="M18 20V10M12 20V4M6 20v-6" />
                 </svg>
                 Add Stats
+              </button>
+              <button className="add-panel-btn large" onClick={() => addPanel('nodes')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                </svg>
+                Add Nodes
               </button>
             </div>
           </div>

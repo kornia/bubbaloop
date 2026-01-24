@@ -1,0 +1,7 @@
+name: daemon
+version: "0.1.0"
+type: rust
+description: Bubbaloop daemon - central service for node management via Zenoh
+author: Edgar Riba
+build: pixi run cargo build --release -p bubbaloop-daemon
+command: target/release/bubbaloop-daemon
