@@ -35,3 +35,37 @@ dashboard/src/proto/*.pb.d.ts
 zenoh-ts/
 bubbaloop-tui/node_modules/
 bubbaloop-tui/dist/
+
+# Python artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.egg-info/
+**/venv/
+**/.venv/
+
+# Build artifacts (general)
+**/build/
+**/out/
+
+# Generated files
+**/*.generated.*
+
+# Compiled binaries (safety net)
+*.so
+*.dylib
+*.dll
+*.exe
+*.o
+*.a
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

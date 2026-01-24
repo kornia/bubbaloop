@@ -187,3 +187,79 @@ The binary will be at `target/release/my_node`.
 - **prost** - Protobuf serialization
 - **GStreamer** - H264 camera capture
 - **zbus** - D-Bus client for systemd integration
+
+## Git Hygiene & Artifacts
+
+### Files that should NOT be committed
+
+The following are automatically ignored via `.gitignore`:
+
+| Pattern | Description |
+|---------|-------------|
+| `target/`, `debug/` | Rust build artifacts |
+| `node_modules/`, `dist/` | Node.js dependencies and builds |
+| `.pixi/` | Pixi environment directories |
+| `*.pb.js`, `*.pb.d.ts` | Generated protobuf files (dashboard) |
+| `*.pyc`, `__pycache__/` | Python bytecode |
+| `*.so`, `*.dylib`, `*.dll` | Compiled libraries |
+
+### Files that SHOULD be committed
+
+| File | Reason |
+|------|--------|
+| `Cargo.lock` | Reproducible Rust builds |
+| `pixi.lock` | Reproducible pixi environments |
+| `package-lock.json` | Reproducible npm installs |
+
+### Pre-commit checks
+
+Before committing, always run:
+
+```bash
+pixi run fmt       # Format Rust code
+pixi run clippy    # Lint Rust code
+```
+
+## Claude Code Instructions
+
+### Adding new boilerplate patterns
+
+When you create new templates, generated files, or build artifacts:
+
+1. **Update `.gitignore`** - Add patterns for any new generated/build files
+2. **Update this section** - Document what should/shouldn't be committed
+3. **Check before commit** - Run `git status` to verify no artifacts are staged
+
+### Common patterns to watch for
+
+When adding new node types or build systems, ensure these are ignored:
+
+```gitignore
+# Python nodes
+**/__pycache__/
+**/*.pyc
+**/*.egg-info/
+**/venv/
+**/.venv/
+
+# Rust nodes (already covered by target/)
+**/target/
+
+# Generated code
+**/*.generated.*
+**/generated/
+
+# Build outputs
+**/build/
+**/out/
+```
+
+### Automation checklist
+
+When creating new boilerplate (templates, nodes, etc.):
+
+- [ ] Add build output patterns to `.gitignore`
+- [ ] Add generated file patterns to `.gitignore`
+- [ ] Document the pattern in this CLAUDE.md file
+- [ ] Verify with `git status` before committing
+- [ ] Run `cargo fmt` and `pixi run clippy` before commit
