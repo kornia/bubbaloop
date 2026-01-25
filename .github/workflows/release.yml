@@ -11,11 +11,11 @@ on:
 
 permissions:
   contents: write
-  id-token: write  # Required for npm provenance/trusted publishing
+  id-token: write
 
 jobs:
-  build-daemon:
-    name: Build Daemon (${{ matrix.arch }})
+  build-rust:
+    name: Build Rust Binaries (${{ matrix.arch }})
     strategy:
       matrix:
         include:
@@ -37,58 +37,24 @@ jobs:
       - name: Build bubbaloop-daemon
         run: pixi run cargo build --release --package bubbaloop-daemon
 
-      - name: Rename binary
-        run: mv target/release/bubbaloop-daemon bubbaloop-daemon-linux-${{ matrix.arch }}
+      - name: Build bubbaloop-tui
+        run: pixi run cargo build --release --package bubbaloop-tui
+
+      - name: Rename binaries
+        run: |
+          mv target/release/bubbaloop-daemon bubbaloop-daemon-linux-${{ matrix.arch }}
+          mv target/release/bubbaloop bubbaloop-linux-${{ matrix.arch }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: daemon-${{ matrix.arch }}
-          path: bubbaloop-daemon-linux-${{ matrix.arch }}
-
-  publish-npm:
-    name: Publish to npm
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write  # Required for npm provenance
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Determine version
-        id: version
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${{ github.event.release.tag_name }}"
-          fi
-          # Remove 'v' prefix if present
-          VERSION="${VERSION#v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Update package version
-        run: |
-          cd bubbaloop-tui
-          npm version ${{ steps.version.outputs.version }} --no-git-tag-version --allow-same-version
-
-      - name: Build and publish
-        continue-on-error: true  # Don't fail release if npm publish fails
-        run: |
-          cd bubbaloop-tui
-          npm ci
-          npm run build
-          npm publish --access public --provenance || echo "npm publish failed (version may already exist)"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          name: binaries-${{ matrix.arch }}
+          path: |
+            bubbaloop-daemon-linux-${{ matrix.arch }}
+            bubbaloop-linux-${{ matrix.arch }}
 
   release:
     name: Publish Release Assets
-    needs: [build-daemon]
+    needs: [build-rust]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -103,8 +69,10 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
-          cp artifacts/daemon-amd64/bubbaloop-daemon-linux-amd64 release-assets/
-          cp artifacts/daemon-arm64/bubbaloop-daemon-linux-arm64 release-assets/
+          cp artifacts/binaries-amd64/bubbaloop-daemon-linux-amd64 release-assets/
+          cp artifacts/binaries-arm64/bubbaloop-daemon-linux-arm64 release-assets/
+          cp artifacts/binaries-amd64/bubbaloop-linux-amd64 release-assets/
+          cp artifacts/binaries-arm64/bubbaloop-linux-arm64 release-assets/
           cp scripts/install.sh release-assets/
 
       - name: Determine version
@@ -127,6 +95,8 @@ jobs:
           files: |
             release-assets/bubbaloop-daemon-linux-amd64
             release-assets/bubbaloop-daemon-linux-arm64
+            release-assets/bubbaloop-linux-amd64
+            release-assets/bubbaloop-linux-arm64
             release-assets/install.sh
           append_body: true
           body: |
@@ -139,13 +109,18 @@ jobs:
 
             ### Manual Install
             ```bash
-            # Install TUI via npm
-            npm install -g @kornia-ai/bubbaloop
+            # Download TUI binary for your architecture
+            curl -fsSL https://github.com/kornia/bubbaloop/releases/latest/download/bubbaloop-linux-amd64 -o ~/.local/bin/bubbaloop
+            chmod +x ~/.local/bin/bubbaloop
 
             # Download daemon binary for your architecture
+            curl -fsSL https://github.com/kornia/bubbaloop/releases/latest/download/bubbaloop-daemon-linux-amd64 -o ~/.local/bin/bubbaloop-daemon
+            chmod +x ~/.local/bin/bubbaloop-daemon
             ```
 
             ### Assets
+            - `bubbaloop-linux-amd64` - TUI for x86_64
+            - `bubbaloop-linux-arm64` - TUI for ARM64 (Jetson, Raspberry Pi)
             - `bubbaloop-daemon-linux-amd64` - Daemon for x86_64
             - `bubbaloop-daemon-linux-arm64` - Daemon for ARM64 (Jetson, Raspberry Pi)
             - `install.sh` - Full installation script (includes Zenoh + systemd setup)
@@ -163,6 +138,8 @@ jobs:
           files: |
             release-assets/bubbaloop-daemon-linux-amd64
             release-assets/bubbaloop-daemon-linux-arm64
+            release-assets/bubbaloop-linux-amd64
+            release-assets/bubbaloop-linux-arm64
             release-assets/install.sh
           body: |
             ## Installation
@@ -174,13 +151,18 @@ jobs:
 
             ### Manual Install
             ```bash
-            # Install TUI via npm
-            npm install -g @kornia-ai/bubbaloop
+            # Download TUI binary for your architecture
+            curl -fsSL https://github.com/kornia/bubbaloop/releases/latest/download/bubbaloop-linux-amd64 -o ~/.local/bin/bubbaloop
+            chmod +x ~/.local/bin/bubbaloop
 
             # Download daemon binary for your architecture
+            curl -fsSL https://github.com/kornia/bubbaloop/releases/latest/download/bubbaloop-daemon-linux-amd64 -o ~/.local/bin/bubbaloop-daemon
+            chmod +x ~/.local/bin/bubbaloop-daemon
             ```
 
             ### Assets
+            - `bubbaloop-linux-amd64` - TUI for x86_64
+            - `bubbaloop-linux-arm64` - TUI for ARM64 (Jetson, Raspberry Pi)
             - `bubbaloop-daemon-linux-amd64` - Daemon for x86_64
             - `bubbaloop-daemon-linux-arm64` - Daemon for ARM64 (Jetson, Raspberry Pi)
             - `install.sh` - Full installation script (includes Zenoh + systemd setup)

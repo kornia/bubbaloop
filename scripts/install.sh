@@ -6,10 +6,8 @@
 # - Zenoh router (zenohd)
 # - Zenoh WebSocket bridge (zenoh-bridge-remote-api)
 # - Bubbaloop daemon
+# - Bubbaloop TUI
 # - Systemd user services for zenohd, zenoh-bridge, and bubbaloop-daemon
-#
-# After installation, install the TUI separately:
-#   npm install -g @kornia-ai/bubbaloop
 
 set -euo pipefail
 
@@ -131,13 +129,13 @@ install_zenoh() {
     info "Zenoh installed: $("$BIN_DIR/zenohd" --version 2>/dev/null | head -1 || echo "$ZENOH_VERSION")"
 }
 
-# Install Bubbaloop daemon
+# Install Bubbaloop binaries
 install_bubbaloop() {
     local version="$1"
     local os="$2"
     local arch="$3"
 
-    step "Installing Bubbaloop daemon $version..."
+    step "Installing Bubbaloop $version..."
 
     local base_url="https://github.com/$REPO/releases/download/$version"
 
@@ -145,10 +143,14 @@ install_bubbaloop() {
     download "$base_url/bubbaloop-daemon-$os-$arch" "$BIN_DIR/bubbaloop-daemon"
     chmod +x "$BIN_DIR/bubbaloop-daemon"
 
+    # Download TUI
+    download "$base_url/bubbaloop-$os-$arch" "$BIN_DIR/bubbaloop"
+    chmod +x "$BIN_DIR/bubbaloop"
+
     # Save version
     echo "$version" > "$INSTALL_DIR/version"
 
-    info "Bubbaloop daemon $version installed"
+    info "Bubbaloop $version installed"
 }
 
 # Setup systemd services
@@ -358,8 +360,8 @@ main() {
     echo "  systemctl --user status bubbaloop-daemon"
     echo "  systemctl --user restart bubbaloop-daemon"
     echo
-    echo -e "${YELLOW}Next step: Install the TUI${NC}"
-    echo "  npm install -g @kornia-ai/bubbaloop"
+    echo -e "${YELLOW}To start the TUI:${NC}"
+    echo "  source $shell_rc  # or open a new terminal"
     echo "  bubbaloop"
     echo
 }

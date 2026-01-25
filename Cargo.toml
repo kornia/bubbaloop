@@ -2,6 +2,7 @@
 members = [
     "crates/bubbaloop",
     "crates/bubbaloop-daemon",
+    "crates/bubbaloop-tui",
     "crates/bubbaloop-nodes/rtsp-camera",
     "crates/bubbaloop-nodes/inference",
     "crates/bubbaloop-nodes/foxglove",
@@ -61,5 +62,22 @@ reqwest = { version = "0.12", features = ["json"] }
 # Foxglove WebSocket server
 foxglove = "0.16.1"
 
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Directories
+dirs = "6"
+
+# Error handling
+anyhow = "1"
+
 # internal dependencies
 bubbaloop = { path = "crates/bubbaloop" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
+opt-level = "s"
+panic = "abort"
