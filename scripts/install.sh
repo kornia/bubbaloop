@@ -6,8 +6,10 @@
 # - Zenoh router (zenohd)
 # - Zenoh WebSocket bridge (zenoh-bridge-remote-api)
 # - Bubbaloop daemon
-# - Bubbaloop TUI
-# - Systemd user services for zenohd and bubbaloop-daemon
+# - Systemd user services for zenohd, zenoh-bridge, and bubbaloop-daemon
+#
+# After installation, install the TUI separately:
+#   npm install -g @kornia-ai/bubbaloop
 
 set -euo pipefail
 
@@ -72,38 +74,12 @@ check_deps() {
         missing+=("curl")
     fi
 
-    if ! command -v tar &> /dev/null; then
-        missing+=("tar")
+    if ! command -v unzip &> /dev/null; then
+        missing+=("unzip")
     fi
 
     if [ ${#missing[@]} -gt 0 ]; then
         error "Missing required dependencies: ${missing[*]}"
-    fi
-
-    # Check Node.js
-    if ! command -v node &> /dev/null; then
-        warn "Node.js not found. Installing via NodeSource..."
-        install_nodejs
-    else
-        local node_version
-        node_version=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
-        if [ "$node_version" -lt 20 ]; then
-            warn "Node.js version $node_version detected. Version 20+ required."
-            warn "Please upgrade Node.js manually."
-        else
-            info "Node.js $(node --version) found"
-        fi
-    fi
-}
-
-# Install Node.js
-install_nodejs() {
-    if command -v apt-get &> /dev/null; then
-        info "Installing Node.js 20 via NodeSource..."
-        curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-        sudo apt-get install -y nodejs
-    else
-        error "Please install Node.js 20+ manually: https://nodejs.org/"
     fi
 }
 
@@ -155,13 +131,13 @@ install_zenoh() {
     info "Zenoh installed: $("$BIN_DIR/zenohd" --version 2>/dev/null | head -1 || echo "$ZENOH_VERSION")"
 }
 
-# Install Bubbaloop
+# Install Bubbaloop daemon
 install_bubbaloop() {
     local version="$1"
     local os="$2"
     local arch="$3"
 
-    step "Installing Bubbaloop $version..."
+    step "Installing Bubbaloop daemon $version..."
 
     local base_url="https://github.com/$REPO/releases/download/$version"
 
@@ -169,15 +145,10 @@ install_bubbaloop() {
     download "$base_url/bubbaloop-daemon-$os-$arch" "$BIN_DIR/bubbaloop-daemon"
     chmod +x "$BIN_DIR/bubbaloop-daemon"
 
-    # Install TUI via npm (globally)
-    info "Installing TUI via npm..."
-    local npm_version="${version#v}"  # Remove 'v' prefix
-    npm install -g "@kornia-ai/bubbaloop@$npm_version" 2>/dev/null || npm install -g @kornia-ai/bubbaloop || warn "npm install had warnings"
-
     # Save version
     echo "$version" > "$INSTALL_DIR/version"
 
-    info "Bubbaloop $version installed"
+    info "Bubbaloop daemon $version installed"
 }
 
 # Setup systemd services
@@ -382,17 +353,14 @@ main() {
     echo "  - zenoh-bridge (WebSocket bridge)"
     echo "  - bubbaloop-daemon (Node manager)"
     echo
-    echo "Commands:"
-    echo "  bubbaloop              - Start the TUI"
-    echo "  bubbaloop-daemon       - Run daemon manually"
-    echo
     echo "Service management:"
     echo "  systemctl --user status zenohd"
     echo "  systemctl --user status bubbaloop-daemon"
     echo "  systemctl --user restart bubbaloop-daemon"
     echo
-    echo -e "${YELLOW}Next step:${NC}"
-    echo "  source $shell_rc && bubbaloop"
+    echo -e "${YELLOW}Next step: Install the TUI${NC}"
+    echo "  npm install -g @kornia-ai/bubbaloop"
+    echo "  bubbaloop"
     echo
 }
 
