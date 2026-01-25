@@ -5,9 +5,10 @@
   "type": "module",
   "main": "dist/cli.js",
   "bin": {
-    "bubbaloop": "dist/cli.js"
+    "bubbaloop": "bin/bubbaloop.js"
   },
   "files": [
+    "bin",
     "dist",
     "package.json",
     "README.md"
