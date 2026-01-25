@@ -1,6 +1,5 @@
-/**
- * Client for communicating with bubbaloop-daemon HTTP API
- */
+import { Session, Config, ReplyError, GetOptions } from "@eclipse-zenoh/zenoh-ts";
+import { Duration } from "typed-duration";
 
 export interface NodeState {
   name: string;
@@ -27,140 +26,190 @@ export interface CommandResponse {
   node_state?: NodeState;
 }
 
-export class DaemonClient {
-  private baseUrl: string;
+export interface LogsResponse {
+  node_name: string;
+  lines: string[];
+  success: boolean;
+  error?: string;
+}
 
-  constructor(port: number = 8088) {
-    this.baseUrl = `http://localhost:${port}`;
+const API_PREFIX = "bubbaloop/daemon/api";
+const API_HEALTH = `${API_PREFIX}/health`;
+const API_NODES = `${API_PREFIX}/nodes`;
+const API_NODES_ADD = `${API_PREFIX}/nodes/add`;
+const API_REFRESH = `${API_PREFIX}/refresh`;
+
+const DEFAULT_WS_ENDPOINT = "ws://127.0.0.1:10001";
+
+async function withSuppressedConsole<T>(fn: () => Promise<T>): Promise<T> {
+  const originalLog = console.log;
+  console.log = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.log = originalLog;
+  }
+}
+
+export class DaemonClient {
+  private session: Session | null = null;
+  private connecting: boolean = false;
+  private connectionPromise: Promise<void> | null = null;
+  private endpoint: string;
+
+  constructor(endpoint: string = DEFAULT_WS_ENDPOINT) {
+    this.endpoint = endpoint;
   }
 
-  /**
-   * Check if daemon is running
-   */
+  setEndpoint(endpoint: string): void {
+    this.endpoint = endpoint;
+  }
+
+  async connect(): Promise<void> {
+    if (this.session) return;
+    if (this.connecting && this.connectionPromise) return this.connectionPromise;
+
+    this.connecting = true;
+    this.connectionPromise = (async () => {
+      try {
+        // Suppress console.log to prevent Zenoh "Connected to..." message from corrupting TUI
+        const config = new Config(this.endpoint, 2000);
+        this.session = await withSuppressedConsole(() => Session.open(config));
+      } finally {
+        this.connecting = false;
+      }
+    })();
+
+    return this.connectionPromise;
+  }
+
+  async disconnect(): Promise<void> {
+    if (!this.session) return;
+    await this.session.close();
+    this.session = null;
+  }
+
+  private async getSession(): Promise<Session> {
+    if (!this.session) await this.connect();
+    if (!this.session) throw new Error("Failed to connect to Zenoh");
+    return this.session;
+  }
+
+  private async query<T>(keyExpr: string, payload?: object): Promise<T> {
+    const session = await this.getSession();
+
+    const options: GetOptions = {
+      timeout: Duration.milliseconds.of(5000),
+    };
+
+    if (payload) {
+      const jsonStr = JSON.stringify(payload);
+      options.payload = jsonStr;
+    }
+
+    const receiver = await session.get(keyExpr, options);
+    if (!receiver) {
+      throw new Error(`No receiver for query to ${keyExpr}`);
+    }
+
+    for await (const reply of receiver) {
+      const result = reply.result();
+
+      if (result instanceof ReplyError) {
+        const errorPayload = result.payload().toString();
+        throw new Error(`Query error: ${errorPayload}`);
+      }
+
+      // It's a Sample
+      const sample = result;
+      const text = sample.payload().toString();
+      return JSON.parse(text) as T;
+    }
+
+    throw new Error(`No reply received for ${keyExpr}`);
+  }
+
   async isAvailable(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
-        signal: AbortSignal.timeout(1000),
-      });
-      return response.ok;
+      const response = await this.query<{ status: string }>(API_HEALTH);
+      return response.status === "ok";
     } catch {
       return false;
     }
   }
 
-  /**
-   * Get all nodes
-   */
   async listNodes(): Promise<NodeListResponse> {
-    const response = await fetch(`${this.baseUrl}/nodes`);
-    if (!response.ok) {
-      throw new Error(`Failed to list nodes: ${response.statusText}`);
-    }
-    return response.json();
+    return this.query<NodeListResponse>(API_NODES);
   }
 
-  /**
-   * Get a single node's state
-   */
   async getNode(name: string): Promise<NodeState | null> {
-    const response = await fetch(`${this.baseUrl}/nodes/${encodeURIComponent(name)}`);
-    if (response.status === 404) {
-      return null;
-    }
-    if (!response.ok) {
-      throw new Error(`Failed to get node: ${response.statusText}`);
-    }
-    return response.json();
-  }
-
-  /**
-   * Execute a command on a node
-   */
-  async executeCommand(
-    nodeName: string,
-    command: string,
-    nodePath?: string
-  ): Promise<CommandResponse> {
-    const response = await fetch(
-      `${this.baseUrl}/nodes/${encodeURIComponent(nodeName)}/command`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command, node_path: nodePath || "" }),
+    try {
+      return await this.query<NodeState>(`${API_NODES}/${encodeURIComponent(name)}`);
+    } catch (e) {
+      const error = e as Error;
+      if (error.message?.includes("404") || error.message?.includes("not found")) {
+        return null;
       }
+      throw e;
+    }
+  }
+
+  async getLogs(name: string): Promise<LogsResponse> {
+    return this.query<LogsResponse>(`${API_NODES}/${encodeURIComponent(name)}/logs`);
+  }
+
+  async executeCommand(nodeName: string, command: string, nodePath?: string): Promise<CommandResponse> {
+    return this.query<CommandResponse>(
+      `${API_NODES}/${encodeURIComponent(nodeName)}/command`,
+      { command, node_path: nodePath ?? "" }
     );
-    if (!response.ok) {
-      throw new Error(`Failed to execute command: ${response.statusText}`);
-    }
-    return response.json();
   }
 
-  /**
-   * Add a new node
-   */
   async addNode(path: string): Promise<CommandResponse> {
-    const response = await fetch(`${this.baseUrl}/nodes/add`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ command: "add", node_path: path }),
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to add node: ${response.statusText}`);
-    }
-    return response.json();
+    return this.query<CommandResponse>(API_NODES_ADD, { command: "add", node_path: path });
   }
 
-  /**
-   * Refresh all node states
-   */
   async refresh(): Promise<CommandResponse> {
-    const response = await fetch(`${this.baseUrl}/refresh`, {
-      method: "POST",
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to refresh: ${response.statusText}`);
-    }
-    return response.json();
+    return this.query<CommandResponse>(API_REFRESH);
   }
 
-  // Convenience methods for common commands
-  async startNode(name: string): Promise<CommandResponse> {
+  startNode(name: string): Promise<CommandResponse> {
     return this.executeCommand(name, "start");
   }
 
-  async stopNode(name: string): Promise<CommandResponse> {
+  stopNode(name: string): Promise<CommandResponse> {
     return this.executeCommand(name, "stop");
   }
 
-  async restartNode(name: string): Promise<CommandResponse> {
+  restartNode(name: string): Promise<CommandResponse> {
     return this.executeCommand(name, "restart");
   }
 
-  async installNode(name: string): Promise<CommandResponse> {
+  installNode(name: string): Promise<CommandResponse> {
     return this.executeCommand(name, "install");
   }
 
-  async uninstallNode(name: string): Promise<CommandResponse> {
+  uninstallNode(name: string): Promise<CommandResponse> {
     return this.executeCommand(name, "uninstall");
   }
 
-  async buildNode(name: string): Promise<CommandResponse> {
+  buildNode(name: string): Promise<CommandResponse> {
     return this.executeCommand(name, "build");
   }
 
-  async cleanNode(name: string): Promise<CommandResponse> {
+  cleanNode(name: string): Promise<CommandResponse> {
     return this.executeCommand(name, "clean");
   }
 
-  async enableAutostart(name: string): Promise<CommandResponse> {
+  enableAutostart(name: string): Promise<CommandResponse> {
     return this.executeCommand(name, "enable_autostart");
   }
 
-  async disableAutostart(name: string): Promise<CommandResponse> {
+  disableAutostart(name: string): Promise<CommandResponse> {
     return this.executeCommand(name, "disable_autostart");
   }
 
-  async removeNode(name: string): Promise<CommandResponse> {
+  removeNode(name: string): Promise<CommandResponse> {
     return this.executeCommand(name, "remove");
   }
 }

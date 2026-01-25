@@ -1,87 +1,62 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
-import open from "open";
 import { userInfo } from "os";
-import { Session, Config, Sample, Subscriber } from "@eclipse-zenoh/zenoh-ts";
+import { exec } from "child_process";
+import { promisify } from "util";
 
-const USERNAME = userInfo().username;
-import {
-  loadConfig,
-  saveConfig,
-  getZenohCliConfigPath,
-  DEFAULT_ENDPOINT,
-} from "./config.js";
 import NodesView from "./NodesView.js";
 
+const execAsync = promisify(exec);
+const USERNAME = userInfo().username;
 const VERSION = "0.1.0";
 
-type ConnectionStatus = "disconnected" | "connecting" | "connected";
-type InputMode = "command" | "endpoint" | "server";
-type ViewMode = "home" | "topics" | "nodes";
+type ViewMode = "home" | "nodes" | "services";
 
 // Available slash commands
 const COMMANDS = [
-  { cmd: "/connect", description: "Connect to local zenohd" },
-  { cmd: "/topics", description: "List available topics" },
-  { cmd: "/nodes", description: "Manage nodes" },
-  { cmd: "/dashboard", description: "Open web dashboard" },
-  { cmd: "/record", description: "Record topics to MCAP file" },
-  { cmd: "/server", description: "Configure remote server endpoint" },
-  { cmd: "/disconnect", description: "Disconnect from zenoh" },
+  { cmd: "/nodes", description: "Manage local nodes" },
+  { cmd: "/services", description: "Show service status" },
   { cmd: "/quit", description: "Exit Bubbaloop" },
 ];
 
-// Spinner component for loading states
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 const Spinner: React.FC = () => {
-  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   const [frame, setFrame] = useState(0);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setFrame((i) => (i + 1) % frames.length);
+      setFrame((i) => (i + 1) % SPINNER_FRAMES.length);
     }, 80);
     return () => clearInterval(timer);
   }, []);
 
-  return <Text color="#FFD93D">{frames[frame]}</Text>;
+  return <Text color="#FFD93D">{SPINNER_FRAMES[frame]}</Text>;
 };
 
-// Robot emoji-style component with blinking antenna
+// Bubbaloop mascot with blinking eyes
 const RobotLogo: React.FC = () => {
-  const [antennaOn, setAntennaOn] = useState(true);
+  const [eyesOn, setEyesOn] = useState(true);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setAntennaOn((prev) => !prev);
-    }, 600);
+      setEyesOn((prev) => !prev);
+    }, 800);
     return () => clearInterval(interval);
   }, []);
 
   return (
-    <Box flexDirection="column" alignItems="center">
+    <Box flexDirection="column" alignItems="center" marginY={1}>
       <Text>
-        {"   "}
-        <Text color={antennaOn ? "#FFF" : "#555"}>
-          {antennaOn ? "◎" : "○"}
-        </Text>
+        <Text color="#4ECDC4"> ▄▀▀▀▄</Text>
       </Text>
       <Text>
-        {"   "}
-        <Text color="#888">│</Text>
+        <Text color="#4ECDC4">█</Text>
+        <Text color={eyesOn ? "#6BB5FF" : "#2A5A8A"}> ▓ ▓ </Text>
+        <Text color="#4ECDC4">█</Text>
       </Text>
-      <Text color="#888">┌╌╌╌╌╌╌╌┐</Text>
-      <Text>
-        <Text color="#888">┆</Text>
-        <Text color="#FFF"> ●   ○ </Text>
-        <Text color="#888">┆</Text>
-      </Text>
-      <Text>
-        <Text color="#888">┆</Text>
-        <Text color="#FFF">  ▭▭▭  </Text>
-        <Text color="#888">┆</Text>
-      </Text>
-      <Text color="#888">└╌╌╌╌╌╌╌┘</Text>
+      <Text color="#4ECDC4"> ▀▄█▄▀</Text>
     </Box>
   );
 };
@@ -122,306 +97,159 @@ const CommandSuggestions: React.FC<CommandSuggestionsProps> = ({
   );
 };
 
-// Connection status indicator component
-interface StatusIndicatorProps {
-  status: ConnectionStatus;
-  endpoint: string;
-}
-
-const StatusIndicator: React.FC<StatusIndicatorProps> = ({ status, endpoint }) => {
-  const statusConfig = {
-    disconnected: { color: "#FF6B6B", symbol: "●", text: "disconnected" },
-    connecting: { color: "#FFD93D", symbol: "●", text: "connecting..." },
-    connected: { color: "#95E1D3", symbol: "●", text: endpoint },
-  };
-
-  const { color, symbol, text } = statusConfig[status];
-
-  return (
-    <Text>
-      <Text color={color}>{symbol}</Text>
-      <Text color="#888"> {text}</Text>
-    </Text>
-  );
-};
-
-// Message type
 interface Message {
   text: string;
   color: string;
   isUser?: boolean;
-  details?: string; // Expandable error details
 }
 
-// Message component - details are always shown when present
 const MessageLine: React.FC<{ msg: Message }> = ({ msg }) => {
-  const hasDetails = Boolean(msg.details && msg.details.length > 0);
-  const MAX_DETAIL_LINES = 5;
-
-  return (
-    <Box flexDirection="column">
-      <Text color={msg.color}>{msg.text}</Text>
-      {hasDetails && (
-        <Box flexDirection="column" marginLeft={2}>
-          {msg.details!.split("\n").slice(0, MAX_DETAIL_LINES).map((line, i) => (
-            <Text key={i} color="#666" dimColor>
-              {line}
-            </Text>
-          ))}
-          {msg.details!.split("\n").length > MAX_DETAIL_LINES && (
-            <Text color="#666" dimColor>... ({msg.details!.split("\n").length - MAX_DETAIL_LINES} more lines)</Text>
-          )}
-        </Box>
-      )}
-    </Box>
-  );
+  return <Text color={msg.color}>{msg.text}</Text>;
 };
 
-// Topics view component - live table of topics with Hz stats
-interface TopicStats {
-  count: number;
-  timestamps: number[]; // Sliding window of timestamps for Hz calculation
-  minHz: number | null;
-  maxHz: number | null;
-  avgHz: number | null;
-}
-
-interface TopicsViewProps {
-  session: Session;
+interface ServicesViewProps {
+  onBack: () => void;
   onExit: () => void;
+  exitWarning?: boolean;
 }
 
-const TopicsView: React.FC<TopicsViewProps> = ({ session, onExit }) => {
-  const [topicStats, setTopicStats] = useState<Map<string, TopicStats>>(new Map());
-  const [windowSize, setWindowSize] = useState(10);
-  const subscriberRef = useRef<Subscriber | null>(null);
+const ServicesView: React.FC<ServicesViewProps> = ({ onBack, onExit, exitWarning }) => {
+  const [services, setServices] = useState<{ name: string; status: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
 
-  // Compute Hz stats from timestamps (filters out TCP burst artifacts)
-  const computeHzStats = (timestamps: number[]): { min: number | null; max: number | null; avg: number | null } => {
-    if (timestamps.length < 2) {
-      return { min: null, max: null, avg: null };
-    }
+  const serviceNames = ["bubbaloop-zenohd", "bubbaloop-bridge", "bubbaloop-daemon"];
 
-    // Average Hz from total time span (most robust)
-    const totalTime = timestamps[timestamps.length - 1] - timestamps[0];
-    const count = timestamps.length - 1;
-    if (totalTime <= 0) {
-      return { min: null, max: null, avg: null };
-    }
-    const avgHz = (count * 1000) / totalTime;
-
-    // For min/max, filter out TCP burst artifacts (intervals < 10ms = 100+ Hz)
-    const MIN_REALISTIC_INTERVAL = 10; // ms
-    const intervals: number[] = [];
-    for (let i = 1; i < timestamps.length; i++) {
-      const interval = timestamps[i] - timestamps[i - 1];
-      if (interval >= MIN_REALISTIC_INTERVAL) {
-        intervals.push(1000 / interval);
-      }
-    }
-
-    if (intervals.length === 0) {
-      return { min: avgHz, max: avgHz, avg: avgHz };
-    }
-
-    const min = Math.min(...intervals);
-    const max = Math.max(...intervals);
-
-    return { min, max, avg: avgHz };
-  };
+  const fetchStatus = useCallback(async () => {
+    const results = await Promise.all(
+      serviceNames.map(async (name) => {
+        try {
+          const { stdout } = await execAsync(
+            `systemctl --user is-active ${name} 2>/dev/null || echo "inactive"`
+          );
+          return { name, status: stdout.trim() };
+        } catch {
+          return { name, status: "unknown" };
+        }
+      })
+    );
+    setServices(results);
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    let mounted = true;
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 2000);
+    return () => clearInterval(interval);
+  }, [fetchStatus]);
 
-    const startSubscription = async () => {
-      try {
-        const subscriber = await session.declareSubscriber("**", {
-          handler: (sample: Sample) => {
-            if (!mounted) return;
-            const keyExpr = sample.keyexpr().toString();
-            const now = Date.now();
+  const handleAction = async (action: "start" | "stop" | "restart") => {
+    const service = services[selectedIndex];
+    if (!service) return;
 
-            setTopicStats((prev) => {
-              const newMap = new Map(prev);
-              const existing = newMap.get(keyExpr) || {
-                count: 0,
-                timestamps: [],
-                minHz: null,
-                maxHz: null,
-                avgHz: null,
-              };
+    setActionMessage(`${action}ing ${service.name}...`);
+    try {
+      await execAsync(`systemctl --user ${action} ${service.name}`);
+      setActionMessage(`${service.name} ${action}ed`);
+      await fetchStatus();
+    } catch (e) {
+      setActionMessage(`Failed to ${action} ${service.name}`);
+    }
+    setTimeout(() => setActionMessage(null), 2000);
+  };
 
-              // Add timestamp to sliding window
-              const newTimestamps = [...existing.timestamps, now].slice(-windowSize);
-              const hzStats = computeHzStats(newTimestamps);
-
-              newMap.set(keyExpr, {
-                count: existing.count + 1,
-                timestamps: newTimestamps,
-                minHz: hzStats.min,
-                maxHz: hzStats.max,
-                avgHz: hzStats.avg,
-              });
-
-              return newMap;
-            });
-          },
-        });
-        subscriberRef.current = subscriber;
-      } catch (e) {
-        // Subscription failed, exit view
-        onExit();
-      }
-    };
-
-    startSubscription();
-
-    return () => {
-      mounted = false;
-      if (subscriberRef.current) {
-        subscriberRef.current.undeclare().catch(() => {});
-      }
-    };
-  }, [session, onExit, windowSize]);
-
-  // Handle input for exiting and window size adjustment
   useInput((input, key) => {
-    if (key.escape || input === "q") {
+    // Global exit: Ctrl+C or Ctrl+X
+    if (key.ctrl && (input === 'c' || input === 'x')) {
       onExit();
-    } else if (input === "+" || input === "=") {
-      setWindowSize((prev) => Math.min(prev + 5, 100));
-    } else if (input === "-" || input === "_") {
-      setWindowSize((prev) => Math.max(prev - 5, 5));
+      return;
+    }
+
+    if (key.escape || input === "q") {
+      onBack();
+    } else if (key.upArrow) {
+      setSelectedIndex((i) => (i > 0 ? i - 1 : services.length - 1));
+    } else if (key.downArrow) {
+      setSelectedIndex((i) => (i < services.length - 1 ? i + 1 : 0));
+    } else if (input === "s") {
+      handleAction("start");
+    } else if (input === "x") {
+      handleAction("stop");
+    } else if (input === "r") {
+      handleAction("restart");
     }
   });
 
-  // Sort topics alphabetically
-  const sortedTopics = Array.from(topicStats.entries()).sort((a, b) =>
-    a[0].localeCompare(b[0])
-  );
-
-  // Format Hz value
-  const formatHz = (hz: number | null): string => {
-    if (hz === null) return "-";
-    if (hz >= 1000) return `${(hz / 1000).toFixed(1)}k`;
-    if (hz >= 100) return hz.toFixed(0);
-    if (hz >= 10) return hz.toFixed(1);
-    return hz.toFixed(2);
+  const getStatusColor = (status: string): string => {
+    const colors: Record<string, string> = {
+      active: "#95E1D3",
+      inactive: "#888",
+      failed: "#FF6B6B",
+    };
+    return colors[status] ?? "#FFD93D";
   };
 
   return (
     <Box flexDirection="column" padding={0}>
-      {/* Header */}
       <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1} justifyContent="space-between">
-        <Text color="#4ECDC4" bold>
-          Topics Monitor
-        </Text>
-        <Text color="#888">
-          {sortedTopics.length} topics • window: {windowSize} • <Text color="#666">esc/q exit</Text>
-        </Text>
+        <Text color="#4ECDC4" bold>Services</Text>
+        <Text color="#888">esc/q back</Text>
       </Box>
 
-      {/* Topics table */}
       <Box flexDirection="column" borderStyle="single" borderColor="#444" marginTop={0}>
-        {/* Table header */}
-        <Box paddingX={1} borderBottom borderColor="#444">
-          <Box width="40%">
-            <Text color="#4ECDC4" bold>Topic</Text>
-          </Box>
-          <Box width="12%" justifyContent="flex-end">
-            <Text color="#4ECDC4" bold>Count</Text>
-          </Box>
-          <Box width="16%" justifyContent="flex-end">
-            <Text color="#4ECDC4" bold>Min Hz</Text>
-          </Box>
-          <Box width="16%" justifyContent="flex-end">
-            <Text color="#4ECDC4" bold>Avg Hz</Text>
-          </Box>
-          <Box width="16%" justifyContent="flex-end">
-            <Text color="#4ECDC4" bold>Max Hz</Text>
-          </Box>
-        </Box>
-
-        {/* Table rows */}
-        {sortedTopics.length === 0 ? (
+        {loading ? (
           <Box paddingX={1} paddingY={1}>
-            <Text color="#888">Waiting for messages...</Text>
+            <Spinner />
+            <Text color="#888"> Loading...</Text>
           </Box>
         ) : (
-          sortedTopics.slice(0, 20).map(([topic, stats]) => (
-            <Box key={topic} paddingX={1}>
-              <Box width="40%">
-                <Text color="#CCC">{topic.length > 35 ? topic.slice(0, 32) + "..." : topic}</Text>
-              </Box>
-              <Box width="12%" justifyContent="flex-end">
-                <Text color="#95E1D3">{stats.count}</Text>
-              </Box>
-              <Box width="16%" justifyContent="flex-end">
-                <Text color="#FFD93D">{formatHz(stats.minHz)}</Text>
-              </Box>
-              <Box width="16%" justifyContent="flex-end">
-                <Text color="#4ECDC4">{formatHz(stats.avgHz)}</Text>
-              </Box>
-              <Box width="16%" justifyContent="flex-end">
-                <Text color="#FF6B6B">{formatHz(stats.maxHz)}</Text>
-              </Box>
+          services.map((svc, index) => (
+            <Box key={svc.name} paddingX={1}>
+              <Text color={index === selectedIndex ? "#4ECDC4" : "#888"}>
+                {index === selectedIndex ? "❯ " : "  "}
+              </Text>
+              <Text color={getStatusColor(svc.status)}>●</Text>
+              <Text color={index === selectedIndex ? "#FFF" : "#AAA"}>
+                {" "}{svc.name.replace("bubbaloop-", "")}
+              </Text>
+              <Text color="#888"> - {svc.status}</Text>
             </Box>
           ))
         )}
-
-        {sortedTopics.length > 20 && (
-          <Box paddingX={1}>
-            <Text color="#888">... and {sortedTopics.length - 20} more topics</Text>
-          </Box>
-        )}
       </Box>
 
-      {/* Footer */}
+      {actionMessage && (
+        <Box marginX={1} marginTop={1}>
+          <Text color="#FFD93D">{actionMessage}</Text>
+        </Box>
+      )}
+
+      {exitWarning && (
+        <Box marginX={1} marginTop={1}>
+          <Text color="#FF6B6B">Press Ctrl+C again to exit</Text>
+        </Box>
+      )}
+
       <Box marginX={1} marginTop={1}>
         <Text color="#666">
-          <Text color="#4ECDC4">+/-</Text> window size • <Text color="#4ECDC4">esc/q</Text> exit
+          <Text color="#4ECDC4">s</Text> start •{" "}
+          <Text color="#4ECDC4">x</Text> stop •{" "}
+          <Text color="#4ECDC4">r</Text> restart •{" "}
+          <Text color="#4ECDC4">↑↓</Text> select •{" "}
+          <Text color="#4ECDC4">esc/q</Text> back
         </Text>
       </Box>
     </Box>
   );
 };
 
-// Store original console functions at module level
-const originalConsole = {
-  log: console.log,
-  warn: console.warn,
-  error: console.error,
-};
 
-// Suppress console output (for zenoh background activity)
-const suppressConsole = () => {
-  const noop = () => {};
-  console.log = noop;
-  console.warn = noop;
-  console.error = noop;
-};
-
-const restoreConsole = () => {
-  console.log = originalConsole.log;
-  console.warn = originalConsole.warn;
-  console.error = originalConsole.error;
-};
-
-// Main App component
 const App: React.FC = () => {
   const { exit } = useApp();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [commandIndex, setCommandIndex] = useState(0);
-
-  // Connection state
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
-  const [endpoint, setEndpoint] = useState(() => loadConfig().endpoint || DEFAULT_ENDPOINT);
-  const sessionRef = useRef<Session | null>(null);
-  const consoleSuppressedRef = useRef(false);
-
-  // Input mode: command or endpoint entry
-  const [inputMode, setInputMode] = useState<InputMode>("command");
 
   // Loading state for async operations
   const [isLoading, setIsLoading] = useState(false);
@@ -430,55 +258,70 @@ const App: React.FC = () => {
   // Command history
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const [savedInput, setSavedInput] = useState(""); // Save current input when navigating history
+  const [savedInput, setSavedInput] = useState("");
 
   // Current view
   const [viewMode, setViewMode] = useState<ViewMode>("home");
 
-  const showCommands = inputMode === "command" && input.startsWith("/");
+  // Switch views - clear screen synchronously before state change
+  const switchView = useCallback((newView: ViewMode) => {
+    if (newView === viewMode) return;
+    // Clear screen before changing view to prevent artifacts
+    process.stdout.write('\x1b[2J\x1b[H');
+    setViewMode(newView);
+  }, [viewMode]);
+
+  // Exit confirmation (double Ctrl+C)
+  const [exitWarning, setExitWarning] = useState(false);
+  const exitTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleExitRequest = useCallback(() => {
+    if (exitWarning) {
+      // Second press - actually exit
+      if (exitTimeoutRef.current) clearTimeout(exitTimeoutRef.current);
+      exit();
+    } else {
+      // First press - show warning
+      setExitWarning(true);
+      exitTimeoutRef.current = setTimeout(() => {
+        setExitWarning(false);
+      }, 2000);
+    }
+  }, [exitWarning, exit]);
+
+  const showCommands = input.startsWith("/");
   const filteredCommands = COMMANDS.filter((c) =>
     c.cmd.toLowerCase().startsWith(input.toLowerCase())
   );
 
   useInput((char, key) => {
-    if (inputMode === "endpoint" || inputMode === "server") {
-      if (key.escape) {
-        setInputMode("command");
-        setInput("");
-        addMessage("└ Cancelled", "#888");
-      }
+    // Global exit: Ctrl+C or Ctrl+X (double press required)
+    if (key.ctrl && (char === 'c' || char === 'x')) {
+      handleExitRequest();
       return;
     }
 
-    // Command history navigation (up/down arrows)
-    // Up: start browsing from end (when empty) or go to older command
-    // Down: only works when already browsing, goes to newer or exits
+    // Command history navigation
     const browsingHistory = historyIndex >= 0;
 
     if (key.upArrow && commandHistory.length > 0 && (browsingHistory || !input)) {
       if (historyIndex === -1) {
-        // Start browsing history from the end
         setSavedInput(input);
         setHistoryIndex(commandHistory.length - 1);
         setInput(commandHistory[commandHistory.length - 1]);
       } else if (historyIndex > 0) {
-        // Move to older command
         setHistoryIndex(historyIndex - 1);
         setInput(commandHistory[historyIndex - 1]);
       }
     } else if (key.downArrow && browsingHistory) {
-      // Down only works when actively browsing history
       if (historyIndex < commandHistory.length - 1) {
-        // Move to newer command
         setHistoryIndex(historyIndex + 1);
         setInput(commandHistory[historyIndex + 1]);
       } else {
-        // Return to saved input (exit history browsing)
         setHistoryIndex(-1);
         setInput(savedInput);
       }
     } else if (showCommands && filteredCommands.length > 0) {
-      // Command suggestion navigation (when not browsing history)
       if (key.upArrow) {
         setCommandIndex((prev) =>
           prev > 0 ? prev - 1 : filteredCommands.length - 1
@@ -493,7 +336,6 @@ const App: React.FC = () => {
     }
 
     if (key.escape) {
-      // Escape clears input, doesn't exit - use /quit to exit
       if (input) {
         setInput("");
       }
@@ -504,355 +346,115 @@ const App: React.FC = () => {
     setCommandIndex(0);
   }, [input]);
 
-  // Cleanup session on unmount
-  useEffect(() => {
-    return () => {
-      if (sessionRef.current) {
-        sessionRef.current.close().catch(() => {});
-      }
-      // Always restore console on unmount
-      restoreConsole();
-    };
-  }, []);
-
-  // Connection health monitoring
-  useEffect(() => {
-    if (connectionStatus === "connected" && sessionRef.current) {
-      let isChecking = false;
-      let disconnected = false;
-
-      // Keep console suppressed during connected state to catch any zenoh background output
-      suppressConsole();
-
-      const healthCheck = setInterval(async () => {
-        // Prevent concurrent checks and multiple disconnection events
-        if (!sessionRef.current || isChecking || disconnected) return;
-
-        isChecking = true;
-
-        try {
-          // Check if session is explicitly closed
-          if (sessionRef.current.isClosed()) {
-            disconnected = true;
-            sessionRef.current = null;
-            setConnectionStatus("disconnected");
-            // Force complete re-render to clear any terminal corruption
-            setTimeout(() => {
-              (global as any).__bubbaloop_forceRerender?.();
-            }, 50);
-            return;
-          }
-
-          // Try to get session info as a ping - if it fails, connection is lost
-          const timeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new Error("Health check timeout")), 2000);
-          });
-          await Promise.race([
-            sessionRef.current.info(),
-            timeoutPromise,
-          ]);
-        } catch {
-          // Connection lost - just update status
-          if (!disconnected) {
-            disconnected = true;
-            sessionRef.current = null;
-            setConnectionStatus("disconnected");
-            // Force complete re-render to clear any terminal corruption
-            setTimeout(() => {
-              (global as any).__bubbaloop_forceRerender?.();
-            }, 50);
-          }
-        } finally {
-          isChecking = false;
-        }
-      }, 1000);
-      return () => {
-        clearInterval(healthCheck);
-      };
-    }
-  }, [connectionStatus, endpoint]);
-
-  const addMessage = (text: string, color: string, isUser = false, details?: string) => {
-    setMessages((prev) => [...prev.slice(-10), { text, color, isUser, details }]);
+  const addMessage = (text: string, color: string, isUser = false) => {
+    setMessages((prev) => [...prev.slice(-10), { text, color, isUser }]);
   };
 
-  const handleConnect = async (ep: string) => {
-    // Close existing session if any
-    if (sessionRef.current) {
-      try {
-        await sessionRef.current.close();
-      } catch {
-        // Ignore close errors
-      }
-      sessionRef.current = null;
-    }
-
-    setConnectionStatus("connecting");
-    setIsLoading(true);
-    setLoadingMessage(`Connecting to ${ep}...`);
-
-    // Capture console output from zenoh-ts library
-    const capturedLogs: string[] = [];
-
-    const captureLog = (...args: unknown[]) => {
-      capturedLogs.push(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '));
-    };
-
-    // Suppress console during connection
-    console.log = captureLog;
-    console.warn = captureLog;
-    console.error = captureLog;
-    consoleSuppressedRef.current = true;
-
-    try {
-      const CONNECTION_TIMEOUT_MS = 3000;
-      const config = new Config(ep, 1000);
-
-      // Race between connection and timeout
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("Connection timeout")), CONNECTION_TIMEOUT_MS);
-      });
-
-      const session = await Promise.race([
-        Session.open(config),
-        timeoutPromise,
-      ]);
-
-      sessionRef.current = session;
-      setEndpoint(ep);
-      setConnectionStatus("connected");
-      addMessage(`└ Connected to ${ep}`, "#95E1D3");
-
-      // Save successful endpoint to config
-      saveConfig({ endpoint: ep });
-
-      // Restore console on success
-      restoreConsole();
-      consoleSuppressedRef.current = false;
-    } catch (e) {
-      setConnectionStatus("disconnected");
-      let errMsg = "Unknown error";
-
-      if (e instanceof Error) {
-        errMsg = e.message || e.name;
-      } else if (typeof e === "object" && e !== null) {
-        errMsg = (e as Record<string, unknown>).message as string || "Connection error";
-      } else {
-        errMsg = String(e);
-      }
-
-      // Combine captured console output as details (deduplicated)
-      const uniqueLogs = [...new Set(capturedLogs)];
-      const errDetails = uniqueLogs.length > 0 ? uniqueLogs.join("\n") : undefined;
-
-      addMessage(`└ Connection failed: ${errMsg}`, "#FF6B6B", false, errDetails);
-
-      // Keep console suppressed - zenoh keeps retrying in background
-      // Will be restored on next successful connection or app exit
-      suppressConsole();
-    } finally {
-      setIsLoading(false);
-      setLoadingMessage("");
-    }
-  };
-
-  const handleDisconnect = async () => {
-    if (sessionRef.current) {
-      const currentEndpoint = endpoint;
-      try {
-        await sessionRef.current.close();
-        addMessage(`└ Disconnected from ${currentEndpoint}`, "#95E1D3");
-      } catch (e) {
-        const err = e instanceof Error ? e.message : String(e);
-        addMessage(`└ Error disconnecting: ${err}`, "#FF6B6B");
-      }
-      sessionRef.current = null;
-    } else {
-      addMessage("└ Not connected", "#888");
-    }
-    setConnectionStatus("disconnected");
-  };
-
-  const handleSetServer = (serverEndpoint: string) => {
-    // Normalize the endpoint format
-    let normalized = serverEndpoint.trim();
-    if (!normalized.startsWith("tcp/")) {
-      // Assume it's just an IP:port, add tcp/ prefix
-      normalized = `tcp/${normalized}`;
-    }
-    // Ensure it has a port
-    if (!normalized.includes(":")) {
-      normalized = `${normalized}:7447`;
-    }
-
-    // Save to config (this also generates zenoh.cli.json5)
-    const currentConfig = loadConfig();
-    saveConfig({ ...currentConfig, serverEndpoint: normalized });
-
-    const configPath = getZenohCliConfigPath();
-    addMessage(`└ Server endpoint set to: ${normalized}`, "#95E1D3");
-    addMessage(`  Config saved to: ${configPath}`, "#888");
-    addMessage(`  Run: zenohd -c ${configPath}`, "#4ECDC4");
-  };
-
-  const handleTopics = () => {
-    if (!sessionRef.current) {
-      addMessage("└ Not connected", "#FF6B6B");
-      return;
-    }
-    // Switch to topics view
-    setViewMode("topics");
-  };
-
-  const handleExitTopicsView = useCallback(() => {
-    setViewMode("home");
-  }, []);
-
-  const handleExitNodesView = useCallback(() => {
-    setViewMode("home");
-  }, []);
+  const handleExitSubview = useCallback(() => {
+    switchView("home");
+  }, [switchView]);
 
   const handleSubmit = (value: string) => {
-    const trimmedInput = value.trim();
-
-    // Handle endpoint input mode
-    if (inputMode === "endpoint") {
-      if (!trimmedInput) {
-        addMessage("└ Cancelled", "#888");
-      } else {
-        handleConnect(trimmedInput);
-      }
-      setInputMode("command");
-      setInput("");
-      return;
-    }
-
-    // Handle server input mode
-    if (inputMode === "server") {
-      if (!trimmedInput) {
-        addMessage("└ Cancelled", "#888");
-      } else {
-        handleSetServer(trimmedInput);
-      }
-      setInputMode("command");
-      setInput("");
-      return;
-    }
-
-    let trimmed = trimmedInput;
+    let trimmed = value.trim();
     if (!trimmed) return;
 
     // If showing suggestions and input is partial, use the selected command
-    if (showCommands && filteredCommands.length > 0 && !COMMANDS.some(c => c.cmd === trimmed)) {
+    const isExactCommand = COMMANDS.some(c => c.cmd === trimmed);
+    if (showCommands && filteredCommands.length > 0 && !isExactCommand) {
       trimmed = filteredCommands[commandIndex].cmd;
     }
 
-    // Add to command history (avoid duplicates of last command)
-    if (commandHistory.length === 0 || commandHistory[commandHistory.length - 1] !== trimmed) {
-      setCommandHistory((prev) => [...prev.slice(-50), trimmed]); // Keep last 50 commands
+    // Add to command history (avoid duplicates)
+    const lastCommand = commandHistory[commandHistory.length - 1];
+    if (lastCommand !== trimmed) {
+      setCommandHistory((prev) => [...prev.slice(-50), trimmed]);
     }
     setHistoryIndex(-1);
     setSavedInput("");
 
-    // Show user input
-    addMessage(`❯ ${trimmed}`, "#888", true);
-
-    if (trimmed.startsWith("/")) {
-      const cmd = trimmed.toLowerCase();
-
-      if (cmd === "/quit" || cmd === "/exit" || cmd === "/q") {
-        exit();
-        return;
-      }
-
-      if (cmd === "/server") {
-        const currentConfig = loadConfig();
-        const currentServer = currentConfig.serverEndpoint || "tcp/192.168.1.100:7447";
-        addMessage(`└ Enter server endpoint (e.g. tcp/192.168.1.100:7447):`, "#4ECDC4");
-        setInputMode("server");
-        setInput(currentServer); // Pre-fill with last used server
-        return;
-      } else if (cmd === "/connect") {
-        addMessage(`└ Enter endpoint (e.g. ${DEFAULT_ENDPOINT}):`, "#4ECDC4");
-        setInputMode("endpoint");
-        setInput(endpoint); // Pre-fill with last used endpoint
-        return;
-      } else if (cmd === "/disconnect") {
-        handleDisconnect();
-      } else if (cmd === "/topics") {
-        if (connectionStatus !== "connected") {
-          addMessage("└ Not connected. Use /connect first", "#FF6B6B");
-        } else {
-          handleTopics();
-        }
-      } else if (cmd === "/nodes") {
-        setViewMode("nodes");
-      } else if (cmd === "/dashboard") {
-        addMessage("└ Opening dashboard at http://localhost:5173", "#95E1D3");
-        open("http://localhost:5173");
-      } else if (cmd === "/record") {
-        if (connectionStatus !== "connected") {
-          addMessage("└ Not connected. Use /connect first", "#FF6B6B");
-        } else {
-          addMessage("└ Not implemented", "#FFD93D");
-        }
-      } else {
-        addMessage(`└ Unknown command: ${trimmed}`, "#FF6B6B");
-      }
+    if (!trimmed.startsWith("/")) {
+      addMessage(`❯ ${trimmed}`, "#888", true);
+      setInput("");
+      return;
     }
 
+    const cmd = trimmed.toLowerCase();
+
+    // Exit commands
+    if (cmd === "/quit" || cmd === "/exit" || cmd === "/q") {
+      exit();
+      return;
+    }
+
+    // View navigation commands
+    if (cmd === "/nodes" || cmd === "/services") {
+      setInput("");
+      switchView(cmd.slice(1) as ViewMode);
+      return;
+    }
+
+    // Unknown command
+    addMessage(`❯ ${trimmed}`, "#888", true);
+    addMessage(`└ Unknown command: ${trimmed}`, "#FF6B6B");
     setInput("");
   };
 
-  const getInputPlaceholder = () => {
-    if (inputMode === "endpoint") {
-      return "ws://ip:port (esc to cancel)";
-    }
-    if (inputMode === "server") {
-      return "tcp/ip:port or just ip:port (esc to cancel)";
-    }
-    return 'Type "/" for commands';
-  };
+  // Build title line like Claude Code: ╭─── Bubbaloop v0.1.0 ───...───╮
+  const termWidth = process.stdout.columns || 80;
+  const contentWidth = termWidth - 2; // minus the ╭ and ╮
+  const titlePart = "─── Bubbaloop ";
+  const versionPart = `v${VERSION} `;
+  const remainingDashes = contentWidth - titlePart.length - versionPart.length;
 
-  // If in topics view, render TopicsView component
-  if (viewMode === "topics" && sessionRef.current) {
-    return <TopicsView session={sessionRef.current} onExit={handleExitTopicsView} />;
+  // Render based on viewMode - completely separate returns to avoid tree diffing issues
+  if (viewMode === "services") {
+    return (
+      <Box flexDirection="column" padding={0}>
+        <ServicesView onBack={handleExitSubview} onExit={handleExitRequest} exitWarning={exitWarning} />
+      </Box>
+    );
   }
 
-  // If in nodes view, render NodesView component
   if (viewMode === "nodes") {
-    return <NodesView onBack={handleExitNodesView} />;
+    return (
+      <Box flexDirection="column" padding={0}>
+        <NodesView onBack={handleExitSubview} onExit={handleExitRequest} exitWarning={exitWarning} />
+      </Box>
+    );
   }
 
+  // Home view
   return (
     <Box flexDirection="column" padding={0}>
-      {/* Header bar with status */}
-      <Box borderStyle="round" borderColor="#4ECDC4" paddingX={1} justifyContent="space-between">
-        <Text color="#4ECDC4" bold>
-          Bubbaloop v{VERSION}
-        </Text>
-        <StatusIndicator status={connectionStatus} endpoint={endpoint} />
-      </Box>
+      {/* Header bar - Claude Code style */}
+      <Text>
+        <Text color="#4ECDC4">╭{titlePart}</Text>
+        <Text color="#888">{versionPart}</Text>
+        <Text color="#4ECDC4">{"─".repeat(Math.max(0, remainingDashes))}╮</Text>
+      </Text>
 
-      {/* Main content - two columns with border */}
+      {/* Main content - two columns with sides only */}
       <Box
         flexDirection="row"
         borderStyle="single"
         borderColor="#4ECDC4"
         borderTop={false}
+        borderBottom={false}
       >
         {/* Left column - Welcome + Robot */}
         <Box
           flexDirection="column"
           alignItems="center"
           paddingX={4}
+          paddingTop={1}
           width="50%"
         >
           <Text bold color="#FFF">
             Welcome {USERNAME}!
           </Text>
           <RobotLogo />
-          <Text color="#AAA">Physical AI with ROS-Z</Text>
+          <Text color="#AAA">Multi-agent orchestration</Text>
+          <Text color="#AAA">for Physical AI</Text>
         </Box>
 
         {/* Vertical divider */}
@@ -865,24 +467,23 @@ const App: React.FC = () => {
         />
 
         {/* Right column - Tips */}
-        <Box flexDirection="column" width="50%" paddingX={2}>
+        <Box flexDirection="column" width="50%" paddingX={2} paddingTop={1}>
           <Text bold color="#FFD93D">
-            Tips for getting started
+            Node Management
           </Text>
           <Text color="#CCC">
-            <Text color="#4ECDC4">/connect</Text> connect to robot
+            <Text color="#4ECDC4">/nodes</Text> manage local nodes
           </Text>
           <Text color="#CCC">
-            <Text color="#4ECDC4">/topics</Text> list available topics
+            <Text color="#4ECDC4">/services</Text> service status
           </Text>
           <Text color="#CCC">
-            <Text color="#4ECDC4">/dashboard</Text> open the web UI
-          </Text>
-          <Text color="#CCC">
-            <Text color="#4ECDC4">/record</Text> record to MCAP
+            <Text color="#4ECDC4">/quit</Text> exit
           </Text>
         </Box>
       </Box>
+      {/* Bottom border */}
+      <Text color="#4ECDC4">{`╰${"─".repeat(Math.max(0, (process.stdout.columns || 80) - 2))}╯`}</Text>
 
       {/* Output messages area */}
       {(messages.length > 0 || isLoading) && (
@@ -910,7 +511,7 @@ const App: React.FC = () => {
       {/* Input area - always at bottom with border */}
       <Box marginX={1} borderStyle="round" borderColor={isLoading ? "#666" : "#4ECDC4"} paddingX={1}>
         <Text color={isLoading ? "#666" : "#4ECDC4"} bold>
-          {inputMode === "endpoint" ? "endpoint: " : "❯ "}
+          ❯{" "}
         </Text>
         {isLoading ? (
           <Text color="#666">waiting...</Text>
@@ -919,10 +520,17 @@ const App: React.FC = () => {
             value={input}
             onChange={setInput}
             onSubmit={handleSubmit}
-            placeholder={getInputPlaceholder()}
+            placeholder='Type "/" for commands'
           />
         )}
       </Box>
+
+      {/* Exit warning */}
+      {exitWarning && (
+        <Box marginX={1}>
+          <Text color="#FF6B6B">Press Ctrl+C again to exit</Text>
+        </Box>
+      )}
 
       {/* Footer */}
       <Box marginX={1}>
