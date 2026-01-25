@@ -104,8 +104,8 @@ export async function ensureServicesRunning(): Promise<{ ready: boolean; started
   try {
     const status = await checkServices();
 
-    // If bridge is running, check WebSocket
-    if (status.bridge && status.zenohd) {
+    // Only consider ready when all services are running
+    if (status.zenohd && status.bridge && status.daemon) {
       if (await checkWebSocketReady()) {
         return { ready: true, started: false };
       }

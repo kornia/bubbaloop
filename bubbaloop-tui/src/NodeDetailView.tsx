@@ -122,6 +122,9 @@ const NodeDetailView: React.FC<NodeDetailViewProps> = ({
     child.stderr?.on("data", (data) => {
       output += data.toString();
     });
+    child.on("error", (err: Error) => {
+      setSystemdInfo([`[error] ${err.message}`]);
+    });
     child.on("close", () => {
       const lines = output.split("\n").filter((l: string) => l.trim());
       setSystemdInfo(lines);

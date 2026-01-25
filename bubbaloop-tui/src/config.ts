@@ -56,16 +56,12 @@ export function loadSourcesRegistry(): SourcesRegistry {
   return { sources: getDefaultSources() };
 }
 
-// Save sources registry
+// Save sources registry - throws on failure to prevent silent data loss
 export function saveSourcesRegistry(registry: SourcesRegistry): void {
-  try {
-    if (!existsSync(CONFIG_DIR)) {
-      mkdirSync(CONFIG_DIR, { recursive: true });
-    }
-    writeFileSync(SOURCES_FILE, JSON.stringify(registry, null, 2));
-  } catch {
-    // Ignore save errors
+  if (!existsSync(CONFIG_DIR)) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
   }
+  writeFileSync(SOURCES_FILE, JSON.stringify(registry, null, 2));
 }
 
 // Add a source

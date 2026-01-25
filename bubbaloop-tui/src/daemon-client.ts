@@ -75,6 +75,10 @@ export class DaemonClient {
         // Suppress console.log to prevent Zenoh "Connected to..." message from corrupting TUI
         const config = new Config(this.endpoint, 2000);
         this.session = await withSuppressedConsole(() => Session.open(config));
+      } catch (err) {
+        // Clear promise on failure to allow retries
+        this.connectionPromise = null;
+        throw err;
       } finally {
         this.connecting = false;
       }
