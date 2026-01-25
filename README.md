@@ -1,91 +1,77 @@
 # Bubbaloop
 
-Multi-camera RTSP streaming with ROS-Z and real-time browser visualization.
-
-Captures H264 streams directly from RTSP cameras (zero decode overhead) and publishes them via Zenoh/ROS-Z for visualization in the React Dashboard.
+Orchestration system for Physical AI — multi-camera RTSP streaming with ROS-Z and real-time browser visualization.
 
 ## Quick Install
+
+### 1. Install Backend (Zenoh + Daemon)
 
 ```bash
 curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
 ```
 
-Requires Node.js 20+ and Linux (x86_64 or ARM64).
-
-## Quick Start
+### 2. Install TUI
 
 ```bash
-# Start Zenoh router
-zenohd &
+npm install -g @kornia-ai/bubbaloop
+```
 
-# Start the TUI
+### 3. Run
+
+```bash
 bubbaloop
 ```
 
-Use the TUI to manage nodes, view topics, and monitor services.
+**Requirements:** Linux (x86_64 or ARM64), Node.js 20+
+
+## What Gets Installed
+
+The install script sets up systemd services:
+
+| Service | Description |
+|---------|-------------|
+| `zenohd` | Zenoh router for pub/sub messaging |
+| `zenoh-bridge` | WebSocket bridge for browser access |
+| `bubbaloop-daemon` | Node manager for starting/stopping nodes |
+
+The npm package provides the `bubbaloop` CLI for managing nodes.
 
 ## Development Setup
 
 For building from source:
 
-### 1. Install dependencies
-
 ```bash
 git clone https://github.com/kornia/bubbaloop.git
 cd bubbaloop
 pixi install
-```
-
-### 2. Configure cameras
-
-Edit `config.yaml` to add your RTSP cameras:
-
-```yaml
-cameras:
-  - name: "entrance"
-    url: "rtsp://user:pass@192.168.1.10:554/stream"
-    latency: 200
-  - name: "backyard"
-    url: "rtsp://192.168.1.11:554/live"
-    latency: 100
-```
-
-### 3. Start everything
-
-```bash
 pixi run up
 ```
 
 This launches the zenoh bridge, camera streams, and dashboard using [process-compose](https://github.com/F1bonacc1/process-compose).
 
-**Local:** http://localhost:5173
-**Remote:** https://\<ip\>:5173 (accept self-signed cert)
+**Dashboard:** http://localhost:5173
 
 ### Running services individually
 
 ```bash
-pixi run bridge      # Start zenoh bridge (local WebSocket)
-pixi run cameras     # Start camera streams (multicast scouting)
-pixi run dashboard   # Start web dashboard
+pixi run daemon      # Start daemon
 pixi run bubbaloop   # Start terminal UI
+pixi run dashboard   # Start web dashboard
+pixi run cameras     # Start camera streams
 ```
 
-### Remote access (TUI/dashboard from laptop to robot)
+## Service Management
 
 ```bash
-# On robot:
-zenohd -c zenoh.json5       # Zenoh router
-pixi run cameras            # Cameras (auto-connects to local router)
+# View status
+systemctl --user status bubbaloop-daemon
 
-# On laptop (first-time setup):
-pixi run bubbaloop          # Run /server to set robot IP
+# Restart
+systemctl --user restart bubbaloop-daemon
 
-# On laptop (run services):
-pixi run zenohd-client      # Local router → robot
-pixi run bubbaloop          # TUI → /connect → /topics
+# View logs
+journalctl --user -u bubbaloop-daemon -f
 ```
-
-See [docs/configuration.md](docs/configuration.md#remote-access-setup) for detailed setup.
 
 ## Documentation
 

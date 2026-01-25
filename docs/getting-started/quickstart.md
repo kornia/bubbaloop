@@ -6,44 +6,37 @@ Get started with Bubbaloop in minutes.
 
 - Linux (Ubuntu 22.04+, Jetson, Raspberry Pi)
 - Node.js 20+ (for TUI)
-- Modern browser (Chrome 94+, Edge 94+, Safari 16.4+)
-- RTSP cameras on your network (optional for initial testing)
+- Modern browser (Chrome 94+, Edge 94+, Safari 16.4+) for dashboard
 
 ## Installation
 
-### Option 1: Quick Install (Recommended)
+### Step 1: Install Backend
 
 ```bash
 curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
 ```
 
-### Option 2: Development Install
+This installs Zenoh router, WebSocket bridge, and bubbaloop-daemon as systemd services.
+
+### Step 2: Install TUI
 
 ```bash
-git clone https://github.com/kornia/bubbaloop.git
-cd bubbaloop
-pixi install
+npm install -g @kornia-ai/bubbaloop
 ```
 
-See [Installation](installation.md) for detailed requirements.
-
-## Running Bubbaloop
-
-### Using the TUI (Terminal UI)
-
-The TUI is the main interface for managing Bubbaloop:
+### Step 3: Run
 
 ```bash
 bubbaloop
 ```
 
-Or with development install:
+See [Installation](installation.md) for detailed requirements.
 
-```bash
-pixi run bubbaloop
-```
+## Using the TUI
 
-### TUI Commands
+The TUI is the main interface for managing Bubbaloop:
+
+### Navigation
 
 | Key | Action |
 |-----|--------|
@@ -53,26 +46,14 @@ pixi run bubbaloop
 | `s` | Settings — Configure options |
 | `q` | Quit |
 
-### Starting Services
+### Managing Nodes
 
-From the TUI Nodes panel:
+From the Nodes panel:
 
 1. Select a node (e.g., `rtsp-camera`)
 2. Press `s` to start the service
 3. Press `l` to view logs
-
-Or start services manually:
-
-```bash
-# Start Zenoh router (required)
-zenohd &
-
-# Start the daemon (manages nodes)
-bubbaloop-daemon &
-
-# Start the TUI
-bubbaloop
-```
+4. Press `x` to stop the service
 
 ## Configuration
 
@@ -102,6 +83,22 @@ weather:
   interval_secs: 300
 ```
 
+## Service Management
+
+Services are managed via systemd:
+
+```bash
+# View status
+systemctl --user status zenohd
+systemctl --user status bubbaloop-daemon
+
+# Restart
+systemctl --user restart bubbaloop-daemon
+
+# View logs
+journalctl --user -u bubbaloop-daemon -f
+```
+
 ## Dashboard
 
 The web dashboard provides real-time visualization.
@@ -115,13 +112,6 @@ pixi run dashboard
 ```
 
 Access at: http://localhost:5173
-
-### Remote Access
-
-For HTTPS access from other devices:
-
-- URL: `https://<your-ip>:5173`
-- Accept the self-signed certificate warning
 
 ### Dashboard Features
 
@@ -137,14 +127,17 @@ For HTTPS access from other devices:
 For contributors building from source:
 
 ```bash
+git clone https://github.com/kornia/bubbaloop.git
+cd bubbaloop
+pixi install
+
 # Start everything with process-compose
 pixi run up
 
 # Or run services individually:
-pixi run bridge      # Zenoh WebSocket bridge
-pixi run cameras     # Camera capture
-pixi run dashboard   # Web dashboard
+pixi run daemon      # Bubbaloop daemon
 pixi run bubbaloop   # Terminal UI
+pixi run dashboard   # Web dashboard
 ```
 
 ## Browser Requirements
@@ -164,4 +157,3 @@ pixi run bubbaloop   # Terminal UI
 - [Installation](installation.md) — Detailed installation options
 - [Configuration](configuration.md) — Component configuration options
 - [Architecture](../concepts/architecture.md) — Understand the system design
-- [Dashboard](../dashboard/index.md) — Dashboard features and panels

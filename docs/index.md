@@ -70,19 +70,21 @@ flowchart TB
 
 ## Quick Start
 
-### Install
+### 1. Install Backend
 
 ```bash
 curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
 ```
 
-### Run
+### 2. Install TUI
 
 ```bash
-# Start Zenoh router
-zenohd &
+npm install -g @kornia-ai/bubbaloop
+```
 
-# Start the TUI
+### 3. Run
+
+```bash
 bubbaloop
 ```
 

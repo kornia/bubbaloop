@@ -4,25 +4,40 @@ Bubbaloop can be installed in two ways: using pre-built binaries (recommended fo
 
 ## Quick Install (Recommended)
 
-Download and install the latest release:
+### Step 1: Install Backend Services
+
+Download and install Zenoh + daemon:
 
 ```bash
 curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
 ```
 
-This installs:
+This installs and starts as systemd services:
 
-| Component | Location |
-|-----------|----------|
-| `bubbaloop` | `~/.bubbaloop/bubbaloop` (TUI) |
-| `bubbaloop-daemon` | `~/.bubbaloop/bubbaloop-daemon` |
+| Component | Description |
+|-----------|-------------|
+| `zenohd` | Zenoh router for pub/sub messaging |
+| `zenoh-bridge` | WebSocket bridge for browser access |
+| `bubbaloop-daemon` | Node manager for starting/stopping nodes |
 
-The installer adds `~/.bubbaloop` to your PATH.
+### Step 2: Install TUI
+
+Install the terminal UI via npm:
+
+```bash
+npm install -g @kornia-ai/bubbaloop
+```
+
+### Step 3: Run
+
+```bash
+bubbaloop
+```
 
 ### Requirements
 
-- **Node.js 20+** — Required for the TUI
 - **Linux** — x86_64 or ARM64 (Ubuntu, Jetson, Raspberry Pi)
+- **Node.js 20+** — Required for the TUI
 
 Install Node.js if needed:
 
@@ -39,7 +54,24 @@ nvm install 20
 ### Verify Installation
 
 ```bash
-bubbaloop --help
+# Check services are running
+systemctl --user status zenohd
+systemctl --user status bubbaloop-daemon
+
+# Run TUI
+bubbaloop
+```
+
+### Upgrading
+
+To upgrade to a new version:
+
+```bash
+# Upgrade backend
+curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
+
+# Upgrade TUI
+npm update -g @kornia-ai/bubbaloop
 ```
 
 ## Development Install
@@ -75,12 +107,6 @@ Restart your terminal or source your shell configuration:
 source ~/.bashrc  # or ~/.zshrc
 ```
 
-Verify the installation:
-
-```bash
-pixi --version
-```
-
 ### 2. Clone the Repository
 
 ```bash
@@ -112,64 +138,55 @@ Build all Rust binaries:
 pixi run build
 ```
 
-### GStreamer Plugins
-
-The following GStreamer plugins are installed automatically:
-
-- `gstreamer` - Core framework
-- `gst-plugins-base` - Basic plugins
-- `gst-plugins-good` - RTSP support
-- `gst-plugins-bad` - H264 parsing
-- `gst-plugins-ugly` - Additional codecs (optional)
-
-## Zenoh Installation
-
-Bubbaloop uses [Zenoh](https://zenoh.io/) for messaging. Install the Zenoh router:
+### 5. Run
 
 ```bash
-# Using cargo (if Rust is installed)
-cargo install zenoh
-
-# Or download from releases
-# https://github.com/eclipse-zenoh/zenoh/releases
-```
-
-For browser connectivity, install the WebSocket bridge:
-
-```bash
-cargo install zenoh-bridge-remote-api
-```
-
-## Verifying Installation
-
-### Binary Install
-
-```bash
-# Start the TUI
-bubbaloop
-```
-
-### Development Install
-
-```bash
-# Run all services
+# Start all services
 pixi run up
+
+# Or run individually
+pixi run daemon      # Start daemon
+pixi run bubbaloop   # Start TUI
+pixi run dashboard   # Start web dashboard
 ```
 
-You should see:
+## Service Management
 
-1. Zenoh bridge starting on port 10000
-2. Camera capture connecting (or reporting no config)
-3. Dashboard available at http://localhost:5173
+The install script sets up systemd user services:
+
+```bash
+# View status
+systemctl --user status zenohd
+systemctl --user status zenoh-bridge
+systemctl --user status bubbaloop-daemon
+
+# Restart services
+systemctl --user restart bubbaloop-daemon
+
+# View logs
+journalctl --user -u bubbaloop-daemon -f
+
+# Stop all services
+systemctl --user stop bubbaloop-daemon zenoh-bridge zenohd
+```
 
 ## Troubleshooting
 
 ### "bubbaloop: command not found"
 
-Restart your terminal or add to PATH manually:
+Restart your terminal or ensure npm global bin is in PATH:
 
 ```bash
-export PATH="$HOME/.bubbaloop:$PATH"
+export PATH="$(npm config get prefix)/bin:$PATH"
+```
+
+### Services not starting
+
+Check if systemd user services are enabled:
+
+```bash
+systemctl --user list-unit-files | grep bubbaloop
+loginctl enable-linger $USER
 ```
 
 ### "pixi: command not found"
@@ -180,15 +197,6 @@ Restart your terminal or run:
 source ~/.bashrc
 ```
 
-### GStreamer errors
-
-Ensure GStreamer plugins are installed:
-
-```bash
-pixi run gst-inspect-1.0 rtspsrc
-pixi run gst-inspect-1.0 h264parse
-```
-
 ### Build failures
 
 Clear the build cache and retry:
@@ -196,15 +204,6 @@ Clear the build cache and retry:
 ```bash
 pixi run cargo clean
 pixi run build
-```
-
-### Network issues
-
-If behind a proxy, configure git and cargo:
-
-```bash
-git config --global http.proxy http://proxy:port
-export HTTPS_PROXY=http://proxy:port
 ```
 
 ## Next Steps
