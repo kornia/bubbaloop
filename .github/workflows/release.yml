@@ -1,0 +1,164 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-daemon:
+    name: Build Daemon (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            arch: arm64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          pixi-version: v0.39.0
+
+      - name: Build bubbaloop-daemon
+        run: pixi run cargo build --release --package bubbaloop-daemon
+
+      - name: Rename binary
+        run: mv target/release/bubbaloop-daemon bubbaloop-daemon-linux-${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daemon-${{ matrix.arch }}
+          path: bubbaloop-daemon-linux-${{ matrix.arch }}
+
+  build-tui:
+    name: Build TUI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build TUI
+        run: |
+          cd bubbaloop-tui
+          npm ci
+          npm run build
+
+      - name: Create tarball
+        run: |
+          cd bubbaloop-tui
+          # Include package files and built dist, exclude dev files
+          tar -czvf ../bubbaloop.tar.gz \
+            package.json \
+            package-lock.json \
+            dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tui
+          path: bubbaloop.tar.gz
+
+  release:
+    name: Publish Release Assets
+    needs: [build-daemon, build-tui]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display downloaded artifacts
+        run: ls -la artifacts/*/
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          cp artifacts/daemon-amd64/bubbaloop-daemon-linux-amd64 release-assets/
+          cp artifacts/daemon-arm64/bubbaloop-daemon-linux-arm64 release-assets/
+          cp artifacts/tui/bubbaloop.tar.gz release-assets/
+          # Also include the install script
+          cp scripts/install.sh release-assets/
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "version=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      # When triggered by release-please, the release already exists - just upload assets
+      - name: Upload Release Assets
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          files: |
+            release-assets/bubbaloop-daemon-linux-amd64
+            release-assets/bubbaloop-daemon-linux-arm64
+            release-assets/bubbaloop.tar.gz
+            release-assets/install.sh
+          append_body: true
+          body: |
+            ## Installation
+
+            ```bash
+            curl -sSL https://get.bubbaloop.com | bash
+            ```
+
+            Or download manually:
+            - `bubbaloop-daemon-linux-amd64` - Daemon for x86_64
+            - `bubbaloop-daemon-linux-arm64` - Daemon for ARM64 (Jetson, Raspberry Pi)
+            - `bubbaloop.tar.gz` - Bubbaloop TUI (Node.js)
+            - `install.sh` - Installation script
+
+      # When triggered manually, create a new release
+      - name: Create Release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Bubbaloop ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          generate_release_notes: true
+          files: |
+            release-assets/bubbaloop-daemon-linux-amd64
+            release-assets/bubbaloop-daemon-linux-arm64
+            release-assets/bubbaloop.tar.gz
+            release-assets/install.sh
+          body: |
+            ## Installation
+
+            ```bash
+            curl -sSL https://get.bubbaloop.com | bash
+            ```
+
+            Or download manually:
+            - `bubbaloop-daemon-linux-amd64` - Daemon for x86_64
+            - `bubbaloop-daemon-linux-arm64` - Daemon for ARM64 (Jetson, Raspberry Pi)
+            - `bubbaloop.tar.gz` - Bubbaloop TUI (Node.js)
+            - `install.sh` - Installation script
+
+            ## What's Changed
