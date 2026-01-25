@@ -1,6 +1,6 @@
 [workspace]
 name = "bubbaloop"
-version = "0.1.0"
+version = "0.0.1"
 description = "Multi-camera RTSP streaming with ROS-Z"
 authors = ["Edgar Riba <edgar.riba@gmail.com>"]
 channels = ["conda-forge"]
