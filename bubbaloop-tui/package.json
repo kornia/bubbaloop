@@ -1,5 +1,5 @@
 {
-  "name": "bubbaloop",
+  "name": "@kornia-ai/bubbaloop",
   "version": "0.0.2",
   "description": "Bubbaloop - Orchestration system for Physical AI",
   "type": "module",

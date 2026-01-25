@@ -135,7 +135,7 @@ jobs:
             ### Manual Install
             ```bash
             # Install TUI via npm
-            npm install -g bubbaloop
+            npm install -g @kornia-ai/bubbaloop
 
             # Download daemon binary for your architecture
             ```
@@ -170,7 +170,7 @@ jobs:
             ### Manual Install
             ```bash
             # Install TUI via npm
-            npm install -g bubbaloop
+            npm install -g @kornia-ai/bubbaloop
 
             # Download daemon binary for your architecture
             ```

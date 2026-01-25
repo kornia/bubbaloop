@@ -172,7 +172,7 @@ install_bubbaloop() {
     # Install TUI via npm (globally)
     info "Installing TUI via npm..."
     local npm_version="${version#v}"  # Remove 'v' prefix
-    npm install -g "bubbaloop@$npm_version" 2>/dev/null || npm install -g bubbaloop || warn "npm install had warnings"
+    npm install -g "@kornia-ai/bubbaloop@$npm_version" 2>/dev/null || npm install -g @kornia-ai/bubbaloop || warn "npm install had warnings"
 
     # Save version
     echo "$version" > "$INSTALL_DIR/version"
