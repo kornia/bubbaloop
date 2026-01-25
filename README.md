@@ -4,16 +4,35 @@ Multi-camera RTSP streaming with ROS-Z and real-time browser visualization.
 
 Captures H264 streams directly from RTSP cameras (zero decode overhead) and publishes them via Zenoh/ROS-Z for visualization in the React Dashboard.
 
-## Requirements
+## Quick Install
 
-- [Pixi](https://pixi.sh) for dependency management
-- [zenoh-bridge-remote-api](https://github.com/eclipse-zenoh/zenoh-ts) for browser connectivity
+```bash
+curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
+```
+
+Requires Node.js 20+ and Linux (x86_64 or ARM64).
 
 ## Quick Start
+
+```bash
+# Start Zenoh router
+zenohd &
+
+# Start the TUI
+bubbaloop
+```
+
+Use the TUI to manage nodes, view topics, and monitor services.
+
+## Development Setup
+
+For building from source:
 
 ### 1. Install dependencies
 
 ```bash
+git clone https://github.com/kornia/bubbaloop.git
+cd bubbaloop
 pixi install
 ```
 

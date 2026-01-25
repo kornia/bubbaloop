@@ -70,11 +70,30 @@ flowchart TB
 
 ## Quick Start
 
-```bash
-# Install dependencies
-pixi install
+### Install
 
-# Start everything (bridge + cameras + dashboard)
+```bash
+curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
+```
+
+### Run
+
+```bash
+# Start Zenoh router
+zenohd &
+
+# Start the TUI
+bubbaloop
+```
+
+### Development
+
+For building from source:
+
+```bash
+git clone https://github.com/kornia/bubbaloop.git
+cd bubbaloop
+pixi install
 pixi run up
 ```
 

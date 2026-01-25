@@ -1,10 +1,52 @@
 # Installation
 
-Detailed installation instructions for Bubbaloop.
+Bubbaloop can be installed in two ways: using pre-built binaries (recommended for users) or building from source (for developers).
 
-## System Requirements
+## Quick Install (Recommended)
 
-### Supported Platforms
+Download and install the latest release:
+
+```bash
+curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
+```
+
+This installs:
+
+| Component | Location |
+|-----------|----------|
+| `bubbaloop` | `~/.bubbaloop/bubbaloop` (TUI) |
+| `bubbaloop-daemon` | `~/.bubbaloop/bubbaloop-daemon` |
+
+The installer adds `~/.bubbaloop` to your PATH.
+
+### Requirements
+
+- **Node.js 20+** — Required for the TUI
+- **Linux** — x86_64 or ARM64 (Ubuntu, Jetson, Raspberry Pi)
+
+Install Node.js if needed:
+
+```bash
+# Ubuntu/Debian
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Or use nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+nvm install 20
+```
+
+### Verify Installation
+
+```bash
+bubbaloop --help
+```
+
+## Development Install
+
+For contributors or building from source.
+
+### System Requirements
 
 | Platform | Status | Notes |
 |----------|--------|-------|
@@ -19,9 +61,9 @@ Detailed installation instructions for Bubbaloop.
 - **RAM**: 2GB minimum, 4GB+ recommended for multiple cameras
 - **Network**: Ethernet recommended for multiple camera streams
 
-## Installing Pixi
+### 1. Install Pixi
 
-[Pixi](https://pixi.sh) is the package manager used by Bubbaloop. Install it with:
+[Pixi](https://pixi.sh) is the package manager used by Bubbaloop:
 
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh
@@ -39,14 +81,14 @@ Verify the installation:
 pixi --version
 ```
 
-## Cloning the Repository
+### 2. Clone the Repository
 
 ```bash
 git clone https://github.com/kornia/bubbaloop.git
 cd bubbaloop
 ```
 
-## Installing Dependencies
+### 3. Install Dependencies
 
 ```bash
 pixi install
@@ -58,23 +100,11 @@ This automatically installs:
 |-----------|-------------|
 | Rust toolchain | Compiler for building Bubbaloop |
 | GStreamer | Video capture and processing |
-| Node.js | Dashboard frontend runtime |
+| Node.js | Dashboard and TUI runtime |
 | protobuf | Protocol buffer compiler |
 | pkg-config, cmake | Build tools |
 
-### GStreamer Plugins
-
-The following GStreamer plugins are required:
-
-- `gstreamer` - Core framework
-- `gst-plugins-base` - Basic plugins
-- `gst-plugins-good` - RTSP support
-- `gst-plugins-bad` - H264 parsing
-- `gst-plugins-ugly` - Additional codecs (optional)
-
-Pixi handles all GStreamer dependencies automatically.
-
-## Building
+### 4. Build
 
 Build all Rust binaries:
 
@@ -82,41 +112,47 @@ Build all Rust binaries:
 pixi run build
 ```
 
-The first build may download and compile dependencies.
+### GStreamer Plugins
 
-### Build Components
+The following GStreamer plugins are installed automatically:
 
-| Binary | Description |
-|--------|-------------|
-| `bubbaloop` | Main TUI application |
-| `cameras_node` | Camera capture service |
-| `openmeteo_node` | Weather data service |
+- `gstreamer` - Core framework
+- `gst-plugins-base` - Basic plugins
+- `gst-plugins-good` - RTSP support
+- `gst-plugins-bad` - H264 parsing
+- `gst-plugins-ugly` - Additional codecs (optional)
 
-## Zenoh Bridge
+## Zenoh Installation
 
-The Zenoh WebSocket bridge is built automatically on first run:
-
-```bash
-pixi run bridge
-```
-
-This clones and compiles `zenoh-bridge-remote-api` from the [zenoh-ts](https://github.com/eclipse-zenoh/zenoh-ts) repository.
-
-## Dashboard Setup
-
-The dashboard dependencies are installed automatically:
+Bubbaloop uses [Zenoh](https://zenoh.io/) for messaging. Install the Zenoh router:
 
 ```bash
-pixi run dashboard
+# Using cargo (if Rust is installed)
+cargo install zenoh
+
+# Or download from releases
+# https://github.com/eclipse-zenoh/zenoh/releases
 ```
 
-This runs `npm install` if needed and starts the development server.
+For browser connectivity, install the WebSocket bridge:
+
+```bash
+cargo install zenoh-bridge-remote-api
+```
 
 ## Verifying Installation
 
-Run all services to verify the installation:
+### Binary Install
 
 ```bash
+# Start the TUI
+bubbaloop
+```
+
+### Development Install
+
+```bash
+# Run all services
 pixi run up
 ```
 
@@ -127,6 +163,14 @@ You should see:
 3. Dashboard available at http://localhost:5173
 
 ## Troubleshooting
+
+### "bubbaloop: command not found"
+
+Restart your terminal or add to PATH manually:
+
+```bash
+export PATH="$HOME/.bubbaloop:$PATH"
+```
 
 ### "pixi: command not found"
 
@@ -165,5 +209,5 @@ export HTTPS_PROXY=http://proxy:port
 
 ## Next Steps
 
-- [Configuration](configuration.md) — Configure cameras and services
 - [Quickstart](quickstart.md) — Run your first stream
+- [Configuration](configuration.md) — Configure cameras and services
