@@ -40,16 +40,17 @@ const STATUS_CONFIG: Record<string, { color: string; icon: string; label: string
 };
 
 // Map protobuf status number to string
+const STATUS_MAP: Record<number, NodeState['status']> = {
+  1: 'stopped',
+  2: 'running',
+  3: 'failed',
+  4: 'installing',
+  5: 'building',
+  6: 'not-installed',
+};
+
 function statusNumberToString(status: number): NodeState['status'] {
-  switch (status) {
-    case 1: return 'stopped';
-    case 2: return 'running';
-    case 3: return 'failed';
-    case 4: return 'installing';
-    case 5: return 'building';
-    case 6: return 'not-installed';
-    default: return 'unknown';
-  }
+  return STATUS_MAP[status] ?? 'unknown';
 }
 
 export function NodesViewPanel({
@@ -266,7 +267,7 @@ export function NodesViewPanel({
     throw new Error('No response from daemon');
   }, [getSession]);
 
-  const getSelectedNode = () => nodes.find(n => n.name === selectedNode);
+  const selectedNodeData = selectedNode ? nodes.find(n => n.name === selectedNode) : undefined;
 
   return (
     <div className="nodes-panel">
@@ -325,7 +326,6 @@ export function NodesViewPanel({
                 <span className="col-name">Name</span>
                 <span className="col-version">Version</span>
                 <span className="col-type">Type</span>
-                <span className="col-built">Built</span>
               </div>
               {nodes.length === 0 ? (
                 <div className="no-nodes">No nodes registered</div>
@@ -347,9 +347,6 @@ export function NodesViewPanel({
                       <span className="col-name">{node.name}</span>
                       <span className="col-version">{node.version}</span>
                       <span className={`col-type type-${node.node_type}`}>{node.node_type}</span>
-                      <span className={`col-built ${node.is_built ? 'yes' : 'no'}`}>
-                        {isBuilding ? '...' : node.is_built ? 'yes' : 'no'}
-                      </span>
                     </div>
                   );
                 })
@@ -357,9 +354,9 @@ export function NodesViewPanel({
             </div>
 
             {/* Node detail */}
-            {selectedNode && getSelectedNode() && (
+            {selectedNodeData && (
               <NodeDetail
-                node={getSelectedNode()!}
+                node={selectedNodeData}
                 onCommand={executeCommand}
                 onFetchLogs={fetchLogs}
                 actionLoading={actionLoading}
@@ -430,7 +427,7 @@ export function NodesViewPanel({
           gap: 4px;
         }
 
-        .refresh-btn, .remove-btn {
+        .remove-btn {
           display: flex;
           align-items: center;
           justify-content: center;
@@ -442,11 +439,6 @@ export function NodesViewPanel({
           color: var(--text-muted);
           cursor: pointer;
           transition: all 0.15s;
-        }
-
-        .refresh-btn:hover {
-          background: var(--bg-tertiary);
-          color: var(--accent-primary);
         }
 
         .remove-btn:hover {
@@ -559,13 +551,9 @@ export function NodesViewPanel({
         .col-name { flex: 1; color: var(--text-primary); font-weight: 500; }
         .col-version { width: 70px; color: var(--accent-secondary); font-family: 'JetBrains Mono', monospace; }
         .col-type { width: 60px; text-transform: uppercase; font-size: 10px; font-weight: 600; }
-        .col-built { width: 40px; text-align: center; }
 
         .col-type.type-rust { color: #ffd600; }
         .col-type.type-python { color: #00e5ff; }
-
-        .col-built.yes { color: #00c853; }
-        .col-built.no { color: #ff1744; }
 
         .no-nodes {
           padding: 32px 16px;
@@ -609,9 +597,8 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
   const statusCfg = STATUS_CONFIG[node.status] || STATUS_CONFIG.unknown;
   const isLoading = (cmd: string) => actionLoading === `${node.name}-${cmd}`;
   const [logs, setLogs] = useState<string | null>(null);
-  const [logsLoading, setLogsLoading] = useState(false);
-  const [showLogs, setShowLogs] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [showLogs, setShowLogs] = useState(true); // Auto-show logs by default
+  const [autoRefresh, setAutoRefresh] = useState(true); // Auto-refresh enabled by default
 
   const fetchLogsInternal = useCallback(async () => {
     try {
@@ -622,12 +609,10 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
     }
   }, [onFetchLogs, node.name]);
 
-  const handleFetchLogs = async () => {
-    setLogsLoading(true);
-    setShowLogs(true);
-    await fetchLogsInternal();
-    setLogsLoading(false);
-  };
+  // Fetch logs immediately on mount
+  useEffect(() => {
+    fetchLogsInternal();
+  }, [fetchLogsInternal]);
 
   // Auto-refresh logs every 3 seconds when showing
   useEffect(() => {
@@ -661,20 +646,6 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
           <span className="label">Version</span>
           <span className="value mono">{node.version}</span>
         </div>
-        <div className="info-row">
-          <span className="label">Built</span>
-          <span className={`value ${node.is_built ? 'yes' : 'no'}`}>
-            {node.is_built ? 'Yes' : 'No'}
-          </span>
-        </div>
-        {node.installed && (
-          <div className="info-row">
-            <span className="label">Autostart</span>
-            <span className={`value ${node.autostart_enabled ? 'yes' : 'no'}`}>
-              {node.autostart_enabled ? 'Enabled' : 'Disabled'}
-            </span>
-          </div>
-        )}
         {node.description && (
           <div className="info-row full">
             <span className="label">Description</span>
@@ -687,127 +658,72 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
         </div>
       </div>
 
-      <div className="detail-actions">
-        {node.status === 'not-installed' ? (
+      {/* Controls row: start/stop, logs toggle, auto-refresh */}
+      <div className="controls-row">
+        <div className="control-group">
+          {node.status === 'not-installed' ? (
+            <span className="hint-text">Service not installed (use TUI to install)</span>
+          ) : node.status === 'running' ? (
+            <button
+              className="action-btn stop"
+              onClick={() => onCommand(node.name, 'stop')}
+              disabled={isLoading('stop')}
+            >
+              {isLoading('stop') ? 'Stopping...' : 'Stop'}
+            </button>
+          ) : node.is_built ? (
+            <button
+              className="action-btn primary"
+              onClick={() => onCommand(node.name, 'start')}
+              disabled={isLoading('start') || node.status === 'building'}
+            >
+              {isLoading('start') ? 'Starting...' : 'Start'}
+            </button>
+          ) : (
+            <span className="hint-text">Not built (use TUI to build)</span>
+          )}
+        </div>
+
+        <div className="control-group">
           <button
-            className="action-btn primary"
-            onClick={() => onCommand(node.name, 'install')}
-            disabled={isLoading('install')}
+            className={`action-btn ${showLogs ? 'active' : 'secondary'}`}
+            onClick={() => setShowLogs(!showLogs)}
           >
-            {isLoading('install') ? 'Installing...' : 'Install Service'}
+            {showLogs ? 'Hide Logs' : 'Show Logs'}
           </button>
-        ) : (
-          <>
-            {node.status === 'running' ? (
-              <button
-                className="action-btn danger"
-                onClick={() => onCommand(node.name, 'stop')}
-                disabled={isLoading('stop')}
-              >
-                {isLoading('stop') ? 'Stopping...' : 'Stop'}
-              </button>
-            ) : node.is_built ? (
-              <button
-                className="action-btn primary"
-                onClick={() => onCommand(node.name, 'start')}
-                disabled={isLoading('start') || node.status === 'building'}
-              >
-                {isLoading('start') ? 'Starting...' : 'Start'}
-              </button>
-            ) : (
-              <button className="action-btn primary" disabled title="Build first">
-                Start (build first)
-              </button>
-            )}
-            <button
-              className="action-btn secondary"
-              onClick={() => onCommand(node.name, 'restart')}
-              disabled={isLoading('restart') || node.status !== 'running'}
-            >
-              {isLoading('restart') ? 'Restarting...' : 'Restart'}
-            </button>
-          </>
-        )}
-
-        <div className="action-divider" />
-
-        <button
-          className="action-btn secondary"
-          onClick={() => onCommand(node.name, 'build')}
-          disabled={isLoading('build') || node.status === 'building'}
-        >
-          {isLoading('build') || node.status === 'building' ? 'Building...' : 'Build'}
-        </button>
-
-        <button
-          className="action-btn secondary"
-          onClick={handleFetchLogs}
-          disabled={logsLoading}
-        >
-          {logsLoading ? 'Loading...' : 'Logs'}
-        </button>
-
-        {node.installed && (
-          <>
-            <button
-              className="action-btn secondary"
-              onClick={() => onCommand(node.name, node.autostart_enabled ? 'disable_autostart' : 'enable_autostart')}
-              disabled={isLoading('enable_autostart') || isLoading('disable_autostart')}
-            >
-              {node.autostart_enabled ? 'Disable Autostart' : 'Enable Autostart'}
-            </button>
-            <button
-              className="action-btn danger"
-              onClick={() => onCommand(node.name, 'uninstall')}
-              disabled={isLoading('uninstall')}
-            >
-              {isLoading('uninstall') ? 'Uninstalling...' : 'Uninstall'}
-            </button>
-          </>
-        )}
+          {showLogs && (
+            <label className="auto-refresh-switch">
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={() => setAutoRefresh(!autoRefresh)}
+              />
+              <span className="switch-slider"></span>
+              <span className="switch-label">Auto</span>
+            </label>
+          )}
+        </div>
       </div>
 
-      {/* Build output */}
-      {node.build_output && node.build_output.length > 0 && (
-        <div className="build-output">
-          <div className="output-header">Build Output</div>
-          <div className="output-content">
-            {node.build_output.slice(-10).map((line, i) => (
-              <div key={i} className="output-line">{line}</div>
-            ))}
-          </div>
-        </div>
-      )}
+      <div className="logs-section">
 
-      {/* Service logs */}
-      {showLogs && (
-        <div className="service-logs">
-          <div className="output-header">
-            <span>Service Logs {autoRefresh && <span className="auto-refresh-indicator">●</span>}</span>
-            <div className="logs-controls">
-              <button
-                className={`auto-refresh-btn ${autoRefresh ? 'active' : ''}`}
-                onClick={() => setAutoRefresh(!autoRefresh)}
-                title={autoRefresh ? 'Disable auto-refresh' : 'Enable auto-refresh'}
-              >
-                ↻
-              </button>
-              <button className="close-logs-btn" onClick={() => setShowLogs(false)}>×</button>
+        {/* Service logs */}
+        {showLogs && (
+          <div className="service-logs">
+            <div className="output-content">
+              {logs === null ? (
+                <div className="logs-loading">Loading logs...</div>
+              ) : logs ? (
+                logs.split('\n').map((line, i) => (
+                  <div key={i} className="output-line">{line}</div>
+                ))
+              ) : (
+                <div className="no-logs">No logs available</div>
+              )}
             </div>
           </div>
-          <div className="output-content">
-            {logsLoading ? (
-              <div className="logs-loading">Loading logs...</div>
-            ) : logs ? (
-              logs.split('\n').map((line, i) => (
-                <div key={i} className="output-line">{line}</div>
-              ))
-            ) : (
-              <div className="no-logs">No logs available</div>
-            )}
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
       <style>{`
         .node-detail {
@@ -907,21 +823,25 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
 
         .info-row .value.type-rust { color: #ffd600; }
         .info-row .value.type-python { color: #00e5ff; }
-        .info-row .value.yes { color: #00c853; }
-        .info-row .value.no { color: #ff1744; }
 
-        .detail-actions {
+        .controls-row {
           display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
           align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          flex-wrap: wrap;
         }
 
-        .action-divider {
-          width: 1px;
-          height: 24px;
-          background: var(--border-color);
-          margin: 0 4px;
+        .control-group {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .hint-text {
+          font-size: 12px;
+          color: var(--text-muted);
+          font-style: italic;
         }
 
         .action-btn {
@@ -960,21 +880,24 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
           color: var(--text-primary);
         }
 
-        .action-btn.danger {
-          background: transparent;
-          color: #ff1744;
-          border-color: #ff1744;
+        .action-btn.stop {
+          background: var(--bg-tertiary);
+          color: #ff9800;
+          border-color: #ff9800;
         }
 
-        .action-btn.danger:hover:not(:disabled) {
-          background: rgba(255, 23, 68, 0.1);
+        .action-btn.stop:hover:not(:disabled) {
+          background: rgba(255, 152, 0, 0.15);
         }
 
-        .build-output {
-          margin-top: 16px;
-          border: 1px solid var(--border-color);
-          border-radius: 8px;
-          overflow: hidden;
+        .action-btn.active {
+          background: var(--accent-primary);
+          color: white;
+          border-color: var(--accent-primary);
+        }
+
+        .action-btn.active:hover:not(:disabled) {
+          background: #5c7cff;
         }
 
         .output-header {
@@ -1003,69 +926,63 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
           line-height: 1.5;
         }
 
-        .service-logs {
-          margin-top: 16px;
-          border: 1px solid var(--border-color);
-          border-radius: 8px;
-          overflow: hidden;
+        .logs-section {
+          margin-top: 12px;
         }
 
-        .service-logs .output-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .logs-controls {
+        .auto-refresh-switch {
           display: flex;
           align-items: center;
           gap: 8px;
+          cursor: pointer;
+          user-select: none;
         }
 
-        .auto-refresh-btn {
-          background: transparent;
+        .auto-refresh-switch input {
+          display: none;
+        }
+
+        .switch-slider {
+          width: 36px;
+          height: 20px;
+          background: var(--bg-tertiary);
+          border-radius: 10px;
+          position: relative;
+          transition: background 0.2s;
           border: 1px solid var(--border-color);
-          color: var(--text-muted);
-          font-size: 14px;
-          cursor: pointer;
-          padding: 2px 6px;
-          border-radius: 4px;
-          line-height: 1;
         }
 
-        .auto-refresh-btn:hover {
-          color: var(--text-primary);
-          border-color: var(--text-secondary);
+        .switch-slider::after {
+          content: '';
+          position: absolute;
+          width: 14px;
+          height: 14px;
+          background: var(--text-muted);
+          border-radius: 50%;
+          top: 2px;
+          left: 2px;
+          transition: all 0.2s;
         }
 
-        .auto-refresh-btn.active {
-          color: #00c853;
+        .auto-refresh-switch input:checked + .switch-slider {
+          background: #00c853;
           border-color: #00c853;
-          animation: spin 2s linear infinite;
         }
 
-        @keyframes spin {
-          to { transform: rotate(360deg); }
+        .auto-refresh-switch input:checked + .switch-slider::after {
+          left: 18px;
+          background: white;
         }
 
-        .auto-refresh-indicator {
-          color: #00c853;
-          margin-left: 4px;
-          animation: pulse 1s ease-in-out infinite;
-        }
-
-        .close-logs-btn {
-          background: transparent;
-          border: none;
+        .switch-label {
+          font-size: 12px;
           color: var(--text-muted);
-          font-size: 18px;
-          cursor: pointer;
-          padding: 0 4px;
-          line-height: 1;
         }
 
-        .close-logs-btn:hover {
-          color: var(--text-primary);
+        .service-logs {
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          overflow: hidden;
         }
 
         .service-logs .output-content {
@@ -1078,15 +995,6 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
         }
 
         @media (max-width: 768px) {
-          .detail-actions {
-            flex-direction: column;
-            align-items: stretch;
-          }
-
-          .action-divider {
-            display: none;
-          }
-
           .action-btn {
             padding: 10px 16px;
           }

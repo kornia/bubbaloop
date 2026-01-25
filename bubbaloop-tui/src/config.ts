@@ -3,21 +3,161 @@ import { homedir } from "os";
 import { join, resolve } from "path";
 
 export interface BubbaloopConfig {
-  // WebSocket endpoint for TUI to connect to local zenohd (ws://...)
-  endpoint?: string;
-  // TCP endpoint of remote server for zenohd to connect to (tcp/ip:port)
-  serverEndpoint?: string;
+  // Reserved for future use
+}
+
+// Node source (marketplace entry)
+export interface NodeSource {
+  name: string;
+  path: string;  // Local path or future: git URL
+  type: "local" | "git";  // Future: support git repos
+  enabled: boolean;
+  addedAt: string;
+}
+
+// Sources registry
+export interface SourcesRegistry {
+  sources: NodeSource[];
 }
 
 // Standard bubbaloop directories
 export const BUBBALOOP_HOME = join(homedir(), ".bubbaloop");
 export const CONFIG_DIR = BUBBALOOP_HOME;
 export const CONFIG_FILE = join(CONFIG_DIR, "config.json");
-export const ZENOH_CLI_CONFIG = join(CONFIG_DIR, "zenoh.cli.json5");
 export const NODES_DIR = join(BUBBALOOP_HOME, "nodes");
 export const NODES_FILE = join(BUBBALOOP_HOME, "nodes.json");
 export const LAUNCH_DIR = join(BUBBALOOP_HOME, "launch");
 export const SYSTEMD_USER_DIR = join(homedir(), ".config/systemd/user");
+export const SOURCES_FILE = join(BUBBALOOP_HOME, "sources.json");
+
+// Default sources
+function getDefaultSources(): NodeSource[] {
+  return [
+    {
+      name: "User Nodes",
+      path: join(BUBBALOOP_HOME, "nodes"),
+      type: "local",
+      enabled: true,
+      addedAt: new Date().toISOString(),
+    },
+  ];
+}
+
+// Load sources registry
+export function loadSourcesRegistry(): SourcesRegistry {
+  try {
+    if (existsSync(SOURCES_FILE)) {
+      const data = readFileSync(SOURCES_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch {
+    // Ignore errors
+  }
+  return { sources: getDefaultSources() };
+}
+
+// Save sources registry - throws on failure to prevent silent data loss
+export function saveSourcesRegistry(registry: SourcesRegistry): void {
+  if (!existsSync(CONFIG_DIR)) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  writeFileSync(SOURCES_FILE, JSON.stringify(registry, null, 2));
+}
+
+// Add a source
+export function addSource(name: string, path: string, type: "local" | "git" = "local"): { success: boolean; error?: string } {
+  const expandedPath = path.startsWith("~") ? join(homedir(), path.slice(1)) : path;
+
+  // For local paths, verify directory exists
+  if (type === "local" && !existsSync(expandedPath)) {
+    return { success: false, error: `Directory not found: ${expandedPath}` };
+  }
+
+  const registry = loadSourcesRegistry();
+
+  // Check if already exists
+  if (registry.sources.some(s => s.path === expandedPath)) {
+    return { success: false, error: "Source already exists" };
+  }
+
+  registry.sources.push({
+    name,
+    path: expandedPath,
+    type,
+    enabled: true,
+    addedAt: new Date().toISOString(),
+  });
+
+  saveSourcesRegistry(registry);
+  return { success: true };
+}
+
+// Remove a source
+export function removeSource(path: string): { success: boolean; error?: string } {
+  const registry = loadSourcesRegistry();
+  const index = registry.sources.findIndex(s => s.path === path);
+
+  if (index === -1) {
+    return { success: false, error: "Source not found" };
+  }
+
+  registry.sources.splice(index, 1);
+  saveSourcesRegistry(registry);
+  return { success: true };
+}
+
+// Toggle source enabled/disabled
+export function toggleSource(path: string): { success: boolean; enabled?: boolean; error?: string } {
+  const registry = loadSourcesRegistry();
+  const source = registry.sources.find(s => s.path === path);
+
+  if (!source) {
+    return { success: false, error: "Source not found" };
+  }
+
+  source.enabled = !source.enabled;
+  saveSourcesRegistry(registry);
+  return { success: true, enabled: source.enabled };
+}
+
+// Update a source (name and/or path)
+export function updateSource(oldPath: string, newName: string, newPath: string): { success: boolean; error?: string } {
+  const registry = loadSourcesRegistry();
+  const source = registry.sources.find(s => s.path === oldPath);
+
+  if (!source) {
+    return { success: false, error: "Source not found" };
+  }
+
+  const expandedNewPath = newPath.startsWith("~") ? join(homedir(), newPath.slice(1)) : newPath;
+
+  // For local paths, verify directory exists
+  if (source.type === "local" && !existsSync(expandedNewPath)) {
+    return { success: false, error: `Directory not found: ${expandedNewPath}` };
+  }
+
+  // Check if new path conflicts with existing source (if path changed)
+  if (expandedNewPath !== oldPath && registry.sources.some(s => s.path === expandedNewPath)) {
+    return { success: false, error: "A source with this path already exists" };
+  }
+
+  source.name = newName;
+  source.path = expandedNewPath;
+  saveSourcesRegistry(registry);
+  return { success: true };
+}
+
+// Get enabled sources
+export function getEnabledSources(): NodeSource[] {
+  const registry = loadSourcesRegistry();
+  return registry.sources.filter(s => s.enabled);
+}
+
+// Get all sources
+export function getAllSources(): NodeSource[] {
+  const registry = loadSourcesRegistry();
+  return registry.sources;
+}
 
 // Find project root (where Cargo.toml is)
 export function findProjectRoot(): string | null {
@@ -39,46 +179,35 @@ export function findProjectRoot(): string | null {
   return null;
 }
 
+// Find first existing directory from a list of candidates
+function findExistingDir(candidates: string[]): string | null {
+  for (const dir of candidates) {
+    if (existsSync(dir)) {
+      return dir;
+    }
+  }
+  return null;
+}
+
 // Get templates directory
 export function getTemplatesDir(): string | null {
   const projectRoot = findProjectRoot();
-  if (projectRoot) {
-    const templatesDir = join(projectRoot, "templates");
-    if (existsSync(templatesDir)) {
-      return templatesDir;
-    }
-  }
-
-  // Check standard locations
-  const locations = [
+  const candidates = [
+    ...(projectRoot ? [join(projectRoot, "templates")] : []),
     join(BUBBALOOP_HOME, "templates"),
     "/usr/share/bubbaloop/templates",
   ];
-
-  for (const loc of locations) {
-    if (existsSync(loc)) {
-      return loc;
-    }
-  }
-
-  return null;
+  return findExistingDir(candidates);
 }
 
 // Get launch files directory
 export function getLaunchDir(): string | null {
   const projectRoot = findProjectRoot();
-  if (projectRoot) {
-    const launchDir = join(projectRoot, "launch");
-    if (existsSync(launchDir)) {
-      return launchDir;
-    }
-  }
-
-  if (existsSync(LAUNCH_DIR)) {
-    return LAUNCH_DIR;
-  }
-
-  return null;
+  const candidates = [
+    ...(projectRoot ? [join(projectRoot, "launch")] : []),
+    LAUNCH_DIR,
+  ];
+  return findExistingDir(candidates);
 }
 
 // List available launch files
@@ -323,44 +452,9 @@ export function saveConfig(config: BubbaloopConfig): void {
       mkdirSync(CONFIG_DIR, { recursive: true });
     }
     writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-
-    // Also update zenoh.cli.json5 if serverEndpoint is set
-    if (config.serverEndpoint) {
-      updateZenohCliConfig(config.serverEndpoint);
-    }
   } catch {
     // Ignore save errors
   }
-}
-
-// Generate zenoh.cli.json5 for zenohd client mode
-export function updateZenohCliConfig(serverEndpoint: string): void {
-  const zenohConfig = `{
-  // Auto-generated by bubbaloop TUI
-  // Server endpoint: ${serverEndpoint}
-  mode: "router",
-  connect: {
-    endpoints: ["${serverEndpoint}"],
-  },
-  plugins: {
-    remote_api: {
-      websocket_port: 10000,
-    },
-  },
-}
-`;
-  try {
-    if (!existsSync(CONFIG_DIR)) {
-      mkdirSync(CONFIG_DIR, { recursive: true });
-    }
-    writeFileSync(ZENOH_CLI_CONFIG, zenohConfig);
-  } catch {
-    // Ignore errors
-  }
-}
-
-export function getZenohCliConfigPath(): string {
-  return ZENOH_CLI_CONFIG;
 }
 
 // Ensure all bubbaloop directories exist
@@ -377,4 +471,3 @@ export function ensureDirectories(): void {
   }
 }
 
-export const DEFAULT_ENDPOINT = "ws://127.0.0.1:10000";

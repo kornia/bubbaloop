@@ -315,43 +315,23 @@ impl NodeManager {
         let _path = self.find_node_path(name).await?;
 
         let service_name = systemd::get_service_name(name);
-        let mut lines = Vec::new();
 
-        // Get systemctl status output
-        let status_output = Command::new("systemctl")
-            .args(["--user", "status", "-l", "--no-pager", &service_name])
+        // Use _SYSTEMD_USER_UNIT filter for user services (logs are in system journal)
+        // This works on systems where --user journal doesn't exist
+        let unit_filter = format!("_SYSTEMD_USER_UNIT={}", service_name);
+        let journal_output = Command::new("journalctl")
+            .args([&unit_filter, "-n", "50", "--no-pager", "-o", "cat"])
             .output()
             .await?;
 
-        let stdout = String::from_utf8_lossy(&status_output.stdout);
-        for line in stdout.lines() {
-            lines.push(line.to_string());
-        }
+        let stdout = String::from_utf8_lossy(&journal_output.stdout);
+        let lines: Vec<&str> = stdout.lines().collect();
 
-        // Try journalctl as backup
-        if let Ok(journal_output) = Command::new("journalctl")
-            .args(["--user", "-u", &service_name, "-n", "50", "--no-pager"])
-            .output()
-            .await
-        {
-            let journal_stdout = String::from_utf8_lossy(&journal_output.stdout);
-            for line in journal_stdout.lines() {
-                if !line.contains("No entries") && !line.contains("No journal files") {
-                    lines.push(line.to_string());
-                }
-            }
+        if lines.is_empty() {
+            Ok("No logs available".to_string())
+        } else {
+            Ok(lines.join("\n"))
         }
-
-        // Add stderr if any
-        let stderr = String::from_utf8_lossy(&status_output.stderr);
-        if !stderr.is_empty() {
-            lines.push("--- stderr ---".to_string());
-            for line in stderr.lines() {
-                lines.push(line.to_string());
-            }
-        }
-
-        Ok(lines.join("\n"))
     }
 
     /// Start a node

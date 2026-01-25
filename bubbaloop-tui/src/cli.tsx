@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { render, Box, Text } from "ink";
 import App from "./App.js";
+import { ServiceStartup } from "./components/ServiceStartup.js";
 
 // Double Ctrl+C state
 let ctrlCCount = 0;
@@ -12,10 +13,14 @@ const CTRL_C_TIMEOUT_MS = 2000;
 let onFirstCtrlC: (() => void) | null = null;
 let onCtrlCReset: (() => void) | null = null;
 
+type StartupPhase = 'services' | 'ready' | 'error';
+
 // Wrapper component that manages render key for force re-render on disconnect
 const AppWrapper: React.FC = () => {
   const [renderKey, setRenderKey] = useState(0);
   const [showExitWarning, setShowExitWarning] = useState(false);
+  const [phase, setPhase] = useState<StartupPhase>('services');
+  const [errorMessage, setErrorMessage] = useState<string>('');
 
   // Expose a global function to trigger re-render
   useEffect(() => {
@@ -33,6 +38,37 @@ const AppWrapper: React.FC = () => {
       onCtrlCReset = null;
     };
   }, []);
+
+  const handleServicesReady = useCallback(() => {
+    setPhase('ready');
+  }, []);
+
+  const handleServicesError = useCallback((error: string) => {
+    setPhase('error');
+    setErrorMessage(error);
+  }, []);
+
+  // Show service startup check first
+  if (phase === 'services') {
+    return (
+      <Box flexDirection="column">
+        <ServiceStartup onReady={handleServicesReady} onError={handleServicesError} />
+      </Box>
+    );
+  }
+
+  // Show error if services failed
+  if (phase === 'error') {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Text color="#FF6B6B" bold>Failed to start services</Text>
+        <Text color="#888">{errorMessage}</Text>
+        <Text color="#666" dimColor>
+          Try running: bubbaloop --status
+        </Text>
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column">
