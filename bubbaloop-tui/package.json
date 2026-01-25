@@ -1,6 +1,6 @@
 {
   "name": "bubbaloop",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "Bubbaloop - Orchestration system for Physical AI",
   "type": "module",
   "main": "dist/cli.js",
