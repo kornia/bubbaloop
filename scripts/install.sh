@@ -1,25 +1,48 @@
 #!/bin/bash
 # Bubbaloop Installer
 # Usage: curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
+#
+# This script installs:
+# - Zenoh router (zenohd)
+# - Zenoh WebSocket bridge (zenoh-bridge-remote-api)
+# - Bubbaloop daemon
+# - Bubbaloop TUI
+# - Systemd user services for zenohd and bubbaloop-daemon
 
 set -euo pipefail
 
 REPO="kornia/bubbaloop"
+ZENOH_VERSION="1.2.1"
 INSTALL_DIR="$HOME/.bubbaloop"
 BIN_DIR="$INSTALL_DIR/bin"
+SERVICE_DIR="$HOME/.config/systemd/user"
 
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 
 # Detect architecture
 detect_arch() {
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64)  echo "x86_64-unknown-linux-gnu" ;;
+        aarch64) echo "aarch64-unknown-linux-gnu" ;;
+        arm64)   echo "aarch64-unknown-linux-gnu" ;;
+        *)       error "Unsupported architecture: $arch" ;;
+    esac
+}
+
+# Get short arch for bubbaloop releases
+get_short_arch() {
     local arch
     arch=$(uname -m)
     case "$arch" in
@@ -43,15 +66,44 @@ detect_os() {
 
 # Check for required dependencies
 check_deps() {
+    local missing=()
+
+    if ! command -v curl &> /dev/null; then
+        missing+=("curl")
+    fi
+
+    if ! command -v tar &> /dev/null; then
+        missing+=("tar")
+    fi
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        error "Missing required dependencies: ${missing[*]}"
+    fi
+
+    # Check Node.js
     if ! command -v node &> /dev/null; then
-        warn "Node.js not found. The TUI requires Node.js 20+."
-        warn "Install with: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs"
+        warn "Node.js not found. Installing via NodeSource..."
+        install_nodejs
     else
         local node_version
         node_version=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
         if [ "$node_version" -lt 20 ]; then
-            warn "Node.js version $node_version detected. Version 20+ recommended."
+            warn "Node.js version $node_version detected. Version 20+ required."
+            warn "Please upgrade Node.js manually."
+        else
+            info "Node.js $(node --version) found"
         fi
+    fi
+}
+
+# Install Node.js
+install_nodejs() {
+    if command -v apt-get &> /dev/null; then
+        info "Installing Node.js 20 via NodeSource..."
+        curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+        sudo apt-get install -y nodejs
+    else
+        error "Please install Node.js 20+ manually: https://nodejs.org/"
     fi
 }
 
@@ -68,29 +120,49 @@ download() {
     curl -sSL "$url" -o "$dest" || error "Failed to download: $url"
 }
 
-main() {
-    info "Bubbaloop Installer"
-    echo
+# Install Zenoh
+install_zenoh() {
+    local arch="$1"
+    local zenoh_dir="$INSTALL_DIR/zenoh"
 
-    local os arch version
-    os=$(detect_os)
-    arch=$(detect_arch)
-
-    info "Detected: $os-$arch"
-
-    check_deps
-
-    # Get version (from arg or latest)
-    version="${1:-$(get_latest_version)}"
-    if [ -z "$version" ]; then
-        error "Could not determine version. Check https://github.com/$REPO/releases"
+    if [ -f "$BIN_DIR/zenohd" ]; then
+        local current_version
+        current_version=$("$BIN_DIR/zenohd" --version 2>/dev/null | head -1 | awk '{print $2}' || echo "unknown")
+        info "Zenoh $current_version already installed, upgrading to $ZENOH_VERSION..."
     fi
-    info "Version: $version"
 
-    # Create directories
-    mkdir -p "$BIN_DIR"
+    step "Installing Zenoh $ZENOH_VERSION..."
 
-    # Download assets
+    mkdir -p "$zenoh_dir"
+
+    # Download zenohd
+    local zenoh_tarball="/tmp/zenoh.tar.gz"
+    local zenoh_url="https://github.com/eclipse-zenoh/zenoh/releases/download/${ZENOH_VERSION}/zenoh-${ZENOH_VERSION}-${arch}-standalone.zip"
+
+    info "Downloading Zenoh..."
+    curl -sSL "$zenoh_url" -o "/tmp/zenoh.zip" || error "Failed to download Zenoh"
+
+    info "Extracting Zenoh..."
+    unzip -o -q "/tmp/zenoh.zip" -d "$zenoh_dir"
+    rm "/tmp/zenoh.zip"
+
+    # Copy binaries
+    cp "$zenoh_dir/zenohd" "$BIN_DIR/"
+    cp "$zenoh_dir/zenoh-bridge-remote-api" "$BIN_DIR/" 2>/dev/null || true
+    chmod +x "$BIN_DIR/zenohd"
+    chmod +x "$BIN_DIR/zenoh-bridge-remote-api" 2>/dev/null || true
+
+    info "Zenoh installed: $("$BIN_DIR/zenohd" --version 2>/dev/null | head -1 || echo "$ZENOH_VERSION")"
+}
+
+# Install Bubbaloop
+install_bubbaloop() {
+    local version="$1"
+    local os="$2"
+    local arch="$3"
+
+    step "Installing Bubbaloop $version..."
+
     local base_url="https://github.com/$REPO/releases/download/$version"
 
     # Download daemon
@@ -102,6 +174,7 @@ main() {
     download "$base_url/bubbaloop.tar.gz" "$tui_tarball"
 
     info "Extracting TUI..."
+    rm -rf "$INSTALL_DIR/tui"
     mkdir -p "$INSTALL_DIR/tui"
     tar -xzf "$tui_tarball" -C "$INSTALL_DIR/tui"
     rm "$tui_tarball"
@@ -109,7 +182,7 @@ main() {
     # Install TUI dependencies
     info "Installing TUI dependencies..."
     cd "$INSTALL_DIR/tui"
-    npm install --production --silent 2>/dev/null || warn "npm install failed. Run manually: cd $INSTALL_DIR/tui && npm install"
+    npm install --production --silent 2>/dev/null || warn "npm install had warnings"
 
     # Create wrapper script
     cat > "$BIN_DIR/bubbaloop" << 'WRAPPER'
@@ -119,38 +192,226 @@ exec node --experimental-wasm-modules dist/cli.js "$@"
 WRAPPER
     chmod +x "$BIN_DIR/bubbaloop"
 
-    # Add to PATH
+    # Save version
+    echo "$version" > "$INSTALL_DIR/version"
+
+    info "Bubbaloop $version installed"
+}
+
+# Setup systemd services
+setup_systemd() {
+    step "Setting up systemd services..."
+
+    mkdir -p "$SERVICE_DIR"
+    mkdir -p "$INSTALL_DIR/configs"
+
+    # Create Zenoh config
+    cat > "$INSTALL_DIR/zenoh.json5" << 'CONFIG'
+{
+  mode: "router",
+  listen: {
+    endpoints: ["tcp/0.0.0.0:7447"]
+  },
+  plugins_search_dirs: []
+}
+CONFIG
+
+    # Zenoh router service
+    cat > "$SERVICE_DIR/zenohd.service" << EOF
+[Unit]
+Description=Zenoh Router
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$BIN_DIR/zenohd -c $INSTALL_DIR/zenoh.json5
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+    # Zenoh WebSocket bridge service
+    cat > "$SERVICE_DIR/zenoh-bridge.service" << EOF
+[Unit]
+Description=Zenoh WebSocket Bridge
+After=zenohd.service
+Requires=zenohd.service
+
+[Service]
+Type=simple
+ExecStart=$BIN_DIR/zenoh-bridge-remote-api --ws-port 10001 -e tcp/127.0.0.1:7447
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+    # Bubbaloop daemon service
+    cat > "$SERVICE_DIR/bubbaloop-daemon.service" << EOF
+[Unit]
+Description=Bubbaloop Daemon
+After=zenohd.service
+Requires=zenohd.service
+
+[Service]
+Type=simple
+Environment="RUST_LOG=info"
+ExecStart=$BIN_DIR/bubbaloop-daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+    # Reload systemd
+    systemctl --user daemon-reload
+
+    # Enable services
+    systemctl --user enable zenohd.service
+    systemctl --user enable zenoh-bridge.service
+    systemctl --user enable bubbaloop-daemon.service
+
+    info "Systemd services configured"
+}
+
+# Start services
+start_services() {
+    step "Starting services..."
+
+    # Stop existing services first (for upgrade)
+    systemctl --user stop bubbaloop-daemon.service 2>/dev/null || true
+    systemctl --user stop zenoh-bridge.service 2>/dev/null || true
+    systemctl --user stop zenohd.service 2>/dev/null || true
+
+    # Start services
+    systemctl --user start zenohd.service
+    sleep 1
+    systemctl --user start zenoh-bridge.service
+    systemctl --user start bubbaloop-daemon.service
+
+    # Check status
+    if systemctl --user is-active --quiet zenohd.service; then
+        info "zenohd: running"
+    else
+        warn "zenohd: failed to start"
+    fi
+
+    if systemctl --user is-active --quiet zenoh-bridge.service; then
+        info "zenoh-bridge: running"
+    else
+        warn "zenoh-bridge: failed to start"
+    fi
+
+    if systemctl --user is-active --quiet bubbaloop-daemon.service; then
+        info "bubbaloop-daemon: running"
+    else
+        warn "bubbaloop-daemon: failed to start"
+    fi
+}
+
+# Add to PATH
+setup_path() {
     local shell_rc=""
-    if [ -n "${BASH_VERSION:-}" ]; then
+    if [ -f "$HOME/.bashrc" ]; then
         shell_rc="$HOME/.bashrc"
-    elif [ -n "${ZSH_VERSION:-}" ]; then
+    elif [ -f "$HOME/.zshrc" ]; then
         shell_rc="$HOME/.zshrc"
     else
         shell_rc="$HOME/.profile"
     fi
 
-    local path_line="export PATH=\"$BIN_DIR:\$PATH\""
     if ! grep -q "$BIN_DIR" "$shell_rc" 2>/dev/null; then
         echo "" >> "$shell_rc"
         echo "# Bubbaloop" >> "$shell_rc"
-        echo "$path_line" >> "$shell_rc"
+        echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$shell_rc"
         info "Added $BIN_DIR to PATH in $shell_rc"
     fi
 
+    echo "$shell_rc"
+}
+
+# Enable lingering for user services to run without login
+enable_linger() {
+    if command -v loginctl &> /dev/null; then
+        loginctl enable-linger "$USER" 2>/dev/null || true
+    fi
+}
+
+main() {
     echo
-    info "Installation complete!"
+    echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║       Bubbaloop Installer            ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════╝${NC}"
+    echo
+
+    local os arch short_arch version zenoh_arch
+    os=$(detect_os)
+    arch=$(detect_arch)
+    short_arch=$(get_short_arch)
+
+    info "Platform: $os ($arch)"
+
+    check_deps
+
+    # Get version (from arg or latest)
+    version="${1:-$(get_latest_version)}"
+    if [ -z "$version" ]; then
+        error "Could not determine version. Check https://github.com/$REPO/releases"
+    fi
+
+    # Check for upgrade
+    if [ -f "$INSTALL_DIR/version" ]; then
+        local current_version
+        current_version=$(cat "$INSTALL_DIR/version")
+        if [ "$current_version" = "$version" ]; then
+            info "Bubbaloop $version already installed. Reinstalling..."
+        else
+            info "Upgrading from $current_version to $version..."
+        fi
+    fi
+
+    # Create directories
+    mkdir -p "$BIN_DIR"
+    mkdir -p "$INSTALL_DIR/configs"
+
+    # Install components
+    install_zenoh "$arch"
+    install_bubbaloop "$version" "$os" "$short_arch"
+    setup_systemd
+    enable_linger
+    start_services
+
+    local shell_rc
+    shell_rc=$(setup_path)
+
+    echo
+    echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║       Installation Complete!         ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════╝${NC}"
     echo
     echo "Installed to: $INSTALL_DIR"
-    echo "  - bubbaloop        (TUI)"
+    echo
+    echo "Services running:"
+    echo "  - zenohd (Zenoh router)"
+    echo "  - zenoh-bridge (WebSocket bridge)"
     echo "  - bubbaloop-daemon (Node manager)"
     echo
-    echo "To start using Bubbaloop:"
-    echo "  1. Restart your terminal or run: source $shell_rc"
-    echo "  2. Start Zenoh router: zenohd &"
-    echo "  3. Run: bubbaloop"
+    echo "Commands:"
+    echo "  bubbaloop              - Start the TUI"
+    echo "  bubbaloop-daemon       - Run daemon manually"
     echo
-    warn "Note: Zenoh (zenohd) must be installed separately."
-    echo "      See: https://zenoh.io/docs/getting-started/installation/"
+    echo "Service management:"
+    echo "  systemctl --user status zenohd"
+    echo "  systemctl --user status bubbaloop-daemon"
+    echo "  systemctl --user restart bubbaloop-daemon"
+    echo
+    echo -e "${YELLOW}Next step:${NC}"
+    echo "  source $shell_rc && bubbaloop"
+    echo
 }
 
 main "$@"
