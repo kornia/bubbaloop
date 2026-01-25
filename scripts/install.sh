@@ -115,7 +115,7 @@ main() {
     cat > "$BIN_DIR/bubbaloop" << 'WRAPPER'
 #!/bin/bash
 cd "$HOME/.bubbaloop/tui"
-exec node dist/cli.js "$@"
+exec node --experimental-wasm-modules dist/cli.js "$@"
 WRAPPER
     chmod +x "$BIN_DIR/bubbaloop"
 
