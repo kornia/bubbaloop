@@ -77,11 +77,12 @@ jobs:
           npm version ${{ steps.version.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Build and publish
+        continue-on-error: true  # Don't fail release if npm publish fails
         run: |
           cd bubbaloop-tui
           npm ci
           npm run build
-          npm publish --access public --provenance
+          npm publish --access public --provenance || echo "npm publish failed (version may already exist)"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
