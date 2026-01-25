@@ -1,16 +1,43 @@
 {
-  "name": "bubbaloop-tui",
+  "name": "bubbaloop",
   "version": "0.0.2",
-  "description": "Bubbaloop TUI application",
+  "description": "Bubbaloop - Orchestration system for Physical AI",
   "type": "module",
   "main": "dist/cli.js",
   "bin": {
-    "bubbaloop-tui": "dist/cli.js"
+    "bubbaloop": "dist/cli.js"
   },
+  "files": [
+    "dist",
+    "package.json",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
-    "start": "NODE_NO_WARNINGS=1 node dist/cli.js",
-    "dev": "NODE_NO_WARNINGS=1 tsx src/cli.tsx"
+    "start": "node --experimental-wasm-modules dist/cli.js",
+    "dev": "NODE_NO_WARNINGS=1 tsx src/cli.tsx",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kornia/bubbaloop.git"
+  },
+  "keywords": [
+    "robotics",
+    "zenoh",
+    "ros",
+    "physical-ai",
+    "tui",
+    "cli"
+  ],
+  "author": "Edgar Riba <edgar.riba@gmail.com>",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/kornia/bubbaloop/issues"
+  },
+  "homepage": "https://github.com/kornia/bubbaloop#readme",
+  "engines": {
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "@eclipse-zenoh/zenoh-ts": "^1.7.2",

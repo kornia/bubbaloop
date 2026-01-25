@@ -44,8 +44,8 @@ jobs:
           name: daemon-${{ matrix.arch }}
           path: bubbaloop-daemon-linux-${{ matrix.arch }}
 
-  build-tui:
-    name: Build TUI
+  publish-npm:
+    name: Publish to npm
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,30 +53,37 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
 
-      - name: Build TUI
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.event.release.tag_name }}"
+          fi
+          # Remove 'v' prefix if present
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update package version
+        run: |
+          cd bubbaloop-tui
+          npm version ${{ steps.version.outputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build and publish
         run: |
           cd bubbaloop-tui
           npm ci
           npm run build
-
-      - name: Create tarball
-        run: |
-          cd bubbaloop-tui
-          # Include package files and built dist, exclude dev files
-          tar -czvf ../bubbaloop.tar.gz \
-            package.json \
-            package-lock.json \
-            dist/
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tui
-          path: bubbaloop.tar.gz
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   release:
     name: Publish Release Assets
-    needs: [build-daemon, build-tui]
+    needs: [build-daemon]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,8 +100,6 @@ jobs:
           mkdir -p release-assets
           cp artifacts/daemon-amd64/bubbaloop-daemon-linux-amd64 release-assets/
           cp artifacts/daemon-arm64/bubbaloop-daemon-linux-arm64 release-assets/
-          cp artifacts/tui/bubbaloop.tar.gz release-assets/
-          # Also include the install script
           cp scripts/install.sh release-assets/
 
       - name: Determine version
@@ -117,21 +122,28 @@ jobs:
           files: |
             release-assets/bubbaloop-daemon-linux-amd64
             release-assets/bubbaloop-daemon-linux-arm64
-            release-assets/bubbaloop.tar.gz
             release-assets/install.sh
           append_body: true
           body: |
             ## Installation
 
+            ### Quick Install (recommended)
             ```bash
-            curl -sSL https://get.bubbaloop.com | bash
+            curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
             ```
 
-            Or download manually:
+            ### Manual Install
+            ```bash
+            # Install TUI via npm
+            npm install -g bubbaloop
+
+            # Download daemon binary for your architecture
+            ```
+
+            ### Assets
             - `bubbaloop-daemon-linux-amd64` - Daemon for x86_64
             - `bubbaloop-daemon-linux-arm64` - Daemon for ARM64 (Jetson, Raspberry Pi)
-            - `bubbaloop.tar.gz` - Bubbaloop TUI (Node.js)
-            - `install.sh` - Installation script
+            - `install.sh` - Full installation script (includes Zenoh + systemd setup)
 
       # When triggered manually, create a new release
       - name: Create Release
@@ -146,19 +158,26 @@ jobs:
           files: |
             release-assets/bubbaloop-daemon-linux-amd64
             release-assets/bubbaloop-daemon-linux-arm64
-            release-assets/bubbaloop.tar.gz
             release-assets/install.sh
           body: |
             ## Installation
 
+            ### Quick Install (recommended)
             ```bash
-            curl -sSL https://get.bubbaloop.com | bash
+            curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
             ```
 
-            Or download manually:
+            ### Manual Install
+            ```bash
+            # Install TUI via npm
+            npm install -g bubbaloop
+
+            # Download daemon binary for your architecture
+            ```
+
+            ### Assets
             - `bubbaloop-daemon-linux-amd64` - Daemon for x86_64
             - `bubbaloop-daemon-linux-arm64` - Daemon for ARM64 (Jetson, Raspberry Pi)
-            - `bubbaloop.tar.gz` - Bubbaloop TUI (Node.js)
-            - `install.sh` - Installation script
+            - `install.sh` - Full installation script (includes Zenoh + systemd setup)
 
             ## What's Changed

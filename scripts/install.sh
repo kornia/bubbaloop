@@ -169,28 +169,10 @@ install_bubbaloop() {
     download "$base_url/bubbaloop-daemon-$os-$arch" "$BIN_DIR/bubbaloop-daemon"
     chmod +x "$BIN_DIR/bubbaloop-daemon"
 
-    # Download and extract TUI
-    local tui_tarball="/tmp/bubbaloop.tar.gz"
-    download "$base_url/bubbaloop.tar.gz" "$tui_tarball"
-
-    info "Extracting TUI..."
-    rm -rf "$INSTALL_DIR/tui"
-    mkdir -p "$INSTALL_DIR/tui"
-    tar -xzf "$tui_tarball" -C "$INSTALL_DIR/tui"
-    rm "$tui_tarball"
-
-    # Install TUI dependencies
-    info "Installing TUI dependencies..."
-    cd "$INSTALL_DIR/tui"
-    npm install --production --silent 2>/dev/null || warn "npm install had warnings"
-
-    # Create wrapper script
-    cat > "$BIN_DIR/bubbaloop" << 'WRAPPER'
-#!/bin/bash
-cd "$HOME/.bubbaloop/tui"
-exec node --experimental-wasm-modules dist/cli.js "$@"
-WRAPPER
-    chmod +x "$BIN_DIR/bubbaloop"
+    # Install TUI via npm (globally)
+    info "Installing TUI via npm..."
+    local npm_version="${version#v}"  # Remove 'v' prefix
+    npm install -g "bubbaloop@$npm_version" 2>/dev/null || npm install -g bubbaloop || warn "npm install had warnings"
 
     # Save version
     echo "$version" > "$INSTALL_DIR/version"
