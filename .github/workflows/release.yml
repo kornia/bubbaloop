@@ -64,7 +64,7 @@ jobs:
         run: |
           cd bubbaloop-tui
           # Include package files and built dist, exclude dev files
-          tar -czvf ../bubbaloop-tui.tar.gz \
+          tar -czvf ../bubbaloop.tar.gz \
             package.json \
             package-lock.json \
             dist/
@@ -72,7 +72,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tui
-          path: bubbaloop-tui.tar.gz
+          path: bubbaloop.tar.gz
 
   release:
     name: Publish Release Assets
@@ -93,7 +93,7 @@ jobs:
           mkdir -p release-assets
           cp artifacts/daemon-amd64/bubbaloop-daemon-linux-amd64 release-assets/
           cp artifacts/daemon-arm64/bubbaloop-daemon-linux-arm64 release-assets/
-          cp artifacts/tui/bubbaloop-tui.tar.gz release-assets/
+          cp artifacts/tui/bubbaloop.tar.gz release-assets/
           # Also include the install script
           cp scripts/install.sh release-assets/
 
@@ -117,7 +117,7 @@ jobs:
           files: |
             release-assets/bubbaloop-daemon-linux-amd64
             release-assets/bubbaloop-daemon-linux-arm64
-            release-assets/bubbaloop-tui.tar.gz
+            release-assets/bubbaloop.tar.gz
             release-assets/install.sh
           append_body: true
           body: |
@@ -130,7 +130,7 @@ jobs:
             Or download manually:
             - `bubbaloop-daemon-linux-amd64` - Daemon for x86_64
             - `bubbaloop-daemon-linux-arm64` - Daemon for ARM64 (Jetson, Raspberry Pi)
-            - `bubbaloop-tui.tar.gz` - Terminal UI (Node.js)
+            - `bubbaloop.tar.gz` - Bubbaloop TUI (Node.js)
             - `install.sh` - Installation script
 
       # When triggered manually, create a new release
@@ -146,7 +146,7 @@ jobs:
           files: |
             release-assets/bubbaloop-daemon-linux-amd64
             release-assets/bubbaloop-daemon-linux-arm64
-            release-assets/bubbaloop-tui.tar.gz
+            release-assets/bubbaloop.tar.gz
             release-assets/install.sh
           body: |
             ## Installation
@@ -158,7 +158,7 @@ jobs:
             Or download manually:
             - `bubbaloop-daemon-linux-amd64` - Daemon for x86_64
             - `bubbaloop-daemon-linux-arm64` - Daemon for ARM64 (Jetson, Raspberry Pi)
-            - `bubbaloop-tui.tar.gz` - Terminal UI (Node.js)
+            - `bubbaloop.tar.gz` - Bubbaloop TUI (Node.js)
             - `install.sh` - Installation script
 
             ## What's Changed
