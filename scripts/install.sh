@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO="kornia/bubbaloop"
-ZENOH_VERSION="1.2.1"
+ZENOH_VERSION="1.6.2"
 INSTALL_DIR="$HOME/.bubbaloop"
 BIN_DIR="$INSTALL_DIR/bin"
 SERVICE_DIR="$HOME/.config/systemd/user"
@@ -360,10 +360,17 @@ main() {
     echo "  systemctl --user status bubbaloop-daemon"
     echo "  systemctl --user restart bubbaloop-daemon"
     echo
-    echo -e "${YELLOW}To start the TUI:${NC}"
+    echo -e "${YELLOW}Usage:${NC}"
     echo "  source $shell_rc  # or open a new terminal"
-    echo "  bubbaloop"
+    echo "  bubbaloop          # Launch TUI"
+    echo "  bubbaloop status   # Show services status"
+    echo "  bubbaloop --help   # Show all commands"
     echo
+
+    # Show installed version
+    if [ -x "$BIN_DIR/bubbaloop" ]; then
+        info "Bubbaloop CLI ready: $($BIN_DIR/bubbaloop --help 2>&1 | head -1 || echo 'installed')"
+    fi
 }
 
 main "$@"
