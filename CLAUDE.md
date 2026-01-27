@@ -167,8 +167,19 @@ Each node lives in `crates/bubbaloop-nodes/{name}/` with:
 name: my-node
 version: "0.1.0"
 description: "My custom node"
-node_type: rust  # or python
+type: rust  # or python
+build: "pixi run build"  # optional build command
+command: "./target/release/my_node"  # optional run command
+depends_on:  # optional service dependencies
+  - rtsp-camera
+  - openmeteo
 ```
+
+#### Service Dependencies
+
+The `depends_on` field specifies other nodes that must be running before this node starts. When the systemd service is installed, this generates:
+- `After=network.target bubbaloop-rtsp-camera.service bubbaloop-openmeteo.service`
+- `Requires=bubbaloop-rtsp-camera.service bubbaloop-openmeteo.service`
 
 ### Building a node
 
@@ -187,6 +198,97 @@ The binary will be at `target/release/my_node`.
 - **prost** - Protobuf serialization
 - **GStreamer** - H264 camera capture
 - **zbus** - D-Bus client for systemd integration
+
+## Daemon Service Management
+
+The bubbaloop-daemon provides advanced service management features:
+
+### Security Hardening
+
+Generated systemd service units include security directives:
+
+```ini
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# Robotics-compatible settings (allow RT scheduling and JIT)
+RestrictRealtime=false
+MemoryDenyWriteExecute=false
+```
+
+To apply security hardening to existing services, reinstall them:
+```bash
+# Via dashboard: Uninstall then Install the node
+# Or programmatically via Zenoh commands
+```
+
+Analyze service security:
+```bash
+systemd-analyze --user security bubbaloop-rtsp-camera.service
+```
+
+### Real-time State Updates (D-Bus Signals)
+
+The daemon subscribes to systemd D-Bus signals for instant state updates:
+- **JobRemoved** - Service started/stopped/failed
+- **UnitNew** - Service installed
+- **UnitRemoved** - Service uninstalled
+
+This provides <100ms state update latency (vs 5s polling previously). Polling now runs every 30s as a backup sync.
+
+### Build Queue and Timeout
+
+Build operations are managed to prevent issues:
+- **Concurrent build prevention**: Only one build per node at a time
+- **10-minute timeout**: Builds are killed if they exceed the timeout
+- **Process cleanup**: `kill_on_drop(true)` ensures child processes are terminated
+
+Events emitted: `building`, `build_complete`, `build_failed`, `build_timeout`
+
+### Health Monitoring (Zenoh Heartbeats)
+
+Nodes can publish heartbeats to `bubbaloop/nodes/{name}/health` for health monitoring:
+
+```rust
+// In your node, publish periodic heartbeats:
+session.put("bubbaloop/nodes/my-node/health", "ok").await?;
+```
+
+The daemon tracks:
+- **HealthStatus**: `UNKNOWN`, `HEALTHY`, `UNHEALTHY`
+- **last_health_check_ms**: Timestamp of last heartbeat
+
+A node is marked `UNHEALTHY` if no heartbeat is received for 30 seconds while the service is running.
+
+### Protobuf Schema (daemon.proto)
+
+```protobuf
+enum HealthStatus {
+  HEALTH_STATUS_UNKNOWN = 0;
+  HEALTH_STATUS_HEALTHY = 1;
+  HEALTH_STATUS_UNHEALTHY = 2;
+}
+
+message NodeState {
+  string name = 1;
+  string path = 2;
+  NodeStatus status = 3;
+  bool installed = 4;
+  bool autostart_enabled = 5;
+  string version = 6;
+  string description = 7;
+  string node_type = 8;
+  bool is_built = 9;
+  int64 last_updated_ms = 10;
+  repeated string build_output = 11;
+  HealthStatus health_status = 12;
+  int64 last_health_check_ms = 13;
+}
+```
 
 ## Git Hygiene & Artifacts
 

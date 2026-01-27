@@ -45,6 +45,9 @@ pub struct NodeManifest {
     pub build: Option<String>,
     #[serde(default)]
     pub command: Option<String>,
+    /// Other nodes that this node depends on (must be started first)
+    #[serde(default)]
+    pub depends_on: Vec<String>,
 }
 
 /// Entry in the nodes registry (nodes.json)

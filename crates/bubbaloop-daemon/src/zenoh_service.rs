@@ -51,12 +51,11 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>> {
     // Configure Zenoh session
     let mut config = zenoh::Config::default();
 
-    // If endpoint provided, connect to it
-    if let Some(ep) = endpoint {
-        config
-            .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
-            .ok();
-    }
+    // Connect to local router by default, or custom endpoint if provided
+    let ep = endpoint.unwrap_or("tcp/127.0.0.1:7447");
+    config
+        .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
+        .ok();
 
     // Enable shared memory if available
     config
@@ -121,8 +120,8 @@ impl ZenohService {
             initial_list.nodes.len()
         );
 
-        // Create periodic publish timer
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        // Create periodic publish timer (30s backup sync - primary updates come from D-Bus signals)
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
 
         loop {
             tokio::select! {

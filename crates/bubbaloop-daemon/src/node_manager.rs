@@ -3,17 +3,24 @@
 //! Maintains authoritative state for all nodes and handles commands.
 
 use crate::proto::{
-    CommandResult, CommandType, NodeCommand, NodeEvent, NodeList, NodeState, NodeStatus,
+    CommandResult, CommandType, HealthStatus, NodeCommand, NodeEvent, NodeList, NodeState,
+    NodeStatus,
 };
 use crate::registry::{self, NodeManifest};
-use crate::systemd::{self, ActiveState, SystemdClient};
-use std::collections::HashMap;
+use crate::systemd::{self, ActiveState, SystemdClient, SystemdSignalEvent};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
+
+/// Build timeout in seconds (10 minutes)
+const BUILD_TIMEOUT_SECS: u64 = 600;
+
+/// Health check timeout in milliseconds (30 seconds)
+const HEALTH_TIMEOUT_MS: i64 = 30_000;
 
 #[derive(Error, Debug)]
 pub enum NodeManagerError {
@@ -28,6 +35,12 @@ pub enum NodeManagerError {
 
     #[error("Build error: {0}")]
     BuildError(String),
+
+    #[error("Build already in progress for: {0}")]
+    AlreadyBuilding(String),
+
+    #[error("Build timed out for: {0}")]
+    BuildTimeout(String),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -69,6 +82,10 @@ pub struct CachedNode {
     pub is_built: bool,
     pub build_state: BuildState,
     pub last_updated_ms: i64,
+    /// Health status based on heartbeat monitoring
+    pub health_status: HealthStatus,
+    /// Last heartbeat timestamp (milliseconds since epoch)
+    pub last_health_check_ms: i64,
 }
 
 impl CachedNode {
@@ -93,6 +110,8 @@ impl CachedNode {
             is_built: self.is_built,
             last_updated_ms: self.last_updated_ms,
             build_output: self.build_state.output.clone(),
+            health_status: self.health_status as i32,
+            last_health_check_ms: self.last_health_check_ms,
         }
     }
 }
@@ -105,6 +124,8 @@ pub struct NodeManager {
     systemd: SystemdClient,
     /// Channel to broadcast state changes
     event_tx: broadcast::Sender<NodeEvent>,
+    /// Nodes currently being built (prevents concurrent builds)
+    building_nodes: Mutex<HashSet<String>>,
 }
 
 impl NodeManager {
@@ -117,6 +138,7 @@ impl NodeManager {
             nodes: RwLock::new(HashMap::new()),
             systemd,
             event_tx,
+            building_nodes: Mutex::new(HashSet::new()),
         });
 
         // Initial load
@@ -128,6 +150,200 @@ impl NodeManager {
     /// Subscribe to node events
     pub fn subscribe(&self) -> broadcast::Receiver<NodeEvent> {
         self.event_tx.subscribe()
+    }
+
+    /// Start listening to systemd D-Bus signals for real-time updates
+    pub async fn start_signal_listener(self: Arc<Self>) -> Result<()> {
+        let mut signal_rx = self.systemd.subscribe_to_signals().await?;
+
+        tokio::spawn(async move {
+            log::info!("Signal listener started");
+            while let Some(event) = signal_rx.recv().await {
+                log::debug!("Received systemd signal: {:?}", event);
+
+                let node_name = match &event {
+                    SystemdSignalEvent::JobRemoved { node_name, .. } => node_name.clone(),
+                    SystemdSignalEvent::UnitNew { node_name, .. } => node_name.clone(),
+                    SystemdSignalEvent::UnitRemoved { node_name, .. } => node_name.clone(),
+                };
+
+                if let Some(name) = node_name {
+                    // Refresh just this node
+                    if let Err(e) = self.refresh_node(&name).await {
+                        log::warn!("Failed to refresh node {} after signal: {}", name, e);
+                    }
+
+                    // Determine event type
+                    let event_type = match &event {
+                        SystemdSignalEvent::JobRemoved { result, .. } => match result.as_str() {
+                            "done" => "state_changed",
+                            "failed" => "failed",
+                            "canceled" => "stopped",
+                            _ => "state_changed",
+                        },
+                        SystemdSignalEvent::UnitNew { .. } => "installed",
+                        SystemdSignalEvent::UnitRemoved { .. } => "uninstalled",
+                    };
+
+                    self.emit_event(event_type, &name).await;
+                }
+            }
+            log::warn!("Signal listener ended");
+        });
+
+        Ok(())
+    }
+
+    /// Refresh a single node's state
+    pub async fn refresh_node(&self, name: &str) -> Result<()> {
+        let service_name = systemd::get_service_name(name);
+
+        // Get systemd state
+        let active_state = self.systemd.get_active_state(&service_name).await?;
+        let installed = systemd::is_service_installed(name);
+        let autostart_enabled = if installed {
+            self.systemd
+                .is_enabled(&service_name)
+                .await
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        let status = if !installed {
+            NodeStatus::NotInstalled
+        } else {
+            match active_state {
+                ActiveState::Active => NodeStatus::Running,
+                ActiveState::Failed => NodeStatus::Failed,
+                ActiveState::Inactive => NodeStatus::Stopped,
+                ActiveState::Activating => NodeStatus::Running,
+                ActiveState::Deactivating => NodeStatus::Stopped,
+                _ => NodeStatus::Stopped,
+            }
+        };
+
+        // Update the node in our cache
+        let mut nodes = self.nodes.write().await;
+        for node in nodes.values_mut() {
+            if node
+                .manifest
+                .as_ref()
+                .map(|m| m.name == name)
+                .unwrap_or(false)
+            {
+                // Preserve build state status override
+                let final_status = match node.build_state.status {
+                    BuildStatus::Building | BuildStatus::Cleaning => NodeStatus::Building,
+                    BuildStatus::Idle => status,
+                };
+
+                node.status = final_status;
+                node.installed = installed;
+                node.autostart_enabled = autostart_enabled;
+                node.last_updated_ms = Self::now_ms();
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Start health monitoring via Zenoh heartbeats
+    ///
+    /// Subscribes to `bubbaloop/nodes/*/health` topics and marks nodes
+    /// as unhealthy if no heartbeat is received within HEALTH_TIMEOUT_MS.
+    pub async fn start_health_monitor(
+        self: Arc<Self>,
+        session: std::sync::Arc<zenoh::Session>,
+    ) -> Result<()> {
+        let manager = self.clone();
+
+        // Subscribe to health heartbeats from all nodes
+        let subscriber = session
+            .declare_subscriber("bubbaloop/nodes/*/health")
+            .await
+            .map_err(|e| NodeManagerError::BuildError(format!("Zenoh subscribe error: {}", e)))?;
+
+        log::info!("Started health monitor, subscribing to bubbaloop/nodes/*/health");
+
+        // Spawn heartbeat receiver task
+        let manager_heartbeat = manager.clone();
+        tokio::spawn(async move {
+            loop {
+                match subscriber.recv_async().await {
+                    Ok(sample) => {
+                        // Extract node name from key: bubbaloop/nodes/{name}/health
+                        let key_str = sample.key_expr().as_str();
+                        if let Some(name) = extract_health_node_name(key_str) {
+                            let now = Self::now_ms();
+                            log::debug!("Received health heartbeat from node: {}", name);
+
+                            // Update health state
+                            let mut nodes = manager_heartbeat.nodes.write().await;
+                            for node in nodes.values_mut() {
+                                if node
+                                    .manifest
+                                    .as_ref()
+                                    .map(|m| m.name == name)
+                                    .unwrap_or(false)
+                                {
+                                    node.health_status = HealthStatus::Healthy;
+                                    node.last_health_check_ms = now;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Health subscriber error: {}", e);
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Spawn staleness checker task (runs every 10 seconds)
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+
+                let now = Self::now_ms();
+                let mut nodes = manager.nodes.write().await;
+
+                for node in nodes.values_mut() {
+                    // Only check running nodes
+                    if node.status == NodeStatus::Running {
+                        // If we've received at least one heartbeat, check staleness
+                        if node.last_health_check_ms > 0 {
+                            let age = now - node.last_health_check_ms;
+                            if age > HEALTH_TIMEOUT_MS
+                                && node.health_status != HealthStatus::Unhealthy
+                            {
+                                let name = node
+                                    .manifest
+                                    .as_ref()
+                                    .map(|m| m.name.clone())
+                                    .unwrap_or_else(|| "unknown".to_string());
+                                log::warn!(
+                                    "Node {} marked unhealthy (no heartbeat for {}ms)",
+                                    name,
+                                    age
+                                );
+                                node.health_status = HealthStatus::Unhealthy;
+                            }
+                        }
+                    } else {
+                        // Reset health for non-running nodes
+                        node.health_status = HealthStatus::Unknown;
+                        node.last_health_check_ms = 0;
+                    }
+                }
+            }
+        });
+
+        Ok(())
     }
 
     /// Get current timestamp in milliseconds
@@ -186,11 +402,17 @@ impl NodeManager {
                 .map(|m| registry::check_is_built(&path, m))
                 .unwrap_or(false);
 
-            // Preserve build state if exists
-            let build_state = nodes
+            // Preserve build state and health state if exists
+            let (build_state, health_status, last_health_check_ms) = nodes
                 .get(&path)
-                .map(|n| n.build_state.clone())
-                .unwrap_or_default();
+                .map(|n| {
+                    (
+                        n.build_state.clone(),
+                        n.health_status,
+                        n.last_health_check_ms,
+                    )
+                })
+                .unwrap_or((BuildState::default(), HealthStatus::Unknown, 0));
 
             // If building/cleaning, override status
             let status = match build_state.status {
@@ -208,6 +430,8 @@ impl NodeManager {
                 is_built,
                 build_state,
                 last_updated_ms: Self::now_ms(),
+                health_status,
+                last_health_check_ms,
             };
 
             nodes.insert(path, cached);
@@ -222,6 +446,7 @@ impl NodeManager {
     /// Get the current node list
     pub async fn get_node_list(&self) -> NodeList {
         let nodes = self.nodes.read().await;
+        log::debug!("get_node_list: nodes HashMap has {} entries", nodes.len());
         NodeList {
             nodes: nodes.values().map(|n| n.to_proto()).collect(),
             timestamp_ms: Self::now_ms(),
@@ -388,6 +613,7 @@ impl NodeManager {
             name,
             &manifest.node_type,
             manifest.command.as_deref(),
+            &manifest.depends_on,
         )
         .await?;
 
@@ -415,6 +641,14 @@ impl NodeManager {
     async fn build_node(self: &Arc<Self>, manager: Arc<Self>, name: &str) -> Result<String> {
         let path = self.find_node_path(name).await?;
 
+        // Check if already building this node
+        {
+            let building = self.building_nodes.lock().await;
+            if building.contains(name) {
+                return Err(NodeManagerError::AlreadyBuilding(name.to_string()));
+            }
+        }
+
         // Get build command
         let build_cmd = {
             let nodes = self.nodes.read().await;
@@ -429,6 +663,12 @@ impl NodeManager {
                 })?
         };
 
+        // Mark as building
+        {
+            let mut building = self.building_nodes.lock().await;
+            building.insert(name.to_string());
+        }
+
         // Update status to building
         {
             let mut nodes = self.nodes.write().await;
@@ -441,24 +681,41 @@ impl NodeManager {
 
         self.emit_event("building", name).await;
 
-        // Spawn build process
+        // Spawn build process with timeout
         let name_clone = name.to_string();
         let path_clone = path.clone();
 
         tokio::spawn(async move {
-            let result = run_build_command(&manager, &path_clone, &build_cmd).await;
+            let timeout_duration = Duration::from_secs(BUILD_TIMEOUT_SECS);
+            let build_future = run_build_command(&manager, &path_clone, &build_cmd);
+
+            let result = match tokio::time::timeout(timeout_duration, build_future).await {
+                Ok(build_result) => build_result,
+                Err(_) => Err(NodeManagerError::BuildTimeout(name_clone.clone())),
+            };
+
+            // Remove from building set
+            {
+                let mut building = manager.building_nodes.lock().await;
+                building.remove(&name_clone);
+            }
 
             // Update status based on result
             let mut nodes = manager.nodes.write().await;
             if let Some(node) = nodes.get_mut(&path_clone) {
                 node.build_state.status = BuildStatus::Idle;
 
-                match result {
+                match &result {
                     Ok(_) => {
                         node.build_state
                             .output
                             .push("--- Build completed successfully ---".to_string());
                         node.is_built = true;
+                    }
+                    Err(NodeManagerError::BuildTimeout(_)) => {
+                        node.build_state
+                            .output
+                            .push("--- Build timed out ---".to_string());
                     }
                     Err(e) => {
                         node.build_state
@@ -471,7 +728,15 @@ impl NodeManager {
 
             // Refresh to get correct status
             let _ = manager.refresh_all().await;
-            manager.emit_event("build_complete", &name_clone).await;
+
+            // Emit appropriate event
+            match result {
+                Ok(_) => manager.emit_event("build_complete", &name_clone).await,
+                Err(NodeManagerError::BuildTimeout(_)) => {
+                    manager.emit_event("build_timeout", &name_clone).await
+                }
+                Err(_) => manager.emit_event("build_failed", &name_clone).await,
+            }
         });
 
         Ok(format!("Building {} (background)", name))
@@ -480,6 +745,20 @@ impl NodeManager {
     /// Clean a node
     async fn clean_node(self: &Arc<Self>, manager: Arc<Self>, name: &str) -> Result<String> {
         let path = self.find_node_path(name).await?;
+
+        // Check if already building/cleaning this node
+        {
+            let building = self.building_nodes.lock().await;
+            if building.contains(name) {
+                return Err(NodeManagerError::AlreadyBuilding(name.to_string()));
+            }
+        }
+
+        // Mark as building (cleaning uses the same lock)
+        {
+            let mut building = self.building_nodes.lock().await;
+            building.insert(name.to_string());
+        }
 
         // Update status to cleaning
         {
@@ -493,12 +772,24 @@ impl NodeManager {
 
         self.emit_event("cleaning", name).await;
 
-        // Spawn clean process
+        // Spawn clean process with timeout
         let name_clone = name.to_string();
         let path_clone = path.clone();
 
         tokio::spawn(async move {
-            let result = run_build_command(&manager, &path_clone, "pixi run clean").await;
+            let timeout_duration = Duration::from_secs(BUILD_TIMEOUT_SECS);
+            let clean_future = run_build_command(&manager, &path_clone, "pixi run clean");
+
+            let result = match tokio::time::timeout(timeout_duration, clean_future).await {
+                Ok(clean_result) => clean_result,
+                Err(_) => Err(NodeManagerError::BuildTimeout(name_clone.clone())),
+            };
+
+            // Remove from building set
+            {
+                let mut building = manager.building_nodes.lock().await;
+                building.remove(&name_clone);
+            }
 
             // Update status
             let mut nodes = manager.nodes.write().await;
@@ -506,11 +797,16 @@ impl NodeManager {
                 node.build_state.status = BuildStatus::Idle;
                 node.is_built = false;
 
-                match result {
+                match &result {
                     Ok(_) => {
                         node.build_state
                             .output
                             .push("--- Clean completed ---".to_string());
+                    }
+                    Err(NodeManagerError::BuildTimeout(_)) => {
+                        node.build_state
+                            .output
+                            .push("--- Clean timed out ---".to_string());
                     }
                     Err(e) => {
                         node.build_state
@@ -594,6 +890,7 @@ async fn run_build_command(manager: &Arc<NodeManager>, path: &str, cmd: &str) ->
         .current_dir(path)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true) // Kill child process if future is dropped (e.g., on timeout)
         .spawn()?;
 
     let stdout = child.stdout.take();
@@ -650,5 +947,16 @@ async fn run_build_command(manager: &Arc<NodeManager>, path: &str, cmd: &str) ->
             "Command exited with code {}",
             status.code().unwrap_or(-1)
         )))
+    }
+}
+
+/// Extract node name from health topic key: bubbaloop/nodes/{name}/health
+fn extract_health_node_name(key: &str) -> Option<String> {
+    // Key format: bubbaloop/nodes/{name}/health
+    let parts: Vec<&str> = key.split('/').collect();
+    if parts.len() >= 4 && parts[0] == "bubbaloop" && parts[1] == "nodes" && parts[3] == "health" {
+        Some(parts[2].to_string())
+    } else {
+        None
     }
 }

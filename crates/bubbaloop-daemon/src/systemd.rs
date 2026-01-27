@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 use thiserror::Error;
+use tokio::sync::mpsc;
+use zbus::zvariant::OwnedObjectPath;
 use zbus::{proxy, Connection};
 
 #[derive(Error, Debug)]
@@ -119,6 +121,30 @@ trait SystemdManager {
 
     /// Get unit file state
     fn get_unit_file_state(&self, name: &str) -> zbus::Result<String>;
+
+    /// Subscribe to signals (required before receiving signals)
+    fn subscribe(&self) -> zbus::Result<()>;
+
+    /// Unsubscribe from signals
+    fn unsubscribe(&self) -> zbus::Result<()>;
+
+    /// Signal: Job removed (job completed/failed/cancelled)
+    #[zbus(signal)]
+    fn job_removed(
+        &self,
+        id: u32,
+        job: OwnedObjectPath,
+        unit: &str,
+        result: &str,
+    ) -> zbus::Result<()>;
+
+    /// Signal: Unit added
+    #[zbus(signal)]
+    fn unit_new(&self, id: &str, unit: OwnedObjectPath) -> zbus::Result<()>;
+
+    /// Signal: Unit removed
+    #[zbus(signal)]
+    fn unit_removed(&self, id: &str, unit: OwnedObjectPath) -> zbus::Result<()>;
 }
 
 /// D-Bus proxy for systemd unit interface
@@ -272,6 +298,148 @@ impl SystemdClient {
         manager.reload().await?;
         Ok(())
     }
+
+    /// Subscribe to systemd signals and return a receiver for signal events
+    pub async fn subscribe_to_signals(&self) -> Result<mpsc::Receiver<SystemdSignalEvent>> {
+        let manager = self.manager().await?;
+
+        // Subscribe to signals first
+        manager.subscribe().await?;
+        log::info!("Subscribed to systemd signals");
+
+        let (tx, rx) = mpsc::channel(100);
+
+        // Clone connection for the signal listener task
+        let connection = self.connection.clone();
+
+        // Spawn signal listener task
+        tokio::spawn(async move {
+            let manager_proxy = match SystemdManagerProxy::new(&connection).await {
+                Ok(proxy) => proxy,
+                Err(e) => {
+                    log::error!("Failed to create manager proxy for signals: {}", e);
+                    return;
+                }
+            };
+
+            // Spawn separate tasks for each signal type
+            let tx_job = tx.clone();
+            let mut job_removed = match manager_proxy.receive_job_removed().await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    log::error!("Failed to receive job_removed signals: {}", e);
+                    return;
+                }
+            };
+
+            tokio::spawn(async move {
+                use futures::StreamExt;
+                while let Some(signal) = job_removed.next().await {
+                    if let Ok(args) = signal.args() {
+                        let unit = args.unit.to_string();
+                        // Only care about bubbaloop services
+                        if unit.starts_with("bubbaloop-") {
+                            let node_name = extract_node_name(&unit);
+                            let event = SystemdSignalEvent::JobRemoved {
+                                unit,
+                                result: args.result.to_string(),
+                                node_name,
+                            };
+                            if tx_job.send(event).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+
+            let tx_new = tx.clone();
+            let mut unit_new = match manager_proxy.receive_unit_new().await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    log::error!("Failed to receive unit_new signals: {}", e);
+                    return;
+                }
+            };
+
+            tokio::spawn(async move {
+                use futures::StreamExt;
+                while let Some(signal) = unit_new.next().await {
+                    if let Ok(args) = signal.args() {
+                        let unit = args.id.to_string();
+                        if unit.starts_with("bubbaloop-") {
+                            let node_name = extract_node_name(&unit);
+                            let event = SystemdSignalEvent::UnitNew { unit, node_name };
+                            if tx_new.send(event).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+
+            let tx_removed = tx;
+            let mut unit_removed = match manager_proxy.receive_unit_removed().await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    log::error!("Failed to receive unit_removed signals: {}", e);
+                    return;
+                }
+            };
+
+            tokio::spawn(async move {
+                use futures::StreamExt;
+                while let Some(signal) = unit_removed.next().await {
+                    if let Ok(args) = signal.args() {
+                        let unit = args.id.to_string();
+                        if unit.starts_with("bubbaloop-") {
+                            let node_name = extract_node_name(&unit);
+                            let event = SystemdSignalEvent::UnitRemoved { unit, node_name };
+                            if tx_removed.send(event).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+        });
+
+        Ok(rx)
+    }
+}
+
+/// Event from systemd signal
+#[derive(Debug, Clone)]
+pub enum SystemdSignalEvent {
+    /// Job completed/failed/cancelled
+    JobRemoved {
+        unit: String,
+        result: String,
+        node_name: Option<String>,
+    },
+    /// Unit added
+    UnitNew {
+        unit: String,
+        node_name: Option<String>,
+    },
+    /// Unit removed
+    UnitRemoved {
+        unit: String,
+        node_name: Option<String>,
+    },
+}
+
+/// Extract node name from service name (e.g., "bubbaloop-rtsp-camera.service" -> "rtsp-camera")
+fn extract_node_name(unit: &str) -> Option<String> {
+    if unit.starts_with("bubbaloop-") && unit.ends_with(".service") {
+        Some(
+            unit.strip_prefix("bubbaloop-")?
+                .strip_suffix(".service")?
+                .to_string(),
+        )
+    } else {
+        None
+    }
 }
 
 /// Get the systemd user directory path
@@ -297,6 +465,7 @@ pub fn generate_service_unit(
     name: &str,
     node_type: &str,
     command: Option<&str>,
+    depends_on: &[String],
 ) -> String {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/user"));
     let cargo_path = home.join(".cargo/bin/cargo");
@@ -313,8 +482,13 @@ pub fn generate_service_unit(
                 cmd.replacen("cargo ", &format!("{} ", cargo_path.display()), 1),
                 "RUST_LOG=info".to_string(),
             )
+        } else if cmd.starts_with("python3 ") || cmd.starts_with("python ") || cmd.starts_with("/")
+        {
+            // Keep interpreter commands and absolute paths as-is
+            // WorkingDirectory will handle relative script paths
+            (cmd.to_string(), "PYTHONUNBUFFERED=1".to_string())
         } else {
-            // Resolve relative paths to absolute
+            // Resolve relative binary paths to absolute
             let resolved = std::path::Path::new(node_path).join(cmd);
             (
                 resolved.to_string_lossy().to_string(),
@@ -335,10 +509,30 @@ pub fn generate_service_unit(
         )
     };
 
+    // Generate dependency lines for systemd
+    let (after_line, requires_line) = if depends_on.is_empty() {
+        ("After=network.target".to_string(), String::new())
+    } else {
+        let dep_services: Vec<String> =
+            depends_on.iter().map(|dep| get_service_name(dep)).collect();
+        let deps_str = dep_services.join(" ");
+        (
+            format!("After=network.target {}", deps_str),
+            format!("Requires={}", deps_str),
+        )
+    };
+
+    // Build the requires line (empty if no dependencies)
+    let requires_section = if requires_line.is_empty() {
+        String::new()
+    } else {
+        format!("\n{}", requires_line)
+    };
+
     format!(
         r#"[Unit]
 Description=Bubbaloop Node: {name}
-After=network.target
+{after_line}{requires_section}
 
 [Service]
 Type=simple
@@ -348,6 +542,17 @@ Restart=on-failure
 RestartSec=5
 Environment={environment}
 Environment={path_env}
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# Robotics-compatible settings (allow RT scheduling and JIT)
+RestrictRealtime=false
+MemoryDenyWriteExecute=false
 
 [Install]
 WantedBy=default.target
@@ -361,12 +566,13 @@ pub async fn install_service(
     name: &str,
     node_type: &str,
     command: Option<&str>,
+    depends_on: &[String],
 ) -> Result<()> {
     let service_dir = get_systemd_user_dir();
     std::fs::create_dir_all(&service_dir)?;
 
     let service_path = get_service_path(name);
-    let content = generate_service_unit(node_path, name, node_type, command);
+    let content = generate_service_unit(node_path, name, node_type, command, depends_on);
     std::fs::write(&service_path, content)?;
 
     // Reload systemd to pick up the new unit

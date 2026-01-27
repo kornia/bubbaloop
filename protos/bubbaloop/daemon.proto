@@ -13,6 +13,13 @@ enum NodeStatus {
   NODE_STATUS_NOT_INSTALLED = 6;
 }
 
+// Health status based on heartbeat monitoring
+enum HealthStatus {
+  HEALTH_STATUS_UNKNOWN = 0;
+  HEALTH_STATUS_HEALTHY = 1;
+  HEALTH_STATUS_UNHEALTHY = 2;
+}
+
 // State of a single node
 message NodeState {
   // Unique node name from manifest
@@ -37,6 +44,10 @@ message NodeState {
   int64 last_updated_ms = 10;
   // Build output (last N lines)
   repeated string build_output = 11;
+  // Health status based on heartbeat monitoring
+  HealthStatus health_status = 12;
+  // Last health check timestamp (milliseconds since epoch)
+  int64 last_health_check_ms = 13;
 }
 
 // List of all nodes (published periodically)
