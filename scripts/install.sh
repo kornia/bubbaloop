@@ -160,14 +160,13 @@ setup_systemd() {
     mkdir -p "$SERVICE_DIR"
     mkdir -p "$INSTALL_DIR/configs"
 
-    # Create Zenoh config
+    # Create Zenoh config (compatible with Zenoh 1.6.x and 1.7.x)
     cat > "$INSTALL_DIR/zenoh.json5" << 'CONFIG'
 {
   mode: "router",
   listen: {
     endpoints: ["tcp/0.0.0.0:7447"]
-  },
-  plugins_search_dirs: []
+  }
 }
 CONFIG
 
@@ -345,32 +344,23 @@ main() {
 
     echo
     echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║       Installation Complete!         ║${NC}"
+    echo -e "${GREEN}║         Bubbaloop is ready!          ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════╝${NC}"
     echo
-    echo "Installed to: $INSTALL_DIR"
-    echo
-    echo "Services running:"
-    echo "  - zenohd (Zenoh router)"
-    echo "  - zenoh-bridge (WebSocket bridge)"
-    echo "  - bubbaloop-daemon (Node manager)"
-    echo
-    echo "Service management:"
-    echo "  systemctl --user status zenohd"
-    echo "  systemctl --user status bubbaloop-daemon"
-    echo "  systemctl --user restart bubbaloop-daemon"
-    echo
-    echo -e "${YELLOW}Usage:${NC}"
-    echo "  source $shell_rc  # or open a new terminal"
-    echo "  bubbaloop          # Launch TUI"
-    echo "  bubbaloop status   # Show services status"
-    echo "  bubbaloop --help   # Show all commands"
-    echo
 
-    # Show installed version
+    # Auto-verify installation
     if [ -x "$BIN_DIR/bubbaloop" ]; then
-        info "Bubbaloop CLI ready: $($BIN_DIR/bubbaloop --help 2>&1 | head -1 || echo 'installed')"
+        echo -e "${BLUE}Verifying installation...${NC}"
+        echo
+        "$BIN_DIR/bubbaloop" status 2>&1 || true
+        echo
     fi
+
+    echo -e "${YELLOW}To get started:${NC}"
+    echo
+    echo "  source $shell_rc   # Add bubbaloop to PATH (or open new terminal)"
+    echo "  bubbaloop          # Launch the TUI"
+    echo
 }
 
 main "$@"
