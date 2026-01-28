@@ -32,6 +32,11 @@ pub mod schemas {
             include!(concat!(env!("OUT_DIR"), "/bubbaloop.weather.v1.rs"));
         }
     }
+    pub mod daemon {
+        pub mod v1 {
+            include!(concat!(env!("OUT_DIR"), "/bubbaloop.daemon.v1.rs"));
+        }
+    }
 
     // Re-export commonly used types
     pub use camera::v1::{CompressedImage, RawImage};
@@ -39,6 +44,10 @@ pub mod schemas {
     pub use weather::v1::{
         CurrentWeather, DailyForecast, DailyForecastEntry, HourlyForecast, HourlyForecastEntry,
         LocationConfig,
+    };
+    pub use daemon::v1::{
+        CommandResult, CommandType, HealthStatus, NodeCommand, NodeEvent, NodeList,
+        NodeState as DaemonNodeState, NodeStatus,
     };
 }
 

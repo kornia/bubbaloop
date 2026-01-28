@@ -2,9 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use prost::Message;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 use zenoh::Session;
 
+use crate::schemas::{NodeList, NodeStatus};
 use crate::tui::app::NodeInfo;
 
 #[allow(dead_code)]
@@ -12,6 +15,9 @@ const API_PREFIX: &str = "bubbaloop/daemon/api";
 const API_HEALTH: &str = "bubbaloop/daemon/api/health";
 const API_NODES: &str = "bubbaloop/daemon/api/nodes";
 const API_NODES_ADD: &str = "bubbaloop/daemon/api/nodes/add";
+
+/// Subscription topic for real-time node list updates (protobuf)
+const NODES_TOPIC: &str = "bubbaloop/daemon/nodes";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct HealthResponse {
@@ -56,6 +62,40 @@ struct CommandResponse {
     output: String,
 }
 
+/// Convert protobuf NodeStatus to string
+fn proto_status_to_string(status: i32) -> String {
+    match NodeStatus::try_from(status) {
+        Ok(NodeStatus::Stopped) => "stopped".to_string(),
+        Ok(NodeStatus::Running) => "running".to_string(),
+        Ok(NodeStatus::Failed) => "failed".to_string(),
+        Ok(NodeStatus::Installing) => "installing".to_string(),
+        Ok(NodeStatus::Building) => "building".to_string(),
+        Ok(NodeStatus::NotInstalled) => "not-installed".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Decode protobuf NodeList to Vec<NodeInfo>
+fn decode_node_list(bytes: &[u8]) -> Result<Vec<NodeInfo>> {
+    let node_list = NodeList::decode(bytes)
+        .map_err(|e| anyhow!("Failed to decode NodeList: {}", e))?;
+
+    Ok(node_list
+        .nodes
+        .into_iter()
+        .map(|n| NodeInfo {
+            name: n.name,
+            path: n.path,
+            version: n.version,
+            node_type: n.node_type,
+            description: n.description,
+            status: proto_status_to_string(n.status),
+            is_built: n.is_built,
+        })
+        .collect())
+}
+
+#[derive(Clone)]
 pub struct DaemonClient {
     session: Arc<Session>,
 }
@@ -189,6 +229,48 @@ impl DaemonClient {
         } else {
             Err(anyhow!("{}", response.message))
         }
+    }
+
+    /// Subscribe to node list updates via protobuf pub/sub
+    /// Returns a receiver that yields NodeList updates in real-time
+    /// This is the non-blocking approach used by the dashboard
+    pub async fn subscribe_nodes(&self) -> Result<mpsc::Receiver<Vec<NodeInfo>>> {
+        let (tx, rx) = mpsc::channel(16);
+
+        let subscriber = self
+            .session
+            .declare_subscriber(NODES_TOPIC)
+            .await
+            .map_err(|e| anyhow!("Failed to subscribe to {}: {}", NODES_TOPIC, e))?;
+
+        // Spawn task to handle subscription
+        let _session = self.session.clone();
+        tokio::spawn(async move {
+            loop {
+                match subscriber.recv_async().await {
+                    Ok(sample) => {
+                        let bytes = sample.payload().to_bytes();
+                        match decode_node_list(&bytes) {
+                            Ok(nodes) => {
+                                if tx.send(nodes).await.is_err() {
+                                    // Receiver dropped, exit
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                log::debug!("Failed to decode node list: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Subscription error: {}", e);
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        });
+
+        Ok(rx)
     }
 }
 

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -5,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::templates;
 use crate::tui::config::Registry;
-use crate::tui::daemon::DaemonClient;
+use crate::tui::daemon::{DaemonClient, DaemonSubscription};
 
 /// Current view mode
 #[derive(Debug, Clone, PartialEq)]
@@ -123,6 +124,9 @@ pub struct App {
     pub daemon_client: Option<DaemonClient>,
     pub daemon_available: bool,
 
+    /// Background subscription for real-time node updates
+    daemon_subscription: Option<Arc<DaemonSubscription>>,
+
     /// Config registry
     pub registry: Registry,
 
@@ -194,6 +198,34 @@ impl App {
             Err(_) => (None, false),
         };
 
+        // HYBRID STARTUP:
+        // 1. Get initial nodes via query (immediate data for UI)
+        let initial_nodes = match &daemon_client {
+            Some(client) => match client.list_nodes().await {
+                Ok(nodes) => nodes,
+                Err(e) => {
+                    log::debug!("Initial node query failed: {}", e);
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
+
+        // 2. Start subscription for real-time updates (background)
+        let daemon_subscription = match &daemon_client {
+            Some(client) => {
+                let client_arc = Arc::new(client.clone());
+                match DaemonSubscription::start(client_arc).await {
+                    Ok(sub) => Some(Arc::new(sub)),
+                    Err(e) => {
+                        log::debug!("Failed to start subscription: {}", e);
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+
         let now = Instant::now();
 
         Self {
@@ -225,7 +257,7 @@ impl App {
                 },
             ],
             service_index: 0,
-            nodes: Vec::new(),
+            nodes: initial_nodes,
             node_index: 0,
             discoverable_nodes: Vec::new(),
             discover_index: 0,
@@ -233,6 +265,7 @@ impl App {
             source_index: 0,
             daemon_client,
             daemon_available,
+            daemon_subscription,
             registry,
             spinner_frame: 0,
             last_spinner_update: now,
@@ -742,6 +775,7 @@ impl App {
     pub async fn tick(&mut self) -> Result<()> {
         let now = Instant::now();
 
+        // Animation updates only - no network I/O
         if now.duration_since(self.last_spinner_update) > Duration::from_millis(150) {
             self.spinner_frame = (self.spinner_frame + 1) % 7;
             self.last_spinner_update = now;
@@ -752,33 +786,85 @@ impl App {
             self.last_robot_blink = now;
         }
 
-        if now.duration_since(self.last_refresh) > Duration::from_millis(250) {
-            self.refresh_status().await?;
+        // Get nodes from subscription (non-blocking read)
+        // Subscription data OVERRIDES initial query data
+        if let Some(ref sub) = self.daemon_subscription {
+            let sub_nodes = sub.get_nodes().await;
+            if !sub_nodes.is_empty() {
+                self.nodes = sub_nodes;
+            }
+            self.daemon_available = sub.is_connected().await;
+        }
+
+        // Less frequent checks for non-node data (services, logs, etc.)
+        if now.duration_since(self.last_refresh) > Duration::from_secs(5) {
+            self.refresh_status_non_blocking().await?;
             self.last_refresh = now;
         }
 
         Ok(())
     }
 
+    /// Non-blocking status refresh - excludes node list queries
+    async fn refresh_status_non_blocking(&mut self) -> Result<()> {
+        // Services check is local (systemctl), not network
+        self.refresh_services().await;
+
+        // Register pending node with daemon (best effort, don't block)
+        if let Some(path) = self.pending_node_path.take() {
+            if let Some(client) = &self.daemon_client {
+                let client = client.clone();
+                let path = path.clone();
+                // Spawn in background so we don't block
+                tokio::spawn(async move {
+                    let _ = client.add_node(&path).await;
+                });
+            }
+        }
+
+        // View-specific refreshes (local operations)
+        if let View::Nodes(NodesTab::Discover) = self.view {
+            self.refresh_discoverable_nodes();
+        }
+        if let View::Nodes(NodesTab::Marketplace) = self.view {
+            self.refresh_sources();
+        }
+
+        if let View::NodeLogs(ref node_name) = self.view {
+            let name = node_name.clone();
+            self.fetch_node_logs(&name).await;
+        }
+
+        if let View::NodeDetail(ref node_name) = self.view {
+            let name = node_name.clone();
+            self.fetch_service_status(&name).await;
+        }
+
+        Ok(())
+    }
+
+    /// Refresh status - now uses subscription for nodes (non-blocking)
     async fn refresh_status(&mut self) -> Result<()> {
         self.refresh_services().await;
 
         // Register pending node with daemon
         if let Some(path) = self.pending_node_path.take() {
             if let Some(client) = &self.daemon_client {
-                let _ = client.add_node(&path).await;
+                let client = client.clone();
+                let path = path.clone();
+                tokio::spawn(async move {
+                    let _ = client.add_node(&path).await;
+                });
             }
         }
 
-        if let Some(client) = &self.daemon_client {
-            if let Ok(nodes) = client.list_nodes().await {
-                if !nodes.is_empty() || self.nodes.is_empty() {
-                    self.nodes = nodes;
-                    self.daemon_available = true;
-                }
-            } else {
-                self.daemon_available = false;
+        // Get nodes from subscription (non-blocking) instead of blocking query
+        if let Some(ref sub) = self.daemon_subscription {
+            let sub_nodes = sub.get_nodes().await;
+            if !sub_nodes.is_empty() {
+                self.nodes = sub_nodes;
             }
+            self.daemon_available = sub.is_connected().await;
         }
 
         if let View::Nodes(NodesTab::Discover) = self.view {
