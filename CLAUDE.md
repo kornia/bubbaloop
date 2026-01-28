@@ -335,6 +335,59 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop-daemon
 - **GStreamer** - H264 camera capture
 - **zbus** - D-Bus client for systemd integration
 
+## Troubleshooting
+
+### "Query not found" or "Timeout" errors in TUI
+
+**Symptoms:**
+- TUI shows "Daemon: disconnected"
+- Zenoh warnings: `Route reply: Query not found!`
+- Error reply with payload "Timeout"
+
+**Common Causes:**
+
+1. **Duplicate daemon processes** (most common)
+   ```bash
+   # Check for multiple daemons
+   ps aux | grep bubbaloop-daemon
+
+   # If multiple found, kill extras and restart service
+   pkill -f bubbaloop-daemon
+   systemctl --user restart bubbaloop-daemon
+   ```
+
+2. **Daemon not fully initialized**
+   ```bash
+   # Wait for daemon to start (takes ~2 seconds)
+   systemctl --user restart bubbaloop-daemon && sleep 3
+   ```
+
+3. **Zenoh router not running**
+   ```bash
+   # Check zenohd status
+   systemctl --user status bubbaloop-zenohd
+
+   # Or start manually
+   zenohd &
+   ```
+
+4. **Binary mismatch** (installed vs built)
+   ```bash
+   # Update installed daemon binary
+   systemctl --user stop bubbaloop-daemon
+   cp target/release/bubbaloop-daemon ~/.bubbaloop/bin/
+   systemctl --user start bubbaloop-daemon
+   ```
+
+### TUI crashes on startup
+
+If running via Claude Code (no TTY attached):
+```
+Error: No such device or address (os error 6)
+```
+
+The TUI requires an interactive terminal. Run it directly in your terminal, not through non-interactive shells.
+
 ## Daemon Service Management
 
 The bubbaloop-daemon provides advanced service management features:
@@ -501,3 +554,114 @@ When creating new boilerplate (templates, nodes, etc.):
 - [ ] Document the pattern in this CLAUDE.md file
 - [ ] Verify with `git status` before committing
 - [ ] Run `cargo fmt` and `pixi run clippy` before commit
+
+## Multi-Terminal Workflow
+
+### Permission Modes
+
+Optimize your workflow by choosing the right permission level:
+
+| Mode | How to Enable | Auto-Approves | Best For |
+|------|---------------|---------------|----------|
+| **Default** | Normal startup | Nothing | High-risk operations |
+| **Accept Edits** | `Shift + Tab` | File edits only | Daily development |
+| **Allowlisted** | `settings.json` | Specific commands | Repetitive tasks |
+| **Bypass All** | `--dangerously-skip-permissions` | Everything | Isolated containers |
+
+**Accept Edits Mode** (Recommended for development):
+- Press `Shift + Tab` to toggle
+- Auto-approves `Write` and `Edit` operations
+- Still prompts for shell commands (safe from `rm -rf`)
+
+### Allowlisting Safe Commands
+
+Add frequently-used safe commands to `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(pixi run build)",
+      "Bash(pixi run test)",
+      "Bash(pixi run fmt)",
+      "Bash(pixi run clippy)",
+      "Bash(cargo check:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(systemctl --user status:*)",
+      "Bash(systemctl --user restart bubbaloop-*)"
+    ]
+  }
+}
+```
+
+### Session Management for Multiple Terminals
+
+| Strategy | Tool | Use Case |
+|----------|------|----------|
+| **Persistence** | `tmux` | Keep Claude running if terminal closes |
+| **Isolation** | `git worktree` | Prevent file conflicts between sessions |
+| **Monitoring** | TUI `/tasks` | Track background agent progress |
+
+**tmux setup for bubbaloop development:**
+```bash
+# Create session with 4 panes
+tmux new-session -s bubbaloop -n dev \; \
+  split-window -h \; \
+  split-window -v \; \
+  select-pane -t 0 \; \
+  split-window -v
+
+# Pane layout:
+# ┌─────────┬─────────┐
+# │ zenohd  │ daemon  │
+# ├─────────┼─────────┤
+# │ claude  │ tui     │
+# └─────────┴─────────┘
+```
+
+**git worktree for parallel Claude sessions:**
+```bash
+# Create isolated worktree for feature work
+git worktree add ../bubbaloop-feature feature-branch
+
+# Run Claude in each worktree independently
+cd ../bubbaloop-feature && claude
+```
+
+### Safety Fences (Deny Rules)
+
+Protect sensitive files even in permissive modes. Add to `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Write(.env)",
+      "Bash(rm -rf *)",
+      "Bash(git push --force:*)"
+    ]
+  }
+}
+```
+
+### Project-Specific Preferences
+
+This CLAUDE.md file tells Claude:
+
+1. **Build commands**: `pixi run build`, `pixi run test`
+2. **Code style**: Rust 2021 edition, async/await patterns
+3. **Project structure**: Nodes in `crates/bubbaloop-nodes/`
+4. **Commit style**: Conventional commits with `Co-Authored-By`
+
+### Recommended Workflow
+
+1. **Start services** in tmux panes (zenohd, daemon, bridge)
+2. **Enable Accept Edits** mode (`Shift + Tab`)
+3. **Use TUI** for node management (`bubbaloop`)
+4. **Run Claude** for development tasks
+5. **Verify** with `pixi run clippy` before commits
