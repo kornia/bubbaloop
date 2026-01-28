@@ -44,6 +44,7 @@ thiserror.workspace = true
 # Utilities
 dirs = "6"
 uuid = { version = "1", features = ["v4"] }
+hostname = "0.4"
 
 [dev-dependencies]
 # For integration tests

@@ -17,12 +17,94 @@ use zenoh::Session;
 
 const TIMEOUT_SECS: u64 = 5;
 
+/// Actions that can be automatically fixed
+#[derive(Debug, Clone)]
+pub enum FixAction {
+    StartZenohd,
+    StartDaemonService,
+    RestartDaemonService,
+    StartBridgeService,
+}
+
+impl FixAction {
+    fn description(&self) -> &'static str {
+        match self {
+            FixAction::StartZenohd => "Start zenohd router",
+            FixAction::StartDaemonService => "Start bubbaloop-daemon service",
+            FixAction::RestartDaemonService => "Restart bubbaloop-daemon service",
+            FixAction::StartBridgeService => "Start zenoh-bridge service",
+        }
+    }
+
+    async fn execute(&self) -> Result<String> {
+        match self {
+            FixAction::StartZenohd => {
+                // Start zenohd in background
+                let mut cmd = Command::new("zenohd");
+                cmd.stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+
+                let child = cmd.spawn()?;
+                // Detach the process
+                std::mem::forget(child);
+
+                // Wait a moment for it to start
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
+                // Verify it started
+                if is_process_running("zenohd").await {
+                    Ok("zenohd started successfully".to_string())
+                } else {
+                    Err(anyhow!("Failed to start zenohd"))
+                }
+            }
+            FixAction::StartDaemonService => {
+                let output = Command::new("systemctl")
+                    .args(["--user", "start", "bubbaloop-daemon.service"])
+                    .output()
+                    .await?;
+
+                if output.status.success() {
+                    Ok("bubbaloop-daemon service started".to_string())
+                } else {
+                    Err(anyhow!("Failed to start: {}", String::from_utf8_lossy(&output.stderr)))
+                }
+            }
+            FixAction::RestartDaemonService => {
+                let output = Command::new("systemctl")
+                    .args(["--user", "restart", "bubbaloop-daemon.service"])
+                    .output()
+                    .await?;
+
+                if output.status.success() {
+                    Ok("bubbaloop-daemon service restarted".to_string())
+                } else {
+                    Err(anyhow!("Failed to restart: {}", String::from_utf8_lossy(&output.stderr)))
+                }
+            }
+            FixAction::StartBridgeService => {
+                let output = Command::new("systemctl")
+                    .args(["--user", "start", "zenoh-bridge.service"])
+                    .output()
+                    .await?;
+
+                if output.status.success() {
+                    Ok("zenoh-bridge service started".to_string())
+                } else {
+                    Err(anyhow!("Failed to start: {}", String::from_utf8_lossy(&output.stderr)))
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 struct DiagnosticResult {
     check: String,
     passed: bool,
     message: String,
     fix: Option<String>,
+    fix_action: Option<FixAction>,
 }
 
 impl DiagnosticResult {
@@ -32,6 +114,7 @@ impl DiagnosticResult {
             passed: true,
             message: message.to_string(),
             fix: None,
+            fix_action: None,
         }
     }
 
@@ -41,6 +124,17 @@ impl DiagnosticResult {
             passed: false,
             message: message.to_string(),
             fix: Some(fix.to_string()),
+            fix_action: None,
+        }
+    }
+
+    fn fail_with_action(check: &str, message: &str, fix: &str, action: FixAction) -> Self {
+        Self {
+            check: check.to_string(),
+            passed: false,
+            message: message.to_string(),
+            fix: Some(fix.to_string()),
+            fix_action: Some(action),
         }
     }
 }
@@ -81,16 +175,27 @@ struct NodeState {
     build_output: Vec<String>,
 }
 
-pub async fn run() -> Result<()> {
-    println!("bubbaloop doctor");
-    println!("================");
+pub async fn run(fix: bool) -> Result<()> {
+    if fix {
+        println!("bubbaloop doctor --fix");
+        println!("=====================");
+    } else {
+        println!("bubbaloop doctor");
+        println!("================");
+    }
     println!();
 
     let mut results = Vec::new();
+    let mut fixes_applied = 0;
 
     // 1. Check system services
     println!("[1/4] Checking system services...");
     results.extend(check_system_services().await);
+
+    // Apply fixes for system services if --fix flag is set
+    if fix {
+        fixes_applied += apply_fixes(&mut results).await;
+    }
     println!();
 
     // 2. Check Zenoh connectivity
@@ -146,8 +251,12 @@ pub async fn run() -> Result<()> {
 
         if !result.passed {
             issues_found += 1;
-            if let Some(fix) = &result.fix {
-                println!("    → Fix: {}", fix);
+            if let Some(fix_hint) = &result.fix {
+                if result.fix_action.is_some() {
+                    println!("    → Auto-fixable: {}", fix_hint);
+                } else {
+                    println!("    → Fix: {}", fix_hint);
+                }
             }
         }
     }
@@ -161,6 +270,17 @@ pub async fn run() -> Result<()> {
             issues_found,
             if issues_found == 1 { "" } else { "s" }
         );
+        if fixes_applied > 0 {
+            println!("Applied {} fix{}", fixes_applied, if fixes_applied == 1 { "" } else { "es" });
+        } else if !fix {
+            // Count auto-fixable issues
+            let auto_fixable: usize = results.iter().filter(|r| !r.passed && r.fix_action.is_some()).count();
+            if auto_fixable > 0 {
+                println!();
+                println!("Tip: Run 'bubbaloop doctor --fix' to automatically fix {} issue{}",
+                    auto_fixable, if auto_fixable == 1 { "" } else { "s" });
+            }
+        }
     }
 
     // Close Zenoh session if open
@@ -169,6 +289,34 @@ pub async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Apply all available fixes and return count of fixes applied
+async fn apply_fixes(results: &mut Vec<DiagnosticResult>) -> usize {
+    let mut fixes_applied = 0;
+
+    for result in results.iter_mut() {
+        if result.passed || result.fix_action.is_none() {
+            continue;
+        }
+
+        let action = result.fix_action.clone().unwrap();
+        println!("    → Fixing: {}", action.description());
+
+        match action.execute().await {
+            Ok(msg) => {
+                println!("      ✓ {}", msg);
+                result.passed = true;
+                result.message = format!("{} (fixed)", result.message);
+                fixes_applied += 1;
+            }
+            Err(e) => {
+                println!("      ✗ Failed: {}", e);
+            }
+        }
+    }
+
+    fixes_applied
 }
 
 async fn check_system_services() -> Vec<DiagnosticResult> {
@@ -192,10 +340,11 @@ async fn check_system_services() -> Vec<DiagnosticResult> {
             ));
         }
     } else {
-        results.push(DiagnosticResult::fail(
+        results.push(DiagnosticResult::fail_with_action(
             "zenohd",
             "not running",
             "Run: zenohd &",
+            FixAction::StartZenohd,
         ));
     }
 
@@ -207,16 +356,18 @@ async fn check_system_services() -> Vec<DiagnosticResult> {
             "service active",
         ));
     } else if daemon_service == "inactive" {
-        results.push(DiagnosticResult::fail(
+        results.push(DiagnosticResult::fail_with_action(
             "bubbaloop-daemon",
             "service inactive",
             "Run: systemctl --user start bubbaloop-daemon",
+            FixAction::StartDaemonService,
         ));
     } else if daemon_service == "failed" {
-        results.push(DiagnosticResult::fail(
+        results.push(DiagnosticResult::fail_with_action(
             "bubbaloop-daemon",
             "service failed",
-            "Run: systemctl --user restart bubbaloop-daemon && journalctl --user -u bubbaloop-daemon -f",
+            "Run: systemctl --user restart bubbaloop-daemon",
+            FixAction::RestartDaemonService,
         ));
     } else {
         results.push(DiagnosticResult::fail(
@@ -234,10 +385,11 @@ async fn check_system_services() -> Vec<DiagnosticResult> {
             "service active",
         ));
     } else {
-        results.push(DiagnosticResult::fail(
+        results.push(DiagnosticResult::fail_with_action(
             "zenoh-bridge",
             "not running (optional for CLI, required for dashboard)",
             "Run: systemctl --user start zenoh-bridge",
+            FixAction::StartBridgeService,
         ));
     }
 

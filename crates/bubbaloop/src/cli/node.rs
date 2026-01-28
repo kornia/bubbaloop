@@ -37,7 +37,7 @@ pub type Result<T> = std::result::Result<T, NodeError>;
 #[argh(subcommand, name = "node")]
 pub struct NodeCommand {
     #[argh(subcommand)]
-    action: NodeAction,
+    action: Option<NodeAction>,
 }
 
 #[derive(FromArgs)]
@@ -50,8 +50,6 @@ enum NodeAction {
     Remove(RemoveArgs),
     Install(InstallArgs),
     Uninstall(UninstallArgs),
-    Enable(EnableArgs),
-    Disable(DisableArgs),
     Start(StartArgs),
     Stop(StopArgs),
     Restart(RestartArgs),
@@ -59,7 +57,7 @@ enum NodeAction {
     Build(BuildArgs),
 }
 
-/// Initialize a new node from template (scaffolding only, does not register)
+/// Initialize a new node from template
 #[derive(FromArgs)]
 #[argh(subcommand, name = "init")]
 struct InitArgs {
@@ -84,7 +82,7 @@ struct InitArgs {
     author: String,
 }
 
-/// Validate a node's manifest and structure
+/// Validate a node manifest and directory structure
 #[derive(FromArgs)]
 #[argh(subcommand, name = "validate")]
 struct ValidateArgs {
@@ -140,7 +138,7 @@ struct RemoveArgs {
     delete_files: bool,
 }
 
-/// Install node as systemd service
+/// Install a node as a systemd service
 #[derive(FromArgs)]
 #[argh(subcommand, name = "install")]
 struct InstallArgs {
@@ -149,7 +147,7 @@ struct InstallArgs {
     name: String,
 }
 
-/// Uninstall systemd service
+/// Uninstall a node's systemd service
 #[derive(FromArgs)]
 #[argh(subcommand, name = "uninstall")]
 struct UninstallArgs {
@@ -158,25 +156,7 @@ struct UninstallArgs {
     name: String,
 }
 
-/// Enable autostart for node
-#[derive(FromArgs)]
-#[argh(subcommand, name = "enable")]
-struct EnableArgs {
-    /// node name
-    #[argh(positional)]
-    name: String,
-}
-
-/// Disable autostart for node
-#[derive(FromArgs)]
-#[argh(subcommand, name = "disable")]
-struct DisableArgs {
-    /// node name
-    #[argh(positional)]
-    name: String,
-}
-
-/// Start a node
+/// Start a node service
 #[derive(FromArgs)]
 #[argh(subcommand, name = "start")]
 struct StartArgs {
@@ -185,7 +165,7 @@ struct StartArgs {
     name: String,
 }
 
-/// Stop a node
+/// Stop a node service
 #[derive(FromArgs)]
 #[argh(subcommand, name = "stop")]
 struct StopArgs {
@@ -194,7 +174,7 @@ struct StopArgs {
     name: String,
 }
 
-/// Restart a node
+/// Restart a node service
 #[derive(FromArgs)]
 #[argh(subcommand, name = "restart")]
 struct RestartArgs {
@@ -203,7 +183,7 @@ struct RestartArgs {
     name: String,
 }
 
-/// View node logs
+/// View logs for a node
 #[derive(FromArgs)]
 #[argh(subcommand, name = "logs")]
 struct LogsArgs {
@@ -267,21 +247,42 @@ struct LogsResponse {
 impl NodeCommand {
     pub async fn run(self) -> Result<()> {
         match self.action {
-            NodeAction::Init(args) => init_node(args),
-            NodeAction::Validate(args) => validate_node(args),
-            NodeAction::List(args) => list_nodes(args).await,
-            NodeAction::Add(args) => add_node(args).await,
-            NodeAction::Remove(args) => remove_node(args).await,
-            NodeAction::Install(args) => send_command(&args.name, "install").await,
-            NodeAction::Uninstall(args) => send_command(&args.name, "uninstall").await,
-            NodeAction::Enable(args) => send_command(&args.name, "enable_autostart").await,
-            NodeAction::Disable(args) => send_command(&args.name, "disable_autostart").await,
-            NodeAction::Start(args) => send_command(&args.name, "start").await,
-            NodeAction::Stop(args) => send_command(&args.name, "stop").await,
-            NodeAction::Restart(args) => send_command(&args.name, "restart").await,
-            NodeAction::Logs(args) => view_logs(args).await,
-            NodeAction::Build(args) => send_command(&args.name, "build").await,
+            None => {
+                Self::print_help();
+                Ok(())
+            }
+            Some(NodeAction::Init(args)) => init_node(args),
+            Some(NodeAction::Validate(args)) => validate_node(args),
+            Some(NodeAction::List(args)) => list_nodes(args).await,
+            Some(NodeAction::Add(args)) => add_node(args).await,
+            Some(NodeAction::Remove(args)) => remove_node(args).await,
+            Some(NodeAction::Install(args)) => send_command(&args.name, "install").await,
+            Some(NodeAction::Uninstall(args)) => send_command(&args.name, "uninstall").await,
+            Some(NodeAction::Start(args)) => send_command(&args.name, "start").await,
+            Some(NodeAction::Stop(args)) => send_command(&args.name, "stop").await,
+            Some(NodeAction::Restart(args)) => send_command(&args.name, "restart").await,
+            Some(NodeAction::Logs(args)) => view_logs(args).await,
+            Some(NodeAction::Build(args)) => send_command(&args.name, "build").await,
         }
+    }
+
+    fn print_help() {
+        eprintln!("Node management commands\n");
+        eprintln!("Usage: bubbaloop node <command>\n");
+        eprintln!("Commands:");
+        eprintln!("  init        Initialize a new node from template");
+        eprintln!("  validate    Validate a node manifest and directory structure");
+        eprintln!("  list        List all registered nodes");
+        eprintln!("  add         Add a node from local path or GitHub URL");
+        eprintln!("  remove      Remove a node from the registry");
+        eprintln!("  install     Install a node as a systemd service");
+        eprintln!("  uninstall   Uninstall a node's systemd service");
+        eprintln!("  start       Start a node service");
+        eprintln!("  stop        Stop a node service");
+        eprintln!("  restart     Restart a node service");
+        eprintln!("  logs        View logs for a node");
+        eprintln!("  build       Build a node");
+        eprintln!("\nRun 'bubbaloop node <command> --help' for more information.");
     }
 }
 
@@ -445,20 +446,18 @@ async fn list_nodes(args: ListArgs) -> Result<()> {
             println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
         } else {
             println!(
-                "{:<20} {:<10} {:<12} {:<8} {:<10} DESCRIPTION",
-                "NAME", "STATUS", "TYPE", "BUILT", "AUTOSTART"
+                "{:<20} {:<10} {:<12} {:<8} DESCRIPTION",
+                "NAME", "STATUS", "TYPE", "BUILT"
             );
-            println!("{}", "-".repeat(80));
+            println!("{}", "-".repeat(70));
             for node in data.nodes {
-                let autostart = if node.autostart_enabled { "yes" } else { "no" };
                 let built = if node.is_built { "yes" } else { "no" };
                 println!(
-                    "{:<20} {:<10} {:<12} {:<8} {:<10} {}",
+                    "{:<20} {:<10} {:<12} {:<8} {}",
                     node.name,
                     node.status,
                     node.node_type,
                     built,
-                    autostart,
                     truncate(&node.description, 30)
                 );
             }
@@ -550,8 +549,13 @@ fn normalize_git_url(source: &str) -> String {
         source.to_string()
     } else if source.starts_with("github.com/") {
         format!("https://{}", source)
-    } else if source.contains('/') && !source.contains(':') && !source.starts_with('/') {
+    } else if source.contains('/')
+        && !source.contains(':')
+        && !source.starts_with('/')
+        && !source.starts_with('.')
+    {
         // Shorthand: user/repo -> https://github.com/user/repo
+        // Exclude relative paths starting with . (e.g., ./node, ../node)
         format!("https://github.com/{}", source)
     } else {
         source.to_string()
@@ -561,7 +565,7 @@ fn normalize_git_url(source: &str) -> String {
 fn is_git_url(source: &str) -> bool {
     source.starts_with("https://github.com/")
         || source.starts_with("git@github.com:")
-        || (source.contains("github.com/") && !source.starts_with('/'))
+        || (source.contains("github.com/") && !source.starts_with('/') && !source.starts_with('.'))
 }
 
 fn extract_node_name(path: &str) -> Result<String> {
@@ -829,10 +833,10 @@ mod tests {
 
     #[test]
     fn test_normalize_git_url_relative_path() {
-        // Note: relative paths with './' contain '/' but don't start with '/'
-        // so they're treated as shorthand GitHub URLs. This may be unintended
-        // but reflects actual behavior.
-        assert_eq!(normalize_git_url("./node"), "https://github.com/./node");
+        // Relative paths starting with . should be preserved as local paths
+        assert_eq!(normalize_git_url("./node"), "./node");
+        assert_eq!(normalize_git_url("../my-node"), "../my-node");
+        assert_eq!(normalize_git_url("./path/to/node"), "./path/to/node");
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crate::node_manager::NodeManager;
 use crate::proto::{CommandResult, NodeCommand};
 use prost::Message;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::sync::watch;
 use zenoh::bytes::ZBytes;
@@ -26,23 +26,61 @@ pub enum ZenohServiceError {
 
 pub type Result<T> = std::result::Result<T, ZenohServiceError>;
 
+/// Get machine ID from environment or hostname
+fn get_machine_id() -> String {
+    std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
+        hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".to_string())
+    })
+}
+
 /// Key expressions for daemon topics
 pub mod keys {
-    /// Full node list (published periodically)
-    pub const NODES_LIST: &str = "bubbaloop/daemon/nodes";
+    use super::get_machine_id;
 
-    /// Individual node state updates
-    pub const NODE_STATE_PREFIX: &str = "bubbaloop/daemon/nodes/";
+    // Legacy keys (for backward compatibility)
+    /// Full node list (legacy, no machine_id)
+    pub const NODES_LIST_LEGACY: &str = "bubbaloop/daemon/nodes";
 
-    /// Command queryable
-    pub const COMMAND: &str = "bubbaloop/daemon/command";
+    /// Individual node state updates (legacy, no machine_id)
+    pub const NODE_STATE_PREFIX_LEGACY: &str = "bubbaloop/daemon/nodes/";
 
-    /// Node events (state changes)
-    pub const EVENTS: &str = "bubbaloop/daemon/events";
+    /// Command queryable (legacy, no machine_id)
+    pub const COMMAND_LEGACY: &str = "bubbaloop/daemon/command";
 
-    /// Get key for individual node state
-    pub fn node_state_key(name: &str) -> String {
-        format!("{}{}/state", NODE_STATE_PREFIX, name)
+    /// Node events (legacy, no machine_id)
+    pub const EVENTS_LEGACY: &str = "bubbaloop/daemon/events";
+
+    // New machine-scoped keys
+    /// Get key for full node list with machine_id
+    pub fn nodes_list_key(machine_id: &str) -> String {
+        format!("bubbaloop/{}/daemon/nodes", machine_id)
+    }
+
+    /// Get key for individual node state with machine_id
+    pub fn node_state_key(machine_id: &str, name: &str) -> String {
+        format!("bubbaloop/{}/daemon/nodes/{}/state", machine_id, name)
+    }
+
+    /// Get key for events with machine_id
+    pub fn events_key(machine_id: &str) -> String {
+        format!("bubbaloop/{}/daemon/events", machine_id)
+    }
+
+    /// Get key for command queryable with machine_id
+    pub fn command_key(machine_id: &str) -> String {
+        format!("bubbaloop/{}/daemon/command", machine_id)
+    }
+
+    /// Get key for individual node state (legacy, no machine_id)
+    pub fn node_state_key_legacy(name: &str) -> String {
+        format!("{}{}/state", NODE_STATE_PREFIX_LEGACY, name)
+    }
+
+    /// Get current machine ID
+    pub fn get_current_machine_id() -> String {
+        get_machine_id()
     }
 }
 
@@ -93,14 +131,18 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>> {
 pub struct ZenohService {
     session: Arc<Session>,
     node_manager: Arc<NodeManager>,
+    machine_id: String,
 }
 
 impl ZenohService {
     /// Create a new Zenoh service with an existing session
     pub fn new(session: Arc<Session>, node_manager: Arc<NodeManager>) -> Self {
+        let machine_id = get_machine_id();
+        log::info!("ZenohService using machine_id: {}", machine_id);
         Self {
             session,
             node_manager,
+            machine_id,
         }
     }
 
@@ -111,32 +153,60 @@ impl ZenohService {
         ZBytes::from(buf)
     }
 
+    /// Get current timestamp in milliseconds
+    fn now_ms() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+    }
+
     /// Run the Zenoh service
     pub async fn run(self, mut shutdown: watch::Receiver<()>) -> Result<()> {
         log::info!("Starting Zenoh service...");
 
-        // Declare queryable for commands
-        let queryable = self.session.declare_queryable(keys::COMMAND).await?;
+        // Declare queryables for commands (both legacy and new)
+        let command_key_new = keys::command_key(&self.machine_id);
+        let queryable = self
+            .session
+            .declare_queryable(keys::COMMAND_LEGACY)
+            .await?;
+        let queryable_new = self.session.declare_queryable(&command_key_new).await?;
 
-        log::info!("Declared queryable on {}", keys::COMMAND);
+        log::info!("Declared queryable on {}", keys::COMMAND_LEGACY);
+        log::info!("Declared queryable on {}", command_key_new);
 
-        // Declare publisher for node list
-        let list_publisher = self.session.declare_publisher(keys::NODES_LIST).await?;
+        // Declare publishers for node list (both legacy and new)
+        let list_publisher = self
+            .session
+            .declare_publisher(keys::NODES_LIST_LEGACY)
+            .await?;
+        let nodes_list_key_new = keys::nodes_list_key(&self.machine_id);
+        let list_publisher_new = self
+            .session
+            .declare_publisher(&nodes_list_key_new)
+            .await?;
 
-        log::info!("Declared publisher on {}", keys::NODES_LIST);
+        log::info!("Declared publisher on {}", keys::NODES_LIST_LEGACY);
+        log::info!("Declared publisher on {}", nodes_list_key_new);
 
-        // Declare publisher for events
-        let event_publisher = self.session.declare_publisher(keys::EVENTS).await?;
+        // Declare publishers for events (both legacy and new)
+        let event_publisher = self.session.declare_publisher(keys::EVENTS_LEGACY).await?;
+        let events_key_new = keys::events_key(&self.machine_id);
+        let event_publisher_new = self.session.declare_publisher(&events_key_new).await?;
 
-        log::info!("Declared publisher on {}", keys::EVENTS);
+        log::info!("Declared publisher on {}", keys::EVENTS_LEGACY);
+        log::info!("Declared publisher on {}", events_key_new);
 
         // Subscribe to node manager events
         let mut event_rx = self.node_manager.subscribe();
 
-        // Publish initial state
+        // Publish initial state (both legacy and new)
         let initial_list = self.node_manager.get_node_list().await;
         let initial_bytes = Self::encode_proto(&initial_list);
+        let initial_bytes_new = Self::encode_proto(&initial_list);
         list_publisher.put(initial_bytes).await?;
+        list_publisher_new.put(initial_bytes_new).await?;
         log::info!(
             "Published initial node list ({} nodes)",
             initial_list.nodes.len()
@@ -160,22 +230,38 @@ impl ZenohService {
                         log::warn!("Failed to refresh node state: {}", e);
                     }
 
-                    // Publish current state
+                    // Publish current state (both legacy and new)
                     let list = self.node_manager.get_node_list().await;
                     let bytes = Self::encode_proto(&list);
+                    let bytes_new = Self::encode_proto(&list);
                     if let Err(e) = list_publisher.put(bytes).await {
-                        log::warn!("Failed to publish node list: {}", e);
+                        log::warn!("Failed to publish node list (legacy): {}", e);
+                    }
+                    if let Err(e) = list_publisher_new.put(bytes_new).await {
+                        log::warn!("Failed to publish node list (new): {}", e);
                     }
                 }
 
-                // Handle incoming queries (commands)
+                // Handle incoming queries (commands) - legacy
                 query = queryable.recv_async() => {
                     match query {
                         Ok(query) => {
                             self.handle_query(&query).await;
                         }
                         Err(e) => {
-                            log::warn!("Query receive error: {}", e);
+                            log::warn!("Query receive error (legacy): {}", e);
+                        }
+                    }
+                }
+
+                // Handle incoming queries (commands) - new
+                query_new = queryable_new.recv_async() => {
+                    match query_new {
+                        Ok(query) => {
+                            self.handle_query(&query).await;
+                        }
+                        Err(e) => {
+                            log::warn!("Query receive error (new): {}", e);
                         }
                     }
                 }
@@ -184,26 +270,39 @@ impl ZenohService {
                 event = event_rx.recv() => {
                     match event {
                         Ok(event) => {
-                            // Publish event
+                            // Publish event (both legacy and new)
                             let event_bytes = Self::encode_proto(&event);
+                            let event_bytes_new = Self::encode_proto(&event);
                             if let Err(e) = event_publisher.put(event_bytes).await {
-                                log::warn!("Failed to publish event: {}", e);
+                                log::warn!("Failed to publish event (legacy): {}", e);
+                            }
+                            if let Err(e) = event_publisher_new.put(event_bytes_new).await {
+                                log::warn!("Failed to publish event (new): {}", e);
                             }
 
-                            // Also publish updated node state
+                            // Also publish updated node state (both legacy and new)
                             if let Some(ref state) = event.state {
-                                let key = keys::node_state_key(&state.name);
+                                let key_legacy = keys::node_state_key_legacy(&state.name);
+                                let key_new = keys::node_state_key(&self.machine_id, &state.name);
                                 let state_bytes = Self::encode_proto(state);
-                                if let Err(e) = self.session.put(&key, state_bytes).await {
-                                    log::warn!("Failed to publish node state: {}", e);
+                                let state_bytes_new = Self::encode_proto(state);
+                                if let Err(e) = self.session.put(&key_legacy, state_bytes).await {
+                                    log::warn!("Failed to publish node state (legacy): {}", e);
+                                }
+                                if let Err(e) = self.session.put(&key_new, state_bytes_new).await {
+                                    log::warn!("Failed to publish node state (new): {}", e);
                                 }
                             }
 
-                            // Publish updated list
+                            // Publish updated list (both legacy and new)
                             let list = self.node_manager.get_node_list().await;
                             let list_bytes = Self::encode_proto(&list);
+                            let list_bytes_new = Self::encode_proto(&list);
                             if let Err(e) = list_publisher.put(list_bytes).await {
-                                log::warn!("Failed to publish node list: {}", e);
+                                log::warn!("Failed to publish node list (legacy): {}", e);
+                            }
+                            if let Err(e) = list_publisher_new.put(list_bytes_new).await {
+                                log::warn!("Failed to publish node list (new): {}", e);
                             }
                         }
                         Err(_) => {
@@ -232,6 +331,8 @@ impl ZenohService {
                     message: "No payload in query".to_string(),
                     output: String::new(),
                     node_state: None,
+                    timestamp_ms: Self::now_ms(),
+                    responding_machine: self.machine_id.clone(),
                 };
                 let result_bytes = Self::encode_proto(&result);
                 query.reply(query.key_expr(), result_bytes).await.ok();
@@ -250,6 +351,8 @@ impl ZenohService {
                     message: format!("Failed to decode command: {}", e),
                     output: String::new(),
                     node_state: None,
+                    timestamp_ms: Self::now_ms(),
+                    responding_machine: self.machine_id.clone(),
                 };
                 let result_bytes = Self::encode_proto(&result);
                 query.reply(query.key_expr(), result_bytes).await.ok();

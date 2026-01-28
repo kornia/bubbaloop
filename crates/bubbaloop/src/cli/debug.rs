@@ -29,7 +29,7 @@ pub type Result<T> = std::result::Result<T, DebugError>;
 #[argh(subcommand, name = "debug")]
 pub struct DebugCommand {
     #[argh(subcommand)]
-    action: DebugAction,
+    action: Option<DebugAction>,
 }
 
 #[derive(FromArgs)]
@@ -104,11 +104,26 @@ struct InfoArgs {
 impl DebugCommand {
     pub async fn run(self) -> Result<()> {
         match self.action {
-            DebugAction::Topics(args) => list_topics(args).await,
-            DebugAction::Subscribe(args) => subscribe_topic(args).await,
-            DebugAction::Query(args) => query_endpoint(args).await,
-            DebugAction::Info(args) => show_info(args).await,
+            None => {
+                Self::print_help();
+                Ok(())
+            }
+            Some(DebugAction::Topics(args)) => list_topics(args).await,
+            Some(DebugAction::Subscribe(args)) => subscribe_topic(args).await,
+            Some(DebugAction::Query(args)) => query_endpoint(args).await,
+            Some(DebugAction::Info(args)) => show_info(args).await,
         }
+    }
+
+    fn print_help() {
+        eprintln!("Debug commands for Zenoh network inspection\n");
+        eprintln!("Usage: bubbaloop debug <command>\n");
+        eprintln!("Commands:");
+        eprintln!("  info        Show Zenoh connection information");
+        eprintln!("  topics      List all active Zenoh topics");
+        eprintln!("  query       Query a Zenoh queryable endpoint");
+        eprintln!("  subscribe   Subscribe to a Zenoh topic and watch messages");
+        eprintln!("\nRun 'bubbaloop debug <command> --help' for more information.");
     }
 }
 

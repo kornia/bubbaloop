@@ -89,8 +89,8 @@ pub struct CachedNode {
 }
 
 impl CachedNode {
-    /// Convert to protobuf NodeState
-    pub fn to_proto(&self) -> NodeState {
+    /// Convert to protobuf NodeState (requires machine info from caller)
+    pub fn to_proto(&self, machine_id: &str, machine_hostname: &str) -> NodeState {
         let manifest = self.manifest.as_ref();
         NodeState {
             name: manifest
@@ -112,6 +112,8 @@ impl CachedNode {
             build_output: self.build_state.output.clone(),
             health_status: self.health_status as i32,
             last_health_check_ms: self.last_health_check_ms,
+            machine_id: machine_id.to_string(),
+            machine_hostname: machine_hostname.to_string(),
         }
     }
 }
@@ -126,6 +128,10 @@ pub struct NodeManager {
     event_tx: broadcast::Sender<NodeEvent>,
     /// Nodes currently being built (prevents concurrent builds)
     building_nodes: Mutex<HashSet<String>>,
+    /// Machine identifier
+    machine_id: String,
+    /// Machine hostname
+    machine_hostname: String,
 }
 
 impl NodeManager {
@@ -134,11 +140,31 @@ impl NodeManager {
         let systemd = SystemdClient::new().await?;
         let (event_tx, _) = broadcast::channel(100);
 
+        // Get machine ID from environment or hostname
+        let machine_id = std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
+            hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "unknown".to_string())
+        });
+
+        // Get machine hostname
+        let machine_hostname = hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+
+        log::info!(
+            "NodeManager using machine_id: {}, hostname: {}",
+            machine_id,
+            machine_hostname
+        );
+
         let manager = Arc::new(Self {
             nodes: RwLock::new(HashMap::new()),
             systemd,
             event_tx,
             building_nodes: Mutex::new(HashSet::new()),
+            machine_id,
+            machine_hostname,
         });
 
         // Initial load
@@ -448,8 +474,12 @@ impl NodeManager {
         let nodes = self.nodes.read().await;
         log::debug!("get_node_list: nodes HashMap has {} entries", nodes.len());
         NodeList {
-            nodes: nodes.values().map(|n| n.to_proto()).collect(),
+            nodes: nodes
+                .values()
+                .map(|n| n.to_proto(&self.machine_id, &self.machine_hostname))
+                .collect(),
             timestamp_ms: Self::now_ms(),
+            machine_id: self.machine_id.clone(),
         }
     }
 
@@ -459,7 +489,7 @@ impl NodeManager {
         nodes
             .values()
             .find(|n| n.manifest.as_ref().map(|m| m.name == name).unwrap_or(false))
-            .map(|n| n.to_proto())
+            .map(|n| n.to_proto(&self.machine_id, &self.machine_hostname))
     }
 
     /// Execute a command
@@ -476,6 +506,8 @@ impl NodeManager {
                     message: "Logs retrieved".to_string(),
                     output: logs,
                     node_state,
+                    timestamp_ms: Self::now_ms(),
+                    responding_machine: self.machine_id.clone(),
                 },
                 Err(e) => CommandResult {
                     request_id: cmd.request_id,
@@ -483,6 +515,8 @@ impl NodeManager {
                     message: e.to_string(),
                     output: String::new(),
                     node_state,
+                    timestamp_ms: Self::now_ms(),
+                    responding_machine: self.machine_id.clone(),
                 },
             };
         }
@@ -513,6 +547,8 @@ impl NodeManager {
                 message: msg,
                 output: String::new(),
                 node_state,
+                timestamp_ms: Self::now_ms(),
+                responding_machine: self.machine_id.clone(),
             },
             Err(e) => CommandResult {
                 request_id: cmd.request_id,
@@ -520,6 +556,8 @@ impl NodeManager {
                 message: e.to_string(),
                 output: String::new(),
                 node_state,
+                timestamp_ms: Self::now_ms(),
+                responding_machine: self.machine_id.clone(),
             },
         }
     }

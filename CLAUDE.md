@@ -1,6 +1,6 @@
 # Bubbaloop
 
-Physical AI camera streaming platform built on Zenoh/ROS-Z.
+AI-native orchestration for Physical AI, built on Zenoh.
 
 ## Quick Start
 
