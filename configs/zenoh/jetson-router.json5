@@ -1,0 +1,81 @@
+{
+  // Jetson Local Router Configuration
+  // ==================================
+  // This runs on each Jetson device and connects to the central router.
+  // Local nodes connect to this router to benefit from shared memory.
+  //
+  // Usage:
+  //   CENTRAL_ROUTER_IP=192.168.1.100 zenohd -c configs/zenoh/jetson-router.json5
+  //
+  // Or edit the connect.endpoints below with your central router IP.
+  //
+  // Benefits of local router:
+  //   - Shared memory works for camera frames (256MB, 6MB per 1080p frame)
+  //   - Resilience during VPN outages (local nodes still communicate)
+  //   - Graceful degradation if central router is unreachable
+  //
+  // Architecture:
+  //   [rtsp-camera] --SHM--> [local zenohd] --TCP/Tailscale--> [central zenohd]
+  //                              ^
+  //   [openmeteo] ----peer-------+
+
+  mode: "router",
+
+  // Listen locally for node connections
+  listen: {
+    endpoints: [
+      "tcp/127.0.0.1:7447",
+    ],
+  },
+
+  // Connect to central router
+  // IMPORTANT: Replace with your central router's IP address
+  connect: {
+    endpoints: [
+      // Example: "tcp/100.64.1.1:7447" for Tailscale
+      // Example: "tcp/192.168.1.100:7447" for local network
+      // "tcp/CENTRAL_ROUTER_IP:7447",
+    ],
+    // Retry connection on failure
+    retry: {
+      period_init_ms: 1000,
+      period_max_ms: 60000,
+      period_increase_factor: 2.0,
+    },
+  },
+
+  // Scouting configuration
+  scouting: {
+    // Disable multicast for security
+    multicast: {
+      enabled: false,
+    },
+    // Enable gossip to learn about other routers through central
+    gossip: {
+      enabled: true,
+      autoconnect: "router",
+    },
+  },
+
+  // Transport configuration
+  transport: {
+    // Enable shared memory for local camera frames
+    shared_memory: {
+      enabled: true,
+    },
+  },
+
+  // Plugin loading
+  plugins_loading: {
+    enabled: true,
+    search_dirs: ["~/.zenoh/lib", "/usr/local/lib", "/usr/lib"],
+  },
+
+  // Plugins (optional - only if dashboard runs locally)
+  plugins: {
+    // Uncomment if running dashboard locally on this Jetson
+    // remote_api: {
+    //   websocket_port: 10000,
+    // },
+  },
+}

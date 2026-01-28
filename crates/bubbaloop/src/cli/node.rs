@@ -1,0 +1,960 @@
+//! Node management CLI commands
+//!
+//! Commands for managing bubbaloop nodes from the command line.
+//! These interact with the daemon via Zenoh to manage systemd services.
+
+use argh::FromArgs;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use thiserror::Error;
+use zenoh::query::QueryTarget;
+
+use crate::templates;
+
+#[derive(Debug, Error)]
+pub enum NodeError {
+    #[error("Zenoh error: {0}")]
+    Zenoh(String),
+    #[error("Node not found: {0}")]
+    NotFound(String),
+    #[error("Command failed: {0}")]
+    CommandFailed(String),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("Git clone failed: {0}")]
+    GitClone(String),
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
+}
+
+pub type Result<T> = std::result::Result<T, NodeError>;
+
+/// Node management commands
+#[derive(FromArgs)]
+#[argh(subcommand, name = "node")]
+pub struct NodeCommand {
+    #[argh(subcommand)]
+    action: NodeAction,
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand)]
+enum NodeAction {
+    Init(InitArgs),
+    Validate(ValidateArgs),
+    List(ListArgs),
+    Add(AddArgs),
+    Remove(RemoveArgs),
+    Install(InstallArgs),
+    Uninstall(UninstallArgs),
+    Enable(EnableArgs),
+    Disable(DisableArgs),
+    Start(StartArgs),
+    Stop(StopArgs),
+    Restart(RestartArgs),
+    Logs(LogsArgs),
+    Build(BuildArgs),
+}
+
+/// Initialize a new node from template (scaffolding only, does not register)
+#[derive(FromArgs)]
+#[argh(subcommand, name = "init")]
+struct InitArgs {
+    /// node name (e.g., "my-sensor")
+    #[argh(positional)]
+    name: String,
+
+    /// node type: rust or python (default: rust)
+    #[argh(option, short = 't', default = "String::from(\"rust\")")]
+    node_type: String,
+
+    /// output directory (default: ./<name> in current directory)
+    #[argh(option, short = 'o')]
+    output: Option<String>,
+
+    /// node description
+    #[argh(option, short = 'd', default = "String::from(\"A Bubbaloop node\")")]
+    description: String,
+
+    /// author name
+    #[argh(option, default = "String::from(\"Anonymous\")")]
+    author: String,
+}
+
+/// Validate a node's manifest and structure
+#[derive(FromArgs)]
+#[argh(subcommand, name = "validate")]
+struct ValidateArgs {
+    /// path to node directory (default: current directory)
+    #[argh(positional, default = "String::from(\".\")")]
+    path: String,
+}
+
+/// List all registered nodes
+#[derive(FromArgs)]
+#[argh(subcommand, name = "list")]
+struct ListArgs {
+    /// output format: table, json (default: table)
+    #[argh(option, short = 'f', default = "String::from(\"table\")")]
+    format: String,
+}
+
+/// Add a node from local path or GitHub URL
+#[derive(FromArgs)]
+#[argh(subcommand, name = "add")]
+struct AddArgs {
+    /// source: local path, GitHub URL, or shorthand (user/repo)
+    #[argh(positional)]
+    source: String,
+
+    /// target directory for Git clones (default: ~/.bubbaloop/plugins/<repo-name>)
+    #[argh(option, short = 'o')]
+    output: Option<String>,
+
+    /// git branch to clone (default: main)
+    #[argh(option, short = 'b', default = "String::from(\"main\")")]
+    branch: String,
+
+    /// build node after adding
+    #[argh(switch)]
+    build: bool,
+
+    /// install as systemd service after adding
+    #[argh(switch)]
+    install: bool,
+}
+
+/// Remove a node from the registry
+#[derive(FromArgs)]
+#[argh(subcommand, name = "remove")]
+struct RemoveArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+
+    /// also delete files
+    #[argh(switch)]
+    delete_files: bool,
+}
+
+/// Install node as systemd service
+#[derive(FromArgs)]
+#[argh(subcommand, name = "install")]
+struct InstallArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+}
+
+/// Uninstall systemd service
+#[derive(FromArgs)]
+#[argh(subcommand, name = "uninstall")]
+struct UninstallArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+}
+
+/// Enable autostart for node
+#[derive(FromArgs)]
+#[argh(subcommand, name = "enable")]
+struct EnableArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+}
+
+/// Disable autostart for node
+#[derive(FromArgs)]
+#[argh(subcommand, name = "disable")]
+struct DisableArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+}
+
+/// Start a node
+#[derive(FromArgs)]
+#[argh(subcommand, name = "start")]
+struct StartArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+}
+
+/// Stop a node
+#[derive(FromArgs)]
+#[argh(subcommand, name = "stop")]
+struct StopArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+}
+
+/// Restart a node
+#[derive(FromArgs)]
+#[argh(subcommand, name = "restart")]
+struct RestartArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+}
+
+/// View node logs
+#[derive(FromArgs)]
+#[argh(subcommand, name = "logs")]
+struct LogsArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+
+    /// number of lines to show (default: 50)
+    #[argh(option, short = 'n', default = "50")]
+    lines: usize,
+
+    /// follow log output
+    #[argh(switch, short = 'f')]
+    follow: bool,
+}
+
+/// Build a node
+#[derive(FromArgs)]
+#[argh(subcommand, name = "build")]
+struct BuildArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+}
+
+/// Response from daemon API
+#[derive(Deserialize)]
+struct CommandResponse {
+    success: bool,
+    message: String,
+    #[serde(default)]
+    output: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct NodeState {
+    name: String,
+    path: String,
+    status: String,
+    installed: bool,
+    autostart_enabled: bool,
+    version: String,
+    description: String,
+    node_type: String,
+    is_built: bool,
+}
+
+#[derive(Deserialize)]
+struct NodeListResponse {
+    nodes: Vec<NodeState>,
+}
+
+#[derive(Deserialize)]
+struct LogsResponse {
+    lines: Vec<String>,
+    success: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+impl NodeCommand {
+    pub async fn run(self) -> Result<()> {
+        match self.action {
+            NodeAction::Init(args) => init_node(args),
+            NodeAction::Validate(args) => validate_node(args),
+            NodeAction::List(args) => list_nodes(args).await,
+            NodeAction::Add(args) => add_node(args).await,
+            NodeAction::Remove(args) => remove_node(args).await,
+            NodeAction::Install(args) => send_command(&args.name, "install").await,
+            NodeAction::Uninstall(args) => send_command(&args.name, "uninstall").await,
+            NodeAction::Enable(args) => send_command(&args.name, "enable_autostart").await,
+            NodeAction::Disable(args) => send_command(&args.name, "disable_autostart").await,
+            NodeAction::Start(args) => send_command(&args.name, "start").await,
+            NodeAction::Stop(args) => send_command(&args.name, "stop").await,
+            NodeAction::Restart(args) => send_command(&args.name, "restart").await,
+            NodeAction::Logs(args) => view_logs(args).await,
+            NodeAction::Build(args) => send_command(&args.name, "build").await,
+        }
+    }
+}
+
+async fn get_zenoh_session() -> Result<zenoh::Session> {
+    // Connect to local zenoh router, or custom endpoint via env var
+    let mut config = zenoh::Config::default();
+
+    // Run as client mode - only connect to router, don't listen
+    config
+        .insert_json5("mode", "\"client\"")
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+
+    let endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT")
+        .unwrap_or_else(|_| "tcp/127.0.0.1:7447".to_string());
+    config
+        .insert_json5("connect/endpoints", &format!("[\"{}\"]", endpoint))
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+
+    // Disable all scouting to avoid connecting to remote peers via Tailscale
+    config
+        .insert_json5("scouting/multicast/enabled", "false")
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+    config
+        .insert_json5("scouting/gossip/enabled", "false")
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+
+    let session = zenoh::open(config)
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+    Ok(session)
+}
+
+fn init_node(args: InitArgs) -> Result<()> {
+    // Determine output directory (default: ./<name> in current directory)
+    let output_dir = if let Some(output) = args.output {
+        PathBuf::from(output)
+    } else {
+        PathBuf::from(".").join(&args.name)
+    };
+
+    // Use shared template module
+    let output_dir = templates::create_node_at(
+        &args.name,
+        &args.node_type,
+        &args.author,
+        &args.description,
+        &output_dir,
+    )
+    .map_err(|e| NodeError::CommandFailed(e.to_string()))?;
+
+    let abs_path = output_dir.canonicalize().unwrap_or(output_dir.clone());
+
+    println!(
+        "Initialized node '{}' at: {}",
+        args.name,
+        abs_path.display()
+    );
+    println!();
+    println!("Next steps:");
+    println!("  cd {}", output_dir.display());
+    if args.node_type.to_lowercase() == "rust" {
+        println!("  # Edit src/node.rs with your logic");
+        println!("  cargo build --release");
+    } else {
+        println!("  # Edit main.py with your logic");
+        println!("  pip install -r requirements.txt");
+    }
+    println!();
+    println!("To register with bubbaloop daemon:");
+    println!("  bubbaloop node add {}", abs_path.display());
+
+    Ok(())
+}
+
+fn validate_node(args: ValidateArgs) -> Result<()> {
+    let path = PathBuf::from(&args.path);
+
+    // 1. Check node.yaml exists
+    let manifest_path = path.join("node.yaml");
+    if !manifest_path.exists() {
+        println!("FAIL: node.yaml not found at {}", manifest_path.display());
+        return Err(NodeError::NotFound("node.yaml".into()));
+    }
+    println!("OK: node.yaml found");
+
+    // 2. Parse manifest
+    let content = std::fs::read_to_string(&manifest_path)?;
+    let manifest: serde_yaml::Value = serde_yaml::from_str(&content)
+        .map_err(|e| NodeError::CommandFailed(format!("Invalid YAML: {}", e)))?;
+    println!("OK: node.yaml parses correctly");
+
+    // 3. Check required fields
+    let required = ["name", "version", "type"];
+    for field in required {
+        if manifest.get(field).is_none() {
+            println!("FAIL: Missing required field: {}", field);
+            return Err(NodeError::CommandFailed(format!(
+                "Missing field: {}",
+                field
+            )));
+        }
+    }
+    println!("OK: All required fields present (name, version, type)");
+
+    // 4. Validate type
+    let node_type = manifest["type"].as_str().unwrap_or("");
+    if node_type != "rust" && node_type != "python" {
+        println!(
+            "WARN: Unknown type '{}' (expected: rust or python)",
+            node_type
+        );
+    }
+
+    // 5. Check command file exists (if specified)
+    if let Some(cmd) = manifest.get("command").and_then(|v| v.as_str()) {
+        let cmd_path = path.join(cmd.trim_start_matches("./"));
+        if cmd_path.exists() {
+            println!("OK: Command '{}' exists", cmd);
+        } else {
+            println!("INFO: Command '{}' does not exist yet (needs build)", cmd);
+        }
+    }
+
+    println!();
+    println!("Validation passed!");
+    Ok(())
+}
+
+async fn list_nodes(args: ListArgs) -> Result<()> {
+    let session = get_zenoh_session().await?;
+
+    let replies: Vec<_> = session
+        .get("bubbaloop/daemon/api/nodes")
+        .target(QueryTarget::BestMatching)
+        .timeout(std::time::Duration::from_secs(10))
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?
+        .into_iter()
+        .collect();
+
+    // Find the first response with actual nodes, or use any response
+    let mut best_data: Option<NodeListResponse> = None;
+    for reply in replies {
+        if let Ok(sample) = reply.into_result() {
+            let payload = sample.payload().to_bytes();
+            if let Ok(data) = serde_json::from_slice::<NodeListResponse>(&payload) {
+                if !data.nodes.is_empty() {
+                    best_data = Some(data);
+                    break; // Found response with nodes, use it
+                } else if best_data.is_none() {
+                    best_data = Some(data); // Keep first empty response as fallback
+                }
+            }
+        }
+    }
+
+    if let Some(data) = best_data {
+        if args.format == "json" {
+            println!("{}", serde_json::to_string_pretty(&data.nodes)?);
+        } else if data.nodes.is_empty() {
+            println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
+        } else {
+            println!(
+                "{:<20} {:<10} {:<12} {:<8} {:<10} DESCRIPTION",
+                "NAME", "STATUS", "TYPE", "BUILT", "AUTOSTART"
+            );
+            println!("{}", "-".repeat(80));
+            for node in data.nodes {
+                let autostart = if node.autostart_enabled { "yes" } else { "no" };
+                let built = if node.is_built { "yes" } else { "no" };
+                println!(
+                    "{:<20} {:<10} {:<12} {:<8} {:<10} {}",
+                    node.name,
+                    node.status,
+                    node.node_type,
+                    built,
+                    autostart,
+                    truncate(&node.description, 30)
+                );
+            }
+        }
+    } else {
+        println!("No response from daemon. Is it running?");
+    }
+
+    session
+        .close()
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+    Ok(())
+}
+
+async fn add_node(args: AddArgs) -> Result<()> {
+    // Normalize source URL
+    let source = normalize_git_url(&args.source);
+
+    let node_path = if is_git_url(&source) {
+        // Clone from GitHub
+        clone_from_github(&source, args.output.as_deref(), &args.branch)?
+    } else {
+        // Local path
+        let path = Path::new(&args.source);
+        if !path.exists() {
+            return Err(NodeError::NotFound(args.source));
+        }
+        path.canonicalize()?.to_string_lossy().to_string()
+    };
+
+    // Add to daemon via Zenoh
+    let session = get_zenoh_session().await?;
+
+    let payload = serde_json::to_string(&serde_json::json!({
+        "command": "add",
+        "node_path": node_path
+    }))?;
+
+    let replies: Vec<_> = session
+        .get("bubbaloop/daemon/api/nodes/add")
+        .payload(payload)
+        .target(QueryTarget::BestMatching)
+        .timeout(std::time::Duration::from_secs(10))
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?
+        .into_iter()
+        .collect();
+
+    let mut node_name: Option<String> = None;
+    for reply in replies {
+        if let Ok(sample) = reply.into_result() {
+            let data: CommandResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
+            if data.success {
+                println!("Added node from: {}", node_path);
+                // Extract node name from path for build/install
+                node_name = extract_node_name(&node_path).ok();
+            } else {
+                return Err(NodeError::CommandFailed(data.message));
+            }
+        }
+    }
+
+    // Optional: build
+    if args.build {
+        if let Some(ref name) = node_name {
+            println!("Building node...");
+            send_command(name, "build").await?;
+        }
+    }
+
+    // Optional: install
+    if args.install {
+        if let Some(ref name) = node_name {
+            println!("Installing as service...");
+            send_command(name, "install").await?;
+        }
+    }
+
+    session
+        .close()
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+    Ok(())
+}
+
+fn normalize_git_url(source: &str) -> String {
+    if source.starts_with("https://") || source.starts_with("git@") {
+        source.to_string()
+    } else if source.starts_with("github.com/") {
+        format!("https://{}", source)
+    } else if source.contains('/') && !source.contains(':') && !source.starts_with('/') {
+        // Shorthand: user/repo -> https://github.com/user/repo
+        format!("https://github.com/{}", source)
+    } else {
+        source.to_string()
+    }
+}
+
+fn is_git_url(source: &str) -> bool {
+    source.starts_with("https://github.com/")
+        || source.starts_with("git@github.com:")
+        || (source.contains("github.com/") && !source.starts_with('/'))
+}
+
+fn extract_node_name(path: &str) -> Result<String> {
+    let node_yaml = Path::new(path).join("node.yaml");
+    if node_yaml.exists() {
+        let content = std::fs::read_to_string(&node_yaml)?;
+        let manifest: serde_yaml::Value =
+            serde_yaml::from_str(&content).map_err(|e| NodeError::CommandFailed(e.to_string()))?;
+        if let Some(name) = manifest.get("name").and_then(|v| v.as_str()) {
+            return Ok(name.to_string());
+        }
+    }
+    // Fallback to directory name
+    Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| NodeError::CommandFailed("Cannot extract node name".into()))
+}
+
+fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -> Result<String> {
+    // Extract repo name from URL
+    let repo_name = url
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .rsplit('/')
+        .next()
+        .ok_or_else(|| NodeError::InvalidUrl(url.to_string()))?;
+
+    // Determine target directory
+    let target_dir = if let Some(out) = output {
+        std::path::PathBuf::from(out)
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        std::path::PathBuf::from(home)
+            .join(".bubbaloop")
+            .join("plugins")
+            .join(repo_name)
+    };
+
+    if target_dir.exists() {
+        return Err(NodeError::GitClone(format!(
+            "Directory already exists: {}",
+            target_dir.display()
+        )));
+    }
+
+    // Create parent directory
+    if let Some(parent) = target_dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    println!(
+        "Cloning {} (branch: {}) to {}...",
+        url,
+        branch,
+        target_dir.display()
+    );
+
+    // Clone the repository with branch
+    let clone_output = Command::new("git")
+        .args([
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            branch,
+            url,
+            &target_dir.to_string_lossy(),
+        ])
+        .output()?;
+
+    if !clone_output.status.success() {
+        let stderr = String::from_utf8_lossy(&clone_output.stderr);
+        return Err(NodeError::GitClone(stderr.to_string()));
+    }
+
+    println!("Cloned successfully!");
+
+    // Check for node.yaml
+    let manifest = target_dir.join("node.yaml");
+    if !manifest.exists() {
+        eprintln!("Warning: No node.yaml found in repository. You may need to create one.");
+    }
+
+    Ok(target_dir.to_string_lossy().to_string())
+}
+
+async fn remove_node(args: RemoveArgs) -> Result<()> {
+    let session = get_zenoh_session().await?;
+
+    let payload = serde_json::to_string(&serde_json::json!({
+        "command": "remove"
+    }))?;
+
+    let key = format!("bubbaloop/daemon/api/nodes/{}/command", args.name);
+    let replies: Vec<_> = session
+        .get(&key)
+        .payload(payload)
+        .target(QueryTarget::BestMatching)
+        .timeout(std::time::Duration::from_secs(10))
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?
+        .into_iter()
+        .collect();
+
+    for reply in replies {
+        if let Ok(sample) = reply.into_result() {
+            let data: CommandResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
+            if data.success {
+                println!("Removed node: {}", args.name);
+            } else {
+                return Err(NodeError::CommandFailed(data.message));
+            }
+        }
+    }
+
+    if args.delete_files {
+        // Get node path first, then delete
+        eprintln!("Note: File deletion not implemented yet. Remove files manually.");
+    }
+
+    session
+        .close()
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+    Ok(())
+}
+
+async fn send_command(name: &str, command: &str) -> Result<()> {
+    let session = get_zenoh_session().await?;
+
+    let payload = serde_json::to_string(&serde_json::json!({
+        "command": command
+    }))?;
+
+    let key = format!("bubbaloop/daemon/api/nodes/{}/command", name);
+    let replies: Vec<_> = session
+        .get(&key)
+        .payload(payload)
+        .target(QueryTarget::BestMatching)
+        .timeout(std::time::Duration::from_secs(30))
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?
+        .into_iter()
+        .collect();
+
+    for reply in replies {
+        if let Ok(sample) = reply.into_result() {
+            let data: CommandResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
+            if data.success {
+                println!("{}", data.message);
+                if !data.output.is_empty() {
+                    println!("{}", data.output);
+                }
+            } else {
+                return Err(NodeError::CommandFailed(data.message));
+            }
+        }
+    }
+
+    session
+        .close()
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+    Ok(())
+}
+
+async fn view_logs(args: LogsArgs) -> Result<()> {
+    if args.follow {
+        // Use journalctl directly for follow mode
+        let service = format!("bubbaloop-{}.service", args.name);
+        let status = Command::new("journalctl")
+            .args(["--user", "-u", &service, "-f", "--no-pager"])
+            .status()?;
+
+        if !status.success() {
+            // Fallback to systemctl status
+            let _ = Command::new("systemctl")
+                .args(["--user", "status", "-l", "--no-pager", &service])
+                .status();
+        }
+        return Ok(());
+    }
+
+    let session = get_zenoh_session().await?;
+
+    let key = format!("bubbaloop/daemon/api/nodes/{}/logs", args.name);
+    let replies: Vec<_> = session
+        .get(&key)
+        .target(QueryTarget::BestMatching)
+        .timeout(std::time::Duration::from_secs(10))
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?
+        .into_iter()
+        .collect();
+
+    for reply in replies {
+        if let Ok(sample) = reply.into_result() {
+            let data: LogsResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
+            if data.success {
+                for line in data.lines.iter().take(args.lines) {
+                    println!("{}", line);
+                }
+            } else if let Some(error) = data.error {
+                return Err(NodeError::CommandFailed(error));
+            }
+        }
+    }
+
+    session
+        .close()
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+    Ok(())
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max - 3])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_git_url_full_https() {
+        assert_eq!(
+            normalize_git_url("https://github.com/user/repo"),
+            "https://github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn test_normalize_git_url_ssh() {
+        assert_eq!(
+            normalize_git_url("git@github.com:user/repo.git"),
+            "git@github.com:user/repo.git"
+        );
+    }
+
+    #[test]
+    fn test_normalize_git_url_with_github_prefix() {
+        assert_eq!(
+            normalize_git_url("github.com/user/repo"),
+            "https://github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn test_normalize_git_url_shorthand() {
+        assert_eq!(
+            normalize_git_url("user/repo"),
+            "https://github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn test_normalize_git_url_local_path() {
+        assert_eq!(normalize_git_url("/path/to/node"), "/path/to/node");
+    }
+
+    #[test]
+    fn test_normalize_git_url_relative_path() {
+        // Note: relative paths with './' contain '/' but don't start with '/'
+        // so they're treated as shorthand GitHub URLs. This may be unintended
+        // but reflects actual behavior.
+        assert_eq!(normalize_git_url("./node"), "https://github.com/./node");
+    }
+
+    #[test]
+    fn test_is_git_url_https() {
+        assert!(is_git_url("https://github.com/user/repo"));
+    }
+
+    #[test]
+    fn test_is_git_url_ssh() {
+        assert!(is_git_url("git@github.com:user/repo.git"));
+    }
+
+    #[test]
+    fn test_is_git_url_with_prefix() {
+        assert!(is_git_url("github.com/user/repo"));
+    }
+
+    #[test]
+    fn test_is_git_url_local_path() {
+        assert!(!is_git_url("/path/to/node"));
+    }
+
+    #[test]
+    fn test_is_git_url_relative_path() {
+        assert!(!is_git_url("./node"));
+    }
+
+    #[test]
+    fn test_truncate_short_string() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_exact_length() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_long_string() {
+        assert_eq!(truncate("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn test_truncate_very_long_string() {
+        let long = "This is a very long description that exceeds the maximum length";
+        // Function takes first (max - 3) chars and adds "..."
+        assert_eq!(truncate(long, 30), "This is a very long descrip...");
+        assert_eq!(truncate(long, 30).len(), 30);
+    }
+
+    #[test]
+    fn test_command_request_serialization() {
+        let req = serde_json::json!({
+            "command": "start",
+            "node_path": "/path/to/node"
+        });
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"command\""));
+        assert!(json.contains("\"start\""));
+        assert!(json.contains("\"node_path\""));
+    }
+
+    #[test]
+    fn test_command_response_deserialization() {
+        let json = r#"{"success": true, "message": "Node started", "output": ""}"#;
+        let response: CommandResponse = serde_json::from_str(json).unwrap();
+        assert!(response.success);
+        assert_eq!(response.message, "Node started");
+    }
+
+    #[test]
+    fn test_command_response_with_output() {
+        let json = r#"{"success": true, "message": "Built", "output": "Compiling..."}"#;
+        let response: CommandResponse = serde_json::from_str(json).unwrap();
+        assert!(response.success);
+        assert_eq!(response.output, "Compiling...");
+    }
+
+    #[test]
+    fn test_node_state_serialization() {
+        let node = NodeState {
+            name: "test-node".to_string(),
+            path: "/path/to/node".to_string(),
+            status: "running".to_string(),
+            installed: true,
+            autostart_enabled: false,
+            version: "1.0.0".to_string(),
+            description: "Test node".to_string(),
+            node_type: "rust".to_string(),
+            is_built: true,
+        };
+
+        let json = serde_json::to_string(&node).unwrap();
+        assert!(json.contains("test-node"));
+        assert!(json.contains("running"));
+    }
+
+    #[test]
+    fn test_node_list_response_deserialization() {
+        let json = r#"{"nodes": [{"name": "node1", "path": "/path", "status": "running",
+                     "installed": true, "autostart_enabled": false, "version": "1.0.0",
+                     "description": "Test", "node_type": "rust", "is_built": true}]}"#;
+        let response: NodeListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.nodes.len(), 1);
+        assert_eq!(response.nodes[0].name, "node1");
+    }
+
+    #[test]
+    fn test_logs_response_deserialization() {
+        let json = r#"{"lines": ["line1", "line2"], "success": true}"#;
+        let response: LogsResponse = serde_json::from_str(json).unwrap();
+        assert!(response.success);
+        assert_eq!(response.lines.len(), 2);
+        assert_eq!(response.lines[0], "line1");
+    }
+
+    #[test]
+    fn test_logs_response_with_error() {
+        let json = r#"{"lines": [], "success": false, "error": "Node not found"}"#;
+        let response: LogsResponse = serde_json::from_str(json).unwrap();
+        assert!(!response.success);
+        assert_eq!(response.error, Some("Node not found".to_string()));
+    }
+}

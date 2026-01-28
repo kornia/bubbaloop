@@ -45,5 +45,9 @@ thiserror.workspace = true
 dirs = "6"
 uuid = { version = "1", features = ["v4"] }
 
+[dev-dependencies]
+# For integration tests
+uuid = { version = "1", features = ["v4"] }
+
 [build-dependencies]
 prost-build.workspace = true

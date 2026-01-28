@@ -50,6 +50,94 @@ pub struct NodeManifest {
     pub depends_on: Vec<String>,
 }
 
+impl NodeManifest {
+    /// Validate the node manifest fields
+    pub fn validate(&self) -> Result<()> {
+        // Validate name: 1-64 chars, alphanumeric + hyphen + underscore
+        if self.name.is_empty() || self.name.len() > 64 {
+            return Err(RegistryError::InvalidNode(format!(
+                "Node name must be 1-64 characters, got: {}",
+                self.name.len()
+            )));
+        }
+        if !self
+            .name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(RegistryError::InvalidNode(format!(
+                "Node name contains invalid characters: {}",
+                self.name
+            )));
+        }
+
+        // Validate version: basic semver check (contains digits and dots)
+        if self.version.is_empty() {
+            return Err(RegistryError::InvalidNode(
+                "Node version cannot be empty".to_string(),
+            ));
+        }
+        let has_digit = self.version.chars().any(|c| c.is_ascii_digit());
+        if !has_digit {
+            return Err(RegistryError::InvalidNode(format!(
+                "Node version must contain at least one digit: {}",
+                self.version
+            )));
+        }
+
+        // Validate type: must be 'rust' or 'python'
+        let valid_types = ["rust", "python"];
+        if !valid_types.contains(&self.node_type.to_lowercase().as_str()) {
+            return Err(RegistryError::InvalidNode(format!(
+                "Node type must be 'rust' or 'python', got: {}",
+                self.node_type
+            )));
+        }
+
+        // Validate description length: max 500 chars
+        if self.description.len() > 500 {
+            return Err(RegistryError::InvalidNode(format!(
+                "Node description exceeds 500 characters: {}",
+                self.description.len()
+            )));
+        }
+
+        // Check for null bytes in string fields
+        for field in [&self.name, &self.description, &self.node_type] {
+            if field.contains('\0') {
+                return Err(RegistryError::InvalidNode(
+                    "Manifest fields cannot contain null bytes".to_string(),
+                ));
+            }
+        }
+
+        // Check optional string fields for null bytes
+        if let Some(ref author) = self.author {
+            if author.contains('\0') {
+                return Err(RegistryError::InvalidNode(
+                    "Author field cannot contain null bytes".to_string(),
+                ));
+            }
+        }
+        if let Some(ref build) = self.build {
+            if build.contains('\0') {
+                return Err(RegistryError::InvalidNode(
+                    "Build field cannot contain null bytes".to_string(),
+                ));
+            }
+        }
+        if let Some(ref command) = self.command {
+            if command.contains('\0') {
+                return Err(RegistryError::InvalidNode(
+                    "Command field cannot contain null bytes".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Entry in the nodes registry (nodes.json)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeEntry {
@@ -111,6 +199,10 @@ pub fn read_manifest(node_path: &Path) -> Result<NodeManifest> {
 
     let content = fs::read_to_string(&manifest_path)?;
     let manifest: NodeManifest = serde_yaml::from_str(&content)?;
+
+    // Validate the manifest fields
+    manifest.validate()?;
+
     Ok(manifest)
 }
 
@@ -244,5 +336,185 @@ mod tests {
     fn test_get_bubbaloop_home() {
         let home = get_bubbaloop_home();
         assert!(home.to_string_lossy().contains(".bubbaloop"));
+    }
+
+    #[test]
+    fn test_manifest_validation_valid() {
+        let manifest = NodeManifest {
+            name: "test-node".to_string(),
+            version: "1.0.0".to_string(),
+            node_type: "rust".to_string(),
+            description: "A test node".to_string(),
+            author: Some("Test Author".to_string()),
+            build: Some("cargo build --release".to_string()),
+            command: Some("./target/release/test-node".to_string()),
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn test_manifest_validation_empty_name() {
+        let manifest = NodeManifest {
+            name: "".to_string(),
+            version: "1.0.0".to_string(),
+            node_type: "rust".to_string(),
+            description: "Test".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn test_manifest_validation_name_too_long() {
+        let manifest = NodeManifest {
+            name: "a".repeat(65),
+            version: "1.0.0".to_string(),
+            node_type: "rust".to_string(),
+            description: "Test".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn test_manifest_validation_invalid_name_chars() {
+        let manifest = NodeManifest {
+            name: "test node!".to_string(),
+            version: "1.0.0".to_string(),
+            node_type: "rust".to_string(),
+            description: "Test".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn test_manifest_validation_valid_name_with_underscores_hyphens() {
+        let manifest = NodeManifest {
+            name: "test_node-123".to_string(),
+            version: "1.0.0".to_string(),
+            node_type: "rust".to_string(),
+            description: "Test".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn test_manifest_validation_empty_version() {
+        let manifest = NodeManifest {
+            name: "test-node".to_string(),
+            version: "".to_string(),
+            node_type: "rust".to_string(),
+            description: "Test".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn test_manifest_validation_version_no_digits() {
+        let manifest = NodeManifest {
+            name: "test-node".to_string(),
+            version: "alpha".to_string(),
+            node_type: "rust".to_string(),
+            description: "Test".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn test_manifest_validation_invalid_node_type() {
+        let manifest = NodeManifest {
+            name: "test-node".to_string(),
+            version: "1.0.0".to_string(),
+            node_type: "javascript".to_string(),
+            description: "Test".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn test_manifest_validation_python_type() {
+        let manifest = NodeManifest {
+            name: "test-node".to_string(),
+            version: "1.0.0".to_string(),
+            node_type: "python".to_string(),
+            description: "Test".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn test_manifest_validation_description_too_long() {
+        let manifest = NodeManifest {
+            name: "test-node".to_string(),
+            version: "1.0.0".to_string(),
+            node_type: "rust".to_string(),
+            description: "a".repeat(501),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn test_manifest_validation_null_bytes_in_name() {
+        let manifest = NodeManifest {
+            name: "test\0node".to_string(),
+            version: "1.0.0".to_string(),
+            node_type: "rust".to_string(),
+            description: "Test".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn test_manifest_validation_null_bytes_in_command() {
+        let manifest = NodeManifest {
+            name: "test-node".to_string(),
+            version: "1.0.0".to_string(),
+            node_type: "rust".to_string(),
+            description: "Test".to_string(),
+            author: None,
+            build: None,
+            command: Some("./target\0/release/test".to_string()),
+            depends_on: vec![],
+        };
+        assert!(manifest.validate().is_err());
     }
 }

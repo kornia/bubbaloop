@@ -2,7 +2,6 @@
 members = [
     "crates/bubbaloop",
     "crates/bubbaloop-daemon",
-    "crates/bubbaloop-tui",
     "crates/bubbaloop-nodes/rtsp-camera",
     "crates/bubbaloop-nodes/inference",
     "crates/bubbaloop-nodes/foxglove",
@@ -38,7 +37,7 @@ flume = "0.12"
 ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
 
 # Zenoh
-zenoh = { version = "1.6.2", features = ["shared-memory"] }
+zenoh = { version = "1.7", features = ["shared-memory"] }
 
 # Logging
 log = "0.4"

@@ -188,7 +188,143 @@ cd crates/bubbaloop-nodes/my-node
 pixi run cargo build --release
 ```
 
+## Creating a New Node
+
+### Quick Start (Rust)
+
+```bash
+# Initialize a new Rust node (creates in current directory)
+bubbaloop node init my-sensor --type rust -d "My custom sensor"
+cd my-sensor
+
+# Edit your logic in src/node.rs
+
+# Build
+cargo build --release
+
+# Register with daemon and start
+bubbaloop node add .
+bubbaloop node start my-sensor
+bubbaloop node logs my-sensor -f
+```
+
+### Quick Start (Python)
+
+```bash
+# Initialize a new Python node
+bubbaloop node init my-sensor --type python -d "My custom sensor"
+cd my-sensor
+
+# Edit your logic in main.py
+
+# Register with daemon and start
+bubbaloop node add .
+bubbaloop node start my-sensor
+bubbaloop node logs my-sensor -f
+```
+
+### Two-Step Workflow
+
+**Init** creates the node structure (scaffolding):
+```bash
+bubbaloop node init my-sensor           # Creates ./my-sensor/
+bubbaloop node init my-sensor -o /path  # Creates at specified path
+```
+
+**Add** registers an existing node with the daemon:
+```bash
+bubbaloop node add .                    # Add node in current directory
+bubbaloop node add /path/to/my-sensor   # Add node at path
+bubbaloop node add user/repo            # Clone from GitHub and add
+```
+
+This separation allows:
+- Creating nodes anywhere in your filesystem
+- Keeping nodes in their own git repos
+- Linking multiple nodes from a monorepo
+- Unlinking without deleting files
+
+### Adding External Nodes
+
+```bash
+# From GitHub (full URL)
+bubbaloop node add https://github.com/user/awesome-node
+
+# From GitHub (shorthand)
+bubbaloop node add user/awesome-node
+
+# From GitHub with branch
+bubbaloop node add user/awesome-node --branch develop
+
+# From local path
+bubbaloop node add /path/to/my-node
+
+# Add and auto-build
+bubbaloop node add user/awesome-node --build
+
+# Add, build, and install as service
+bubbaloop node add user/awesome-node --build --install
+```
+
+### Node Lifecycle
+
+```bash
+bubbaloop node list              # Show all nodes
+bubbaloop node validate ./       # Validate node in current directory
+bubbaloop node build my-sensor   # Build (Rust nodes)
+bubbaloop node start my-sensor   # Start as service
+bubbaloop node stop my-sensor    # Stop service
+bubbaloop node logs my-sensor -f # Follow logs
+bubbaloop node install my-sensor # Install as systemd service
+bubbaloop node enable my-sensor  # Enable autostart
+```
+
+### Using TUI for Node Management
+
+```bash
+bubbaloop              # Launch TUI (default)
+/nodes                 # Type command to go to nodes view
+```
+
+In Nodes view:
+- **Tab**: Switch between Installed/Discover/Marketplace tabs
+- **n**: Create new node (in Discover tab)
+- **Enter**: View node details
+- **s**: Start/stop node
+- **b**: Build node
+- **l**: View logs
+
 The binary will be at `target/release/my_node`.
+
+## Distributed Deployment
+
+For multi-machine deployments (e.g., multiple Jetsons with central dashboard), see [docs/distributed-deployment.md](docs/distributed-deployment.md).
+
+### Zenoh Configuration Files
+
+| Config | Use Case | Location |
+|--------|----------|----------|
+| `configs/zenoh/standalone.json5` | Single-machine development | Default |
+| `configs/zenoh/central-router.json5` | Central server (dashboard host) | Server |
+| `configs/zenoh/jetson-router.json5` | Each Jetson device | Edge devices |
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
+| `RUST_LOG` | Log level | `info` |
+
+### Quick Multi-Machine Setup
+
+```bash
+# On central server
+zenohd -c configs/zenoh/central-router.json5
+
+# On each Jetson (edit config first with central IP)
+zenohd -c configs/zenoh/jetson-router.json5
+BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop-daemon
+```
 
 ## Key Dependencies
 

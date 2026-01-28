@@ -883,8 +883,43 @@ impl NodeManager {
     }
 }
 
+/// Validate a build command to prevent command injection
+fn validate_build_command(cmd: &str) -> Result<()> {
+    // Allowlist of permitted build command prefixes
+    const ALLOWED_PREFIXES: &[&str] = &["cargo ", "pixi ", "npm ", "make", "python ", "pip "];
+
+    let cmd_lower = cmd.to_lowercase();
+    let has_allowed_prefix = ALLOWED_PREFIXES
+        .iter()
+        .any(|prefix| cmd_lower.starts_with(prefix));
+
+    if !has_allowed_prefix {
+        return Err(NodeManagerError::BuildError(format!(
+            "Build command must start with one of: cargo, pixi, npm, make, python, pip. Got: {}",
+            cmd.chars().take(50).collect::<String>()
+        )));
+    }
+
+    // Reject dangerous shell metacharacters
+    const DANGEROUS_CHARS: &[char] = &[
+        '$', '`', '|', ';', '&', '>', '<', '(', ')', '{', '}', '!', '\\',
+    ];
+    if let Some(bad_char) = cmd.chars().find(|c| DANGEROUS_CHARS.contains(c)) {
+        return Err(NodeManagerError::BuildError(format!(
+            "Build command contains dangerous character '{}': {}",
+            bad_char,
+            cmd.chars().take(50).collect::<String>()
+        )));
+    }
+
+    Ok(())
+}
+
 /// Run a build/clean command and stream output to the node's build state
 async fn run_build_command(manager: &Arc<NodeManager>, path: &str, cmd: &str) -> Result<()> {
+    // Validate command before execution to prevent command injection
+    validate_build_command(cmd)?;
+
     let mut child = Command::new("sh")
         .args(["-c", cmd])
         .current_dir(path)

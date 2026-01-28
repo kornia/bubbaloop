@@ -171,9 +171,11 @@ impl ZenohApiService {
         log::info!("Starting Zenoh API service...");
 
         // Declare a single queryable with wildcard to handle all API endpoints
+        // The .complete(true) hint tells Zenoh this queryable is authoritative for this key expression
         let queryable = self
             .session
             .declare_queryable(api_keys::API_WILDCARD)
+            .complete(true)
             .await?;
 
         log::info!(
@@ -209,7 +211,7 @@ impl ZenohApiService {
     /// Handle an incoming query by routing to the appropriate handler
     async fn handle_query(&self, query: &zenoh::query::Query) {
         let key_expr = query.key_expr().as_str();
-        log::debug!("Received API query on {}", key_expr);
+        log::info!("API query received on: {}", key_expr);
 
         // Parse the key expression to determine the endpoint
         let path = key_expr
@@ -239,8 +241,12 @@ impl ZenohApiService {
         };
 
         // Send reply
-        if let Err(e) = query.reply(query.key_expr(), ZBytes::from(response)).await {
-            log::warn!("Failed to send reply: {}", e);
+        match query
+            .reply(query.key_expr(), ZBytes::from(response.clone()))
+            .await
+        {
+            Ok(_) => log::debug!("Reply sent for {}", key_expr),
+            Err(e) => log::error!("Failed to send reply for {}: {}", key_expr, e),
         }
     }
 

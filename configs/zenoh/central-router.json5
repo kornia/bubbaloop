@@ -1,0 +1,66 @@
+{
+  // Central Zenoh Router Configuration
+  // ===================================
+  // This is the hub router that all Jetson devices connect to.
+  // Deploy this on a stable server accessible to all devices.
+  //
+  // Usage:
+  //   zenohd -c configs/zenoh/central-router.json5
+  //
+  // Environment variables:
+  //   ZENOH_LISTEN_IP - IP to listen on (default: 0.0.0.0)
+  //   ZENOH_LISTEN_PORT - Port to listen on (default: 7447)
+
+  mode: "router",
+
+  // Listen on all interfaces for remote connections
+  // In production, consider binding to specific interface (e.g., Tailscale IP)
+  listen: {
+    endpoints: [
+      "tcp/0.0.0.0:7447",
+    ],
+  },
+
+  // Scouting configuration for router mesh
+  scouting: {
+    // Disable multicast - use explicit connections for security
+    multicast: {
+      enabled: false,
+    },
+    // Enable gossip for router-to-router topology propagation
+    gossip: {
+      enabled: true,
+      // Only gossip with other routers, not clients
+      autoconnect: "router",
+    },
+  },
+
+  // Transport configuration
+  transport: {
+    // Shared memory for local processes connecting to this router
+    shared_memory: {
+      enabled: true,
+    },
+    // Unicast optimizations
+    unicast: {
+      // Quality of service for priority traffic
+      qos: {
+        enabled: true,
+      },
+    },
+  },
+
+  // Plugin loading
+  plugins_loading: {
+    enabled: true,
+    search_dirs: ["~/.zenoh/lib", "/usr/local/lib", "/usr/lib"],
+  },
+
+  // Plugins
+  plugins: {
+    // Remote API for dashboard WebSocket connections
+    remote_api: {
+      websocket_port: 10000,
+    },
+  },
+}

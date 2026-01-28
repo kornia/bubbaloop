@@ -22,6 +22,12 @@ pub enum SystemdError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Invalid node name: {0}")]
+    InvalidNodeName(String),
+
+    #[error("Invalid input for systemd unit: {0}")]
+    InvalidInput(String),
 }
 
 pub type Result<T> = std::result::Result<T, SystemdError>;
@@ -459,6 +465,66 @@ pub fn get_service_path(node_name: &str) -> PathBuf {
     get_systemd_user_dir().join(get_service_name(node_name))
 }
 
+/// Validate node name for systemd service naming
+fn validate_node_name(name: &str) -> Result<()> {
+    // Node names should be alphanumeric with hyphens/underscores only
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(SystemdError::InvalidNodeName(format!(
+            "'{}' contains invalid characters (only alphanumeric, hyphens, and underscores allowed)",
+            name
+        )));
+    }
+    if name.is_empty() || name.len() > 64 {
+        return Err(SystemdError::InvalidNodeName(format!(
+            "'{}' has invalid length (must be 1-64 characters)",
+            name
+        )));
+    }
+    Ok(())
+}
+
+/// Sanitize a string for use in systemd unit file Description field
+fn sanitize_description(s: &str) -> String {
+    // Remove newlines and special characters that could break unit file parsing
+    s.chars()
+        .filter(|c| !matches!(c, '\n' | '\r' | '[' | ']'))
+        .take(200) // Reasonable length limit for descriptions
+        .collect()
+}
+
+/// Sanitize a path for use in systemd unit files
+fn sanitize_path(path: &str) -> Result<String> {
+    // Basic validation - paths should not contain newlines or null bytes
+    if path.contains('\n') || path.contains('\r') || path.contains('\0') {
+        return Err(SystemdError::InvalidInput(format!(
+            "Path '{}' contains invalid characters",
+            path
+        )));
+    }
+    // Ensure it's a valid UTF-8 path
+    Ok(path.to_string())
+}
+
+/// Sanitize a command for use in ExecStart
+fn sanitize_command(cmd: &str) -> Result<String> {
+    // Commands should not contain newlines or null bytes
+    if cmd.contains('\n') || cmd.contains('\r') || cmd.contains('\0') {
+        return Err(SystemdError::InvalidInput(
+            "Command contains invalid characters".to_string(),
+        ));
+    }
+    // Prevent injection of systemd directives by checking for suspicious patterns
+    if cmd.contains("[Unit]") || cmd.contains("[Service]") || cmd.contains("[Install]") {
+        return Err(SystemdError::InvalidInput(
+            "Command contains systemd unit section markers".to_string(),
+        ));
+    }
+    Ok(cmd.to_string())
+}
+
 /// Generate a systemd service unit file content
 pub fn generate_service_unit(
     node_path: &str,
@@ -466,30 +532,44 @@ pub fn generate_service_unit(
     node_type: &str,
     command: Option<&str>,
     depends_on: &[String],
-) -> String {
+) -> Result<String> {
+    // Validate and sanitize inputs
+    validate_node_name(name)?;
+    let safe_node_path = sanitize_path(node_path)?;
+    let safe_name = sanitize_description(name);
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/user"));
     let cargo_path = home.join(".cargo/bin/cargo");
-    let pixi_bin = home.join(".pixi/bin");
+    let pixi_bin_dir = home.join(".pixi/bin");
+    let pixi_path = pixi_bin_dir.join("pixi");
     let path_env = format!(
         "PATH={}:{}:/usr/local/bin:/usr/bin:/bin",
         home.join(".cargo/bin").display(),
-        pixi_bin.display()
+        pixi_bin_dir.display()
     );
 
     let (exec_start, environment) = if let Some(cmd) = command {
-        if cmd.starts_with("cargo ") {
+        let safe_cmd = sanitize_command(cmd)?;
+        if safe_cmd.starts_with("cargo ") {
             (
-                cmd.replacen("cargo ", &format!("{} ", cargo_path.display()), 1),
+                safe_cmd.replacen("cargo ", &format!("{} ", cargo_path.display()), 1),
                 "RUST_LOG=info".to_string(),
             )
-        } else if cmd.starts_with("python3 ") || cmd.starts_with("python ") || cmd.starts_with("/")
+        } else if safe_cmd.starts_with("pixi ") {
+            // Resolve pixi to absolute path like cargo
+            (
+                safe_cmd.replacen("pixi ", &format!("{} ", pixi_path.display()), 1),
+                "PYTHONUNBUFFERED=1".to_string(),
+            )
+        } else if safe_cmd.starts_with("python3 ")
+            || safe_cmd.starts_with("python ")
+            || safe_cmd.starts_with("/")
         {
             // Keep interpreter commands and absolute paths as-is
             // WorkingDirectory will handle relative script paths
-            (cmd.to_string(), "PYTHONUNBUFFERED=1".to_string())
+            (safe_cmd, "PYTHONUNBUFFERED=1".to_string())
         } else {
             // Resolve relative binary paths to absolute
-            let resolved = std::path::Path::new(node_path).join(cmd);
+            let resolved = std::path::Path::new(&safe_node_path).join(&safe_cmd);
             (
                 resolved.to_string_lossy().to_string(),
                 "RUST_LOG=info".to_string(),
@@ -502,17 +582,21 @@ pub fn generate_service_unit(
         )
     } else {
         // Python
-        let venv_python = std::path::Path::new(node_path).join("venv/bin/python");
+        let venv_python = std::path::Path::new(&safe_node_path).join("venv/bin/python");
         (
             format!("{} main.py", venv_python.display()),
             "PYTHONUNBUFFERED=1".to_string(),
         )
     };
 
-    // Generate dependency lines for systemd
+    // Validate and generate dependency lines for systemd
     let (after_line, requires_line) = if depends_on.is_empty() {
         ("After=network.target".to_string(), String::new())
     } else {
+        // Validate all dependency names
+        for dep in depends_on {
+            validate_node_name(dep)?;
+        }
         let dep_services: Vec<String> =
             depends_on.iter().map(|dep| get_service_name(dep)).collect();
         let deps_str = dep_services.join(" ");
@@ -529,14 +613,14 @@ pub fn generate_service_unit(
         format!("\n{}", requires_line)
     };
 
-    format!(
+    Ok(format!(
         r#"[Unit]
-Description=Bubbaloop Node: {name}
+Description=Bubbaloop Node: {safe_name}
 {after_line}{requires_section}
 
 [Service]
 Type=simple
-WorkingDirectory={node_path}
+WorkingDirectory={safe_node_path}
 ExecStart={exec_start}
 Restart=on-failure
 RestartSec=5
@@ -545,8 +629,8 @@ Environment={path_env}
 
 # Security hardening
 NoNewPrivileges=true
-ProtectSystem=strict
-PrivateTmp=true
+ProtectSystem=full
+PrivateTmp=false
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -557,7 +641,7 @@ MemoryDenyWriteExecute=false
 [Install]
 WantedBy=default.target
 "#
-    )
+    ))
 }
 
 /// Install a service unit file
@@ -572,8 +656,8 @@ pub async fn install_service(
     std::fs::create_dir_all(&service_dir)?;
 
     let service_path = get_service_path(name);
-    let content = generate_service_unit(node_path, name, node_type, command, depends_on);
-    std::fs::write(&service_path, content)?;
+    let content = generate_service_unit(node_path, name, node_type, command, depends_on)?;
+    std::fs::write(&service_path, &content)?;
 
     // Reload systemd to pick up the new unit
     let client = SystemdClient::new().await?;

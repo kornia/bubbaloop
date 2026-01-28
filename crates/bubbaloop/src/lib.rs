@@ -9,6 +9,12 @@ pub mod config;
 /// CLI commands
 pub mod cli;
 
+/// TUI (Terminal User Interface)
+pub mod tui;
+
+/// Template processing for node creation
+pub mod templates;
+
 /// Protobuf schemas for bubbaloop
 pub mod schemas {
     pub mod camera {

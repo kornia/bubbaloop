@@ -47,15 +47,37 @@ pub mod keys {
 }
 
 /// Create a Zenoh session with optional endpoint configuration
+///
+/// Endpoint resolution order:
+/// 1. Explicit `endpoint` parameter (if Some)
+/// 2. `BUBBALOOP_ZENOH_ENDPOINT` environment variable
+/// 3. Default: `tcp/127.0.0.1:7447`
+///
+/// For distributed deployments, set `BUBBALOOP_ZENOH_ENDPOINT` to point to the local router.
 pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>> {
     // Configure Zenoh session
     let mut config = zenoh::Config::default();
 
-    // Connect to local router by default, or custom endpoint if provided
-    let ep = endpoint.unwrap_or("tcp/127.0.0.1:7447");
+    // Run as peer mode - connect to router but can also accept connections for shared memory
+    config.insert_json5("mode", "\"peer\"").ok();
+
+    // Resolve endpoint: parameter > env var > default
+    let env_endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT").ok();
+    let ep = endpoint
+        .or(env_endpoint.as_deref())
+        .unwrap_or("tcp/127.0.0.1:7447");
+
+    log::info!("Connecting to Zenoh router at: {}", ep);
+
     config
         .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
         .ok();
+
+    // Disable all scouting to prevent connecting to remote peers via Tailscale/VPN
+    config
+        .insert_json5("scouting/multicast/enabled", "false")
+        .ok();
+    config.insert_json5("scouting/gossip/enabled", "false").ok();
 
     // Enable shared memory if available
     config
@@ -255,5 +277,74 @@ impl ZenohService {
         if let Err(e) = query.reply(query.key_expr(), result_bytes).await {
             log::warn!("Failed to send reply: {}", e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::{HealthStatus, NodeState, NodeStatus};
+
+    #[test]
+    fn test_encode_proto_encodes_valid_message() {
+        let state = NodeState {
+            name: "test-node".to_string(),
+            path: "/path/to/node".to_string(),
+            status: NodeStatus::Running as i32,
+            installed: true,
+            autostart_enabled: false,
+            version: "0.1.0".to_string(),
+            description: "Test node".to_string(),
+            node_type: "rust".to_string(),
+            is_built: true,
+            last_updated_ms: 1234567890,
+            build_output: vec![],
+            health_status: HealthStatus::Healthy as i32,
+            last_health_check_ms: 1234567890,
+        };
+
+        let bytes = ZenohService::encode_proto(&state);
+
+        // Verify it's not empty
+        assert!(!bytes.is_empty());
+
+        // Verify we can decode it back
+        let decoded = NodeState::decode(&bytes.to_bytes()[..]).unwrap();
+        assert_eq!(decoded.name, "test-node");
+        assert_eq!(decoded.path, "/path/to/node");
+        assert_eq!(decoded.version, "0.1.0");
+        assert_eq!(decoded.status, NodeStatus::Running as i32);
+    }
+
+    #[test]
+    fn test_encode_proto_handles_empty_message() {
+        let state = NodeState::default();
+        let bytes = ZenohService::encode_proto(&state);
+
+        // Empty messages may encode to an empty buffer (no fields to encode)
+        // but should still be decodeable
+        let decoded = NodeState::decode(&bytes.to_bytes()[..]).unwrap();
+        assert_eq!(decoded.name, "");
+        assert_eq!(decoded.status, 0);
+    }
+
+    #[test]
+    fn test_encode_proto_with_build_output() {
+        let state = NodeState {
+            name: "test-node".to_string(),
+            build_output: vec![
+                "Building...".to_string(),
+                "Compiling...".to_string(),
+                "Finished".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let bytes = ZenohService::encode_proto(&state);
+        let decoded = NodeState::decode(&bytes.to_bytes()[..]).unwrap();
+
+        assert_eq!(decoded.build_output.len(), 3);
+        assert_eq!(decoded.build_output[0], "Building...");
+        assert_eq!(decoded.build_output[2], "Finished");
     }
 }
