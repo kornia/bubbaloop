@@ -71,6 +71,9 @@ dirs = "6"
 # Error handling
 anyhow = "1"
 
+# Hex encoding
+hex = "0.4"
+
 # internal dependencies
 bubbaloop = { path = "crates/bubbaloop" }
 
