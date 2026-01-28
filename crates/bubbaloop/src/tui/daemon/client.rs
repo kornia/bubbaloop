@@ -99,27 +99,47 @@ impl DaemonClient {
             getter = getter.payload(p.as_bytes());
         }
 
+        // Increased timeout from 5s to 10s for more reliability on slow networks
         let replies = getter
-            .timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(10))
             .await
-            .map_err(|e| anyhow!("Zenoh query failed: {}", e))?;
+            .map_err(|e| {
+                anyhow!(
+                    "Zenoh query failed for '{}': {} (check if daemon is running and zenoh router is accessible)",
+                    key_expr,
+                    e
+                )
+            })?;
 
         while let Ok(reply) = replies.recv_async().await {
-            if let Ok(sample) = reply.result() {
-                let bytes = sample.payload().to_bytes();
-                let text = String::from_utf8_lossy(&bytes);
-                let result: T = serde_json::from_str(&text)?;
-                return Ok(result);
+            match reply.result() {
+                Ok(sample) => {
+                    let bytes = sample.payload().to_bytes();
+                    let text = String::from_utf8_lossy(&bytes);
+                    let result: T = serde_json::from_str(&text)
+                        .map_err(|e| anyhow!("Failed to parse response from '{}': {}", key_expr, e))?;
+                    return Ok(result);
+                }
+                Err(e) => {
+                    eprintln!("Received error reply for '{}': {:?}", key_expr, e);
+                }
             }
         }
 
-        Err(anyhow!("No reply received for {}", key_expr))
+        Err(anyhow!(
+            "No valid reply received for '{}' (timeout after 10s - daemon may be unavailable)",
+            key_expr
+        ))
     }
 
     pub async fn is_available(&self) -> bool {
         match self.query::<HealthResponse>(API_HEALTH, None).await {
             Ok(response) => response.status == "ok",
-            Err(_) => false,
+            Err(e) => {
+                // Log at debug level to avoid spamming in TUI
+                log::debug!("Daemon health check failed: {}", e);
+                false
+            }
         }
     }
 

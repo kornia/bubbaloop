@@ -89,18 +89,34 @@ async fn query_daemon<T: for<'de> Deserialize<'de>>(
     session: &Session,
     key_expr: &str,
 ) -> Result<T> {
+    // Increase timeout to 8 seconds to reduce warning spam
+    // This accounts for daemon startup time and network latency
     let replies = session
         .get(key_expr)
-        .timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(8))
         .await
         .map_err(|e| anyhow!("Zenoh query failed: {}", e))?;
 
-    while let Ok(reply) = replies.recv_async().await {
-        if let Ok(sample) = reply.result() {
-            let bytes = sample.payload().to_bytes();
-            let text = String::from_utf8_lossy(&bytes);
-            let result: T = serde_json::from_str(&text)?;
-            return Ok(result);
+    // Use a timeout on the reply receiver to avoid indefinite waiting
+    let timeout_duration = Duration::from_secs(8);
+    let start = std::time::Instant::now();
+
+    while start.elapsed() < timeout_duration {
+        match tokio::time::timeout(
+            timeout_duration - start.elapsed(),
+            replies.recv_async(),
+        )
+        .await
+        {
+            Ok(Ok(reply)) => {
+                if let Ok(sample) = reply.result() {
+                    let bytes = sample.payload().to_bytes();
+                    let text = String::from_utf8_lossy(&bytes);
+                    let result: T = serde_json::from_str(&text)?;
+                    return Ok(result);
+                }
+            }
+            Ok(Err(_)) | Err(_) => break,
         }
     }
 
