@@ -1,16 +1,17 @@
-# Bubbaloop Plugin Development Guide
+# Bubbaloop Node Development Guide
 
-Create custom plugins for Bubbaloop in Rust or Python. Plugins connect to the Zenoh pub/sub network to publish sensor data, process messages, or integrate with external services.
+Create custom nodes for Bubbaloop in Rust or Python. Nodes connect to the Zenoh pub/sub network to publish sensor data, process messages, or integrate with external services.
 
 ## Quick Start
 
 ### Option 1: Using CLI (Recommended)
 
 ```bash
-bubbaloop plugin init my-sensor -t rust -d "My custom sensor"
-cd ~/.bubbaloop/plugins/my-sensor
+bubbaloop node init my-sensor --type rust -d "My custom sensor"
+cd my-sensor
 cargo build --release
-./target/release/my-sensor
+bubbaloop node add .
+bubbaloop node start my-sensor
 ```
 
 ### Option 2: Manual Setup (This Guide)
@@ -19,15 +20,15 @@ Create files manually following the patterns below.
 
 ---
 
-## Rust Plugin (Manual Setup)
+## Rust Node (Manual Setup)
 
 ### Directory Structure
 
 ```
-my-plugin/
+my-node/
 ├── Cargo.toml
-├── config.yaml
-├── plugin.yaml      # Optional: for MCP/discovery
+├── node.yaml        # Node manifest
+├── configs/         # Configuration files
 └── src/
     └── main.rs
 ```
@@ -36,17 +37,17 @@ my-plugin/
 
 ```toml
 [package]
-name = "my-plugin"
+name = "my-node"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "my-plugin"
+name = "my_node"
 path = "src/main.rs"
 
 [dependencies]
 # Bubbaloop SDK - provides BubbleNode trait
-bubbaloop = { git = "https://github.com/kopernikusai/bubbaloop.git" }
+bubbaloop = { path = "../../bubbaloop" }
 
 # Required
 tokio = { version = "1", features = ["full"] }
@@ -59,7 +60,7 @@ log = "0.4"
 ### Step 2: src/main.rs
 
 ```rust
-//! my-plugin - A Bubbaloop plugin
+//! my-node - A Bubbaloop node
 
 use bubbaloop::prelude::*;
 use serde::Serialize;
@@ -82,7 +83,7 @@ pub struct Config {
     // pub sensor_address: String,
 }
 
-fn default_topic() -> String { "my-plugin/data".to_string() }
+fn default_topic() -> String { "my-node/data".to_string() }
 fn default_interval() -> u64 { 60 }
 
 // ============================================================================
@@ -90,7 +91,7 @@ fn default_interval() -> u64 { 60 }
 // ============================================================================
 
 #[derive(Debug, Serialize)]
-struct PluginData {
+struct NodeData {
     value: f64,
     timestamp: u64,
     // Add your fields here:
@@ -100,10 +101,10 @@ struct PluginData {
 }
 
 // ============================================================================
-// PLUGIN NODE - Edit run() to add your logic
+// NODE IMPLEMENTATION - Edit run() to add your logic
 // ============================================================================
 
-pub struct MyPluginNode {
+pub struct MyNode {
     ctx: Arc<ZContext>,
     config: Config,
 }
@@ -598,3 +599,55 @@ RUST_LOG=debug ./my-plugin
 ## Examples
 
 See `templates/rust-plugin/` and `templates/python-plugin/` for complete working examples.
+
+---
+
+## Security Best Practices
+
+When developing nodes, follow these guidelines to keep your deployment secure:
+
+### Input Validation
+
+- **Config values**: Always validate configuration values after loading from YAML. Check bounds on numeric fields (e.g., intervals >= 1s), validate string patterns for topics and endpoints.
+- **Zenoh topics**: Restrict topic names to alphanumeric characters, `/`, `-`, `_`, and `.`. Never allow arbitrary strings as topic names.
+- **Endpoints**: Validate Zenoh endpoint format before connecting. Reject strings containing shell metacharacters (`&`, `|`, `;`, `$`, backticks, newlines).
+
+### Example: Python Config Validation
+
+```python
+import re
+
+def validate(self):
+    if self.interval_secs < 1 or self.interval_secs > 86400:
+        logger.warning("Invalid interval_secs, using default")
+        self.interval_secs = 60
+    if not re.match(r'^[a-zA-Z0-9/_.\-]+$', self.topic):
+        logger.warning("Invalid topic name, using default")
+        self.topic = "my-node/data"
+```
+
+### Example: Rust Config Validation
+
+```rust
+if config.rate_hz <= 0.0 || config.rate_hz > 100.0 {
+    log::warn!("Invalid rate_hz, using default");
+    config.rate_hz = 1.0;
+}
+let valid_topic = config.publish_topic.chars().all(|c| {
+    c.is_alphanumeric() || c == '/' || c == '-' || c == '_' || c == '.'
+});
+if !valid_topic {
+    log::warn!("Invalid topic, using default");
+    config.publish_topic = "my-node/output".to_string();
+}
+```
+
+### Network Security
+
+- Use `tcp/localhost:7447` for single-machine deployments.
+- For distributed setups, configure TLS endpoints in Zenoh.
+- Never expose Zenoh ports to untrusted networks without authentication.
+
+### systemd Hardening
+
+Node services installed via the daemon include security directives (`NoNewPrivileges=true`, `ProtectSystem=strict`, etc.). For additional hardening, consider restricting network access with `PrivateNetwork=true` for monitoring-only nodes.
