@@ -1,6 +1,18 @@
 # Bubbaloop Troubleshooting Guide
 
-This guide helps you diagnose and fix common issues with Bubbaloop services, the daemon, and the TUI. Start with **Quick Diagnostics** if you're experiencing problems.
+This guide helps you diagnose and fix common issues with Bubbaloop services, the daemon, nodes, and the TUI. Start with **Quick Diagnostics** if you're experiencing problems.
+
+**Table of Contents:**
+1. [Quick Diagnostics](#quick-diagnostics)
+2. [Zenoh Issues](#zenoh-issues)
+3. [Daemon Issues](#daemon-issues)
+4. [Node Issues](#node-issues)
+5. [Dashboard Issues](#dashboard-issues)
+6. [LLM Troubleshooting Guide](#llm-troubleshooting-guide)
+7. [Environment Variables](#environment-variables)
+8. [Performance Issues](#performance-issues)
+9. [FAQ](#faq)
+10. [Getting Help](#getting-help)
 
 ---
 
@@ -44,7 +56,29 @@ systemctl --user status bubbaloop-daemon
 journalctl --user -u bubbaloop-daemon -n 20 --no-pager
 ```
 
-### 4. Verify Zenoh Connectivity
+### 4. Run Doctor Command
+
+```bash
+# Comprehensive system health check
+bubbaloop doctor
+
+# Quick Zenoh-only check
+bubbaloop doctor -c zenoh
+
+# Auto-fix common issues
+bubbaloop doctor --fix
+
+# JSON output for programmatic parsing
+bubbaloop doctor --json
+```
+
+The `bubbaloop doctor` command is your first-line diagnostic tool. It checks:
+- System services (zenohd, daemon, bridge)
+- Zenoh connectivity and routing
+- Daemon health endpoints
+- Node subscriptions
+
+### 5. Verify Zenoh Connectivity
 
 ```bash
 # From another terminal, test pub/sub
@@ -111,439 +145,1073 @@ Understanding Bubbaloop's architecture helps diagnose issues:
 
 ---
 
-## Common Issues & Solutions
+---
 
-### Issue 1: "Daemon: disconnected" in TUI or CLI timeout
+## Zenoh Issues
+
+### "Didn't receive final reply for query: Timeout"
+
+**Symptoms:**
+- TUI shows "Daemon: disconnected"
+- CLI commands hang for 10 seconds then timeout
+- Logs show: "Zenoh query failed" or "No reply received"
+- `bubbaloop doctor` shows red X on query/reply check
+
+**Root Causes (in order of likelihood):**
+1. Zenoh router not routing queries correctly
+2. Queryable handler not responding in time
+3. Network timeout (slow connection or high latency)
+4. Zenoh router configuration issue
+5. Multiple routers on same network interfering
+
+**Solutions:**
+
+**Step 1: Run doctor command**
+```bash
+bubbaloop doctor -c zenoh
+```
+
+Look specifically at the "Zenoh query/reply" check. If it says "query succeeded but no replies received", this confirms the routing issue.
+
+**Step 2: Verify zenohd is running and accessible**
+```bash
+# Check if process is running
+pgrep -l zenohd
+
+# Check if port is listening
+netstat -tlnp | grep 7447
+
+# Or test connectivity
+zenoh-cli info
+```
+
+**Step 3: Restart zenohd**
+```bash
+# Kill all instances
+pkill -9 zenohd
+sleep 1
+
+# Start fresh
+zenohd &
+sleep 2
+
+# Verify it started
+pgrep zenohd
+netstat -tlnp | grep 7447
+```
+
+**Step 4: Check zenohd logs for errors**
+```bash
+# If running as systemd service
+journalctl -u zenohd -n 50 --no-pager
+
+# Look for errors like:
+# - "Failed to bind"
+# - "Invalid configuration"
+# - "Router mode error"
+```
+
+**Step 5: Verify daemon is connected to same router**
+```bash
+# Check what endpoint daemon is connecting to
+echo $BUBBALOOP_ZENOH_ENDPOINT
+
+# If set to wrong value, clear it
+unset BUBBALOOP_ZENOH_ENDPOINT
+
+# Restart daemon
+systemctl --user restart bubbaloop-daemon
+
+# Verify connection
+bubbaloop status
+```
+
+**Advanced: Increase Query Timeout (for slow networks)**
+
+If you're on a slow network or high-latency connection (e.g., remote server):
+```bash
+# Run client commands with explicit longer timeout
+# Note: This depends on the specific command implementation
+RUST_LOG=debug bubbaloop status
+```
+
+---
+
+### "Query not found" or "No response from query handler"
+
+**Symptoms:**
+- Error message: "Query not found" or "No matching query handlers"
+- Only occurs when trying to query daemon
+- Zenoh connection itself works fine
+
+**Root Cause:**
+The daemon's queryable is not registered or listening. This is secondary to timeout issues above.
+
+**Solutions:**
+
+**Step 1: Verify daemon is actually running**
+```bash
+systemctl --user status bubbaloop-daemon
+
+# If not running, start it
+systemctl --user start bubbaloop-daemon
+sleep 2
+```
+
+**Step 2: Check daemon health directly**
+```bash
+# Subscribe to all daemon messages (in one terminal)
+zenoh-cli sub 'bubbaloop/daemon/**' &
+
+# In another terminal, trigger daemon activity
+bubbaloop status
+
+# You should see daemon messages
+```
+
+**Step 3: Restart daemon with debug logging**
+```bash
+RUST_LOG=debug systemctl --user restart bubbaloop-daemon
+sleep 2
+
+# Watch logs
+journalctl --user -u bubbaloop-daemon -f
+
+# Try a query (in another terminal)
+bubbaloop status
+
+# Look for debug messages about queryable registration
+```
+
+**Step 4: Full reset if still failing**
+```bash
+# Kill daemon
+systemctl --user stop bubbaloop-daemon
+sleep 1
+
+# Restart zenohd first
+pkill -9 zenohd
+zenohd &
+sleep 2
+
+# Now restart daemon
+systemctl --user start bubbaloop-daemon
+sleep 2
+
+# Test
+bubbaloop status
+```
+
+---
+
+### Router Not Starting
+
+**Symptoms:**
+- `zenohd: command not found` error
+- Port 7447 already in use
+- zenohd crashes immediately
+
+**Solutions:**
+
+**If zenohd not installed:**
+```bash
+# Install via package manager
+# Ubuntu/Debian:
+sudo apt-get install zenoh-tools
+
+# Or via Rust
+cargo install zenoh-tools
+
+# Verify installation
+zenohd --version
+```
+
+**If port 7447 already in use:**
+```bash
+# Find what's using the port
+sudo lsof -i :7447
+
+# If it's old zenohd process, kill it
+pkill -9 zenohd
+sleep 1
+
+# Or change zenohd port (advanced, not recommended for production)
+zenohd -c /path/to/custom/config.json5
+```
+
+**If zenohd crashes immediately:**
+```bash
+# Try running in foreground to see error
+zenohd --log-level debug
+
+# Common errors:
+# - "Failed to bind": Port in use or permission denied
+# - "Invalid config": Bad configuration file
+# - "Thread panicked": Check Zenoh logs or GitHub issues
+```
+
+---
+
+### Connection Refused Errors
+
+**Symptoms:**
+```
+Error: Failed to connect to zenoh: Connection refused
+Error: 127.0.0.1:7447: Connection refused
+```
+
+**Root Cause:**
+1. zenohd not running
+2. Connecting to wrong IP/port
+3. Firewall blocking the connection
+4. Wrong BUBBALOOP_ZENOH_ENDPOINT value
+
+**Solutions:**
+
+**Quick fix:**
+```bash
+# Start zenohd
+zenohd &
+sleep 2
+
+# Test connection
+bubbaloop status
+```
+
+**If still getting connection refused:**
+```bash
+# Verify what endpoint you're using
+echo "Endpoint: $BUBBALOOP_ZENOH_ENDPOINT"
+
+# Test connectivity to the endpoint
+nc -zv 127.0.0.1 7447
+
+# If connection refused, zenohd isn't running or listening
+zenohd &
+sleep 2
+nc -zv 127.0.0.1 7447  # Should now succeed
+```
+
+**For remote connections:**
+```bash
+# Don't use 127.0.0.1 for remote servers
+export BUBBALOOP_ZENOH_ENDPOINT=tcp/ACTUAL_IP:7447
+
+# Test with actual IP
+nc -zv ACTUAL_IP 7447
+
+# If this fails, check firewall
+sudo ufw status
+sudo ufw allow 7447
+```
+
+**Check firewall on Linux:**
+```bash
+# If using UFW
+sudo ufw status
+sudo ufw allow 7447
+
+# If using iptables
+sudo iptables -L -n | grep 7447
+sudo iptables -A INPUT -p tcp --dport 7447 -j ACCEPT
+
+# Reload iptables
+sudo iptables-save | sudo iptables-restore
+```
+
+---
+
+## Daemon Issues
+
+### Daemon Not Responding
+
+**Symptoms:**
+- `bubbaloop status` times out
+- TUI shows "Daemon: disconnected"
+- `bubbaloop doctor` shows red X for daemon health check
 
 **Symptoms:**
 - TUI shows "Daemon: disconnected"
 - CLI commands hang for 10 seconds then timeout
 - Logs show: "Zenoh query failed" or "No valid reply received"
 
-**Root Cause:**
-This is usually **NOT** a single-root-cause issue. Multiple things can cause it:
-1. zenohd router is not running or crashed
-2. Multiple daemon instances fighting over the same port
-3. Daemon crashed or hung during initialization
-4. Firewall blocking port 7447
-5. Wrong `BUBBALOOP_ZENOH_ENDPOINT` environment variable
+**Root Causes:**
+1. Zenoh router not running or inaccessible
+2. Daemon crashed during startup
+3. Multiple daemon instances fighting each other
+4. Daemon hung waiting for something
+5. Wrong BUBBALOOP_ZENOH_ENDPOINT value
 
 **Solutions:**
 
-**Step 1: Kill all existing services**
+**Step 1: Run doctor command (fastest diagnosis)**
 ```bash
-# Kill any running processes
-pkill -f zenohd
-pkill -f bubbaloop-daemon
-sleep 1
+bubbaloop doctor --fix
 ```
 
-**Step 2: Start services in order**
+This will automatically fix most issues. If it doesn't:
+
+**Step 2: Kill all and restart in order**
 ```bash
-# Terminal 1: Start Zenoh router
+# Kill everything
+pkill -9 -f zenohd
+pkill -9 -f bubbaloop-daemon
+sleep 2
+
+# Start zenohd first
 zenohd &
-sleep 2
+sleep 3
 
-# Terminal 2: Start daemon
-# Make sure BUBBALOOP_ZENOH_ENDPOINT is not set (uses default)
-unset BUBBALOOP_ZENOH_ENDPOINT
-bubbaloop-daemon &
-sleep 2
-
-# Terminal 3: Test TUI
-bubbaloop
-```
-
-**Step 3: Verify each step**
-```bash
-# After starting zenohd
-pgrep zenohd          # Should show PID
+# Verify it's running
+pgrep zenohd
 netstat -tlnp | grep 7447  # Should show LISTENING
 
-# After starting daemon
-ps aux | grep bubbaloop-daemon  # Should show single instance
-journalctl --user -u bubbaloop-daemon -n 10
-```
-
-**Step 4: Check for duplicate daemons**
-```bash
-# Look for multiple daemon processes
-ps aux | grep bubbaloop-daemon
-
-# If more than one, kill all and restart
-pkill -9 -f bubbaloop-daemon
-systemctl --user stop bubbaloop-daemon 2>/dev/null
-sleep 1
+# Now start daemon
 systemctl --user start bubbaloop-daemon
-```
+sleep 2
 
-**Step 5: Check environment variables**
-```bash
-# Verify BUBBALOOP_ZENOH_ENDPOINT is correct
-echo $BUBBALOOP_ZENOH_ENDPOINT
-
-# If set to wrong IP/port, clear it
-unset BUBBALOOP_ZENOH_ENDPOINT
-
-# If you need a specific endpoint, verify it's correct:
-# For local development: tcp/127.0.0.1:7447
-# For remote: tcp/ACTUAL_IP:7447
-```
-
-**Permanent fix (systemd):**
-```bash
-# Use systemd to auto-restart services in correct order
-systemctl --user enable bubbaloop-daemon
-systemctl --user restart bubbaloop-daemon
-
-# View status
+# Verify daemon started
 systemctl --user status bubbaloop-daemon
 ```
 
+**Step 3: Check daemon logs for errors**
+```bash
+# View recent logs
+journalctl --user -u bubbaloop-daemon -n 50 --no-pager
+
+# Look for errors like:
+# - "Connection refused" = zenohd not running
+# - "Address already in use" = duplicate daemon
+# - "Failed to query" = Zenoh routing problem
+# - "Thread panicked" = daemon bug
+
+# Watch logs in real-time
+journalctl --user -u bubbaloop-daemon -f
+```
+
+**Step 4: Verify only one daemon is running**
+```bash
+# Check for multiple instances
+ps aux | grep bubbaloop-daemon | grep -v grep
+
+# Should show only ONE process. If more, kill all:
+pkill -9 bubbaloop-daemon
+sleep 2
+systemctl --user start bubbaloop-daemon
+```
+
+**Step 5: Verify endpoint configuration**
+```bash
+# Check what endpoint is configured
+echo "Endpoint: $BUBBALOOP_ZENOH_ENDPOINT"
+
+# For local development, should be unset or:
+# tcp/127.0.0.1:7447
+
+# If set to wrong value, clear it
+unset BUBBALOOP_ZENOH_ENDPOINT
+
+# For remote, verify IP is correct:
+export BUBBALOOP_ZENOH_ENDPOINT=tcp/ACTUAL_REMOTE_IP:7447
+
+# Restart daemon
+systemctl --user restart bubbaloop-daemon
+sleep 2
+
+# Test
+bubbaloop status
+```
+
 ---
 
-### Issue 2: TUI Freezes or UI Hangs
+### Duplicate Daemon Detection (Address Already In Use)
 
 **Symptoms:**
-- TUI becomes unresponsive
-- Cursor stops moving, keys don't work
-- TUI shows spinner indefinitely
+- Error: "Address already in use"
+- Multiple bubbaloop-daemon processes visible in `ps aux`
+- Only one responds, others hang
 
 **Root Cause:**
-The TUI is waiting for a query response that won't arrive (usually due to Issue 1).
+The daemon is running multiple times (usually from crashed restarts or multiple systemd instances).
 
 **Solutions:**
 
-**Immediate Recovery:**
+**Immediate fix:**
 ```bash
-# Press Ctrl+C in the TUI terminal to exit (may take a few seconds)
-# The TUI will try to gracefully handle shutdown
+# Kill all daemon instances
+pkill -9 bubbaloop-daemon
+sleep 2
 
-# Kill if necessary
-pkill -f "bubbaloop.*tui"
-```
-
-**Permanent Fix:**
-Follow **Issue 1** solutions above to ensure daemon is responding.
-
-**Advanced: Enable Debug Logging**
-```bash
-# Run TUI with debug logs to see what it's waiting for
-RUST_LOG=debug bubbaloop tui 2>&1 | tee tui.log
-
-# Check the logs for "Zenoh query failed" or timeout messages
-grep -i "timeout\|failed\|error" tui.log
-```
-
----
-
-### Issue 3: Zenoh Connection Refused
-
-**Symptoms:**
-```
-Error: Failed to connect to zenoh: Connection refused
-```
-
-**Root Cause:**
-- zenohd is not running
-- zenohd is listening on wrong IP (not localhost)
-- Port 7447 is blocked by firewall or already in use
-- Wrong `BUBBALOOP_ZENOH_ENDPOINT` points to wrong machine
-
-**Solutions:**
-
-**Step 1: Start Zenoh Router**
-```bash
-# Kill any existing instances
-pkill -f zenohd
+# Ensure systemd knows it's stopped
+systemctl --user daemon-reload
 
 # Start fresh
-zenohd &
+systemctl --user start bubbaloop-daemon
+sleep 2
 
-# Verify it's listening
-sleep 1
-netstat -tlnp | grep 7447
-# Output should include: tcp 0 0 0.0.0.0:7447
+# Verify only one is running
+ps aux | grep bubbaloop-daemon | wc -l  # Should be 2 (process + grep)
 ```
 
-**Step 2: Verify Port is Free**
+**Prevent future duplicates:**
 ```bash
-# Check if port 7447 is already in use
-sudo lsof -i :7447
+# Don't spawn daemon manually if using systemd
+# Use only:
+systemctl --user start bubbaloop-daemon
 
-# If something else is using it, either:
-# 1. Stop that service
-# 2. Change Zenoh to different port (advanced)
-```
-
-**Step 3: Verify Endpoint Configuration**
-```bash
-# For local development (default):
+# Or for development, use a different terminal/session:
+# Terminal 1:
+systemctl --user stop bubbaloop-daemon
 unset BUBBALOOP_ZENOH_ENDPOINT
+pixi run daemon
 
-# For connecting to remote Zenoh router:
-export BUBBALOOP_ZENOH_ENDPOINT=tcp/REMOTE_IP:7447
-# Then try connecting:
+# Terminal 2 (different session):
 bubbaloop status
 ```
 
-**Step 4: Check Firewall**
+**Systemd protection:**
 ```bash
-# On Linux with UFW:
-sudo ufw status
+# Check current systemd configuration
+systemctl --user show bubbaloop-daemon.service | grep Type=
 
-# If firewall is active, allow port 7447:
-sudo ufw allow 7447
+# Should be "simple" or "notify". If not, edit:
+systemctl --user edit bubbaloop-daemon.service
 
-# After allowing, restart daemon
-systemctl --user restart bubbaloop-daemon
+# Add or verify:
+# Type=notify
+# Restart=on-failure
+# RestartSec=2
 ```
 
 ---
 
-### Issue 4: Nodes Not Starting or Disappearing
+### Service Management Errors
 
 **Symptoms:**
-- Nodes show "not-installed" or "stopped" in TUI
-- After reboot, previously running nodes don't auto-start
-- Node logs show errors immediately after start
-
-**Root Cause:**
-- Service dependencies not met (zenohd/daemon not running first)
-- systemd service not installed or broken
-- Node configuration issues (missing config file, wrong path)
-- Service dependencies specified in `node.yaml` but not started
+- `systemctl --user start bubbaloop-daemon` fails with error
+- Service shows "activating" but never reaches "active"
+- Service crashes immediately after starting
 
 **Solutions:**
 
-**Step 1: Verify Service Dependencies**
+**For "activating" state (stuck):**
 ```bash
-# Check what services your node depends on
-systemctl --user show bubbaloop-NODENAME.service | grep -E "^(Requires|After)="
+# Force stop the service
+systemctl --user kill bubbaloop-daemon
 
-# Example output:
-# Requires=bubbaloop-daemon.service
-# After=network.target bubbaloop-daemon.service
+# Reset failed state
+systemctl --user reset-failed bubbaloop-daemon
 
-# Verify all dependencies are running:
+# Retry
+systemctl --user start bubbaloop-daemon
+sleep 2
 systemctl --user status bubbaloop-daemon
-systemctl --user status bubbaloop-zenohd
 ```
 
-**Step 2: Check Service Installation**
+**For immediate crash:**
 ```bash
-# List all bubbaloop services
+# Check why it's crashing
+journalctl --user -u bubbaloop-daemon -n 30 --no-pager
+
+# Common causes:
+# 1. "Connection refused" -> zenohd not running
+#    Fix: zenohd &
+# 2. "Failed to bind" -> port in use
+#    Fix: pkill -9 bubbaloop-daemon; pkill zenohd; zenohd &
+# 3. "Permission denied" -> systemd hardening issue
+#    Fix: See status 218 section below
+
+# After fixing the root cause:
+systemctl --user start bubbaloop-daemon
+```
+
+**For status 218 (CAPABILITIES) error:**
+
+This occurs when a node or service lacks required Linux capabilities. Typically happens after a fresh reinstall of a node service.
+
+```bash
+# Check the actual error
+journalctl -u bubbaloop-NODENAME --no-pager | tail -20
+
+# Look for: "status 218" or "Operation not permitted"
+
+# The fix is to reinstall the service (which regenerates proper systemd unit)
+bubbaloop node install NODENAME --force
+
+# Or reinstall all nodes
+bubbaloop node install rtsp-camera --force
+bubbaloop node install openmeteo --force
+# etc.
+
+# Then try starting again
+systemctl --user start bubbaloop-NODENAME
+```
+
+---
+
+## Node Issues
+
+### Node Won't Start
+
+**Symptoms:**
+- Node shows "stopped" or "not-installed"
+- `systemctl --user start bubbaloop-NODENAME` fails
+- Logs show immediate error
+
+**Root Causes:**
+1. Service not installed (need to run `bubbaloop node install`)
+2. Binary not built (missing executable)
+3. Configuration file missing
+4. Service dependencies not met
+5. Capability/permission issues (status 218)
+
+**Solutions:**
+
+**Step 1: Verify service is installed**
+```bash
+# List all services
 systemctl --user list-units 'bubbaloop-*.service'
 
-# If node service is missing, reinstall it
+# Check if your node service exists
+systemctl --user status bubbaloop-NODENAME.service
+
+# If not listed, install it
 bubbaloop node install NODENAME
-
-# Or reinstall from TUI: go to node, press 'i' to install
 ```
 
-**Step 3: Verify Node Configuration**
+**Step 2: Verify node is built**
 ```bash
-# Check if node.yaml exists and is valid
-cat crates/bubbaloop-nodes/NODENAME/node.yaml
+# Check if binary exists
+ls -la crates/bubbaloop-nodes/NODENAME/target/release/NODENAME
 
-# Required fields:
-# - name
-# - version
-# - type
-# - command (for running), or build (for building)
-
-# Validate with:
-bubbaloop node validate crates/bubbaloop-nodes/NODENAME/
-```
-
-**Step 4: Check Node Logs**
-```bash
-# View recent logs for failed start
-journalctl --user -u bubbaloop-NODENAME.service -n 30
-
-# If binary is missing:
-# error: No such file or directory
-# Then rebuild: bubbaloop node build NODENAME
-
-# If config is missing:
-# error: config.yaml not found
-# Then add config file or check node.yaml command path
-```
-
-**Step 5: Rebuild Node**
-```bash
-# If node has build script in node.yaml:
+# If not found, build it
 bubbaloop node build NODENAME
 
-# Check if binary was created:
-ls -la crates/bubbaloop-nodes/NODENAME/target/release/
+# Or manually
+cd crates/bubbaloop-nodes/NODENAME
+cargo build --release
+```
 
-# Reinstall service after rebuild:
+**Step 3: Reinstall service with updated binary**
+```bash
+# Force reinstall to pick up latest binary
 bubbaloop node install NODENAME --force
+
+# Then start
+systemctl --user start bubbaloop-NODENAME
+systemctl --user status bubbaloop-NODENAME
+```
+
+**Step 4: Check node logs**
+```bash
+# View logs immediately after failure
+journalctl --user -u bubbaloop-NODENAME -n 50 --no-pager
+
+# Look for specific errors:
+# - "No such file or directory" -> Binary missing, rebuild
+# - "config.yaml not found" -> Config missing, create it
+# - "Connection refused" -> Zenohd not running
+# - "Address already in use" -> Another instance running
+```
+
+**Step 5: Check dependencies**
+```bash
+# Check what this node depends on
+systemctl --user show bubbaloop-NODENAME.service | grep Requires
+
+# Verify those services are running
+systemctl --user status bubbaloop-daemon
+systemctl --user status bubbaloop-OTHER-NODE
+
+# If not, start them first
+systemctl --user start bubbaloop-daemon
+systemctl --user start bubbaloop-OTHER-NODE
+sleep 2
+
+# Then start this node
+systemctl --user start bubbaloop-NODENAME
 ```
 
 ---
 
-### Issue 5: Service Dependencies Not Working
+### Build Failures
 
 **Symptoms:**
-- Node has `depends_on: [other-node]` in node.yaml
-- Node starts before dependency is ready
-- Or node fails to start at all
-
-**Root Cause:**
-- Service dependencies not properly installed in systemd
-- `depends_on` in node.yaml not being recognized during install
-- Dependencies need to be reinstalled
+- `bubbaloop node build NODENAME` fails
+- Cargo compilation errors
+- Build timeout
 
 **Solutions:**
 
-**Step 1: Check Dependency Configuration**
+**For compilation errors:**
 ```bash
-# Verify node.yaml has depends_on field
-cat crates/bubbaloop-nodes/NODENAME/node.yaml
+# Get full error details
+cd crates/bubbaloop-nodes/NODENAME
+cargo build --release 2>&1 | tail -50
 
-# Example:
-# depends_on:
-#   - rtsp-camera
-#   - openmeteo
+# Common fixes:
+# 1. Update dependencies
+cargo update
+
+# 2. Clean and rebuild
+cargo clean
+cargo build --release
+
+# 3. Check for syntax errors
+cargo check
 ```
 
-**Step 2: Reinstall Service with Dependencies**
+**For build timeout (>10 minutes):**
 ```bash
-# When you reinstall, dependencies should be encoded in systemd unit
+# The daemon will kill builds after 10 minutes
+# Kill the hung build
+pkill -f "cargo build"
+
+# Check why it's slow:
+# - First build? Downloading dependencies can take time
+# - Large project? May legitimately need >10 minutes
+# - Stuck in compilation? Check top/htop for CPU/memory
+
+# For future builds, increase timeout or pre-warm:
+# Pre-download dependencies
+cargo metadata --format-version 1 > /dev/null
+
+# Then build
+bubbaloop node build NODENAME
+```
+
+**For Rust version issues:**
+```bash
+# Check Rust version
+rustc --version
+
+# Update Rust
+rustup update
+
+# Update Cargo
+cargo update -p <package-name>
+
+# Then rebuild
+cargo build --release
+```
+
+---
+
+### Start/Stop Timeouts
+
+**Symptoms:**
+- `systemctl --user start NODENAME` hangs
+- Takes >30 seconds to start/stop
+- Process appears to hang
+
+**Solutions:**
+
+**Immediate:**
+```bash
+# Kill the hung process
+systemctl --user kill bubbaloop-NODENAME
+
+# Check what was happening
+journalctl --user -u bubbaloop-NODENAME -f
+
+# Look for what it was waiting on:
+# - Waiting for Zenoh connection? Make sure zenohd is running
+# - Waiting for dependencies? Ensure they started
+```
+
+**For startup hanging on Zenoh connection:**
+```bash
+# Verify Zenoh is running
+bubbaloop doctor -c zenoh
+
+# If not responding, restart it
+pkill -9 zenohd
+zenohd &
+sleep 2
+
+# Now try starting node again
+systemctl --user start bubbaloop-NODENAME
+```
+
+**Increase startup timeout:**
+```bash
+# Edit service to allow more time
+systemctl --user edit bubbaloop-NODENAME.service
+
+# Add or increase:
+# TimeoutStartSec=60
+# TimeoutStopSec=60
+
+# Then reload and restart
+systemctl --user daemon-reload
+systemctl --user restart bubbaloop-NODENAME
+```
+
+---
+
+### Status 218 (CAPABILITIES) Error
+
+**Symptoms:**
+- Service fails with exit code 218
+- Error: "Operation not permitted"
+- Typically occurs after fresh node installation
+
+**Root Cause:**
+The systemd unit was created without proper Linux capability directives, or the node binary requires capabilities not granted.
+
+**Solutions:**
+
+**Automatic fix (recommended):**
+```bash
+# Reinstall the node service (regenerates systemd unit)
 bubbaloop node install NODENAME --force
 
-# Verify systemd service has dependency:
-systemctl --user show bubbaloop-NODENAME.service | grep Requires
-# Output should include: Requires=bubbaloop-rtsp-camera.service bubbaloop-openmeteo.service
-```
-
-**Step 3: Start in Correct Order**
-```bash
-# Manual start order (guarantees dependencies are ready):
-systemctl --user start bubbaloop-daemon
-systemctl --user start bubbaloop-rtsp-camera
-systemctl --user start bubbaloop-openmeteo
+# Restart
 systemctl --user start bubbaloop-NODENAME
 
-# Or use --all for automatic dependency ordering:
-systemctl --user start bubbaloop-rtsp-camera bubbaloop-openmeteo bubbaloop-NODENAME
+# Verify
+systemctl --user status bubbaloop-NODENAME
 ```
 
-**Step 4: Check Dependency Chain**
+**Manual fix (if auto-fix doesn't work):**
 ```bash
-# See full dependency tree
-systemctl --user show bubbaloop-NODENAME.service -p Requires
-systemctl --user show bubbaloop-NODENAME.service -p After
+# Check what's in the current systemd unit
+systemctl --user show bubbaloop-NODENAME.service | grep -E "^(Protect|Restrict|Capability)"
 
-# All these services must be running for node to start
+# If the node needs special capabilities (e.g., for GPIO, network raw sockets):
+systemctl --user edit bubbaloop-NODENAME.service
+
+# Add under [Service]:
+# NoNewPrivileges=false
+# AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN
+# (adjust capabilities based on node needs)
+
+# Reload and test
+systemctl --user daemon-reload
+systemctl --user start bubbaloop-NODENAME
 ```
 
----
+**For robotics/hardware nodes:**
 
-### Issue 6: Protobuf Decode Errors
-
-**Symptoms:**
-- TUI shows node list but with empty/corrupted data
-- Error logs show: "Failed to decode NodeList"
-- Dashboard shows garbled text in node panels
-
-**Root Cause:**
-- TUI and daemon built with different protobuf schema versions
-- Protobuf schema mismatch between versions
-- Corrupted message in Zenoh
-
-**Solutions:**
-
-**Step 1: Rebuild Everything**
+If your node accesses hardware (GPIO, I2C, SPI, video devices):
 ```bash
-# Clean build artifacts
-cargo clean
-pixi run build
+# Check what permissions the binary needs
+ldd crates/bubbaloop-nodes/NODENAME/target/release/NODENAME
 
-# This recompiles both TUI and daemon with same schema versions
-```
+# Edit systemd unit
+systemctl --user edit bubbaloop-NODENAME.service
 
-**Step 2: Verify Schema Files**
-```bash
-# Check protobuf schema is up-to-date
-cat protos/daemon.proto
+# Add under [Service]:
+# PrivateDevices=false
+# DevicePolicy=auto
 
-# Regenerated Rust code should match
-cat crates/bubbaloop/src/schemas.rs | head -50
-```
-
-**Step 3: Check Version Compatibility**
-```bash
-# Verify TUI and daemon are similar versions
-bubbaloop -V
-bubbaloop-daemon -V
-
-# If major versions differ, rebuild both:
-cargo build --release -p bubbaloop -p bubbaloop-daemon
+# Reload
+systemctl --user daemon-reload
+systemctl --user start bubbaloop-NODENAME
 ```
 
 ---
 
-### Issue 7: Zenoh Topic Routing Issues (Advanced)
+## Dashboard Issues
+
+### WebSocket Connection Failed
 
 **Symptoms:**
-- TUI can't find topics published by nodes
-- Nodes can't receive commands from TUI
-- Multi-machine deployment: remote nodes don't show up
+- Dashboard page shows "Cannot connect to server"
+- Browser console shows WebSocket error
+- Port 10001 connection refused
 
-**Root Cause:**
-- Zenoh router not routing between clients properly
-- Topic names mismatch (typo in subscription vs publication)
-- Mode settings wrong (router vs peer vs client)
-- Multicast/gossip misconfigured
+**Root Causes:**
+1. zenoh-bridge-remote-api not running
+2. Bridge is running but Zenoh not accessible
+3. Wrong browser URL or port
 
 **Solutions:**
 
-**Step 1: Verify Topic Routing**
+**Quick fix:**
 ```bash
-# In one terminal, subscribe to all topics
-zenoh-cli --connect tcp/127.0.0.1:7447 sub '@/**' &
+# Start the bridge
+zenoh-bridge-remote-api --ws-port 10001 -e tcp/127.0.0.1:7447 &
+sleep 2
 
-# In another, publish a test message
-zenoh-cli --connect tcp/127.0.0.1:7447 put bubbaloop/test/hello "world"
+# Verify it's listening
+netstat -tlnp | grep 10001
 
-# You should see the message in the subscriber
-# Output: [RCV] sample:
-# bubbaloop/test/hello <- "world"
+# Refresh browser
+# Open http://localhost:10001 or :5173 (depending on setup)
 ```
 
-**Step 2: Check Zenoh Router Connectivity**
+**If bridge fails to start:**
 ```bash
-# View connected peers
-curl http://127.0.0.1:8000/@/router/*/peers 2>/dev/null | python3 -m json.tool
+# Check if port is in use
+sudo lsof -i :10001
 
-# Should list all connected clients/peers
-# If empty or 404, check if zenoh admin API is enabled (default: :8000)
+# If in use, kill the old process or change port:
+# PORT=10002 zenoh-bridge-remote-api --ws-port 10002 -e tcp/127.0.0.1:7447 &
+
+# Verify bridge can connect to Zenoh
+# First make sure zenohd is running:
+pgrep zenohd || zenohd &
+sleep 2
+
+# Then try bridge again:
+zenoh-bridge-remote-api --ws-port 10001 -e tcp/127.0.0.1:7447 &
 ```
 
-**Step 3: Verify Mode Settings**
+**Check bridge logs:**
 ```bash
-# Zenoh router must be in "router" mode
-# All others must be in "client" or "peer" mode
+# Run bridge in foreground to see errors
+zenoh-bridge-remote-api --ws-port 10001 -e tcp/127.0.0.1:7447 2>&1
 
-# Check current process modes by reviewing systemd unit or startup command:
-systemctl --user show bubbaloop-daemon | grep ExecStart
-
-# Should include mode: client or mode: peer, NOT mode: router
+# Look for:
+# - "Connection refused" -> zenohd not running
+# - "Address already in use" -> port 10001 in use
+# - "Failed to establish" -> endpoint wrong
 ```
 
-**Step 4: Test Direct Connectivity**
+**For remote dashboard:**
 ```bash
-# Test if daemon can talk to router
+# If accessing dashboard from another machine:
+# Don't use localhost in browser, use actual IP:
+
+# On server:
+export SERVER_IP=$(hostname -I | awk '{print $1}')
+zenoh-bridge-remote-api --ws-port 10001 -e tcp/127.0.0.1:7447 &
+
+# In browser on client:
+# http://SERVER_IP:10001
+# Or if using dev server:
+# http://SERVER_IP:5173
+```
+
+---
+
+### Bridge Not Running
+
+**Symptoms:**
+- Dashboard loads but shows "no nodes" or "no data"
+- Commands in dashboard don't work
+- zenoh-bridge-remote-api not started
+
+**Solutions:**
+
+**Start the bridge:**
+```bash
+# In a dedicated terminal:
+zenoh-bridge-remote-api --ws-port 10001 -e tcp/127.0.0.1:7447 &
+
+# Or via systemd (if available):
+systemctl --user start zenoh-bridge
+
+# Verify it started
+pgrep zenoh-bridge
+netstat -tlnp | grep 10001
+```
+
+**Keep bridge running:**
+```bash
+# Option 1: Use systemd (recommended)
+systemctl --user enable zenoh-bridge
+systemctl --user start zenoh-bridge
+
+# Option 2: Use tmux/screen
+tmux new-session -d -s bridge 'zenoh-bridge-remote-api --ws-port 10001 -e tcp/127.0.0.1:7447'
+tmux attach -t bridge
+
+# Option 3: Use systemd-run
+systemd-run --user --scope --service-type=simple zenoh-bridge-remote-api --ws-port 10001 -e tcp/127.0.0.1:7447
+```
+
+**Troubleshoot bridge connection:**
+```bash
+# Verify bridge has Zenoh access
+zenoh-cli info  # Should succeed
+
+# Verify bridge is routing topics
+zenoh-cli sub 'bubbaloop/**' &  # In terminal 1
+sleep 1
+
+# In terminal 2, trigger activity:
 bubbaloop status
 
-# Should succeed and show services
-# If fails, check BUBBALOOP_ZENOH_ENDPOINT environment variable
+# Terminal 1 should show activity
 ```
 
 ---
+
+## LLM Troubleshooting Guide
+
+This section is specifically for AI assistants (LLMs) using Bubbaloop commands for diagnostics.
+
+### JSON Output for Programmatic Parsing
+
+All diagnostic commands support JSON output, which is ideal for parsing and analysis:
+
+```bash
+# Get system status as JSON
+bubbaloop status --json
+
+# Get full diagnostics as JSON
+bubbaloop doctor --json
+
+# Parse with jq or any JSON parser
+bubbaloop doctor --json | jq '.summary.failed'
+
+# Python example
+import json
+import subprocess
+
+result = subprocess.run(
+    ["bubbaloop", "doctor", "--json"],
+    capture_output=True,
+    text=True
+)
+diagnostics = json.loads(result.stdout)
+print(f"Failed checks: {diagnostics['summary']['failed']}")
+```
+
+### Common Diagnostic Patterns
+
+**Check System Health:**
+```bash
+# Single command that shows everything
+bubbaloop doctor --json | jq '{
+  healthy: .summary.failed == 0,
+  passed: .summary.passed,
+  failed: .summary.failed,
+  issues: [.checks[] | select(.passed == false) | {check: .check, message: .message}]
+}'
+```
+
+**Get Status with Details:**
+```bash
+# Full status in JSON
+bubbaloop status --json
+
+# Parse node list
+bubbaloop status --json | jq '.nodes[] | {name, status, type: .node_type, version}'
+```
+
+**Monitor Daemon Health:**
+```bash
+# Repeatedly check daemon (useful for monitoring)
+while true; do
+  bubbaloop doctor --json | jq -r '.checks[] | select(.check == "Daemon health") | .passed'
+  sleep 5
+done
+```
+
+### How to Use `bubbaloop doctor --json`
+
+The JSON output has this structure:
+```json
+{
+  "summary": {
+    "total": 9,        # Total checks run
+    "passed": 7,       # Checks that passed
+    "failed": 2,       # Checks that failed
+    "fixes_applied": 0 # Auto-fixes applied with --fix
+  },
+  "checks": [
+    {
+      "check": "zenohd",
+      "passed": true,
+      "message": "running on port 7447",
+      "fix": null,      # Only present if failed
+      "details": null   # Optional additional info
+    },
+    {
+      "check": "Zenoh query/reply",
+      "passed": false,
+      "message": "query succeeded but no replies received (timeout)",
+      "fix": "Check if zenohd is running and accessible",
+      "details": {
+        "error_type": "timeout",
+        "common_cause": "zenohd not routing queries correctly",
+        "timeout_ms": 2000
+      }
+    }
+  ]
+}
+```
+
+**Parse programmatically:**
+```bash
+# Check if system is healthy
+bubbaloop doctor --json | jq 'if .summary.failed == 0 then "healthy" else "unhealthy" end'
+
+# Get all failed checks with fixes
+bubbaloop doctor --json | jq '.checks[] | select(.passed == false) | "\(.check): \(.fix)"'
+
+# Monitor in script
+if bubbaloop doctor --json | jq -e '.summary.failed > 0' > /dev/null; then
+  echo "System has issues"
+  bubbaloop doctor --json | jq '.checks[] | select(.passed == false)'
+else
+  echo "All checks passed"
+fi
+```
+
+### Recommended LLM Query Workflow
+
+When asked to diagnose issues:
+
+**1. Gather diagnostics:**
+```bash
+# Always start here
+bubbaloop doctor --json > /tmp/diagnostics.json
+bubbaloop status --json > /tmp/status.json
+```
+
+**2. Parse results:**
+```bash
+# Check overall health
+jq '.summary' /tmp/diagnostics.json
+
+# Get specific issues
+jq '.checks[] | select(.passed == false)' /tmp/diagnostics.json
+```
+
+**3. Provide structured response:**
+```python
+import json
+
+with open('/tmp/diagnostics.json') as f:
+    diag = json.load(f)
+
+issues = [c for c in diag['checks'] if not c['passed']]
+
+response = {
+    "system_health": "healthy" if diag['summary']['failed'] == 0 else "degraded",
+    "issues": [
+        {"component": i['check'], "problem": i['message'], "fix": i['fix']}
+        for i in issues
+    ]
+}
+
+print(json.dumps(response, indent=2))
+```
+
+### Environment Variables for Diagnostics
+
+Always check and report these:
+
+```bash
+# Diagnostic script for LLMs
+echo "=== Bubbaloop Diagnostic Report ==="
+echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo ""
+echo "Environment:"
+echo "  BUBBALOOP_ZENOH_ENDPOINT=${BUBBALOOP_ZENOH_ENDPOINT:-tcp/127.0.0.1:7447}"
+echo "  RUST_LOG=${RUST_LOG:-info}"
+echo ""
+echo "Doctor Output:"
+bubbaloop doctor --json | jq '.summary'
+echo ""
+echo "Failed Checks:"
+bubbaloop doctor --json | jq '[.checks[] | select(.passed == false)]'
+```
+
 
 ## Distributed Deployment Issues
 
@@ -651,24 +1319,78 @@ zenoh-cli sub bubbaloop/daemon/nodes
 
 | Variable | Purpose | Default | Example |
 |----------|---------|---------|---------|
-| `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router address | `tcp/127.0.0.1:7447` | `tcp/192.168.1.100:7447` |
-| `RUST_LOG` | Log level (trace/debug/info/warn/error) | `info` | `debug` |
-| `RUST_BACKTRACE` | Show stack traces on panic | Not set | `1` or `full` |
+| `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` | `tcp/192.168.1.100:7447` |
+| `RUST_LOG` | Log level (trace/debug/info/warn/error) | `info` | `RUST_LOG=debug` |
+| `RUST_BACKTRACE` | Show stack traces on panic | Not set | `1` (short) or `full` (detailed) |
+| `XDG_CONFIG_HOME` | Config directory | `~/.config` | `/home/user/.config` |
+| `XDG_DATA_HOME` | Data directory | `~/.local/share` | `/home/user/.local/share` |
 
 ### Setting Environment Variables
 
+**Temporarily (current session only):**
 ```bash
-# Temporarily for current session
+# For CLI commands
 export RUST_LOG=debug
 bubbaloop status
 
-# Permanently in systemd service
-systemctl --user edit bubbaloop-daemon
-# Add: Environment="RUST_LOG=debug"
+# For one command only
+RUST_LOG=debug bubbaloop doctor
 
-# For TUI running via systemd
-systemctl --user edit bubbaloop-tui
-# Add: Environment="RUST_LOG=debug"
+# For daemon
+RUST_LOG=debug systemctl --user restart bubbaloop-daemon
+journalctl --user -u bubbaloop-daemon -f
+```
+
+**Permanently (systemd):**
+```bash
+# Edit daemon service
+systemctl --user edit bubbaloop-daemon
+
+# Add under [Service]:
+# Environment="RUST_LOG=debug"
+# Environment="BUBBALOOP_ZENOH_ENDPOINT=tcp/192.168.1.100:7447"
+
+# Reload and restart
+systemctl --user daemon-reload
+systemctl --user restart bubbaloop-daemon
+```
+
+**For shell startup (bash/zsh):**
+```bash
+# Add to ~/.bashrc or ~/.zshrc:
+export RUST_LOG=info
+export BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447
+
+# Then reload
+source ~/.bashrc
+```
+
+### BUBBALOOP_ZENOH_ENDPOINT Details
+
+**Format:** `protocol/host:port`
+
+**Common values:**
+```bash
+# Local development (default)
+tcp/127.0.0.1:7447
+
+# Local, different port
+tcp/127.0.0.1:7448
+
+# Remote server
+tcp/192.168.1.100:7447
+
+# With DNS
+tcp/zenoh.example.com:7447
+
+# Unset to use default
+unset BUBBALOOP_ZENOH_ENDPOINT
+```
+
+**Verify current value:**
+```bash
+echo $BUBBALOOP_ZENOH_ENDPOINT
+# If empty, using default: tcp/127.0.0.1:7447
 ```
 
 ---

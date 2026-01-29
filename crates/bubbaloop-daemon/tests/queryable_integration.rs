@@ -219,7 +219,7 @@ async fn test_command_encoding_and_sending() {
 
     // Declare queryable to handle commands
     let queryable = session1
-        .declare_queryable("bubbaloop/daemon/commands")
+        .declare_queryable("bubbaloop/daemon/command")
         .await
         .expect("Failed to declare queryable");
 
@@ -251,7 +251,7 @@ async fn test_command_encoding_and_sending() {
     // Send command as query with encoded payload
     let command_bytes = encode_proto(&command);
     let replies = session2
-        .get("bubbaloop/daemon/commands")
+        .get("bubbaloop/daemon/command")
         .payload(command_bytes)
         .await
         .expect("Failed to send query");
@@ -296,7 +296,7 @@ async fn test_various_command_types() {
         .expect("Failed to create session");
 
     let queryable = session1
-        .declare_queryable("bubbaloop/daemon/commands")
+        .declare_queryable("bubbaloop/daemon/command")
         .await
         .expect("Failed to declare queryable");
 
@@ -340,7 +340,7 @@ async fn test_various_command_types() {
         let command_bytes = encode_proto(&command);
 
         let replies = session2
-            .get("bubbaloop/daemon/commands")
+            .get("bubbaloop/daemon/command")
             .payload(command_bytes)
             .await
             .expect("Failed to send query");
@@ -400,7 +400,11 @@ async fn test_command_result_decoding() {
                     build_output: vec!["line1".to_string(), "line2".to_string()],
                     health_status: bubbaloop_daemon::proto::HealthStatus::Healthy as i32,
                     last_health_check_ms: 1234567890,
+                    machine_id: String::new(),
+                    machine_hostname: String::new(),
                 }),
+                timestamp_ms: 0,
+                responding_machine: String::new(),
             };
 
             let reply_bytes = encode_proto(&result);
@@ -480,6 +484,8 @@ async fn test_invalid_payload_handling() {
                             message: "Invalid command payload".to_string(),
                             output: String::new(),
                             node_state: None,
+                            timestamp_ms: 0,
+                            responding_machine: String::new(),
                         };
                         let reply_bytes = encode_proto(&result);
                         query
@@ -549,6 +555,8 @@ async fn test_malformed_command_handling() {
                             message: "Node name is required".to_string(),
                             output: String::new(),
                             node_state: None,
+                            timestamp_ms: 0,
+                            responding_machine: String::new(),
                         }
                     } else {
                         CommandResult {
@@ -557,6 +565,8 @@ async fn test_malformed_command_handling() {
                             message: "OK".to_string(),
                             output: String::new(),
                             node_state: None,
+                            timestamp_ms: 0,
+                            responding_machine: String::new(),
                         }
                     };
 
@@ -578,6 +588,9 @@ async fn test_malformed_command_handling() {
         node_name: String::new(), // Empty name
         node_path: String::new(),
         request_id: "req-123".to_string(),
+        timestamp_ms: 0,
+        source_machine: String::new(),
+        target_machine: String::new(),
     };
 
     let command_bytes = encode_proto(&command);
@@ -632,6 +645,8 @@ async fn test_queryable_errors() {
                 message: "Internal server error".to_string(),
                 output: "Stack trace here".to_string(),
                 node_state: None,
+                timestamp_ms: 0,
+                responding_machine: String::new(),
             };
 
             let reply_bytes = encode_proto(&result);

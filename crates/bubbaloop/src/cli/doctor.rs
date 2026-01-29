@@ -9,7 +9,7 @@
 //! Provides actionable fixes for each issue found.
 
 use anyhow::{anyhow, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::process::Command;
 use zenoh::query::QueryTarget;
@@ -67,7 +67,10 @@ impl FixAction {
                 if output.status.success() {
                     Ok("bubbaloop-daemon service started".to_string())
                 } else {
-                    Err(anyhow!("Failed to start: {}", String::from_utf8_lossy(&output.stderr)))
+                    Err(anyhow!(
+                        "Failed to start: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    ))
                 }
             }
             FixAction::RestartDaemonService => {
@@ -79,7 +82,10 @@ impl FixAction {
                 if output.status.success() {
                     Ok("bubbaloop-daemon service restarted".to_string())
                 } else {
-                    Err(anyhow!("Failed to restart: {}", String::from_utf8_lossy(&output.stderr)))
+                    Err(anyhow!(
+                        "Failed to restart: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    ))
                 }
             }
             FixAction::StartBridgeService => {
@@ -91,20 +97,27 @@ impl FixAction {
                 if output.status.success() {
                     Ok("zenoh-bridge service started".to_string())
                 } else {
-                    Err(anyhow!("Failed to start: {}", String::from_utf8_lossy(&output.stderr)))
+                    Err(anyhow!(
+                        "Failed to start: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    ))
                 }
             }
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct DiagnosticResult {
     check: String,
     passed: bool,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     fix: Option<String>,
+    #[serde(skip)]
     fix_action: Option<FixAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
 }
 
 impl DiagnosticResult {
@@ -115,6 +128,18 @@ impl DiagnosticResult {
             message: message.to_string(),
             fix: None,
             fix_action: None,
+            details: None,
+        }
+    }
+
+    fn pass_with_details(check: &str, message: &str, details: serde_json::Value) -> Self {
+        Self {
+            check: check.to_string(),
+            passed: true,
+            message: message.to_string(),
+            fix: None,
+            fix_action: None,
+            details: Some(details),
         }
     }
 
@@ -125,6 +150,7 @@ impl DiagnosticResult {
             message: message.to_string(),
             fix: Some(fix.to_string()),
             fix_action: None,
+            details: None,
         }
     }
 
@@ -135,6 +161,23 @@ impl DiagnosticResult {
             message: message.to_string(),
             fix: Some(fix.to_string()),
             fix_action: Some(action),
+            details: None,
+        }
+    }
+
+    fn fail_with_details(
+        check: &str,
+        message: &str,
+        fix: &str,
+        details: serde_json::Value,
+    ) -> Self {
+        Self {
+            check: check.to_string(),
+            passed: false,
+            message: message.to_string(),
+            fix: Some(fix.to_string()),
+            fix_action: None,
+            details: Some(details),
         }
     }
 }
@@ -175,77 +218,164 @@ struct NodeState {
     build_output: Vec<String>,
 }
 
-pub async fn run(fix: bool) -> Result<()> {
-    if fix {
-        println!("bubbaloop doctor --fix");
-        println!("=====================");
-    } else {
-        println!("bubbaloop doctor");
-        println!("================");
+pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
+    // Normalize check name
+    let check_type = check.to_lowercase();
+
+    if !json {
+        if fix {
+            println!("bubbaloop doctor --fix");
+            println!("=====================");
+        } else {
+            println!("bubbaloop doctor");
+            println!("================");
+        }
+        println!();
     }
-    println!();
 
     let mut results = Vec::new();
     let mut fixes_applied = 0;
 
-    // 1. Check system services
-    println!("[1/4] Checking system services...");
-    results.extend(check_system_services().await);
+    // Determine which checks to run
+    let run_services = check_type == "all" || check_type == "zenoh";
+    let run_zenoh = check_type == "all" || check_type == "zenoh";
+    let run_daemon = check_type == "all" || check_type == "daemon";
 
-    // Apply fixes for system services if --fix flag is set
-    if fix {
-        fixes_applied += apply_fixes(&mut results).await;
+    let mut session: Option<Session> = None;
+
+    // 1. Check system services
+    if run_services {
+        if !json {
+            println!("[1/4] Checking system services...");
+        }
+        results.extend(check_system_services().await);
+
+        // Apply fixes for system services if --fix flag is set
+        if fix && !json {
+            fixes_applied += apply_fixes(&mut results).await;
+        }
+        if !json {
+            println!();
+        }
     }
-    println!();
 
     // 2. Check Zenoh connectivity
-    println!("[2/4] Checking Zenoh connectivity...");
-    let session = match check_zenoh_connection().await {
-        Ok((result, session)) => {
-            results.push(result);
-            Some(session)
+    if run_zenoh {
+        if !json {
+            println!("[2/4] Checking Zenoh connectivity...");
         }
-        Err(result) => {
-            results.push(result);
-            None
+        let zenoh_results = check_zenoh_comprehensive().await;
+        let has_session = zenoh_results
+            .iter()
+            .any(|r| r.check == "Zenoh connection" && r.passed);
+
+        results.extend(zenoh_results);
+
+        if has_session {
+            // Try to get a session for further checks
+            match get_zenoh_session().await {
+                Ok(s) => session = Some(s),
+                Err(_) => {}
+            }
         }
-    };
-    println!();
+
+        if !json {
+            println!();
+        }
+    }
 
     // 3. Check daemon health (requires Zenoh connection)
-    println!("[3/4] Checking daemon health...");
-    if let Some(ref session) = session {
-        results.extend(check_daemon_health(session).await);
-    } else {
-        results.push(DiagnosticResult::fail(
-            "Daemon health",
-            "Skipped (no Zenoh connection)",
-            "Fix Zenoh connection first",
-        ));
+    if run_daemon {
+        if !json {
+            println!("[3/4] Checking daemon health...");
+        }
+
+        // Get session if we don't already have one
+        if session.is_none() && check_type == "daemon" {
+            match get_zenoh_session().await {
+                Ok(s) => session = Some(s),
+                Err(_) => {}
+            }
+        }
+
+        if let Some(ref session) = session {
+            results.extend(check_daemon_health(session).await);
+        } else {
+            results.push(DiagnosticResult::fail(
+                "Daemon health",
+                "Skipped (no Zenoh connection)",
+                "Fix Zenoh connection first",
+            ));
+        }
+        if !json {
+            println!();
+        }
     }
-    println!();
 
     // 4. Check node subscriptions (requires Zenoh connection)
-    println!("[4/4] Checking node subscriptions...");
-    if let Some(ref session) = session {
-        results.extend(check_node_subscriptions(session).await);
-    } else {
-        results.push(DiagnosticResult::fail(
-            "Node subscriptions",
-            "Skipped (no Zenoh connection)",
-            "Fix Zenoh connection first",
-        ));
+    if check_type == "all" {
+        if !json {
+            println!("[4/4] Checking node subscriptions...");
+        }
+        if let Some(ref session) = session {
+            results.extend(check_node_subscriptions(session).await);
+        } else {
+            results.push(DiagnosticResult::fail(
+                "Node subscriptions",
+                "Skipped (no Zenoh connection)",
+                "Fix Zenoh connection first",
+            ));
+        }
+        if !json {
+            println!();
+        }
     }
-    println!();
 
-    // Print results
+    // Output results
+    if json {
+        print_json_results(&results, fixes_applied)?;
+    } else {
+        print_human_results(&results, fixes_applied, fix)?;
+    }
+
+    // Close Zenoh session if open
+    if let Some(session) = session {
+        let _ = session.close().await;
+    }
+
+    Ok(())
+}
+
+fn print_json_results(results: &[DiagnosticResult], fixes_applied: usize) -> Result<()> {
+    let passed = results.iter().filter(|r| r.passed).count();
+    let failed = results.iter().filter(|r| !r.passed).count();
+
+    let output = serde_json::json!({
+        "summary": {
+            "total": results.len(),
+            "passed": passed,
+            "failed": failed,
+            "fixes_applied": fixes_applied,
+        },
+        "checks": results,
+    });
+
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+fn print_human_results(
+    results: &[DiagnosticResult],
+    fixes_applied: usize,
+    fix: bool,
+) -> Result<()> {
     println!("Summary");
     println!("=======");
     println!();
 
     let mut issues_found = 0;
 
-    for result in &results {
+    for result in results {
         let symbol = if result.passed { "✓" } else { "✗" };
         println!("[{}] {}: {}", symbol, result.check, result.message);
 
@@ -256,6 +386,15 @@ pub async fn run(fix: bool) -> Result<()> {
                     println!("    → Auto-fixable: {}", fix_hint);
                 } else {
                     println!("    → Fix: {}", fix_hint);
+                }
+            }
+        }
+
+        // Print details if available
+        if let Some(details) = &result.details {
+            if let Some(obj) = details.as_object() {
+                for (key, value) in obj {
+                    println!("    {} = {}", key, value);
                 }
             }
         }
@@ -271,21 +410,26 @@ pub async fn run(fix: bool) -> Result<()> {
             if issues_found == 1 { "" } else { "s" }
         );
         if fixes_applied > 0 {
-            println!("Applied {} fix{}", fixes_applied, if fixes_applied == 1 { "" } else { "es" });
+            println!(
+                "Applied {} fix{}",
+                fixes_applied,
+                if fixes_applied == 1 { "" } else { "es" }
+            );
         } else if !fix {
             // Count auto-fixable issues
-            let auto_fixable: usize = results.iter().filter(|r| !r.passed && r.fix_action.is_some()).count();
+            let auto_fixable: usize = results
+                .iter()
+                .filter(|r| !r.passed && r.fix_action.is_some())
+                .count();
             if auto_fixable > 0 {
                 println!();
-                println!("Tip: Run 'bubbaloop doctor --fix' to automatically fix {} issue{}",
-                    auto_fixable, if auto_fixable == 1 { "" } else { "s" });
+                println!(
+                    "Tip: Run 'bubbaloop doctor --fix' to automatically fix {} issue{}",
+                    auto_fixable,
+                    if auto_fixable == 1 { "" } else { "s" }
+                );
             }
         }
-    }
-
-    // Close Zenoh session if open
-    if let Some(session) = session {
-        let _ = session.close().await;
     }
 
     Ok(())
@@ -328,10 +472,7 @@ async fn check_system_services() -> Vec<DiagnosticResult> {
         // Additional check: is port 7447 listening?
         let port_check = check_port(7447).await;
         if port_check {
-            results.push(DiagnosticResult::pass(
-                "zenohd",
-                "running on port 7447",
-            ));
+            results.push(DiagnosticResult::pass("zenohd", "running on port 7447"));
         } else {
             results.push(DiagnosticResult::fail(
                 "zenohd",
@@ -351,10 +492,7 @@ async fn check_system_services() -> Vec<DiagnosticResult> {
     // Check bubbaloop-daemon
     let daemon_service = check_systemd_service("bubbaloop-daemon.service").await;
     if daemon_service == "active" {
-        results.push(DiagnosticResult::pass(
-            "bubbaloop-daemon",
-            "service active",
-        ));
+        results.push(DiagnosticResult::pass("bubbaloop-daemon", "service active"));
     } else if daemon_service == "inactive" {
         results.push(DiagnosticResult::fail_with_action(
             "bubbaloop-daemon",
@@ -380,10 +518,7 @@ async fn check_system_services() -> Vec<DiagnosticResult> {
     // Check zenoh-bridge (optional, so we don't fail hard)
     let bridge_service = check_systemd_service("zenoh-bridge.service").await;
     if bridge_service == "active" {
-        results.push(DiagnosticResult::pass(
-            "zenoh-bridge",
-            "service active",
-        ));
+        results.push(DiagnosticResult::pass("zenoh-bridge", "service active"));
     } else {
         results.push(DiagnosticResult::fail_with_action(
             "zenoh-bridge",
@@ -397,11 +532,7 @@ async fn check_system_services() -> Vec<DiagnosticResult> {
 }
 
 async fn is_process_running(name: &str) -> bool {
-    let output = Command::new("pgrep")
-        .arg("-x")
-        .arg(name)
-        .output()
-        .await;
+    let output = Command::new("pgrep").arg("-x").arg(name).output().await;
 
     matches!(output, Ok(out) if out.status.success())
 }
@@ -425,47 +556,191 @@ async fn check_systemd_service(service_name: &str) -> String {
     }
 }
 
-async fn check_zenoh_connection() -> std::result::Result<(DiagnosticResult, Session), DiagnosticResult> {
+async fn get_zenoh_session() -> Result<Session> {
     let mut config = zenoh::Config::default();
 
-    // Run as client mode
-    if config.insert_json5("mode", "\"client\"").is_err() {
-        return Err(DiagnosticResult::fail(
-            "Zenoh connection",
-            "failed to configure client mode",
-            "Check Zenoh installation",
-        ));
-    }
+    config
+        .insert_json5("mode", "\"client\"")
+        .map_err(|e| anyhow!("Failed to configure client mode: {}", e))?;
 
     let endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT")
         .unwrap_or_else(|_| "tcp/127.0.0.1:7447".to_string());
 
-    if config
+    config
         .insert_json5("connect/endpoints", &format!("[\"{}\"]", endpoint))
-        .is_err()
-    {
-        return Err(DiagnosticResult::fail(
-            "Zenoh connection",
-            "failed to configure endpoint",
-            "Check BUBBALOOP_ZENOH_ENDPOINT environment variable",
-        ));
-    }
+        .map_err(|e| anyhow!("Failed to configure endpoint: {}", e))?;
 
     // Disable scouting
     let _ = config.insert_json5("scouting/multicast/enabled", "false");
     let _ = config.insert_json5("scouting/gossip/enabled", "false");
 
-    match zenoh::open(config).await {
-        Ok(session) => Ok((
-            DiagnosticResult::pass("Zenoh connection", &format!("connected to {}", endpoint)),
-            session,
-        )),
-        Err(e) => Err(DiagnosticResult::fail(
-            "Zenoh connection",
-            &format!("failed to connect: {}", e),
-            "Ensure zenohd is running on port 7447. Check with: pgrep zenohd",
-        )),
+    zenoh::open(config)
+        .await
+        .map_err(|e| anyhow!("Failed to open Zenoh session: {}", e))
+}
+
+/// Comprehensive Zenoh connectivity checks
+async fn check_zenoh_comprehensive() -> Vec<DiagnosticResult> {
+    let mut results = Vec::new();
+
+    let endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT")
+        .unwrap_or_else(|_| "tcp/127.0.0.1:7447".to_string());
+
+    // Parse endpoint to get host and port
+    let (host, port) = parse_zenoh_endpoint(&endpoint);
+
+    // Check 1: Can we create a session?
+    let session_result = get_zenoh_session().await;
+    match &session_result {
+        Ok(session) => {
+            let session_id = session.zid().to_string();
+            results.push(DiagnosticResult::pass_with_details(
+                "Zenoh connection",
+                &format!("connected to {}", endpoint),
+                serde_json::json!({
+                    "endpoint": endpoint,
+                    "session_id": session_id,
+                    "mode": "client",
+                }),
+            ));
+
+            // Check 2: Can we declare a test queryable?
+            match session.declare_queryable("bubbaloop/doctor/test").await {
+                Ok(queryable) => {
+                    results.push(DiagnosticResult::pass(
+                        "Zenoh queryable",
+                        "can declare queryables",
+                    ));
+                    drop(queryable);
+                }
+                Err(e) => {
+                    results.push(DiagnosticResult::fail(
+                        "Zenoh queryable",
+                        &format!("failed to declare queryable: {}", e),
+                        "Check Zenoh router permissions and configuration",
+                    ));
+                }
+            }
+
+            // Check 3: Can we query ourselves?
+            let test_key = "bubbaloop/doctor/test/query";
+            let _test_queryable = session.declare_queryable(test_key).await;
+
+            if let Ok(test_queryable) = _test_queryable {
+                // Spawn a task to respond to our own query
+                let handle = tokio::spawn(async move {
+                    if let Ok(query) = test_queryable.recv_async().await {
+                        let _ = query.reply(test_key, "pong").await;
+                    }
+                });
+
+                tokio::time::sleep(Duration::from_millis(100)).await;
+
+                // Try to query
+                match session.get(test_key).timeout(Duration::from_secs(2)).await {
+                    Ok(receiver) => {
+                        let replies: Vec<_> = receiver.into_iter().collect();
+                        if replies.is_empty() {
+                            results.push(DiagnosticResult::fail_with_details(
+                                "Zenoh query/reply",
+                                "query succeeded but no replies received (timeout)",
+                                "This is the 'Didn't receive final reply for query: Timeout' error. Check if zenohd is running and accessible. Increase query timeout if on slow network.",
+                                serde_json::json!({
+                                    "error_type": "timeout",
+                                    "common_cause": "zenohd not routing queries correctly",
+                                    "timeout_ms": 2000,
+                                }),
+                            ));
+                        } else {
+                            results.push(DiagnosticResult::pass(
+                                "Zenoh query/reply",
+                                "can send queries and receive replies",
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        results.push(DiagnosticResult::fail_with_details(
+                            "Zenoh query/reply",
+                            &format!("query failed: {}", e),
+                            "This indicates Zenoh routing is broken. Check zenohd logs and configuration.",
+                            serde_json::json!({
+                                "error": e.to_string(),
+                                "error_type": "query_failed",
+                            }),
+                        ));
+                    }
+                }
+
+                handle.abort();
+            } else {
+                results.push(DiagnosticResult::fail(
+                    "Zenoh query/reply",
+                    "skipped (could not declare test queryable)",
+                    "Fix queryable declaration first",
+                ));
+            }
+
+            let _ = session.close().await;
+        }
+        Err(e) => {
+            results.push(DiagnosticResult::fail_with_details(
+                "Zenoh connection",
+                &format!("failed to connect: {}", e),
+                &format!(
+                    "Ensure zenohd is running and accessible at {}. Run: zenohd &",
+                    endpoint
+                ),
+                serde_json::json!({
+                    "endpoint": endpoint,
+                    "host": host,
+                    "port": port,
+                    "error": e.to_string(),
+                }),
+            ));
+
+            // Check if port is even listening
+            if let Ok(can_connect) = tokio::time::timeout(
+                Duration::from_secs(1),
+                tokio::net::TcpStream::connect(format!("{}:{}", host, port)),
+            )
+            .await
+            {
+                if can_connect.is_ok() {
+                    results.push(DiagnosticResult::pass(
+                        "Zenoh port",
+                        &format!("port {} is listening", port),
+                    ));
+                } else {
+                    results.push(DiagnosticResult::fail(
+                        "Zenoh port",
+                        &format!("port {} is not accessible", port),
+                        "Start zenohd or check firewall settings",
+                    ));
+                }
+            } else {
+                results.push(DiagnosticResult::fail(
+                    "Zenoh port",
+                    &format!("timeout connecting to port {}", port),
+                    "Check if zenohd is running and network is accessible",
+                ));
+            }
+        }
     }
+
+    results
+}
+
+fn parse_zenoh_endpoint(endpoint: &str) -> (String, u16) {
+    // Parse "tcp/127.0.0.1:7447" format
+    if let Some(addr_part) = endpoint.strip_prefix("tcp/") {
+        if let Some((host, port_str)) = addr_part.rsplit_once(':') {
+            if let Ok(port) = port_str.parse() {
+                return (host.to_string(), port);
+            }
+        }
+    }
+    // Default
+    ("127.0.0.1".to_string(), 7447)
 }
 
 async fn check_daemon_health(session: &Session) -> Vec<DiagnosticResult> {
@@ -475,10 +750,7 @@ async fn check_daemon_health(session: &Session) -> Vec<DiagnosticResult> {
     match query_with_timeout::<HealthResponse>(session, "bubbaloop/daemon/api/health").await {
         Ok(response) => {
             if response.status == "ok" {
-                results.push(DiagnosticResult::pass(
-                    "Daemon health",
-                    "ok",
-                ));
+                results.push(DiagnosticResult::pass("Daemon health", "ok"));
             } else {
                 results.push(DiagnosticResult::fail(
                     "Daemon health",
@@ -554,12 +826,7 @@ async fn query_with_timeout<T: for<'de> Deserialize<'de>>(
     let start = std::time::Instant::now();
 
     while start.elapsed() < timeout_duration {
-        match tokio::time::timeout(
-            timeout_duration - start.elapsed(),
-            replies.recv_async(),
-        )
-        .await
-        {
+        match tokio::time::timeout(timeout_duration - start.elapsed(), replies.recv_async()).await {
             Ok(Ok(reply)) => {
                 if let Ok(sample) = reply.result() {
                     let bytes = sample.payload().to_bytes();
@@ -572,7 +839,11 @@ async fn query_with_timeout<T: for<'de> Deserialize<'de>>(
         }
     }
 
-    Err(anyhow!("No reply received for {} (timeout after {}s)", key_expr, TIMEOUT_SECS))
+    Err(anyhow!(
+        "No reply received for {} (timeout after {}s)",
+        key_expr,
+        TIMEOUT_SECS
+    ))
 }
 
 #[cfg(test)]

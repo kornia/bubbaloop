@@ -1,18 +1,22 @@
 //! Bubbaloop CLI - Unified command-line interface
 //!
 //! Usage:
-//!   bubbaloop tui                   # Launch TUI
-//!   bubbaloop status [-f format]    # Show services status
-//!   bubbaloop doctor                # Run system diagnostics
-//!   bubbaloop node list             # List registered nodes
-//!   bubbaloop node add <path|url>   # Add node from path or GitHub
-//!   bubbaloop node start <name>     # Start a node
-//!   bubbaloop node stop <name>      # Stop a node
-//!   bubbaloop node logs <name>      # View node logs
-//!   bubbaloop debug topics          # List active Zenoh topics
-//!   bubbaloop debug subscribe <key> # Subscribe to Zenoh topic
-//!   bubbaloop debug query <key>     # Query Zenoh endpoint
-//!   bubbaloop debug info            # Show Zenoh connection info
+//!   bubbaloop tui                      # Launch TUI
+//!   bubbaloop status [-f format]       # Show services status
+//!   bubbaloop doctor                   # Run all system diagnostics
+//!   bubbaloop doctor -c zenoh          # Check Zenoh connectivity only
+//!   bubbaloop doctor -c daemon         # Check daemon health only
+//!   bubbaloop doctor --json            # Output diagnostics as JSON
+//!   bubbaloop doctor --fix             # Auto-fix issues
+//!   bubbaloop node list                # List registered nodes
+//!   bubbaloop node add <path|url>      # Add node from path or GitHub
+//!   bubbaloop node start <name>        # Start a node
+//!   bubbaloop node stop <name>         # Stop a node
+//!   bubbaloop node logs <name>         # View node logs
+//!   bubbaloop debug topics             # List active Zenoh topics
+//!   bubbaloop debug subscribe <key>    # Subscribe to Zenoh topic
+//!   bubbaloop debug query <key>        # Query Zenoh endpoint
+//!   bubbaloop debug info               # Show Zenoh connection info
 
 use argh::FromArgs;
 use bubbaloop::cli::{DebugCommand, NodeCommand};
@@ -59,6 +63,14 @@ struct DoctorArgs {
     /// automatically fix issues that can be resolved
     #[argh(switch)]
     fix: bool,
+
+    /// output results as JSON
+    #[argh(switch)]
+    json: bool,
+
+    /// specific check to run: all, zenoh, daemon (default: all)
+    #[argh(option, short = 'c', default = "String::from(\"all\")")]
+    check: String,
 }
 
 #[tokio::main]
@@ -85,6 +97,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("  tui       Launch the terminal user interface");
             eprintln!("  status    Show services status (non-interactive)");
             eprintln!("  doctor    Run system diagnostics and health checks");
+            eprintln!("              --json: Output as JSON");
+            eprintln!("              -c, --check <type>: all|zenoh|daemon (default: all)");
+            eprintln!("              --fix: Auto-fix issues");
             eprintln!("  node      Manage nodes:");
             eprintln!("              init, validate, list, add, remove");
             eprintln!("              install, uninstall, start, stop, restart");
@@ -101,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             bubbaloop::cli::status::run(&status_args.format).await?;
         }
         Some(Command::Doctor(args)) => {
-            bubbaloop::cli::doctor::run(args.fix).await?;
+            bubbaloop::cli::doctor::run(args.fix, args.json, &args.check).await?;
         }
         Some(Command::Node(cmd)) => {
             cmd.run()

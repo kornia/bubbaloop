@@ -627,12 +627,13 @@ RestartSec=5
 Environment={environment}
 Environment={path_env}
 
-# Security hardening
+# Security hardening (user service compatible)
 NoNewPrivileges=true
-ProtectSystem=full
-PrivateTmp=false
+ProtectSystem=strict
+PrivateTmp=true
 ProtectKernelTunables=true
-ProtectKernelModules=true
+# Note: ProtectKernelModules requires capabilities not available in user services
+# ProtectKernelModules=true
 ProtectControlGroups=true
 # Robotics-compatible settings (allow RT scheduling and JIT)
 RestrictRealtime=false

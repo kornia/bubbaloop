@@ -55,6 +55,8 @@ enum NodeAction {
     Restart(RestartArgs),
     Logs(LogsArgs),
     Build(BuildArgs),
+    Enable(EnableArgs),
+    Disable(DisableArgs),
 }
 
 /// Initialize a new node from template
@@ -108,7 +110,7 @@ struct AddArgs {
     #[argh(positional)]
     source: String,
 
-    /// target directory for Git clones (default: ~/.bubbaloop/plugins/<repo-name>)
+    /// target directory for Git clones (default: ~/.bubbaloop/nodes/<repo-name>)
     #[argh(option, short = 'o')]
     output: Option<String>,
 
@@ -209,6 +211,24 @@ struct BuildArgs {
     name: String,
 }
 
+/// Enable autostart for a node
+#[derive(FromArgs)]
+#[argh(subcommand, name = "enable")]
+struct EnableArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+}
+
+/// Disable autostart for a node
+#[derive(FromArgs)]
+#[argh(subcommand, name = "disable")]
+struct DisableArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+}
+
 /// Response from daemon API
 #[derive(Deserialize)]
 struct CommandResponse {
@@ -263,6 +283,8 @@ impl NodeCommand {
             Some(NodeAction::Restart(args)) => send_command(&args.name, "restart").await,
             Some(NodeAction::Logs(args)) => view_logs(args).await,
             Some(NodeAction::Build(args)) => send_command(&args.name, "build").await,
+            Some(NodeAction::Enable(args)) => send_command(&args.name, "enable").await,
+            Some(NodeAction::Disable(args)) => send_command(&args.name, "disable").await,
         }
     }
 
@@ -282,6 +304,8 @@ impl NodeCommand {
         eprintln!("  restart     Restart a node service");
         eprintln!("  logs        View logs for a node");
         eprintln!("  build       Build a node");
+        eprintln!("  enable      Enable autostart for a node");
+        eprintln!("  disable     Disable autostart for a node");
         eprintln!("\nRun 'bubbaloop node <command> --help' for more information.");
     }
 }
@@ -414,26 +438,49 @@ fn validate_node(args: ValidateArgs) -> Result<()> {
 async fn list_nodes(args: ListArgs) -> Result<()> {
     let session = get_zenoh_session().await?;
 
-    let replies: Vec<_> = session
-        .get("bubbaloop/daemon/api/nodes")
-        .target(QueryTarget::BestMatching)
-        .timeout(std::time::Duration::from_secs(10))
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?
-        .into_iter()
-        .collect();
-
-    // Find the first response with actual nodes, or use any response
+    // Retry up to 3 times with 1 second delay between retries
+    let mut last_error = None;
     let mut best_data: Option<NodeListResponse> = None;
-    for reply in replies {
-        if let Ok(sample) = reply.into_result() {
-            let payload = sample.payload().to_bytes();
-            if let Ok(data) = serde_json::from_slice::<NodeListResponse>(&payload) {
-                if !data.nodes.is_empty() {
-                    best_data = Some(data);
-                    break; // Found response with nodes, use it
-                } else if best_data.is_none() {
-                    best_data = Some(data); // Keep first empty response as fallback
+
+    for attempt in 1..=3 {
+        let replies_result = session
+            .get("bubbaloop/daemon/api/nodes")
+            .target(QueryTarget::BestMatching)
+            .timeout(std::time::Duration::from_secs(30))
+            .await;
+
+        match replies_result {
+            Ok(replies) => {
+                let replies: Vec<_> = replies.into_iter().collect();
+
+                // Find the first response with actual nodes, or use any response
+                for reply in replies {
+                    if let Ok(sample) = reply.into_result() {
+                        let payload = sample.payload().to_bytes();
+                        if let Ok(data) = serde_json::from_slice::<NodeListResponse>(&payload) {
+                            if !data.nodes.is_empty() {
+                                best_data = Some(data);
+                                break; // Found response with nodes, use it
+                            } else if best_data.is_none() {
+                                best_data = Some(data); // Keep first empty response as fallback
+                            }
+                        }
+                    }
+                }
+
+                if best_data.is_some() {
+                    break; // Success, exit retry loop
+                }
+
+                // No valid response, retry
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            }
+            Err(e) => {
+                last_error = Some(NodeError::Zenoh(e.to_string()));
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
             }
         }
@@ -462,6 +509,8 @@ async fn list_nodes(args: ListArgs) -> Result<()> {
                 );
             }
         }
+    } else if let Some(err) = last_error {
+        return Err(err);
     } else {
         println!("No response from daemon. Is it running?");
     }
@@ -497,27 +546,65 @@ async fn add_node(args: AddArgs) -> Result<()> {
         "node_path": node_path
     }))?;
 
-    let replies: Vec<_> = session
-        .get("bubbaloop/daemon/api/nodes/add")
-        .payload(payload)
-        .target(QueryTarget::BestMatching)
-        .timeout(std::time::Duration::from_secs(10))
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?
-        .into_iter()
-        .collect();
-
+    // Retry up to 3 times with 1 second delay between retries
     let mut node_name: Option<String> = None;
-    for reply in replies {
-        if let Ok(sample) = reply.into_result() {
-            let data: CommandResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
-            if data.success {
-                println!("Added node from: {}", node_path);
-                // Extract node name from path for build/install
-                node_name = extract_node_name(&node_path).ok();
-            } else {
-                return Err(NodeError::CommandFailed(data.message));
+    let mut last_error = None;
+
+    for attempt in 1..=3 {
+        let replies_result = session
+            .get("bubbaloop/daemon/api/nodes/add")
+            .payload(payload.clone())
+            .target(QueryTarget::BestMatching)
+            .timeout(std::time::Duration::from_secs(30))
+            .await;
+
+        match replies_result {
+            Ok(replies) => {
+                let replies: Vec<_> = replies.into_iter().collect();
+                let mut success = false;
+
+                for reply in replies {
+                    if let Ok(sample) = reply.into_result() {
+                        let data: CommandResponse =
+                            serde_json::from_slice(&sample.payload().to_bytes())?;
+                        if data.success {
+                            println!("Added node from: {}", node_path);
+                            // Extract node name from path for build/install
+                            node_name = extract_node_name(&node_path).ok();
+                            success = true;
+                            break;
+                        } else {
+                            last_error = Some(NodeError::CommandFailed(data.message));
+                        }
+                    }
+                }
+
+                if success {
+                    break; // Success, exit retry loop
+                }
+
+                // Failed, retry
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
             }
+            Err(e) => {
+                last_error = Some(NodeError::Zenoh(e.to_string()));
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
+
+    // Check if we failed after all retries
+    if node_name.is_none() {
+        if let Some(err) = last_error {
+            session
+                .close()
+                .await
+                .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+            return Err(err);
         }
     }
 
@@ -601,7 +688,7 @@ fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -> Result<St
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         std::path::PathBuf::from(home)
             .join(".bubbaloop")
-            .join("plugins")
+            .join("nodes")
             .join(repo_name)
     };
 
@@ -665,7 +752,7 @@ async fn remove_node(args: RemoveArgs) -> Result<()> {
         .get(&key)
         .payload(payload)
         .target(QueryTarget::BestMatching)
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .await
         .map_err(|e| NodeError::Zenoh(e.to_string()))?
         .into_iter()
@@ -702,26 +789,54 @@ async fn send_command(name: &str, command: &str) -> Result<()> {
     }))?;
 
     let key = format!("bubbaloop/daemon/api/nodes/{}/command", name);
-    let replies: Vec<_> = session
-        .get(&key)
-        .payload(payload)
-        .target(QueryTarget::BestMatching)
-        .timeout(std::time::Duration::from_secs(30))
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?
-        .into_iter()
-        .collect();
 
-    for reply in replies {
-        if let Ok(sample) = reply.into_result() {
-            let data: CommandResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
-            if data.success {
-                println!("{}", data.message);
-                if !data.output.is_empty() {
-                    println!("{}", data.output);
+    // Retry up to 3 times with 1 second delay between retries
+    let mut last_error = None;
+    let mut success = false;
+
+    for attempt in 1..=3 {
+        let replies_result = session
+            .get(&key)
+            .payload(payload.clone())
+            .target(QueryTarget::BestMatching)
+            .timeout(std::time::Duration::from_secs(30))
+            .await;
+
+        match replies_result {
+            Ok(replies) => {
+                let replies: Vec<_> = replies.into_iter().collect();
+
+                for reply in replies {
+                    if let Ok(sample) = reply.into_result() {
+                        let data: CommandResponse =
+                            serde_json::from_slice(&sample.payload().to_bytes())?;
+                        if data.success {
+                            println!("{}", data.message);
+                            if !data.output.is_empty() {
+                                println!("{}", data.output);
+                            }
+                            success = true;
+                            break;
+                        } else {
+                            last_error = Some(NodeError::CommandFailed(data.message));
+                        }
+                    }
                 }
-            } else {
-                return Err(NodeError::CommandFailed(data.message));
+
+                if success {
+                    break; // Success, exit retry loop
+                }
+
+                // Failed, retry
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            }
+            Err(e) => {
+                last_error = Some(NodeError::Zenoh(e.to_string()));
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
             }
         }
     }
@@ -730,6 +845,13 @@ async fn send_command(name: &str, command: &str) -> Result<()> {
         .close()
         .await
         .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+
+    if !success {
+        if let Some(err) = last_error {
+            return Err(err);
+        }
+    }
+
     Ok(())
 }
 
@@ -756,7 +878,7 @@ async fn view_logs(args: LogsArgs) -> Result<()> {
     let replies: Vec<_> = session
         .get(&key)
         .target(QueryTarget::BestMatching)
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .await
         .map_err(|e| NodeError::Zenoh(e.to_string()))?
         .into_iter()

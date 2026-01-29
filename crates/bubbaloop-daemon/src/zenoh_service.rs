@@ -167,10 +167,7 @@ impl ZenohService {
 
         // Declare queryables for commands (both legacy and new)
         let command_key_new = keys::command_key(&self.machine_id);
-        let queryable = self
-            .session
-            .declare_queryable(keys::COMMAND_LEGACY)
-            .await?;
+        let queryable = self.session.declare_queryable(keys::COMMAND_LEGACY).await?;
         let queryable_new = self.session.declare_queryable(&command_key_new).await?;
 
         log::info!("Declared queryable on {}", keys::COMMAND_LEGACY);
@@ -182,10 +179,7 @@ impl ZenohService {
             .declare_publisher(keys::NODES_LIST_LEGACY)
             .await?;
         let nodes_list_key_new = keys::nodes_list_key(&self.machine_id);
-        let list_publisher_new = self
-            .session
-            .declare_publisher(&nodes_list_key_new)
-            .await?;
+        let list_publisher_new = self.session.declare_publisher(&nodes_list_key_new).await?;
 
         log::info!("Declared publisher on {}", keys::NODES_LIST_LEGACY);
         log::info!("Declared publisher on {}", nodes_list_key_new);
@@ -197,6 +191,10 @@ impl ZenohService {
 
         log::info!("Declared publisher on {}", keys::EVENTS_LEGACY);
         log::info!("Declared publisher on {}", events_key_new);
+
+        // Give Zenoh time to propagate queryable declarations across the network
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        log::info!("All queryables registered, ready to accept commands");
 
         // Subscribe to node manager events
         let mut event_rx = self.node_manager.subscribe();
@@ -404,6 +402,8 @@ mod tests {
             build_output: vec![],
             health_status: HealthStatus::Healthy as i32,
             last_health_check_ms: 1234567890,
+            machine_id: "test-machine".to_string(),
+            machine_hostname: "test-hostname".to_string(),
         };
 
         let bytes = ZenohService::encode_proto(&state);

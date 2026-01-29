@@ -1,31 +1,71 @@
+//! Status command for quick system overview
+//!
+//! Provides a concise view of the bubbaloop system status:
+//! - Zenoh router (running/stopped, port)
+//! - Daemon (running/stopped, node count)
+//! - Bridge (running/stopped)
+//! - Node summary (running/stopped/not-installed counts)
+//!
+//! Supports --json for machine-readable output.
+
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
+use zenoh::query::QueryTarget;
 use zenoh::Session;
 
-const API_HEALTH: &str = "bubbaloop/daemon/api/health";
 const API_NODES: &str = "bubbaloop/daemon/api/nodes";
 
-#[derive(Debug, Serialize, Deserialize)]
-struct HealthResponse {
-    status: String,
+#[derive(Debug, Serialize)]
+struct StatusOutput {
+    zenoh: ZenohStatus,
+    daemon: DaemonStatus,
+    bridge: BridgeStatus,
+    nodes: NodeSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct ZenohStatus {
+    running: bool,
+    port: u16,
+}
+
+#[derive(Debug, Serialize)]
+struct DaemonStatus {
+    running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nodes: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct BridgeStatus {
+    running: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct NodeSummary {
+    running: usize,
+    stopped: usize,
+    not_installed: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct NodeState {
+    #[allow(dead_code)]
     name: String,
     #[allow(dead_code)]
     path: String,
     status: String,
-    #[allow(dead_code)]
     installed: bool,
     #[allow(dead_code)]
     autostart_enabled: bool,
+    #[allow(dead_code)]
     version: String,
     #[allow(dead_code)]
     description: String,
+    #[allow(dead_code)]
     node_type: String,
     #[allow(dead_code)]
     is_built: bool,
@@ -38,32 +78,6 @@ struct NodeListResponse {
     nodes: Vec<NodeState>,
     #[allow(dead_code)]
     timestamp_ms: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct StatusOutput {
-    services: Vec<ServiceStatus>,
-    daemon: DaemonStatus,
-    nodes: Vec<NodeStatus>,
-}
-
-#[derive(Debug, Serialize)]
-struct ServiceStatus {
-    name: String,
-    status: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DaemonStatus {
-    connected: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct NodeStatus {
-    name: String,
-    status: String,
-    node_type: String,
-    version: String,
 }
 
 async fn check_systemd_service(service_name: &str) -> String {
@@ -85,34 +99,23 @@ async fn check_systemd_service(service_name: &str) -> String {
     }
 }
 
-async fn query_daemon<T: for<'de> Deserialize<'de>>(
-    session: &Session,
-    key_expr: &str,
-) -> Result<T> {
-    // Increase timeout to 8 seconds to reduce warning spam
-    // This accounts for daemon startup time and network latency
+async fn query_nodes(session: &Session) -> Result<NodeListResponse> {
     let replies = session
-        .get(key_expr)
-        .timeout(Duration::from_secs(8))
+        .get(API_NODES)
+        .target(QueryTarget::BestMatching)
+        .timeout(Duration::from_secs(5))
         .await
         .map_err(|e| anyhow!("Zenoh query failed: {}", e))?;
 
-    // Use a timeout on the reply receiver to avoid indefinite waiting
-    let timeout_duration = Duration::from_secs(8);
+    let timeout_duration = Duration::from_secs(5);
     let start = std::time::Instant::now();
 
     while start.elapsed() < timeout_duration {
-        match tokio::time::timeout(
-            timeout_duration - start.elapsed(),
-            replies.recv_async(),
-        )
-        .await
-        {
+        match tokio::time::timeout(timeout_duration - start.elapsed(), replies.recv_async()).await {
             Ok(Ok(reply)) => {
                 if let Ok(sample) = reply.result() {
                     let bytes = sample.payload().to_bytes();
-                    let text = String::from_utf8_lossy(&bytes);
-                    let result: T = serde_json::from_str(&text)?;
+                    let result: NodeListResponse = serde_json::from_slice(&bytes)?;
                     return Ok(result);
                 }
             }
@@ -120,142 +123,162 @@ async fn query_daemon<T: for<'de> Deserialize<'de>>(
         }
     }
 
-    Err(anyhow!("No reply received for {}", key_expr))
+    Err(anyhow!("No reply received from daemon (timeout after 5s)"))
 }
 
-async fn check_daemon_health(session: &Session) -> bool {
-    match query_daemon::<HealthResponse>(session, API_HEALTH).await {
-        Ok(response) => response.status == "ok",
-        Err(_) => false,
-    }
-}
-
-async fn get_nodes(session: &Session) -> Result<Vec<NodeState>> {
-    let response: NodeListResponse = query_daemon(session, API_NODES).await?;
-    Ok(response.nodes)
-}
-
-fn format_table(output: &StatusOutput) {
-    println!("Bubbaloop Status");
+fn print_table(status: &StatusOutput) {
+    println!("bubbaloop status");
     println!("================");
-    println!();
-    println!("Services:");
-    for service in &output.services {
-        let symbol = if service.status == "running" {
-            "●"
+
+    // Zenoh Router
+    let zenoh_symbol = if status.zenoh.running { "✓" } else { "✗" };
+    let zenoh_state = if status.zenoh.running {
+        format!("running (port {})", status.zenoh.port)
+    } else {
+        "stopped".to_string()
+    };
+    println!("Zenoh Router:  {} {}", zenoh_symbol, zenoh_state);
+
+    // Daemon
+    let daemon_symbol = if status.daemon.running { "✓" } else { "✗" };
+    let daemon_state = if status.daemon.running {
+        if let Some(count) = status.daemon.nodes {
+            format!("running ({} nodes)", count)
         } else {
-            "○"
-        };
-        println!("  {} {:<18} {}", symbol, service.name, service.status);
-    }
-    println!();
-    println!(
-        "Daemon: {}",
-        if output.daemon.connected {
-            "connected"
-        } else {
-            "disconnected"
+            "running".to_string()
         }
-    );
+    } else {
+        "stopped".to_string()
+    };
+    println!("Daemon:        {} {}", daemon_symbol, daemon_state);
+
+    // Bridge
+    let bridge_symbol = if status.bridge.running { "✓" } else { "✗" };
+    let bridge_state = if status.bridge.running {
+        "running".to_string()
+    } else {
+        "stopped".to_string()
+    };
+    println!("Bridge:        {} {}", bridge_symbol, bridge_state);
+
+    // Node summary
     println!();
-    println!("Nodes:");
-    println!("  {:<15} {:<8} {:<6} VERSION", "NAME", "STATUS", "TYPE");
-    for node in &output.nodes {
+    let total = status.nodes.running + status.nodes.stopped + status.nodes.not_installed;
+    if total > 0 {
         println!(
-            "  {:<15} {:<8} {:<6} {}",
-            node.name, node.status, node.node_type, node.version
+            "Nodes: {} running, {} stopped, {} not installed",
+            status.nodes.running, status.nodes.stopped, status.nodes.not_installed
         );
+    } else {
+        println!("Nodes: none registered");
     }
 }
 
-fn format_json(output: &StatusOutput) -> Result<()> {
-    let json = serde_json::to_string_pretty(output)?;
+fn print_json(status: &StatusOutput) -> Result<()> {
+    let json = serde_json::to_string_pretty(status)?;
     println!("{}", json);
     Ok(())
 }
 
-fn format_yaml(output: &StatusOutput) -> Result<()> {
-    let yaml = serde_yaml::to_string(output)?;
-    println!("{}", yaml);
-    Ok(())
-}
-
 pub async fn run(format: &str) -> Result<()> {
-    // Connect to Zenoh with explicit endpoint
-    let mut config = zenoh::Config::default();
+    // Collect status information
+    let status = collect_status().await?;
 
-    // Run as client mode - only connect to router, don't listen
-    config.insert_json5("mode", "\"client\"").ok();
-
-    let endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT")
-        .unwrap_or_else(|_| "tcp/127.0.0.1:7447".to_string());
-    config
-        .insert_json5("connect/endpoints", &format!("[\"{}\"]", endpoint))
-        .ok();
-
-    // Disable all scouting to avoid connecting to remote peers via Tailscale
-    config
-        .insert_json5("scouting/multicast/enabled", "false")
-        .ok();
-    config.insert_json5("scouting/gossip/enabled", "false").ok();
-
-    let session = zenoh::open(config)
-        .await
-        .map_err(|e| anyhow!("Failed to connect to zenoh: {}", e))?;
-
-    // Check systemd services
-    let services = vec![
-        ServiceStatus {
-            name: "zenohd".to_string(),
-            status: check_systemd_service("zenohd.service").await,
-        },
-        ServiceStatus {
-            name: "zenoh-bridge".to_string(),
-            status: check_systemd_service("zenoh-bridge.service").await,
-        },
-        ServiceStatus {
-            name: "bubbaloop-daemon".to_string(),
-            status: check_systemd_service("bubbaloop-daemon.service").await,
-        },
-    ];
-
-    // Check daemon health
-    let daemon_connected = check_daemon_health(&session).await;
-
-    // Get nodes
-    let nodes = if daemon_connected {
-        match get_nodes(&session).await {
-            Ok(node_states) => node_states
-                .into_iter()
-                .map(|n| NodeStatus {
-                    name: n.name,
-                    status: n.status,
-                    node_type: n.node_type,
-                    version: n.version,
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        }
-    } else {
-        Vec::new()
-    };
-
-    let output = StatusOutput {
-        services,
-        daemon: DaemonStatus {
-            connected: daemon_connected,
-        },
-        nodes,
-    };
-
-    // Format output
+    // Output in requested format
     match format {
-        "json" => format_json(&output)?,
-        "yaml" => format_yaml(&output)?,
-        _ => format_table(&output),
+        "json" => print_json(&status)?,
+        "table" | _ => print_table(&status),
     }
 
     Ok(())
+}
+
+async fn collect_status() -> Result<StatusOutput> {
+    // Check Zenoh router
+    let zenoh_running = is_process_running("zenohd").await;
+    let zenoh = ZenohStatus {
+        running: zenoh_running,
+        port: 7447,
+    };
+
+    // Check daemon
+    let daemon_service = check_systemd_service("bubbaloop-daemon.service").await;
+    let daemon_running = daemon_service == "active";
+
+    // Try to get node count from daemon if it's running
+    let mut node_count = None;
+    let mut node_summary = NodeSummary {
+        running: 0,
+        stopped: 0,
+        not_installed: 0,
+    };
+
+    if daemon_running && zenoh_running {
+        if let Ok(session) = get_zenoh_session().await {
+            if let Ok(response) = query_nodes(&session).await {
+                node_count = Some(response.nodes.len());
+
+                // Count node states
+                for node in response.nodes {
+                    if !node.installed {
+                        node_summary.not_installed += 1;
+                    } else if node.status.to_lowercase() == "running" {
+                        node_summary.running += 1;
+                    } else {
+                        node_summary.stopped += 1;
+                    }
+                }
+            }
+            let _ = session.close().await;
+        }
+    }
+
+    let daemon = DaemonStatus {
+        running: daemon_running,
+        nodes: node_count,
+    };
+
+    // Check bridge
+    let bridge_service = check_systemd_service("zenoh-bridge.service").await;
+    let bridge = BridgeStatus {
+        running: bridge_service == "active",
+    };
+
+    Ok(StatusOutput {
+        zenoh,
+        daemon,
+        bridge,
+        nodes: node_summary,
+    })
+}
+
+async fn is_process_running(name: &str) -> bool {
+    let output = Command::new("pgrep").arg("-x").arg(name).output().await;
+
+    matches!(output, Ok(out) if out.status.success())
+}
+
+async fn get_zenoh_session() -> Result<Session> {
+    let mut config = zenoh::Config::default();
+
+    config
+        .insert_json5("mode", "\"client\"")
+        .map_err(|e| anyhow!("Failed to configure client mode: {}", e))?;
+
+    let endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT")
+        .unwrap_or_else(|_| "tcp/127.0.0.1:7447".to_string());
+
+    config
+        .insert_json5("connect/endpoints", &format!("[\"{}\"]", endpoint))
+        .map_err(|e| anyhow!("Failed to configure endpoint: {}", e))?;
+
+    // Disable scouting
+    let _ = config.insert_json5("scouting/multicast/enabled", "false");
+    let _ = config.insert_json5("scouting/gossip/enabled", "false");
+
+    zenoh::open(config)
+        .await
+        .map_err(|e| anyhow!("Failed to open Zenoh session: {}", e))
 }
 
 #[cfg(test)]
@@ -263,79 +286,69 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_service_status_serialization() {
-        let status = ServiceStatus {
-            name: "zenohd".to_string(),
-            status: "running".to_string(),
+    fn test_status_output_serialization() {
+        let status = StatusOutput {
+            zenoh: ZenohStatus {
+                running: true,
+                port: 7447,
+            },
+            daemon: DaemonStatus {
+                running: true,
+                nodes: Some(3),
+            },
+            bridge: BridgeStatus { running: false },
+            nodes: NodeSummary {
+                running: 1,
+                stopped: 2,
+                not_installed: 0,
+            },
         };
 
         let json = serde_json::to_string(&status).unwrap();
-        assert!(json.contains("zenohd"));
-        assert!(json.contains("running"));
+        assert!(json.contains("\"running\":true"));
+        assert!(json.contains("\"port\":7447"));
+    }
+
+    #[test]
+    fn test_zenoh_status_serialization() {
+        let status = ZenohStatus {
+            running: true,
+            port: 7447,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("true"));
+        assert!(json.contains("7447"));
     }
 
     #[test]
     fn test_daemon_status_serialization() {
-        let status = DaemonStatus { connected: true };
+        let status = DaemonStatus {
+            running: true,
+            nodes: Some(5),
+        };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("true"));
+        assert!(json.contains("5"));
     }
 
     #[test]
-    fn test_node_status_serialization() {
-        let status = NodeStatus {
-            name: "test-node".to_string(),
-            status: "running".to_string(),
-            node_type: "rust".to_string(),
-            version: "1.0.0".to_string(),
-        };
-
+    fn test_bridge_status_serialization() {
+        let status = BridgeStatus { running: false };
         let json = serde_json::to_string(&status).unwrap();
-        assert!(json.contains("test-node"));
-        assert!(json.contains("running"));
-        assert!(json.contains("rust"));
+        assert!(json.contains("false"));
     }
 
     #[test]
-    fn test_status_output_json_formatting() {
-        let output = StatusOutput {
-            services: vec![ServiceStatus {
-                name: "zenohd".to_string(),
-                status: "running".to_string(),
-            }],
-            daemon: DaemonStatus { connected: true },
-            nodes: vec![NodeStatus {
-                name: "test".to_string(),
-                status: "active".to_string(),
-                node_type: "rust".to_string(),
-                version: "1.0.0".to_string(),
-            }],
+    fn test_node_summary_serialization() {
+        let summary = NodeSummary {
+            running: 1,
+            stopped: 2,
+            not_installed: 3,
         };
-
-        let result = format_json(&output);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_status_output_yaml_formatting() {
-        let output = StatusOutput {
-            services: vec![ServiceStatus {
-                name: "zenohd".to_string(),
-                status: "running".to_string(),
-            }],
-            daemon: DaemonStatus { connected: false },
-            nodes: vec![],
-        };
-
-        let result = format_yaml(&output);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_health_response_deserialization() {
-        let json = r#"{"status": "ok"}"#;
-        let response: HealthResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(response.status, "ok");
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("\"running\":1"));
+        assert!(json.contains("\"stopped\":2"));
+        assert!(json.contains("\"not_installed\":3"));
     }
 
     #[test]

@@ -12,49 +12,55 @@ use prost::Message;
 
 #[test]
 fn test_node_state_key_generates_correct_format() {
-    let key = keys::node_state_key("my-node");
-    assert_eq!(key, "bubbaloop/daemon/nodes/my-node/state");
+    let key = keys::node_state_key("test-machine", "my-node");
+    assert_eq!(key, "bubbaloop/test-machine/daemon/nodes/my-node/state");
 
-    let key2 = keys::node_state_key("rtsp-camera");
-    assert_eq!(key2, "bubbaloop/daemon/nodes/rtsp-camera/state");
+    let key2 = keys::node_state_key("test-machine", "rtsp-camera");
+    assert_eq!(
+        key2,
+        "bubbaloop/test-machine/daemon/nodes/rtsp-camera/state"
+    );
 }
 
 #[test]
 fn test_node_state_key_handles_special_characters() {
     // Test with underscores
-    let key = keys::node_state_key("my_test_node");
-    assert_eq!(key, "bubbaloop/daemon/nodes/my_test_node/state");
+    let key = keys::node_state_key("test-machine", "my_test_node");
+    assert_eq!(
+        key,
+        "bubbaloop/test-machine/daemon/nodes/my_test_node/state"
+    );
 
     // Test with numbers
-    let key2 = keys::node_state_key("node123");
-    assert_eq!(key2, "bubbaloop/daemon/nodes/node123/state");
+    let key2 = keys::node_state_key("test-machine", "node123");
+    assert_eq!(key2, "bubbaloop/test-machine/daemon/nodes/node123/state");
 }
 
 #[test]
 fn test_node_state_key_handles_empty_string() {
-    let key = keys::node_state_key("");
-    assert_eq!(key, "bubbaloop/daemon/nodes//state");
+    let key = keys::node_state_key("test-machine", "");
+    assert_eq!(key, "bubbaloop/test-machine/daemon/nodes//state");
 }
 
 #[test]
 fn test_key_constants_are_valid() {
     // These should be valid Zenoh key expressions (no wildcards needed for tests)
-    assert!(!keys::NODES_LIST.is_empty());
-    assert!(!keys::NODE_STATE_PREFIX.is_empty());
-    assert!(!keys::COMMAND.is_empty());
-    assert!(!keys::EVENTS.is_empty());
+    assert!(!keys::NODES_LIST_LEGACY.is_empty());
+    assert!(!keys::NODE_STATE_PREFIX_LEGACY.is_empty());
+    assert!(!keys::COMMAND_LEGACY.is_empty());
+    assert!(!keys::EVENTS_LEGACY.is_empty());
 
     // Verify structure
-    assert_eq!(keys::NODES_LIST, "bubbaloop/daemon/nodes");
-    assert_eq!(keys::NODE_STATE_PREFIX, "bubbaloop/daemon/nodes/");
-    assert_eq!(keys::COMMAND, "bubbaloop/daemon/command");
-    assert_eq!(keys::EVENTS, "bubbaloop/daemon/events");
+    assert_eq!(keys::NODES_LIST_LEGACY, "bubbaloop/daemon/nodes");
+    assert_eq!(keys::NODE_STATE_PREFIX_LEGACY, "bubbaloop/daemon/nodes/");
+    assert_eq!(keys::COMMAND_LEGACY, "bubbaloop/daemon/command");
+    assert_eq!(keys::EVENTS_LEGACY, "bubbaloop/daemon/events");
 }
 
 #[test]
 fn test_key_prefix_matches_list() {
     // NODE_STATE_PREFIX should be a prefix of NODES_LIST
-    assert!(keys::NODE_STATE_PREFIX.starts_with(keys::NODES_LIST));
+    assert!(keys::NODE_STATE_PREFIX_LEGACY.starts_with(keys::NODES_LIST_LEGACY));
 }
 
 #[test]
@@ -73,6 +79,8 @@ fn test_proto_encoding_node_state() {
         build_output: vec!["line1".to_string(), "line2".to_string()],
         health_status: HealthStatus::Healthy as i32,
         last_health_check_ms: 1234567890,
+        machine_id: String::new(),
+        machine_hostname: String::new(),
     };
 
     // Encode
@@ -114,6 +122,7 @@ fn test_proto_encoding_node_list() {
             },
         ],
         timestamp_ms: 9876543210,
+        machine_id: String::new(),
     };
 
     // Encode
@@ -137,6 +146,9 @@ fn test_proto_encoding_node_command() {
         node_name: "test-node".to_string(),
         node_path: "".to_string(),
         request_id: "req-123".to_string(),
+        timestamp_ms: 0,
+        source_machine: String::new(),
+        target_machine: String::new(),
     };
 
     // Encode
@@ -163,6 +175,8 @@ fn test_proto_encoding_command_result() {
             name: "test-node".to_string(),
             ..Default::default()
         }),
+        timestamp_ms: 0,
+        responding_machine: String::new(),
     };
 
     // Encode
@@ -308,6 +322,8 @@ fn test_proto_roundtrip_preserves_all_fields() {
         ],
         health_status: HealthStatus::Healthy as i32,
         last_health_check_ms: 8888888888,
+        machine_id: "test-machine".to_string(),
+        machine_hostname: "test-host".to_string(),
     };
 
     // Encode and decode
@@ -355,6 +371,7 @@ fn test_node_list_with_multiple_states() {
             },
         ],
         timestamp_ms: 1234567890123,
+        machine_id: String::new(),
     };
 
     let mut buf = Vec::new();
@@ -380,6 +397,8 @@ fn test_command_result_with_no_state() {
         message: "Command failed".to_string(),
         output: "Error details".to_string(),
         node_state: None,
+        timestamp_ms: 0,
+        responding_machine: String::new(),
     };
 
     let mut buf = Vec::new();
