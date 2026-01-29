@@ -13,6 +13,13 @@ enum NodeStatus {
   NODE_STATUS_NOT_INSTALLED = 6;
 }
 
+// Health status based on heartbeat monitoring
+enum HealthStatus {
+  HEALTH_STATUS_UNKNOWN = 0;
+  HEALTH_STATUS_HEALTHY = 1;
+  HEALTH_STATUS_UNHEALTHY = 2;
+}
+
 // State of a single node
 message NodeState {
   // Unique node name from manifest
@@ -37,12 +44,22 @@ message NodeState {
   int64 last_updated_ms = 10;
   // Build output (last N lines)
   repeated string build_output = 11;
+  // Health status based on heartbeat monitoring
+  HealthStatus health_status = 12;
+  // Last health check timestamp (milliseconds since epoch)
+  int64 last_health_check_ms = 13;
+  // Source machine identifier
+  string machine_id = 14;
+  // Human-readable hostname
+  string machine_hostname = 15;
 }
 
 // List of all nodes (published periodically)
 message NodeList {
   repeated NodeState nodes = 1;
   int64 timestamp_ms = 2;
+  // Which daemon published this list
+  string machine_id = 3;
 }
 
 // Command types for node operations
@@ -72,6 +89,12 @@ message NodeCommand {
   string node_path = 3;
   // Unique request ID for tracking
   string request_id = 4;
+  // Command issue time
+  int64 timestamp_ms = 5;
+  // Requesting machine
+  string source_machine = 6;
+  // Target machine (empty = local)
+  string target_machine = 7;
 }
 
 // Result of a command execution
@@ -86,6 +109,10 @@ message CommandResult {
   string output = 4;
   // Updated node state (if applicable)
   NodeState node_state = 5;
+  // Response time
+  int64 timestamp_ms = 6;
+  // Which daemon responded
+  string responding_machine = 7;
 }
 
 // Event published when node state changes

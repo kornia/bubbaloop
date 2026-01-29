@@ -1,7 +1,0 @@
-# {{plugin_name}} configuration
-
-# Topic to publish data to
-topic: "{{plugin_name}}/data"
-
-# Interval between data publishes (seconds)
-interval_secs: 60

@@ -67,9 +67,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // Start systemd signal listener for real-time state updates
+    log::info!("Starting systemd signal listener...");
+    if let Err(e) = node_manager.clone().start_signal_listener().await {
+        log::warn!(
+            "Failed to start signal listener (will rely on polling): {}",
+            e
+        );
+    }
+
     // Create shared Zenoh session
     log::info!("Connecting to Zenoh...");
     let session = create_session(args.zenoh_endpoint.as_deref()).await?;
+
+    // Start health monitor for Zenoh heartbeats
+    log::info!("Starting health monitor...");
+    if let Err(e) = node_manager
+        .clone()
+        .start_health_monitor(session.clone())
+        .await
+    {
+        log::warn!("Failed to start health monitor: {}", e);
+    }
 
     // Start Zenoh API service (REST-like queryables with JSON responses)
     let api_manager = node_manager.clone();

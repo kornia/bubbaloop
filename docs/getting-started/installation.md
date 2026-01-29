@@ -4,31 +4,22 @@ Bubbaloop can be installed in two ways: using pre-built binaries (recommended fo
 
 ## Quick Install (Recommended)
 
-### Step 1: Install Backend Services
-
-Download and install Zenoh + daemon:
+Download and install everything with a single command:
 
 ```bash
 curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
 ```
 
-This installs and starts as systemd services:
+This installs:
 
 | Component | Description |
 |-----------|-------------|
 | `zenohd` | Zenoh router for pub/sub messaging |
 | `zenoh-bridge` | WebSocket bridge for browser access |
 | `bubbaloop-daemon` | Node manager for starting/stopping nodes |
+| `bubbaloop` | Terminal UI for managing nodes |
 
-### Step 2: Install TUI
-
-Install the terminal UI via npm:
-
-```bash
-npm install -g @kornia-ai/bubbaloop
-```
-
-### Step 3: Run
+After installation, start a new terminal or source your shell config, then run:
 
 ```bash
 bubbaloop
@@ -37,19 +28,6 @@ bubbaloop
 ### Requirements
 
 - **Linux** — x86_64 or ARM64 (Ubuntu, Jetson, Raspberry Pi)
-- **Node.js 20+** — Required for the TUI
-
-Install Node.js if needed:
-
-```bash
-# Ubuntu/Debian
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# Or use nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-nvm install 20
-```
 
 ### Verify Installation
 
@@ -67,12 +45,10 @@ bubbaloop
 To upgrade to a new version:
 
 ```bash
-# Upgrade backend
 curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
-
-# Upgrade TUI
-npm update -g @kornia-ai/bubbaloop
 ```
+
+The script handles upgrading existing installations.
 
 ## Development Install
 
@@ -126,7 +102,7 @@ This automatically installs:
 |-----------|-------------|
 | Rust toolchain | Compiler for building Bubbaloop |
 | GStreamer | Video capture and processing |
-| Node.js | Dashboard and TUI runtime |
+| Node.js | Dashboard runtime |
 | protobuf | Protocol buffer compiler |
 | pkg-config, cmake | Build tools |
 
@@ -146,7 +122,7 @@ pixi run up
 
 # Or run individually
 pixi run daemon      # Start daemon
-pixi run bubbaloop   # Start TUI
+pixi run tui         # Start TUI
 pixi run dashboard   # Start web dashboard
 ```
 
@@ -174,10 +150,10 @@ systemctl --user stop bubbaloop-daemon zenoh-bridge zenohd
 
 ### "bubbaloop: command not found"
 
-Restart your terminal or ensure npm global bin is in PATH:
+The installer adds `~/.bubbaloop/bin` to your PATH. Restart your terminal or run:
 
 ```bash
-export PATH="$(npm config get prefix)/bin:$PATH"
+source ~/.bashrc  # or ~/.zshrc
 ```
 
 ### Services not starting

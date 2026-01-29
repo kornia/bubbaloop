@@ -2,9 +2,19 @@
   // Zenoh router configuration with Remote API plugin for browser WebSocket access
   mode: "router",
 
-  // Listen for peer connections
+  // Listen for peer connections on localhost only to avoid Tailscale/VPN routing issues
   listen: {
-    endpoints: ["tcp/0.0.0.0:7447"],
+    endpoints: ["tcp/127.0.0.1:7447"],
+  },
+
+  // Disable multicast scouting to prevent discovering remote peers via Tailscale
+  scouting: {
+    multicast: {
+      enabled: false,
+    },
+    gossip: {
+      enabled: false,
+    },
   },
 
   // Plugin loading configuration
