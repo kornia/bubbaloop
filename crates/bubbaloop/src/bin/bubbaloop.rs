@@ -135,10 +135,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Command::Daemon(args)) => {
             // Re-initialize logging for daemon (info level, not warn)
-            drop(env_logger::Builder::from_env(
-                env_logger::Env::default().default_filter_or("info"),
-            )
-            .try_init());
+            drop(
+                env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+                    .try_init(),
+            );
             bubbaloop::daemon::run(args.zenoh_endpoint, args.strict).await?;
         }
         Some(Command::Node(cmd)) => {

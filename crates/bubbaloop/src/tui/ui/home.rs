@@ -21,13 +21,13 @@ pub fn render(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),            // Header
-            Constraint::Length(main_height),  // Main content (dynamic)
-            Constraint::Length(1),            // Footer border
+            Constraint::Length(1),           // Header
+            Constraint::Length(main_height), // Main content (dynamic)
+            Constraint::Length(1),           // Footer border
             Constraint::Min(0),              // Spacer (absorbs extra space)
-            Constraint::Length(3),            // Messages (if any)
-            Constraint::Length(3),            // Input area
-            Constraint::Length(1),            // Exit warning / hints
+            Constraint::Length(3),           // Messages (if any)
+            Constraint::Length(3),           // Input area
+            Constraint::Length(1),           // Exit warning / hints
         ])
         .split(area);
 

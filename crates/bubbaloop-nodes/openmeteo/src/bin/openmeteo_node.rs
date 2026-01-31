@@ -95,14 +95,15 @@ async fn main() -> ZResult<()> {
         let mut c = zenoh::Config::default();
         c.insert_json5("connect/endpoints", &format!(r#"["{}"]"#, endpoint))
             .unwrap();
-        zenoh::open(c)
-            .await
-            .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(format!("Zenoh session error: {}", e)))?
+        zenoh::open(c).await.map_err(|e| {
+            Box::<dyn std::error::Error + Send + Sync>::from(format!("Zenoh session error: {}", e))
+        })?
     };
 
     // Create and run the weather node
     let node = OpenMeteoNode::new(ctx, resolved_location, config.fetch, machine_id.clone())?;
-    node.run(shutdown_tx, zenoh_session, scope, machine_id).await?;
+    node.run(shutdown_tx, zenoh_session, scope, machine_id)
+        .await?;
 
     log::info!("Weather node shut down, exiting");
 

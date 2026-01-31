@@ -75,11 +75,9 @@ async fn main() -> ZResult<()> {
         let mut c = zenoh::Config::default();
         c.insert_json5("connect/endpoints", &format!(r#"["{}"]"#, endpoint))
             .unwrap();
-        std::sync::Arc::new(
-            zenoh::open(c)
-                .await
-                .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(format!("Zenoh session error: {}", e)))?,
-        )
+        std::sync::Arc::new(zenoh::open(c).await.map_err(|e| {
+            Box::<dyn std::error::Error + Send + Sync>::from(format!("Zenoh session error: {}", e))
+        })?)
     };
 
     // Spawn camera nodes

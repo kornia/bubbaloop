@@ -100,9 +100,9 @@ async fn main() -> ZResult<()> {
             c.insert_json5("connect/endpoints", &format!(r#"["{}"]"#, ep))
                 .unwrap();
         }
-        zenoh::open(c)
-            .await
-            .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(format!("Zenoh session error: {}", e)))?
+        zenoh::open(c).await.map_err(|e| {
+            Box::<dyn std::error::Error + Send + Sync>::from(format!("Zenoh session error: {}", e))
+        })?
     };
 
     // Start health heartbeat task
@@ -110,7 +110,12 @@ async fn main() -> ZResult<()> {
     let health_publisher = zenoh_session
         .declare_publisher(&health_topic)
         .await
-        .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(format!("Health publisher error: {}", e)))?;
+        .map_err(|e| {
+            Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                "Health publisher error: {}",
+                e
+            ))
+        })?;
     log::info!("Health heartbeat topic: {}", health_topic);
 
     let mut health_shutdown_rx = shutdown_tx.subscribe();

@@ -597,10 +597,7 @@ fn render_text_field(
     } else {
         Style::default().fg(colors::TEXT)
     };
-    f.render_widget(
-        Paragraph::new(Span::styled(content, text_style)),
-        inner,
-    );
+    f.render_widget(Paragraph::new(Span::styled(content, text_style)), inner);
 }
 
 fn render_edit_source_form(f: &mut Frame, app: &App) {

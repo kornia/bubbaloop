@@ -342,14 +342,13 @@ fn render_status_panel(
     let node_output = &node.build_output;
 
     let terminal_title = if is_busy {
-        let activity_label =
-            if app.build_activity == crate::tui::app::BuildActivity::Cleaning
-                && app.build_activity_node == node.name
-            {
-                format!(" Cleaning {}... ", node.name)
-            } else {
-                format!(" Building {}... ", node.name)
-            };
+        let activity_label = if app.build_activity == crate::tui::app::BuildActivity::Cleaning
+            && app.build_activity_node == node.name
+        {
+            format!(" Cleaning {}... ", node.name)
+        } else {
+            format!(" Building {}... ", node.name)
+        };
         Line::from(vec![
             flower_spinner(app.spinner_frame),
             Span::styled(activity_label, Style::default().fg(colors::WARNING)),

@@ -198,10 +198,7 @@ impl ZenohService {
             .session
             .declare_queryable(keys::NODES_LIST_LEGACY)
             .await?;
-        log::info!(
-            "Declared nodes queryable on {}",
-            keys::NODES_LIST_LEGACY
-        );
+        log::info!("Declared nodes queryable on {}", keys::NODES_LIST_LEGACY);
 
         // Give Zenoh time to propagate queryable declarations across the network
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

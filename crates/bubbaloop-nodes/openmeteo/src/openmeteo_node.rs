@@ -313,14 +313,16 @@ impl OpenMeteoNode {
             .unwrap_or_else(|| format!("{:.2},{:.2}", location.latitude, location.longitude));
 
         // Create health heartbeat publisher
-        let health_topic = format!(
-            "bubbaloop/{}/{}/health/openmeteo",
-            scope, machine_id
-        );
+        let health_topic = format!("bubbaloop/{}/{}/health/openmeteo", scope, machine_id);
         let health_publisher = zenoh_session
             .declare_publisher(&health_topic)
             .await
-            .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(format!("Health publisher error: {}", e)))?;
+            .map_err(|e| {
+                Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                    "Health publisher error: {}",
+                    e
+                ))
+            })?;
         log::info!("Health heartbeat topic: {}", health_topic);
 
         // Create ROS-Z node

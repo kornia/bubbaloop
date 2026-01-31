@@ -2,12 +2,12 @@
 //!
 //! Maintains authoritative state for all nodes and handles commands.
 
+use crate::daemon::registry::{self, NodeManifest};
+use crate::daemon::systemd::{self, ActiveState, SystemdClient, SystemdSignalEvent};
 use crate::schemas::daemon::v1::{
     CommandResult, CommandType, HealthStatus, NodeCommand, NodeEvent, NodeList, NodeState,
     NodeStatus,
 };
-use crate::daemon::registry::{self, NodeManifest};
-use crate::daemon::systemd::{self, ActiveState, SystemdClient, SystemdSignalEvent};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -225,7 +225,11 @@ impl NodeManager {
                 log::debug!(
                     "Signal burst: {} events for {} unique nodes",
                     pending.len(),
-                    pending.iter().map(|(n, _)| n.as_str()).collect::<std::collections::HashSet<_>>().len()
+                    pending
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<std::collections::HashSet<_>>()
+                        .len()
                 );
 
                 // Refresh on a separate spawned task so we don't block signal
@@ -247,10 +251,7 @@ impl NodeManager {
     }
 
     /// Extract node name and event type from a signal, pushing to the batch if relevant.
-    fn push_signal_event(
-        event: &SystemdSignalEvent,
-        batch: &mut Vec<(String, String)>,
-    ) {
+    fn push_signal_event(event: &SystemdSignalEvent, batch: &mut Vec<(String, String)>) {
         let (node_name, event_type) = match event {
             SystemdSignalEvent::JobRemoved {
                 node_name, result, ..
@@ -263,12 +264,8 @@ impl NodeManager {
                     _ => "state_changed",
                 },
             ),
-            SystemdSignalEvent::UnitNew { node_name, .. } => {
-                (node_name.clone(), "installed")
-            }
-            SystemdSignalEvent::UnitRemoved { node_name, .. } => {
-                (node_name.clone(), "uninstalled")
-            }
+            SystemdSignalEvent::UnitNew { node_name, .. } => (node_name.clone(), "installed"),
+            SystemdSignalEvent::UnitRemoved { node_name, .. } => (node_name.clone(), "uninstalled"),
         };
         if let Some(name) = node_name {
             batch.push((name, event_type.to_string()));
@@ -570,7 +567,11 @@ impl NodeManager {
     /// Execute a command
     pub async fn execute_command(self: &Arc<Self>, cmd: NodeCommand) -> CommandResult {
         let command_type = CommandType::try_from(cmd.command).unwrap_or(CommandType::Refresh);
-        log::debug!("execute_command: type={:?} node={}", command_type, cmd.node_name);
+        log::debug!(
+            "execute_command: type={:?} node={}",
+            command_type,
+            cmd.node_name
+        );
 
         // Special handling for GET_LOGS since it returns data in output field
         if command_type == CommandType::GetLogs {
@@ -757,7 +758,11 @@ impl NodeManager {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             Err(e) => {
-                log::warn!("Could not check state of {} ({}), proceeding anyway", name, e);
+                log::warn!(
+                    "Could not check state of {} ({}), proceeding anyway",
+                    name,
+                    e
+                );
             }
             _ => {}
         }

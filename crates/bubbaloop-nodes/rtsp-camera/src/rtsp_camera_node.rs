@@ -20,7 +20,11 @@ fn get_pub_time() -> u64 {
         .unwrap_or(0)
 }
 
-fn frame_to_compressed_image(frame: H264Frame, camera_name: &str, machine_id: &str) -> CompressedImage {
+fn frame_to_compressed_image(
+    frame: H264Frame,
+    camera_name: &str,
+    machine_id: &str,
+) -> CompressedImage {
     CompressedImage {
         header: Some(Header {
             acq_time: frame.pts,
@@ -59,8 +63,16 @@ pub struct RtspCameraNode {
 }
 
 impl RtspCameraNode {
-    pub fn new(ctx: Arc<ZContext>, camera_config: CameraConfig, machine_id: String) -> ZResult<Self> {
-        Ok(Self { ctx, camera_config, machine_id })
+    pub fn new(
+        ctx: Arc<ZContext>,
+        camera_config: CameraConfig,
+        machine_id: String,
+    ) -> ZResult<Self> {
+        Ok(Self {
+            ctx,
+            camera_config,
+            machine_id,
+        })
     }
 
     /// Compressed task: feeds decoder, publishes compressed images
@@ -301,14 +313,16 @@ impl RtspCameraNode {
         );
 
         // Create health heartbeat publisher
-        let health_topic = format!(
-            "bubbaloop/{}/{}/health/rtsp-camera",
-            scope, machine_id
-        );
+        let health_topic = format!("bubbaloop/{}/{}/health/rtsp-camera", scope, machine_id);
         let health_publisher = zenoh_session
             .declare_publisher(&health_topic)
             .await
-            .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(format!("Health publisher error: {}", e)))?;
+            .map_err(|e| {
+                Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                    "Health publisher error: {}",
+                    e
+                ))
+            })?;
         log::info!("[{}] Health heartbeat topic: {}", camera_name, health_topic);
 
         // Spawn tasks with shutdown receivers
@@ -322,9 +336,15 @@ impl RtspCameraNode {
             let machine_id = self.machine_id.clone();
             let shutdown_tx = shutdown_tx.clone();
             async move {
-                if let Err(e) =
-                    Self::compressed_task(ctx, capture, decoder, camera_name.clone(), machine_id, shutdown_tx)
-                        .await
+                if let Err(e) = Self::compressed_task(
+                    ctx,
+                    capture,
+                    decoder,
+                    camera_name.clone(),
+                    machine_id,
+                    shutdown_tx,
+                )
+                .await
                 {
                     log::error!("[{}] Compressed task failed: {}", camera_name, e);
                 }
@@ -337,7 +357,9 @@ impl RtspCameraNode {
             let machine_id = self.machine_id.clone();
             let shutdown_tx = shutdown_tx.clone();
             async move {
-                if let Err(e) = Self::shm_task(decoder, camera_name.clone(), machine_id, shutdown_tx).await {
+                if let Err(e) =
+                    Self::shm_task(decoder, camera_name.clone(), machine_id, shutdown_tx).await
+                {
                     log::error!("[{}] SHM task failed: {}", camera_name, e);
                 }
             }

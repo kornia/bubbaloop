@@ -147,7 +147,8 @@ impl Registry {
             .iter()
             .map(|n| normalize_path(&n.path))
             .collect();
-        let mut discovered_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut discovered_paths: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
 
         // Scan enabled sources (first, so configured sources win over local dev)
         for source in self.get_enabled_sources() {

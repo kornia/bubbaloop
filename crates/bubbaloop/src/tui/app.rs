@@ -788,8 +788,7 @@ impl App {
     /// Whether a specific node is busy (building/cleaning).
     pub fn is_node_busy(&self, node: &NodeInfo) -> bool {
         node.status == "building"
-            || (self.build_activity != BuildActivity::Idle
-                && self.build_activity_node == node.name)
+            || (self.build_activity != BuildActivity::Idle && self.build_activity_node == node.name)
     }
 
     /// Return the node name if the current view is NodeDetail or NodeLogs.
@@ -900,7 +899,11 @@ impl App {
                     self.build_confirmed = false;
                 } else if elapsed > Duration::from_secs(10) {
                     // Daemon never confirmed - command was probably lost
-                    let label = if self.build_activity == BuildActivity::Cleaning { "Clean" } else { "Build" };
+                    let label = if self.build_activity == BuildActivity::Cleaning {
+                        "Clean"
+                    } else {
+                        "Build"
+                    };
                     self.add_message(
                         format!("{} timed out — daemon did not respond", label),
                         MessageType::Warning,
@@ -911,7 +914,10 @@ impl App {
             } else if elapsed > Duration::from_secs(10) {
                 // Node disappeared entirely — reset
                 self.add_message(
-                    format!("Node '{}' disappeared during operation", self.build_activity_node),
+                    format!(
+                        "Node '{}' disappeared during operation",
+                        self.build_activity_node
+                    ),
                     MessageType::Warning,
                 );
                 self.build_activity = BuildActivity::Idle;
@@ -1003,9 +1009,9 @@ impl App {
         let mut handles = Vec::new();
         for name in &names {
             let name = name.clone();
-            handles.push(tokio::spawn(async move {
-                check_service_status(&name).await
-            }));
+            handles.push(tokio::spawn(
+                async move { check_service_status(&name).await },
+            ));
         }
         for (i, handle) in handles.into_iter().enumerate() {
             if let Ok(status) = handle.await {
@@ -1287,11 +1293,18 @@ impl App {
                 self.nodes.sort_by(|a, b| a.name.cmp(&b.name));
                 self.discoverable_nodes.retain(|n| n.path != path);
                 self.view = View::Nodes(NodesTab::Installed);
-                self.node_index = self.nodes.iter().position(|n| n.name == node.name).unwrap_or(0);
+                self.node_index = self
+                    .nodes
+                    .iter()
+                    .position(|n| n.name == node.name)
+                    .unwrap_or(0);
 
                 tokio::spawn(async move {
                     if let Err(e) = client.send_add_node(&path).await {
-                        let _ = tx.send((format!("Error adding {}: {}", node_name, e), MessageType::Error));
+                        let _ = tx.send((
+                            format!("Error adding {}: {}", node_name, e),
+                            MessageType::Error,
+                        ));
                     }
                 });
             }
