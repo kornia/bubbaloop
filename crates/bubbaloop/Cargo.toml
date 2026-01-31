@@ -64,5 +64,8 @@ ctrlc.workspace = true
 # UUID generation (daemon)
 uuid = { version = "1", features = ["v4"] }
 
+[dev-dependencies]
+tempfile = "3"
+
 [build-dependencies]
 prost-build.workspace = true

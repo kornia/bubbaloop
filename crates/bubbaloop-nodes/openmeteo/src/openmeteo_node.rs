@@ -3,7 +3,7 @@ use crate::api::{
     OpenMeteoClient,
 };
 use crate::config::{FetchConfig, LocationConfig};
-use bubbaloop::schemas::{
+use bubbaloop_schemas::{
     CurrentWeather, DailyForecast, DailyForecastEntry, Header, HourlyForecast, HourlyForecastEntry,
     LocationConfig as LocationConfigProto,
 };
@@ -42,6 +42,7 @@ fn convert_current_weather(
             sequence,
             frame_id: location_name.to_string(),
             machine_id: machine_id.to_string(),
+            ..Default::default()
         }),
         latitude: response.latitude,
         longitude: response.longitude,
@@ -119,6 +120,7 @@ fn convert_hourly_forecast(
             sequence,
             frame_id: location_name.to_string(),
             machine_id: machine_id.to_string(),
+            ..Default::default()
         }),
         latitude: response.latitude,
         longitude: response.longitude,
@@ -223,6 +225,7 @@ fn convert_daily_forecast(
             sequence,
             frame_id: location_name.to_string(),
             machine_id: machine_id.to_string(),
+            ..Default::default()
         }),
         latitude: response.latitude,
         longitude: response.longitude,

@@ -1,5 +1,5 @@
 use argh::FromArgs;
-use bubbaloop::config::TopicsConfig;
+use bubbaloop_schemas::config::TopicsConfig;
 use foxglove::WebSocketServer;
 use foxglove_bridge::foxglove_node::FoxgloveNode;
 use ros_z::{context::ZContextBuilder, Builder, Result as ZResult};

@@ -72,3 +72,6 @@ Thumbs.db
 
 # Tool config
 .omc/
+
+# External repo assembly (not part of this repo)
+bubbaloop-nodes-official/

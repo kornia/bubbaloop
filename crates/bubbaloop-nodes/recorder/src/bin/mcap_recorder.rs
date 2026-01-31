@@ -1,5 +1,5 @@
 use argh::FromArgs;
-use bubbaloop::config::TopicsConfig;
+use bubbaloop_schemas::config::TopicsConfig;
 use mcap_recorder::recorder_node::RecorderNode;
 use ros_z::{context::ZContextBuilder, Builder, Result as ZResult};
 use serde_json::json;

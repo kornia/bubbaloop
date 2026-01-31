@@ -9,4 +9,5 @@ message Header {
     uint32 sequence = 3;    // Frame sequence number
     string frame_id = 4;    // Camera/frame identifier
     string machine_id = 5;  // Source machine identifier
+    string scope = 6;       // Deployment scope (from BUBBALOOP_SCOPE env var)
 }

@@ -1,7 +1,7 @@
 use crate::config::CameraConfig;
 use crate::h264_capture::{H264Frame, H264StreamCapture};
 use crate::h264_decode::{DecoderBackend, RawFrame, VideoH264Decoder};
-use bubbaloop::schemas::{CompressedImage, Header, RawImage};
+use bubbaloop_schemas::{CompressedImage, Header, RawImage};
 use prost::Message;
 use ros_z::{context::ZContext, msg::ProtobufSerdes, pubsub::ZPub, Builder, Result as ZResult};
 use std::sync::Arc;
@@ -32,6 +32,7 @@ fn frame_to_compressed_image(
             sequence: frame.sequence,
             frame_id: camera_name.to_string(),
             machine_id: machine_id.to_string(),
+            ..Default::default()
         }),
         format: "h264".to_string(),
         data: frame.as_slice().into(),
@@ -46,6 +47,7 @@ fn frame_to_raw_image(frame: RawFrame, camera_name: &str, machine_id: &str) -> R
             sequence: frame.sequence,
             frame_id: camera_name.to_string(),
             machine_id: machine_id.to_string(),
+            ..Default::default()
         }),
         width: frame.width,
         height: frame.height,

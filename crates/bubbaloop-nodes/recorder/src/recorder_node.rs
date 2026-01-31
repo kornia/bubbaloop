@@ -1,4 +1,4 @@
-use bubbaloop::{get_descriptor_for_message, schemas::CompressedImage};
+use bubbaloop_schemas::{get_descriptor_for_message, CompressedImage};
 use prost::Message;
 use ros_z::{node::ZNode, Builder, Result as ZResult};
 use std::collections::BTreeMap;

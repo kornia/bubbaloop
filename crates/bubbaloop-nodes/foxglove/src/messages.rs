@@ -2,7 +2,7 @@
 
 // Utils to convert bubbaloop message to foxglove message
 pub(crate) fn extract_timestamp_and_frame_id(
-    header: Option<bubbaloop::schemas::Header>,
+    header: Option<bubbaloop_schemas::Header>,
 ) -> (Option<foxglove::schemas::Timestamp>, String) {
     header
         .as_ref()
@@ -100,7 +100,7 @@ macro_rules! register_message_types {
 
 // Register all message types
 register_message_types!(
-    ("compressed" => bubbaloop::schemas::CompressedImage => foxglove::schemas::CompressedVideo, |msg| {
+    ("compressed" => bubbaloop_schemas::CompressedImage => foxglove::schemas::CompressedVideo, |msg| {
         let (timestamp, frame_id) = crate::messages::extract_timestamp_and_frame_id(msg.header);
         foxglove::schemas::CompressedVideo {
             timestamp,
@@ -109,7 +109,7 @@ register_message_types!(
             data: msg.data.into(),
         }
     }),
-    ("raw" => bubbaloop::schemas::RawImage => foxglove::schemas::RawImage, |msg| {
+    ("raw" => bubbaloop_schemas::RawImage => foxglove::schemas::RawImage, |msg| {
         let (timestamp, frame_id) = crate::messages::extract_timestamp_and_frame_id(msg.header);
         foxglove::schemas::RawImage {
             timestamp,

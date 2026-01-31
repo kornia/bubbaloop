@@ -28,6 +28,8 @@ pub enum NodeError {
     GitClone(String),
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
+    #[error("Invalid argument: {0}")]
+    InvalidArgs(String),
 }
 
 pub type Result<T> = std::result::Result<T, NodeError>;
@@ -126,6 +128,10 @@ struct AddArgs {
     /// install as systemd service after adding
     #[argh(switch)]
     install: bool,
+
+    /// subdirectory within repo containing node.yaml (for multi-node repos)
+    #[argh(option, short = 's')]
+    subdir: Option<String>,
 }
 
 /// Remove a node from the registry
@@ -534,11 +540,108 @@ async fn list_nodes(args: ListArgs) -> Result<()> {
     Ok(())
 }
 
+/// Discover node.yaml files in immediate subdirectories of a path.
+/// Returns Vec<(node_name, subdir_name, node_type)>.
+fn discover_nodes_in_subdirs(base_path: &Path) -> Vec<(String, String, String)> {
+    let manifest_field = |manifest: &serde_yaml::Value, key: &str| -> String {
+        manifest
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string()
+    };
+
+    let mut nodes: Vec<_> = std::fs::read_dir(base_path)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|entry| {
+            let yaml_path = entry.path().join("node.yaml");
+            let content = std::fs::read_to_string(&yaml_path).ok()?;
+            match serde_yaml::from_str::<serde_yaml::Value>(&content) {
+                Ok(manifest) => {
+                    let subdir = entry.file_name().to_string_lossy().to_string();
+                    Some((
+                        manifest_field(&manifest, "name"),
+                        subdir,
+                        manifest_field(&manifest, "type"),
+                    ))
+                }
+                Err(e) => {
+                    log::warn!("Skipping {}: invalid node.yaml: {}", yaml_path.display(), e);
+                    None
+                }
+            }
+        })
+        .collect();
+
+    nodes.sort_by(|a, b| a.0.cmp(&b.0));
+    nodes
+}
+
+/// Resolve the node path, applying --subdir if set, or discovering nodes if needed.
+fn resolve_node_path(base_path: &str, subdir: Option<&str>) -> Result<String> {
+    let base = Path::new(base_path);
+
+    if let Some(sub) = subdir {
+        // Validate subdir to prevent path traversal
+        if sub.is_empty()
+            || sub.contains("..")
+            || sub.contains('/')
+            || sub.contains('\\')
+            || sub.starts_with('.')
+        {
+            return Err(NodeError::InvalidArgs(
+                "subdir must be a simple directory name (no paths, no '..')".into(),
+            ));
+        }
+        let node_path = base.join(sub);
+        let manifest = node_path.join("node.yaml");
+        if !manifest.exists() {
+            return Err(NodeError::NotFound(format!(
+                "No node.yaml found at {}/{}",
+                base_path, sub
+            )));
+        }
+        return Ok(node_path.to_string_lossy().to_string());
+    }
+
+    // Check for node.yaml at root
+    let manifest = base.join("node.yaml");
+    if manifest.exists() {
+        return Ok(base_path.to_string());
+    }
+
+    // No node.yaml at root -- discover subdirectories
+    let discovered = discover_nodes_in_subdirs(base);
+    if discovered.is_empty() {
+        return Err(NodeError::NotFound(format!(
+            "No node.yaml found at {} or in any subdirectory",
+            base_path
+        )));
+    }
+
+    let mut msg = format!(
+        "No node.yaml found at repository root.\n\nFound {} node(s) in subdirectories:\n",
+        discovered.len()
+    );
+    for (name, subdir, node_type) in &discovered {
+        msg.push_str(&format!(
+            "  {:<20} (type: {:<6}) -- use: bubbaloop node add <source> --subdir {}\n",
+            name, node_type, subdir
+        ));
+    }
+    msg.push_str("\nHint: Use --subdir <name> to add a specific node.");
+
+    Err(NodeError::NotFound(msg))
+}
+
 async fn add_node(args: AddArgs) -> Result<()> {
     // Normalize source URL
     let source = normalize_git_url(&args.source);
 
-    let node_path = if is_git_url(&source) {
+    let base_path = if is_git_url(&source) {
         // Clone from GitHub
         clone_from_github(&source, args.output.as_deref(), &args.branch)?
     } else {
@@ -549,6 +652,9 @@ async fn add_node(args: AddArgs) -> Result<()> {
         }
         path.canonicalize()?.to_string_lossy().to_string()
     };
+
+    // Resolve the actual node path (handles --subdir and multi-node discovery)
+    let node_path = resolve_node_path(&base_path, args.subdir.as_deref())?;
 
     // Add to daemon via Zenoh
     let session = get_zenoh_session().await?;
@@ -1184,5 +1290,143 @@ mod tests {
         assert!(!is_valid_node_name(""));
         assert!(!is_valid_node_name("-starts-with-dash"));
         assert!(!is_valid_node_name(".hidden"));
+    }
+
+    // Multi-node repo support tests (Phase 3)
+
+    #[test]
+    fn test_resolve_node_path_single_node_at_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("node.yaml"),
+            "name: test-node\nversion: \"0.1.0\"\ntype: rust",
+        )
+        .unwrap();
+
+        let result = resolve_node_path(dir.path().to_str().unwrap(), None);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), dir.path().to_str().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_node_path_with_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("my-node");
+        std::fs::create_dir(&subdir).unwrap();
+        std::fs::write(
+            subdir.join("node.yaml"),
+            "name: my-node\nversion: \"0.1.0\"\ntype: rust",
+        )
+        .unwrap();
+
+        let result = resolve_node_path(dir.path().to_str().unwrap(), Some("my-node"));
+        assert!(result.is_ok());
+        assert!(result.unwrap().ends_with("my-node"));
+    }
+
+    #[test]
+    fn test_resolve_node_path_subdir_missing_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("empty-dir");
+        std::fs::create_dir(&subdir).unwrap();
+
+        let result = resolve_node_path(dir.path().to_str().unwrap(), Some("empty-dir"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("No node.yaml found"));
+    }
+
+    #[test]
+    fn test_resolve_node_path_multi_node_discovery() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create two node subdirectories
+        for name in &["camera", "weather"] {
+            let subdir = dir.path().join(name);
+            std::fs::create_dir(&subdir).unwrap();
+            std::fs::write(
+                subdir.join("node.yaml"),
+                format!("name: {}\nversion: \"0.1.0\"\ntype: rust", name),
+            )
+            .unwrap();
+        }
+
+        // No node.yaml at root, no --subdir -> should discover and error
+        let result = resolve_node_path(dir.path().to_str().unwrap(), None);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Found 2 node(s)"));
+        assert!(err.contains("camera"));
+        assert!(err.contains("weather"));
+        assert!(err.contains("--subdir"));
+    }
+
+    #[test]
+    fn test_resolve_node_path_no_nodes_found() {
+        let dir = tempfile::tempdir().unwrap();
+        // Empty directory, no node.yaml anywhere
+        let result = resolve_node_path(dir.path().to_str().unwrap(), None);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("No node.yaml found"));
+    }
+
+    #[test]
+    fn test_resolve_node_path_rejects_path_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        // ".." traversal
+        let result = resolve_node_path(dir.path().to_str().unwrap(), Some("../etc"));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("simple directory name"));
+
+        // Slash in subdir
+        let result = resolve_node_path(dir.path().to_str().unwrap(), Some("foo/bar"));
+        assert!(result.is_err());
+
+        // Hidden directory
+        let result = resolve_node_path(dir.path().to_str().unwrap(), Some(".hidden"));
+        assert!(result.is_err());
+
+        // Empty string
+        let result = resolve_node_path(dir.path().to_str().unwrap(), Some(""));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_discover_nodes_in_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+
+        for (name, node_type) in &[("sensor", "rust"), ("bridge", "python")] {
+            let subdir = dir.path().join(name);
+            std::fs::create_dir(&subdir).unwrap();
+            std::fs::write(
+                subdir.join("node.yaml"),
+                format!("name: {}\nversion: \"0.1.0\"\ntype: {}", name, node_type),
+            )
+            .unwrap();
+        }
+
+        let nodes = discover_nodes_in_subdirs(dir.path());
+        assert_eq!(nodes.len(), 2);
+        // Sorted by name
+        assert_eq!(nodes[0].0, "bridge");
+        assert_eq!(nodes[0].2, "python");
+        assert_eq!(nodes[1].0, "sensor");
+        assert_eq!(nodes[1].2, "rust");
+    }
+
+    #[test]
+    fn test_discover_nodes_ignores_files() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create a file named "node.yaml" at root (not a subdir)
+        std::fs::write(dir.path().join("node.yaml"), "name: root").unwrap();
+        // Create a regular file (not a directory)
+        std::fs::write(dir.path().join("README.md"), "hello").unwrap();
+
+        let nodes = discover_nodes_in_subdirs(dir.path());
+        assert_eq!(nodes.len(), 0); // Only scans directories, not root
     }
 }
