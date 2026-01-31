@@ -273,9 +273,8 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
 
         if has_session {
             // Try to get a session for further checks
-            match get_zenoh_session().await {
-                Ok(s) => session = Some(s),
-                Err(_) => {}
+            if let Ok(s) = get_zenoh_session().await {
+                session = Some(s);
             }
         }
 
@@ -292,9 +291,8 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
 
         // Get session if we don't already have one
         if session.is_none() && check_type == "daemon" {
-            match get_zenoh_session().await {
-                Ok(s) => session = Some(s),
-                Err(_) => {}
+            if let Ok(s) = get_zenoh_session().await {
+                session = Some(s);
             }
         }
 
@@ -436,7 +434,7 @@ fn print_human_results(
 }
 
 /// Apply all available fixes and return count of fixes applied
-async fn apply_fixes(results: &mut Vec<DiagnosticResult>) -> usize {
+async fn apply_fixes(results: &mut [DiagnosticResult]) -> usize {
     let mut fixes_applied = 0;
 
     for result in results.iter_mut() {

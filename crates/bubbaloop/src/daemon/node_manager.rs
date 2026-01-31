@@ -211,11 +211,8 @@ impl NodeManager {
 
                 // Drain any additional signals within the debounce window
                 let deadline = tokio::time::Instant::now() + debounce;
-                loop {
-                    match tokio::time::timeout_at(deadline, signal_rx.recv()).await {
-                        Ok(Some(ev)) => Self::push_signal_event(&ev, &mut pending),
-                        _ => break, // timeout or channel closed
-                    }
+                while let Ok(Some(ev)) = tokio::time::timeout_at(deadline, signal_rx.recv()).await {
+                    Self::push_signal_event(&ev, &mut pending);
                 }
 
                 // Deduplicate: only refresh each node once per burst

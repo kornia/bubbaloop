@@ -187,7 +187,8 @@ pub async fn run(format: &str) -> Result<()> {
     // Output in requested format
     match format {
         "json" => print_json(&status)?,
-        "table" | _ => print_table(&status),
+        "table" => print_table(&status),
+        _ => print_table(&status),
     }
 
     Ok(())

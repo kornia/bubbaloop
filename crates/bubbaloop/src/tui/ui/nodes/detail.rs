@@ -76,7 +76,7 @@ pub fn render_detail(f: &mut Frame, app: &App, node_name: &str) {
     }
 
     let left_width = if chunks[2].width < 80 {
-        Constraint::Length(chunks[2].width.min(30).max(20))
+        Constraint::Length(chunks[2].width.clamp(20, 30))
     } else {
         Constraint::Percentage(25)
     };
