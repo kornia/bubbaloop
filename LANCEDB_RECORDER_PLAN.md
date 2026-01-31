@@ -105,7 +105,7 @@ managed by the daemon on the central machine:
 
 ```bash
 # On central server
-bubbaloop node add crates/bubbaloop-nodes/storage
+bubbaloop node add crates/storage
 bubbaloop node install storage
 bubbaloop node start storage
 ```
@@ -234,7 +234,7 @@ The storage service records this automatically -- no code changes needed.
 
 ## Deliverables
 
-1. `crates/bubbaloop-nodes/storage/` -- standalone Rust node (renamed from lancedb-recorder)
+1. `crates/storage/` -- standalone Rust crate, core infrastructure (not under `bubbaloop-nodes/`)
 2. `bubbaloop record` CLI subcommand in `crates/bubbaloop/`
 3. Recording controls (record button) in the React dashboard
 4. Recordings panel in the React dashboard for browsing/playback
@@ -246,7 +246,7 @@ The storage service records this automatically -- no code changes needed.
 | `lancedb-recorder` | `storage` |
 | `lancedb_recorder` (binary) | `storage_node` (binary) |
 | `bubbaloop/recorder/api/**` | `bubbaloop/storage/api/**` |
-| `crates/bubbaloop-nodes/lancedb-recorder/` | `crates/bubbaloop-nodes/storage/` |
+| `crates/bubbaloop-nodes/lancedb-recorder/` | `crates/storage/` |
 
 ---
 
@@ -318,11 +318,16 @@ Unchanged from v1 -- verify `lancedb = "0.23"` compiles on Jetson.
 
 ### Phase 1: Storage Node Skeleton
 
-**Goal:** Standalone crate at `crates/bubbaloop-nodes/storage/`.
+**Goal:** Standalone crate at `crates/storage/` (core infrastructure, not under `bubbaloop-nodes/`).
+
+The storage service lives alongside `crates/bubbaloop/` and `crates/bubbaloop-schemas/` as a
+top-level crate. It's standalone (not a workspace member, has its own Cargo.lock) but stays in
+the main bubbaloop repo because it's core infrastructure -- unlike application nodes which live
+in `bubbaloop-nodes-official`.
 
 Files:
 ```
-crates/bubbaloop-nodes/storage/
+crates/storage/
 ├── .cargo/config.toml
 ├── Cargo.toml          # lancedb, zenoh, ros-z, prost, bubbaloop-schemas
 ├── Cargo.lock
@@ -567,21 +572,21 @@ nanosecond timestamp, not zero or far-future). Fall back to wall clock time on f
 
 | File | Phase | Description |
 |------|-------|-------------|
-| `crates/bubbaloop-nodes/storage/.cargo/config.toml` | 1 | Cargo build config |
-| `crates/bubbaloop-nodes/storage/Cargo.toml` | 1 | Crate manifest |
-| `crates/bubbaloop-nodes/storage/Cargo.lock` | 1 | Lock file |
-| `crates/bubbaloop-nodes/storage/pixi.toml` | 1 | Pixi build config |
-| `crates/bubbaloop-nodes/storage/node.yaml` | 1 | Node manifest (name: storage) |
-| `crates/bubbaloop-nodes/storage/configs/storage.yaml` | 1 | Default config |
-| `crates/bubbaloop-nodes/storage/src/lib.rs` | 1 | Library root |
-| `crates/bubbaloop-nodes/storage/src/error.rs` | 1 | Error types |
-| `crates/bubbaloop-nodes/storage/src/config.rs` | 1 | Config with topic patterns + schema_hints |
-| `crates/bubbaloop-nodes/storage/src/header.rs` | 1 | Generic Header extraction |
-| `crates/bubbaloop-nodes/storage/src/bin/storage_node.rs` | 1 | Binary entry point |
-| `crates/bubbaloop-nodes/storage/src/lancedb_client.rs` | 2 | LanceDB operations (generic schema) |
-| `crates/bubbaloop-nodes/storage/src/session.rs` | 3 | Session state machine |
-| `crates/bubbaloop-nodes/storage/src/recorder_node.rs` | 3 | Generic recording logic |
-| `crates/bubbaloop-nodes/storage/src/zenoh_api.rs` | 4 | Query API (JSON) |
+| `crates/storage/.cargo/config.toml` | 1 | Cargo build config |
+| `crates/storage/Cargo.toml` | 1 | Crate manifest |
+| `crates/storage/Cargo.lock` | 1 | Lock file |
+| `crates/storage/pixi.toml` | 1 | Pixi build config |
+| `crates/storage/node.yaml` | 1 | Node manifest (name: storage) |
+| `crates/storage/configs/storage.yaml` | 1 | Default config |
+| `crates/storage/src/lib.rs` | 1 | Library root |
+| `crates/storage/src/error.rs` | 1 | Error types |
+| `crates/storage/src/config.rs` | 1 | Config with topic patterns + schema_hints |
+| `crates/storage/src/header.rs` | 1 | Generic Header extraction |
+| `crates/storage/src/bin/storage_node.rs` | 1 | Binary entry point |
+| `crates/storage/src/lancedb_client.rs` | 2 | LanceDB operations (generic schema) |
+| `crates/storage/src/session.rs` | 3 | Session state machine |
+| `crates/storage/src/recorder_node.rs` | 3 | Generic recording logic |
+| `crates/storage/src/zenoh_api.rs` | 4 | Query API (JSON) |
 | `crates/bubbaloop/src/cli/zenoh.rs` | 5 | Shared get_zenoh_session() |
 | `crates/bubbaloop/src/cli/record.rs` | 5 | CLI record subcommand |
 | `dashboard/src/components/RecordButton.tsx` | 6 | Record button |
