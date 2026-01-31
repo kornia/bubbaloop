@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Create health heartbeat publisher
     let health_topic = format!("bubbaloop/{}/{}/health/inference", scope, machine_id);
-    let health_publisher = session.declare_publisher(&health_topic).await?;
+    let health_publisher = session.declare_publisher(health_topic.clone()).await?;
     log::info!("Health heartbeat topic: {}", health_topic);
 
     // Subscribe to all camera raw_shm topics using wildcard

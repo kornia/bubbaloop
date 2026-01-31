@@ -315,7 +315,7 @@ impl OpenMeteoNode {
         // Create health heartbeat publisher
         let health_topic = format!("bubbaloop/{}/{}/health/openmeteo", scope, machine_id);
         let health_publisher = zenoh_session
-            .declare_publisher(&health_topic)
+            .declare_publisher(health_topic.clone())
             .await
             .map_err(|e| {
                 Box::<dyn std::error::Error + Send + Sync>::from(format!(
