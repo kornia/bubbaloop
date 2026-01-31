@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package bubbaloop.machine.v1;
+
+// Information about a machine in the fleet
+message MachineInfo {
+    string machine_id = 1;           // UUID or stable identifier (e.g., "jetson-orin-1-a3b4c5d6")
+    string hostname = 2;             // Human-readable hostname
+    string ip_address = 3;           // Primary IP address
+    int64 last_seen_ms = 4;          // Last heartbeat timestamp (ms since epoch)
+    string platform = 5;             // Platform type (e.g., "jetson-orin", "x86_64-linux")
+    repeated string node_names = 6;  // Names of nodes registered on this machine
+    string version = 7;              // Bubbaloop daemon version
+}
+
+// List of machines in the fleet
+message MachineList {
+    repeated MachineInfo machines = 1;
+    int64 timestamp_ms = 2;
+}
+
+// Machine heartbeat announcement
+message MachineHeartbeat {
+    string machine_id = 1;
+    int64 timestamp_ms = 2;
+    uint32 node_count = 3;           // Number of registered nodes
+    uint32 running_count = 4;        // Number of running nodes
+}

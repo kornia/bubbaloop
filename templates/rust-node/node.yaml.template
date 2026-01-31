@@ -3,3 +3,5 @@ version: "0.1.0"
 type: rust
 description: {{description}}
 author: {{author}}
+build: "pixi run build"
+command: "./target/release/{{node_name}}_node"

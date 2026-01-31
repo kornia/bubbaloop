@@ -27,11 +27,14 @@ export interface NodeState {
   isBuilt: boolean;
   lastUpdatedMs: bigint;
   buildOutput: string[];
+  machineId: string;
+  machineHostname: string;
 }
 
 export interface NodeList {
   nodes: NodeState[];
   timestampMs: bigint;
+  machineId: string;
 }
 
 export interface NodeEvent {
@@ -86,6 +89,8 @@ function decodeNodeState(msg: unknown): NodeState | null {
     isBuilt: (m.isBuilt as boolean) ?? false,
     lastUpdatedMs: toLongBigInt(m.lastUpdatedMs as Long | number),
     buildOutput: (m.buildOutput as string[]) ?? [],
+    machineId: (m.machineId as string) ?? '',
+    machineHostname: (m.machineHostname as string) ?? '',
   };
 }
 
@@ -101,6 +106,7 @@ export function decodeNodeList(data: Uint8Array): NodeList | null {
     return {
       nodes,
       timestampMs: toLongBigInt(message.timestampMs as Long | number),
+      machineId: (message.machineId as string) ?? '',
     };
   } catch (error) {
     console.error('[Proto] Failed to decode NodeList:', error);

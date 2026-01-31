@@ -20,26 +20,32 @@ fn get_pub_time() -> u64 {
         .unwrap_or(0)
 }
 
-fn frame_to_compressed_image(frame: H264Frame, camera_name: &str) -> CompressedImage {
+fn frame_to_compressed_image(
+    frame: H264Frame,
+    camera_name: &str,
+    machine_id: &str,
+) -> CompressedImage {
     CompressedImage {
         header: Some(Header {
             acq_time: frame.pts,
             pub_time: get_pub_time(),
             sequence: frame.sequence,
             frame_id: camera_name.to_string(),
+            machine_id: machine_id.to_string(),
         }),
         format: "h264".to_string(),
         data: frame.as_slice().into(),
     }
 }
 
-fn frame_to_raw_image(frame: RawFrame, camera_name: &str) -> RawImage {
+fn frame_to_raw_image(frame: RawFrame, camera_name: &str, machine_id: &str) -> RawImage {
     RawImage {
         header: Some(Header {
             acq_time: frame.pts,
             pub_time: get_pub_time(),
             sequence: frame.sequence,
             frame_id: camera_name.to_string(),
+            machine_id: machine_id.to_string(),
         }),
         width: frame.width,
         height: frame.height,
@@ -53,11 +59,20 @@ fn frame_to_raw_image(frame: RawFrame, camera_name: &str) -> RawImage {
 pub struct RtspCameraNode {
     ctx: Arc<ZContext>,
     camera_config: CameraConfig,
+    machine_id: String,
 }
 
 impl RtspCameraNode {
-    pub fn new(ctx: Arc<ZContext>, camera_config: CameraConfig) -> ZResult<Self> {
-        Ok(Self { ctx, camera_config })
+    pub fn new(
+        ctx: Arc<ZContext>,
+        camera_config: CameraConfig,
+        machine_id: String,
+    ) -> ZResult<Self> {
+        Ok(Self {
+            ctx,
+            camera_config,
+            machine_id,
+        })
     }
 
     /// Compressed task: feeds decoder, publishes compressed images
@@ -66,6 +81,7 @@ impl RtspCameraNode {
         capture: Arc<H264StreamCapture>,
         decoder: Arc<VideoH264Decoder>,
         camera_name: String,
+        machine_id: String,
         shutdown_tx: tokio::sync::watch::Sender<()>,
     ) -> ZResult<()> {
         let mut shutdown_rx = shutdown_tx.subscribe();
@@ -110,7 +126,7 @@ impl RtspCameraNode {
 
                             // Publish compressed
                             let sequence = h264_frame.sequence;
-                            let msg = frame_to_compressed_image(h264_frame, &camera_name);
+                            let msg = frame_to_compressed_image(h264_frame, &camera_name, &machine_id);
                             if compressed_pub.async_publish(&msg).await.is_ok() {
                                 published += 1;
                             }
@@ -150,6 +166,7 @@ impl RtspCameraNode {
     async fn shm_task(
         decoder: Arc<VideoH264Decoder>,
         camera_name: String,
+        machine_id: String,
         shutdown_tx: tokio::sync::watch::Sender<()>,
     ) -> ZResult<()> {
         let mut shutdown_rx = shutdown_tx.subscribe();
@@ -205,7 +222,7 @@ impl RtspCameraNode {
                                 last_publish = now;
 
                                 // Build protobuf
-                                let msg = frame_to_raw_image(frame, &camera_name);
+                                let msg = frame_to_raw_image(frame, &camera_name, &machine_id);
                                 let proto_bytes = msg.encode_to_vec();
 
                                 // Allocate SHM buffer
@@ -262,7 +279,13 @@ impl RtspCameraNode {
         Ok(())
     }
 
-    pub async fn run(self, shutdown_tx: tokio::sync::watch::Sender<()>) -> ZResult<()> {
+    pub async fn run(
+        self,
+        shutdown_tx: tokio::sync::watch::Sender<()>,
+        zenoh_session: std::sync::Arc<zenoh::Session>,
+        scope: String,
+        machine_id: String,
+    ) -> ZResult<()> {
         let camera_name = self.camera_config.name.clone();
 
         // Create H264 capture
@@ -289,6 +312,19 @@ impl RtspCameraNode {
             self.camera_config.height
         );
 
+        // Create health heartbeat publisher
+        let health_topic = format!("bubbaloop/{}/{}/health/rtsp-camera", scope, machine_id);
+        let health_publisher = zenoh_session
+            .declare_publisher(health_topic.clone())
+            .await
+            .map_err(|e| {
+                Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                    "Health publisher error: {}",
+                    e
+                ))
+            })?;
+        log::info!("[{}] Health heartbeat topic: {}", camera_name, health_topic);
+
         // Spawn tasks with shutdown receivers
         let mut tasks: JoinSet<()> = JoinSet::new();
 
@@ -297,11 +333,18 @@ impl RtspCameraNode {
             let camera_name = camera_name.clone();
             let capture = capture.clone();
             let decoder = decoder.clone();
+            let machine_id = self.machine_id.clone();
             let shutdown_tx = shutdown_tx.clone();
             async move {
-                if let Err(e) =
-                    Self::compressed_task(ctx, capture, decoder, camera_name.clone(), shutdown_tx)
-                        .await
+                if let Err(e) = Self::compressed_task(
+                    ctx,
+                    capture,
+                    decoder,
+                    camera_name.clone(),
+                    machine_id,
+                    shutdown_tx,
+                )
+                .await
                 {
                     log::error!("[{}] Compressed task failed: {}", camera_name, e);
                 }
@@ -311,19 +354,37 @@ impl RtspCameraNode {
         tasks.spawn({
             let camera_name = camera_name.clone();
             let decoder = decoder.clone();
+            let machine_id = self.machine_id.clone();
             let shutdown_tx = shutdown_tx.clone();
             async move {
-                if let Err(e) = Self::shm_task(decoder, camera_name.clone(), shutdown_tx).await {
+                if let Err(e) =
+                    Self::shm_task(decoder, camera_name.clone(), machine_id, shutdown_tx).await
+                {
                     log::error!("[{}] SHM task failed: {}", camera_name, e);
                 }
             }
         });
 
-        // Wait for shutdown signal
+        // Health heartbeat + shutdown loop
         let mut shutdown_rx = shutdown_tx.subscribe();
-        let _ = shutdown_rx.changed().await;
+        let mut health_interval = tokio::time::interval(std::time::Duration::from_secs(5));
 
-        log::info!("Shutting down camera '{}'...", camera_name);
+        loop {
+            tokio::select! {
+                biased;
+
+                _ = shutdown_rx.changed() => {
+                    log::info!("Shutting down camera '{}'...", camera_name);
+                    break;
+                }
+
+                _ = health_interval.tick() => {
+                    if let Err(e) = health_publisher.put("ok").await {
+                        log::warn!("[{}] Failed to publish health heartbeat: {}", camera_name, e);
+                    }
+                }
+            }
+        }
 
         // Tasks will exit via their select! loops when they see shutdown
         // Wait for all tasks to complete

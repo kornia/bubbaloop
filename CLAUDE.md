@@ -1,6 +1,6 @@
 # Bubbaloop
 
-Physical AI camera streaming platform built on Zenoh/ROS-Z.
+AI-native orchestration for Physical AI, built on Zenoh.
 
 ## Quick Start
 
@@ -167,8 +167,19 @@ Each node lives in `crates/bubbaloop-nodes/{name}/` with:
 name: my-node
 version: "0.1.0"
 description: "My custom node"
-node_type: rust  # or python
+type: rust  # or python
+build: "pixi run build"  # optional build command
+command: "./target/release/my_node"  # optional run command
+depends_on:  # optional service dependencies
+  - rtsp-camera
+  - openmeteo
 ```
+
+#### Service Dependencies
+
+The `depends_on` field specifies other nodes that must be running before this node starts. When the systemd service is installed, this generates:
+- `After=network.target bubbaloop-rtsp-camera.service bubbaloop-openmeteo.service`
+- `Requires=bubbaloop-rtsp-camera.service bubbaloop-openmeteo.service`
 
 ### Building a node
 
@@ -177,7 +188,143 @@ cd crates/bubbaloop-nodes/my-node
 pixi run cargo build --release
 ```
 
+## Creating a New Node
+
+### Quick Start (Rust)
+
+```bash
+# Initialize a new Rust node (creates in current directory)
+bubbaloop node init my-sensor --type rust -d "My custom sensor"
+cd my-sensor
+
+# Edit your logic in src/node.rs
+
+# Build
+cargo build --release
+
+# Register with daemon and start
+bubbaloop node add .
+bubbaloop node start my-sensor
+bubbaloop node logs my-sensor -f
+```
+
+### Quick Start (Python)
+
+```bash
+# Initialize a new Python node
+bubbaloop node init my-sensor --type python -d "My custom sensor"
+cd my-sensor
+
+# Edit your logic in main.py
+
+# Register with daemon and start
+bubbaloop node add .
+bubbaloop node start my-sensor
+bubbaloop node logs my-sensor -f
+```
+
+### Two-Step Workflow
+
+**Init** creates the node structure (scaffolding):
+```bash
+bubbaloop node init my-sensor           # Creates ./my-sensor/
+bubbaloop node init my-sensor -o /path  # Creates at specified path
+```
+
+**Add** registers an existing node with the daemon:
+```bash
+bubbaloop node add .                    # Add node in current directory
+bubbaloop node add /path/to/my-sensor   # Add node at path
+bubbaloop node add user/repo            # Clone from GitHub and add
+```
+
+This separation allows:
+- Creating nodes anywhere in your filesystem
+- Keeping nodes in their own git repos
+- Linking multiple nodes from a monorepo
+- Unlinking without deleting files
+
+### Adding External Nodes
+
+```bash
+# From GitHub (full URL)
+bubbaloop node add https://github.com/user/awesome-node
+
+# From GitHub (shorthand)
+bubbaloop node add user/awesome-node
+
+# From GitHub with branch
+bubbaloop node add user/awesome-node --branch develop
+
+# From local path
+bubbaloop node add /path/to/my-node
+
+# Add and auto-build
+bubbaloop node add user/awesome-node --build
+
+# Add, build, and install as service
+bubbaloop node add user/awesome-node --build --install
+```
+
+### Node Lifecycle
+
+```bash
+bubbaloop node list              # Show all nodes
+bubbaloop node validate ./       # Validate node in current directory
+bubbaloop node build my-sensor   # Build (Rust nodes)
+bubbaloop node start my-sensor   # Start as service
+bubbaloop node stop my-sensor    # Stop service
+bubbaloop node logs my-sensor -f # Follow logs
+bubbaloop node install my-sensor # Install as systemd service
+bubbaloop node enable my-sensor  # Enable autostart
+```
+
+### Using TUI for Node Management
+
+```bash
+bubbaloop              # Launch TUI (default)
+/nodes                 # Type command to go to nodes view
+```
+
+In Nodes view:
+- **Tab**: Switch between Installed/Discover/Marketplace tabs
+- **n**: Create new node (in Discover tab)
+- **Enter**: View node details
+- **s**: Start/stop node
+- **b**: Build node
+- **l**: View logs
+
 The binary will be at `target/release/my_node`.
+
+## Distributed Deployment
+
+For multi-machine deployments (e.g., multiple Jetsons with central dashboard), see [docs/distributed-deployment.md](docs/distributed-deployment.md).
+
+### Zenoh Configuration Files
+
+| Config | Use Case | Location |
+|--------|----------|----------|
+| `configs/zenoh/standalone.json5` | Single-machine development | Default |
+| `configs/zenoh/central-router.json5` | Central server (dashboard host) | Server |
+| `configs/zenoh/jetson-router.json5` | Each Jetson device | Edge devices |
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
+| `RUST_LOG` | Log level | `info` |
+
+### Quick Multi-Machine Setup
+
+```bash
+# On central server
+zenohd -c configs/zenoh/central-router.json5
+
+# On each Jetson (edit config first with central IP)
+zenohd -c configs/zenoh/jetson-router.json5
+BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop-daemon
+```
 
 ## Key Dependencies
 
@@ -187,6 +334,150 @@ The binary will be at `target/release/my_node`.
 - **prost** - Protobuf serialization
 - **GStreamer** - H264 camera capture
 - **zbus** - D-Bus client for systemd integration
+
+## Troubleshooting
+
+### "Query not found" or "Timeout" errors in TUI
+
+**Symptoms:**
+- TUI shows "Daemon: disconnected"
+- Zenoh warnings: `Route reply: Query not found!`
+- Error reply with payload "Timeout"
+
+**Common Causes:**
+
+1. **Duplicate daemon processes** (most common)
+   ```bash
+   # Check for multiple daemons
+   ps aux | grep bubbaloop-daemon
+
+   # If multiple found, kill extras and restart service
+   pkill -f bubbaloop-daemon
+   systemctl --user restart bubbaloop-daemon
+   ```
+
+2. **Daemon not fully initialized**
+   ```bash
+   # Wait for daemon to start (takes ~2 seconds)
+   systemctl --user restart bubbaloop-daemon && sleep 3
+   ```
+
+3. **Zenoh router not running**
+   ```bash
+   # Check zenohd status
+   systemctl --user status bubbaloop-zenohd
+
+   # Or start manually
+   zenohd &
+   ```
+
+4. **Binary mismatch** (installed vs built)
+   ```bash
+   # Update installed daemon binary
+   systemctl --user stop bubbaloop-daemon
+   cp target/release/bubbaloop-daemon ~/.bubbaloop/bin/
+   systemctl --user start bubbaloop-daemon
+   ```
+
+### TUI crashes on startup
+
+If running via Claude Code (no TTY attached):
+```
+Error: No such device or address (os error 6)
+```
+
+The TUI requires an interactive terminal. Run it directly in your terminal, not through non-interactive shells.
+
+## Daemon Service Management
+
+The bubbaloop-daemon provides advanced service management features:
+
+### Security Hardening
+
+Generated systemd service units include security directives:
+
+```ini
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# Robotics-compatible settings (allow RT scheduling and JIT)
+RestrictRealtime=false
+MemoryDenyWriteExecute=false
+```
+
+To apply security hardening to existing services, reinstall them:
+```bash
+# Via dashboard: Uninstall then Install the node
+# Or programmatically via Zenoh commands
+```
+
+Analyze service security:
+```bash
+systemd-analyze --user security bubbaloop-rtsp-camera.service
+```
+
+### Real-time State Updates (D-Bus Signals)
+
+The daemon subscribes to systemd D-Bus signals for instant state updates:
+- **JobRemoved** - Service started/stopped/failed
+- **UnitNew** - Service installed
+- **UnitRemoved** - Service uninstalled
+
+This provides <100ms state update latency (vs 5s polling previously). Polling now runs every 30s as a backup sync.
+
+### Build Queue and Timeout
+
+Build operations are managed to prevent issues:
+- **Concurrent build prevention**: Only one build per node at a time
+- **10-minute timeout**: Builds are killed if they exceed the timeout
+- **Process cleanup**: `kill_on_drop(true)` ensures child processes are terminated
+
+Events emitted: `building`, `build_complete`, `build_failed`, `build_timeout`
+
+### Health Monitoring (Zenoh Heartbeats)
+
+Nodes can publish heartbeats to `bubbaloop/nodes/{name}/health` for health monitoring:
+
+```rust
+// In your node, publish periodic heartbeats:
+session.put("bubbaloop/nodes/my-node/health", "ok").await?;
+```
+
+The daemon tracks:
+- **HealthStatus**: `UNKNOWN`, `HEALTHY`, `UNHEALTHY`
+- **last_health_check_ms**: Timestamp of last heartbeat
+
+A node is marked `UNHEALTHY` if no heartbeat is received for 30 seconds while the service is running.
+
+### Protobuf Schema (daemon.proto)
+
+```protobuf
+enum HealthStatus {
+  HEALTH_STATUS_UNKNOWN = 0;
+  HEALTH_STATUS_HEALTHY = 1;
+  HEALTH_STATUS_UNHEALTHY = 2;
+}
+
+message NodeState {
+  string name = 1;
+  string path = 2;
+  NodeStatus status = 3;
+  bool installed = 4;
+  bool autostart_enabled = 5;
+  string version = 6;
+  string description = 7;
+  string node_type = 8;
+  bool is_built = 9;
+  int64 last_updated_ms = 10;
+  repeated string build_output = 11;
+  HealthStatus health_status = 12;
+  int64 last_health_check_ms = 13;
+}
+```
 
 ## Git Hygiene & Artifacts
 
@@ -263,3 +554,114 @@ When creating new boilerplate (templates, nodes, etc.):
 - [ ] Document the pattern in this CLAUDE.md file
 - [ ] Verify with `git status` before committing
 - [ ] Run `cargo fmt` and `pixi run clippy` before commit
+
+## Multi-Terminal Workflow
+
+### Permission Modes
+
+Optimize your workflow by choosing the right permission level:
+
+| Mode | How to Enable | Auto-Approves | Best For |
+|------|---------------|---------------|----------|
+| **Default** | Normal startup | Nothing | High-risk operations |
+| **Accept Edits** | `Shift + Tab` | File edits only | Daily development |
+| **Allowlisted** | `settings.json` | Specific commands | Repetitive tasks |
+| **Bypass All** | `--dangerously-skip-permissions` | Everything | Isolated containers |
+
+**Accept Edits Mode** (Recommended for development):
+- Press `Shift + Tab` to toggle
+- Auto-approves `Write` and `Edit` operations
+- Still prompts for shell commands (safe from `rm -rf`)
+
+### Allowlisting Safe Commands
+
+Add frequently-used safe commands to `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(pixi run build)",
+      "Bash(pixi run test)",
+      "Bash(pixi run fmt)",
+      "Bash(pixi run clippy)",
+      "Bash(cargo check:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(systemctl --user status:*)",
+      "Bash(systemctl --user restart bubbaloop-*)"
+    ]
+  }
+}
+```
+
+### Session Management for Multiple Terminals
+
+| Strategy | Tool | Use Case |
+|----------|------|----------|
+| **Persistence** | `tmux` | Keep Claude running if terminal closes |
+| **Isolation** | `git worktree` | Prevent file conflicts between sessions |
+| **Monitoring** | TUI `/tasks` | Track background agent progress |
+
+**tmux setup for bubbaloop development:**
+```bash
+# Create session with 4 panes
+tmux new-session -s bubbaloop -n dev \; \
+  split-window -h \; \
+  split-window -v \; \
+  select-pane -t 0 \; \
+  split-window -v
+
+# Pane layout:
+# ┌─────────┬─────────┐
+# │ zenohd  │ daemon  │
+# ├─────────┼─────────┤
+# │ claude  │ tui     │
+# └─────────┴─────────┘
+```
+
+**git worktree for parallel Claude sessions:**
+```bash
+# Create isolated worktree for feature work
+git worktree add ../bubbaloop-feature feature-branch
+
+# Run Claude in each worktree independently
+cd ../bubbaloop-feature && claude
+```
+
+### Safety Fences (Deny Rules)
+
+Protect sensitive files even in permissive modes. Add to `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Write(.env)",
+      "Bash(rm -rf *)",
+      "Bash(git push --force:*)"
+    ]
+  }
+}
+```
+
+### Project-Specific Preferences
+
+This CLAUDE.md file tells Claude:
+
+1. **Build commands**: `pixi run build`, `pixi run test`
+2. **Code style**: Rust 2021 edition, async/await patterns
+3. **Project structure**: Nodes in `crates/bubbaloop-nodes/`
+4. **Commit style**: Conventional commits with `Co-Authored-By`
+
+### Recommended Workflow
+
+1. **Start services** in tmux panes (zenohd, daemon, bridge)
+2. **Enable Accept Edits** mode (`Shift + Tab`)
+3. **Use TUI** for node management (`bubbaloop`)
+4. **Run Claude** for development tasks
+5. **Verify** with `pixi run clippy` before commits

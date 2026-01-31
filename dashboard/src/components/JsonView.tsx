@@ -1,10 +1,12 @@
-import { useCallback, useState, useRef } from 'react';
-import { Sample } from '@eclipse-zenoh/zenoh-ts';
+import { useCallback, useState, useRef, useEffect } from 'react';
+import { Sample, Reply, ReplyError } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
+import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 import { decodeCompressedImage } from '../proto/camera';
 import { decodeCurrentWeather, decodeHourlyForecast, decodeDailyForecast } from '../proto/weather';
 import { decodeNodeList, decodeNodeEvent } from '../proto/daemon';
+import { Duration } from 'typed-duration';
 import JsonView from 'react18-json-view';
 import 'react18-json-view/src/style.css';
 
@@ -106,13 +108,13 @@ function decodePayload(payload: Uint8Array, topic: string): { data: unknown; sch
   // 3. Try daemon topics (they use key expressions, not ros-z schema format)
   if (topic.includes('bubbaloop/daemon/nodes')) {
     const msg = decodeNodeList(payload);
-    if (msg && msg.nodes.length > 0) {
+    if (msg) {
       return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeList' };
     }
   }
   if (topic.includes('bubbaloop/daemon/events')) {
     const msg = decodeNodeEvent(payload);
-    if (msg && msg.eventType) {
+    if (msg) {
       return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeEvent' };
     }
   }
@@ -197,11 +199,17 @@ export function RawDataViewPanel({
   const [, setCurrentTopic] = useState<string>('');
   const lastUpdateRef = useRef<number>(0);
 
-  // Handle incoming samples from Zenoh
+  // Handle incoming samples from Zenoh subscriptions
   const handleSample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
       const sampleTopic = sample.keyexpr().toString();
+
+      // For daemon topics, skip small subscription payloads — GET polling provides full data
+      if (sampleTopic.includes('bubbaloop/daemon/') && payload.length < 20) {
+        return;
+      }
+
       const result = decodePayload(payload, sampleTopic);
 
       setJsonData(result.data);
@@ -216,8 +224,51 @@ export function RawDataViewPanel({
     }
   }, []);
 
-  // Subscribe to topic
+  // Subscribe to topic (works for non-daemon topics)
   useZenohSubscription(topic, handleSample);
+
+  // For daemon topics, also poll via GET since the bridge drops larger
+  // subscription payloads but GET queries work reliably
+  const { getSession } = useZenohSubscriptionContext();
+  useEffect(() => {
+    if (!topic || !topic.includes('bubbaloop/daemon/')) return;
+
+    let mounted = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      const session = getSession();
+      if (!session || !mounted) {
+        timer = setTimeout(poll, 1000);
+        return;
+      }
+      try {
+        const receiver = await session.get(topic, {
+          timeout: Duration.milliseconds.of(5000),
+        });
+        if (receiver && mounted) {
+          for await (const replyItem of receiver) {
+            if (!mounted) break;
+            if (replyItem instanceof Reply) {
+              const replyResult = replyItem.result();
+              if (replyResult instanceof ReplyError) continue;
+              const payload = getSamplePayload(replyResult as Sample);
+              const result = decodePayload(payload, topic);
+              setJsonData(result.data);
+              setSchemaName(result.schema);
+              setParseError(result.error || null);
+            }
+          }
+        }
+      } catch {
+        // Ignore poll errors
+      }
+      if (mounted) timer = setTimeout(poll, 3000);
+    };
+
+    poll();
+    return () => { mounted = false; if (timer) clearTimeout(timer); };
+  }, [topic, getSession]);
 
   // Handle topic change from dropdown
   const handleTopicSelect = (newTopic: string) => {

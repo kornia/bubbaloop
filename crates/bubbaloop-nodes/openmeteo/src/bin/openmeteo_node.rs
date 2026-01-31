@@ -72,6 +72,15 @@ async fn main() -> ZResult<()> {
         .expect("Error setting Ctrl+C handler");
     }
 
+    // Read scope/machine env vars for health heartbeat
+    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+    let machine_id = std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
+        hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".to_string())
+    });
+    log::info!("Scope: {}, Machine ID: {}", scope, machine_id);
+
     // Initialize ROS-Z context
     let endpoint = std::env::var("ZENOH_ENDPOINT").unwrap_or(args.zenoh_endpoint);
     log::info!("Connecting to Zenoh at: {}", endpoint);
@@ -81,9 +90,20 @@ async fn main() -> ZResult<()> {
             .build()?,
     );
 
+    // Create vanilla zenoh session for health heartbeat
+    let zenoh_session = {
+        let mut c = zenoh::Config::default();
+        c.insert_json5("connect/endpoints", &format!(r#"["{}"]"#, endpoint))
+            .unwrap();
+        zenoh::open(c).await.map_err(|e| {
+            Box::<dyn std::error::Error + Send + Sync>::from(format!("Zenoh session error: {}", e))
+        })?
+    };
+
     // Create and run the weather node
-    let node = OpenMeteoNode::new(ctx, resolved_location, config.fetch)?;
-    node.run(shutdown_tx).await?;
+    let node = OpenMeteoNode::new(ctx, resolved_location, config.fetch, machine_id.clone())?;
+    node.run(shutdown_tx, zenoh_session, scope, machine_id)
+        .await?;
 
     log::info!("Weather node shut down, exiting");
 

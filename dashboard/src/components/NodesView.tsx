@@ -3,7 +3,7 @@ import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContex
 import { decodeNodeList } from '../proto/daemon';
 import { getSamplePayload } from '../lib/zenoh';
 import { Duration } from 'typed-duration';
-import { Reply, ReplyError } from '@eclipse-zenoh/zenoh-ts';
+import { Reply, ReplyError, Sample } from '@eclipse-zenoh/zenoh-ts';
 
 // Node state from protobuf
 interface NodeState {
@@ -17,6 +17,8 @@ interface NodeState {
   node_type: string;
   is_built: boolean;
   build_output: string[];
+  machine_id?: string;
+  machine_hostname?: string;
 }
 
 // Drag handle props type
@@ -57,7 +59,7 @@ export function NodesViewPanel({
   onRemove,
   dragHandleProps,
 }: NodesViewPanelProps) {
-  const { subscribe, unsubscribe, getSession } = useZenohSubscriptionContext();
+  const { getSession } = useZenohSubscriptionContext();
   const [nodes, setNodes] = useState<NodeState[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -65,57 +67,99 @@ export function NodesViewPanel({
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [daemonConnected, setDaemonConnected] = useState(false);
-  const listenerIdRef = useRef<string | null>(null);
 
-  // Subscribe to daemon nodes topic
+  // Track whether we've received data (avoids stale closure over nodes.length)
+  const hasReceivedDataRef = useRef(false);
+
+  // Helper to process a NodeList payload
+  const processPayload = useCallback((payload: Uint8Array) => {
+    try {
+      const nodeList = decodeNodeList(payload);
+
+      if (nodeList && nodeList.nodes.length > 0) {
+        const mappedNodes: NodeState[] = nodeList.nodes.map(n => ({
+          name: n.name,
+          path: n.path,
+          status: statusNumberToString(n.status),
+          installed: n.installed,
+          autostart_enabled: n.autostartEnabled,
+          version: n.version,
+          description: n.description,
+          node_type: n.nodeType,
+          is_built: n.isBuilt,
+          build_output: n.buildOutput,
+          machine_id: n.machineId,
+          machine_hostname: n.machineHostname,
+        }));
+        setNodes(mappedNodes);
+        setDaemonConnected(true);
+        setError(null);
+        setLoading(false);
+        hasReceivedDataRef.current = true;
+      }
+    } catch (err) {
+      console.error('[NodesView] Failed to decode NodeList:', err);
+      console.error('[NodesView] Decode error:', err);
+    }
+  }, []);
+
+  // Poll daemon for node list via Zenoh GET (queryable)
+  // Subscriptions don't reliably forward larger payloads through the bridge,
+  // but GET queries work consistently.
   useEffect(() => {
     const topic = 'bubbaloop/daemon/nodes';
+    let mounted = true;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const handleSample = (sample: { payload: () => { toBytes: () => Uint8Array } }) => {
+    const pollNodes = async () => {
+      const session = getSession();
+      if (!session || !mounted) {
+        pollTimer = setTimeout(pollNodes, 500);
+        return;
+      }
+
       try {
-        const payload = getSamplePayload(sample as Parameters<typeof getSamplePayload>[0]);
-        const nodeList = decodeNodeList(payload);
+        const receiver = await session.get(topic, {
+          timeout: Duration.milliseconds.of(5000),
+        });
 
-        if (nodeList && nodeList.nodes.length > 0) {
-          const mappedNodes: NodeState[] = nodeList.nodes.map(n => ({
-            name: n.name,
-            path: n.path,
-            status: statusNumberToString(n.status),
-            installed: n.installed,
-            autostart_enabled: n.autostartEnabled,
-            version: n.version,
-            description: n.description,
-            node_type: n.nodeType,
-            is_built: n.isBuilt,
-            build_output: n.buildOutput,
-          }));
-          setNodes(mappedNodes);
-          setDaemonConnected(true);
-          setError(null);
-          setLoading(false);
+        if (receiver && mounted) {
+          for await (const replyItem of receiver) {
+            if (!mounted) break;
+            if (replyItem instanceof Reply) {
+              const replyResult = replyItem.result();
+              if (replyResult instanceof ReplyError) continue;
+              const payload = getSamplePayload(replyResult as Sample);
+              processPayload(payload);
+            }
+          }
         }
       } catch (err) {
-        console.error('[NodesView] Failed to decode NodeList:', err);
+        console.warn('[NodesView] Poll failed:', err);
+      }
+
+      // Schedule next poll
+      if (mounted) {
+        pollTimer = setTimeout(pollNodes, 3000);
       }
     };
 
-    listenerIdRef.current = subscribe(topic, handleSample);
+    pollNodes();
 
-    // Set timeout for connection
+    // Set timeout for initial connection
     const timeout = setTimeout(() => {
-      if (nodes.length === 0) {
+      if (!hasReceivedDataRef.current) {
         setLoading(false);
         setError('No data from daemon - check if bubbaloop-daemon is running');
       }
-    }, 5000);
+    }, 15000);
 
     return () => {
+      mounted = false;
       clearTimeout(timeout);
-      if (listenerIdRef.current) {
-        unsubscribe(topic, listenerIdRef.current);
-      }
+      if (pollTimer) clearTimeout(pollTimer);
     };
-  }, [subscribe, unsubscribe, nodes.length]);
+  }, [getSession, processPayload]);
 
   // Execute command via Zenoh query
   const executeCommand = useCallback(async (nodeName: string, command: string) => {
@@ -324,6 +368,7 @@ export function NodesViewPanel({
               <div className="list-header">
                 <span className="col-status">St</span>
                 <span className="col-name">Name</span>
+                <span className="col-machine">Machine</span>
                 <span className="col-version">Version</span>
                 <span className="col-type">Type</span>
               </div>
@@ -345,6 +390,7 @@ export function NodesViewPanel({
                         {isBuilding ? <span className="pulse">{statusCfg.icon}</span> : statusCfg.icon}
                       </span>
                       <span className="col-name">{node.name}</span>
+                      <span className="col-machine">{node.machine_hostname || 'local'}</span>
                       <span className="col-version">{node.version}</span>
                       <span className={`col-type type-${node.node_type}`}>{node.node_type}</span>
                     </div>
@@ -549,6 +595,7 @@ export function NodesViewPanel({
 
         .col-status { width: 30px; text-align: center; }
         .col-name { flex: 1; color: var(--text-primary); font-weight: 500; }
+        .col-machine { width: 100px; color: var(--text-muted); font-size: 11px; }
         .col-version { width: 70px; color: var(--accent-secondary); font-family: 'JetBrains Mono', monospace; }
         .col-type { width: 60px; text-transform: uppercase; font-size: 10px; font-weight: 600; }
 
@@ -575,7 +622,7 @@ export function NodesViewPanel({
             min-height: 300px;
           }
 
-          .col-version, .col-type {
+          .col-machine, .col-version, .col-type {
             display: none;
           }
         }
@@ -645,6 +692,10 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
         <div className="info-row">
           <span className="label">Version</span>
           <span className="value mono">{node.version}</span>
+        </div>
+        <div className="info-row">
+          <span className="label">Machine</span>
+          <span className="value">{node.machine_hostname || 'local'}</span>
         </div>
         {node.description && (
           <div className="info-row full">

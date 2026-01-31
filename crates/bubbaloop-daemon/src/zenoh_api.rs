@@ -7,13 +7,13 @@
 //!
 //! | Key Expression | Description | Payload |
 //! |----------------|-------------|---------|
-//! | `bubbaloop/daemon/api/health` | Health check | None |
-//! | `bubbaloop/daemon/api/nodes` | List all nodes | None |
-//! | `bubbaloop/daemon/api/nodes/add` | Add a node | JSON: `{"node_path": "..."}` |
-//! | `bubbaloop/daemon/api/nodes/{name}` | Get single node | None |
-//! | `bubbaloop/daemon/api/nodes/{name}/logs` | Get node logs | None |
-//! | `bubbaloop/daemon/api/nodes/{name}/command` | Execute command | JSON: `{"command": "start"}` |
-//! | `bubbaloop/daemon/api/refresh` | Refresh all nodes | None |
+//! | `bubbaloop/{machine_id}/daemon/api/health` | Health check | None |
+//! | `bubbaloop/{machine_id}/daemon/api/nodes` | List all nodes | None |
+//! | `bubbaloop/{machine_id}/daemon/api/nodes/add` | Add a node | JSON: `{"node_path": "..."}` |
+//! | `bubbaloop/{machine_id}/daemon/api/nodes/{name}` | Get single node | None |
+//! | `bubbaloop/{machine_id}/daemon/api/nodes/{name}/logs` | Get node logs | None |
+//! | `bubbaloop/{machine_id}/daemon/api/nodes/{name}/command` | Execute command | JSON: `{"command": "start"}` |
+//! | `bubbaloop/{machine_id}/daemon/api/refresh` | Refresh all nodes | None |
 
 use crate::node_manager::NodeManager;
 use crate::proto::{CommandType, NodeCommand};
@@ -23,25 +23,54 @@ use tokio::sync::watch;
 use zenoh::bytes::ZBytes;
 use zenoh::Session;
 
+/// Get machine ID from environment or hostname
+fn get_machine_id() -> String {
+    std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
+        hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".to_string())
+    })
+}
+
 /// Key expressions for API endpoints
 pub mod api_keys {
-    /// Base prefix for all API endpoints
-    pub const API_PREFIX: &str = "bubbaloop/daemon/api";
+    // Legacy keys (for backward compatibility)
+    /// Base prefix for all API endpoints (legacy)
+    pub const API_PREFIX_LEGACY: &str = "bubbaloop/daemon/api";
 
-    /// Health check
-    pub const HEALTH: &str = "bubbaloop/daemon/api/health";
+    /// Wildcard for all API endpoints (legacy)
+    pub const API_WILDCARD_LEGACY: &str = "bubbaloop/daemon/api/**";
 
-    /// List all nodes
-    pub const NODES: &str = "bubbaloop/daemon/api/nodes";
+    // New machine-scoped keys
+    /// Get base prefix for API with machine_id
+    pub fn api_prefix(machine_id: &str) -> String {
+        format!("bubbaloop/{}/daemon/api", machine_id)
+    }
 
-    /// Add a new node
-    pub const NODES_ADD: &str = "bubbaloop/daemon/api/nodes/add";
+    /// Get wildcard for all API endpoints with machine_id
+    pub fn api_wildcard(machine_id: &str) -> String {
+        format!("bubbaloop/{}/daemon/api/**", machine_id)
+    }
 
-    /// Refresh all node states
-    pub const REFRESH: &str = "bubbaloop/daemon/api/refresh";
+    /// Get health check key with machine_id
+    pub fn health_key(machine_id: &str) -> String {
+        format!("bubbaloop/{}/daemon/api/health", machine_id)
+    }
 
-    /// Wildcard for all API endpoints (used for queryable declaration)
-    pub const API_WILDCARD: &str = "bubbaloop/daemon/api/**";
+    /// Get nodes list key with machine_id
+    pub fn nodes_key(machine_id: &str) -> String {
+        format!("bubbaloop/{}/daemon/api/nodes", machine_id)
+    }
+
+    /// Get nodes add key with machine_id
+    pub fn nodes_add_key(machine_id: &str) -> String {
+        format!("bubbaloop/{}/daemon/api/nodes/add", machine_id)
+    }
+
+    /// Get refresh key with machine_id
+    pub fn refresh_key(machine_id: &str) -> String {
+        format!("bubbaloop/{}/daemon/api/refresh", machine_id)
+    }
 }
 
 /// JSON response for node state
@@ -142,8 +171,8 @@ fn parse_command(cmd: &str) -> CommandType {
         "uninstall" => CommandType::Uninstall,
         "build" => CommandType::Build,
         "clean" => CommandType::Clean,
-        "enable_autostart" | "enable-autostart" => CommandType::EnableAutostart,
-        "disable_autostart" | "disable-autostart" => CommandType::DisableAutostart,
+        "enable" | "enable_autostart" | "enable-autostart" => CommandType::EnableAutostart,
+        "disable" | "disable_autostart" | "disable-autostart" => CommandType::DisableAutostart,
         "add" | "add_node" => CommandType::AddNode,
         "remove" | "remove_node" => CommandType::RemoveNode,
         "refresh" => CommandType::Refresh,
@@ -155,30 +184,60 @@ fn parse_command(cmd: &str) -> CommandType {
 pub struct ZenohApiService {
     session: Arc<Session>,
     node_manager: Arc<NodeManager>,
+    machine_id: String,
 }
 
 impl ZenohApiService {
     /// Create a new Zenoh API service
     pub fn new(session: Arc<Session>, node_manager: Arc<NodeManager>) -> Self {
+        let machine_id = get_machine_id();
+        log::info!("Zenoh API service using machine_id: {}", machine_id);
         Self {
             session,
             node_manager,
+            machine_id,
         }
+    }
+
+    /// Get current timestamp in milliseconds
+    fn now_ms() -> i64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
     }
 
     /// Run the Zenoh API service
     pub async fn run(self, mut shutdown: watch::Receiver<()>) -> Result<(), zenoh::Error> {
         log::info!("Starting Zenoh API service...");
 
-        // Declare a single queryable with wildcard to handle all API endpoints
-        let queryable = self
+        // Declare queryables on both legacy and new paths for backward compatibility
+        // The .complete(true) hint tells Zenoh this queryable is authoritative for this key expression
+
+        // Legacy path
+        let queryable_legacy = self
             .session
-            .declare_queryable(api_keys::API_WILDCARD)
+            .declare_queryable(api_keys::API_WILDCARD_LEGACY)
+            .complete(true)
             .await?;
 
         log::info!(
-            "Declared queryable on {} for REST-like API",
-            api_keys::API_WILDCARD
+            "Declared queryable on {} for REST-like API (legacy)",
+            api_keys::API_WILDCARD_LEGACY
+        );
+
+        // New machine-scoped path
+        let new_wildcard = api_keys::api_wildcard(&self.machine_id);
+        let queryable_new = self
+            .session
+            .declare_queryable(&new_wildcard)
+            .complete(true)
+            .await?;
+
+        log::info!(
+            "Declared queryable on {} for REST-like API (machine-scoped)",
+            new_wildcard
         );
 
         loop {
@@ -189,14 +248,26 @@ impl ZenohApiService {
                     break;
                 }
 
-                // Handle incoming queries
-                query = queryable.recv_async() => {
+                // Handle incoming queries on legacy path
+                query = queryable_legacy.recv_async() => {
                     match query {
                         Ok(query) => {
                             self.handle_query(&query).await;
                         }
                         Err(e) => {
-                            log::warn!("Query receive error: {}", e);
+                            log::warn!("Query receive error (legacy): {}", e);
+                        }
+                    }
+                }
+
+                // Handle incoming queries on new path
+                query = queryable_new.recv_async() => {
+                    match query {
+                        Ok(query) => {
+                            self.handle_query(&query).await;
+                        }
+                        Err(e) => {
+                            log::warn!("Query receive error (new): {}", e);
                         }
                     }
                 }
@@ -209,13 +280,18 @@ impl ZenohApiService {
     /// Handle an incoming query by routing to the appropriate handler
     async fn handle_query(&self, query: &zenoh::query::Query) {
         let key_expr = query.key_expr().as_str();
-        log::debug!("Received API query on {}", key_expr);
+        log::info!("API query received on: {}", key_expr);
 
-        // Parse the key expression to determine the endpoint
-        let path = key_expr
-            .strip_prefix(api_keys::API_PREFIX)
-            .unwrap_or(key_expr);
-        let path = path.trim_start_matches('/');
+        // Try to parse path from either legacy or new format
+        let path = if let Some(p) = key_expr.strip_prefix(api_keys::API_PREFIX_LEGACY) {
+            p.trim_start_matches('/')
+        } else if let Some(p) = key_expr.strip_prefix(&api_keys::api_prefix(&self.machine_id)) {
+            p.trim_start_matches('/')
+        } else {
+            // Fallback - just use the key as-is
+            log::warn!("Query path doesn't match expected prefix: {}", key_expr);
+            key_expr
+        };
 
         // Route to appropriate handler
         let response = match path {
@@ -239,8 +315,12 @@ impl ZenohApiService {
         };
 
         // Send reply
-        if let Err(e) = query.reply(query.key_expr(), ZBytes::from(response)).await {
-            log::warn!("Failed to send reply: {}", e);
+        match query
+            .reply(query.key_expr(), ZBytes::from(response.clone()))
+            .await
+        {
+            Ok(_) => log::debug!("Reply sent for {}", key_expr),
+            Err(e) => log::error!("Failed to send reply for {}: {}", key_expr, e),
         }
     }
 
@@ -281,6 +361,9 @@ impl ZenohApiService {
             node_name: String::new(),
             node_path: request.node_path,
             request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: Self::now_ms(),
+            source_machine: "api".to_string(), // API calls don't have a source machine
+            target_machine: self.machine_id.clone(),
         };
 
         let result = self.node_manager.execute_command(cmd).await;
@@ -301,6 +384,9 @@ impl ZenohApiService {
             node_name: String::new(),
             node_path: String::new(),
             request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: Self::now_ms(),
+            source_machine: "api".to_string(),
+            target_machine: self.machine_id.clone(),
         };
 
         let result = self.node_manager.execute_command(cmd).await;
@@ -443,6 +529,9 @@ impl ZenohApiService {
             node_name: name.to_string(),
             node_path: request.node_path,
             request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: Self::now_ms(),
+            source_machine: "api".to_string(),
+            target_machine: self.machine_id.clone(),
         };
 
         let result = self.node_manager.execute_command(cmd).await;

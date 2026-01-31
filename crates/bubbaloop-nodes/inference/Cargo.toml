@@ -10,10 +10,12 @@ description = "Inference node for processing camera data"
 prost.workspace = true
 prost-types.workspace = true
 tokio.workspace = true
-zenoh.workspace = true
+zenoh = { workspace = true, features = ["shared-memory"] }
 env_logger.workspace = true
 log.workspace = true
 bubbaloop.workspace = true
+ctrlc.workspace = true
+hostname = "0.4"
 
 [[bin]]
 name = "inference_node"

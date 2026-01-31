@@ -1,0 +1,50 @@
+{
+  // Standalone Zenoh Router Configuration
+  // ======================================
+  // Single-machine development setup. All services run locally.
+  // This is the default configuration for local development.
+  //
+  // Usage:
+  //   zenohd -c configs/zenoh/standalone.json5
+  //
+  // Or simply:
+  //   zenohd  (uses default zenoh.json5 in project root)
+
+  mode: "router",
+
+  // Listen only on localhost for security
+  listen: {
+    endpoints: ["tcp/127.0.0.1:7447"],
+  },
+
+  // Disable all scouting for isolated development
+  scouting: {
+    multicast: {
+      enabled: false,
+    },
+    gossip: {
+      enabled: false,
+    },
+  },
+
+  // Transport
+  transport: {
+    shared_memory: {
+      enabled: true,
+    },
+  },
+
+  // Plugin loading
+  plugins_loading: {
+    enabled: true,
+    search_dirs: ["~/.zenoh/lib", "/usr/local/lib", "/usr/lib"],
+  },
+
+  // Plugins
+  plugins: {
+    // WebSocket for local dashboard
+    remote_api: {
+      websocket_port: 10000,
+    },
+  },
+}

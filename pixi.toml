@@ -32,7 +32,7 @@ docs-build = "mkdocs build"
 
 # individual nodes
 # Daemon manages all nodes via systemd and Zenoh
-daemon = "RUST_LOG=info cargo run --bin bubbaloop-daemon --package bubbaloop-daemon --release --"
+daemon = "RUST_LOG=info cargo run --bin bubbaloop --package bubbaloop --release -- daemon"
 
 # Cameras connects to local zenohd by default (tcp/127.0.0.1:7447)
 # Override with: pixi run cameras -- -z tcp/other:7447
@@ -48,9 +48,12 @@ dashboard-proto = { cmd = "cd dashboard && npm run proto", depends-on = ["dashbo
 dashboard-build = { cmd = "cd dashboard && npm run build", depends-on = ["dashboard-proto"] }
 dashboard = { cmd = "cd dashboard && npm run dev", depends-on = ["dashboard-proto"] }
 
-# TUI
-bubbaloop-install = "cd bubbaloop-tui && npm install"
-bubbaloop = { cmd = "cd bubbaloop-tui && npm run dev", depends-on = ["bubbaloop-install"] }
+# TUI (Rust)
+tui = "RUST_LOG=info cargo run --bin bubbaloop --package bubbaloop --release -- tui"
+
+# TUI (Legacy Ink - deprecated)
+bubbaloop-legacy-install = "cd bubbaloop-tui && npm install"
+bubbaloop-legacy = { cmd = "cd bubbaloop-tui && npm run dev", depends-on = ["bubbaloop-legacy-install"] }
 
 # Zenoh bridge (for dashboard WebSocket connection)
 bridge-clone = "test -d zenoh-ts || git clone https://github.com/eclipse-zenoh/zenoh-ts.git"

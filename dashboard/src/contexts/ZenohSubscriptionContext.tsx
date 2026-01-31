@@ -6,14 +6,15 @@ import {
   MonitoredTopicStatsWithMeta,
   SampleCallback,
   EndpointConfig,
+  SubscribeOptions,
 } from '../lib/subscription-manager';
 
 interface ZenohSubscriptionContextValue {
   manager: ZenohSubscriptionManager;
   /** Get the current session (useful for publishing) */
   getSession: () => Session | null;
-  subscribe: (topic: string, callback: SampleCallback, endpointId?: string) => string;
-  unsubscribe: (topic: string, listenerId: string, endpointId?: string) => void;
+  subscribe: (topic: string, callback: SampleCallback, endpointId?: string, options?: SubscribeOptions) => string;
+  unsubscribe: (topic: string, listenerId: string, endpointId?: string, options?: SubscribeOptions) => void;
   getTopicStats: (topic: string, endpointId?: string) => TopicStats | null;
   getAllStats: () => Map<string, TopicStats>;
   getAllMonitoredStats: () => Map<string, MonitoredTopicStatsWithMeta>;
@@ -75,8 +76,8 @@ export function ZenohSubscriptionProvider({
     return {
       manager,
       getSession: () => sessionRef.current,
-      subscribe: (topic, callback, endpointId) => manager.subscribe(topic, callback, endpointId),
-      unsubscribe: (topic, listenerId, endpointId) => manager.unsubscribe(topic, listenerId, endpointId),
+      subscribe: (topic, callback, endpointId, options) => manager.subscribe(topic, callback, endpointId, options),
+      unsubscribe: (topic, listenerId, endpointId, options) => manager.unsubscribe(topic, listenerId, endpointId, options),
       getTopicStats: (topic, endpointId) => manager.getTopicStats(topic, endpointId),
       getAllStats: () => manager.getAllStats(),
       getAllMonitoredStats: () => manager.getAllMonitoredStats(),

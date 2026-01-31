@@ -9,6 +9,15 @@ pub mod config;
 /// CLI commands
 pub mod cli;
 
+/// Daemon module
+pub mod daemon;
+
+/// TUI (Terminal User Interface)
+pub mod tui;
+
+/// Template processing for node creation
+pub mod templates;
+
 /// Protobuf schemas for bubbaloop
 pub mod schemas {
     pub mod camera {
@@ -26,9 +35,18 @@ pub mod schemas {
             include!(concat!(env!("OUT_DIR"), "/bubbaloop.weather.v1.rs"));
         }
     }
+    pub mod daemon {
+        pub mod v1 {
+            include!(concat!(env!("OUT_DIR"), "/bubbaloop.daemon.v1.rs"));
+        }
+    }
 
     // Re-export commonly used types
     pub use camera::v1::{CompressedImage, RawImage};
+    pub use daemon::v1::{
+        CommandResult, CommandType, HealthStatus, NodeCommand, NodeEvent, NodeList,
+        NodeState as DaemonNodeState, NodeStatus,
+    };
     pub use header::v1::Header;
     pub use weather::v1::{
         CurrentWeather, DailyForecast, DailyForecastEntry, HourlyForecast, HourlyForecastEntry,

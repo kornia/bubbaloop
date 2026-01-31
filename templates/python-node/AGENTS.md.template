@@ -1,0 +1,65 @@
+# {{node_name}}
+
+{{description}}
+
+## Quick Reference
+
+| Item | Value |
+|------|-------|
+| Type | Python |
+| Run | `bubbaloop node start {{node_name}}` |
+| Logs | `bubbaloop node logs {{node_name}} -f` |
+
+## File Structure
+
+```
+{{node_name}}/
+├── AGENTS.md         # This file - AI agent context
+├── node.yaml         # Daemon manifest (name, type, command)
+├── config.yaml       # Runtime configuration
+├── requirements.txt  # Python dependencies
+└── main.py           # Main implementation (EDIT THIS)
+```
+
+## How to Modify
+
+### Adding a New Zenoh Publisher
+Edit `main.py`:
+```python
+# Declare publisher
+publisher = session.declare_publisher("{{node_name}}/my_topic")
+
+# Publish data (in run loop)
+publisher.put(json.dumps(data).encode())
+```
+
+### Adding a Subscriber
+```python
+def on_message(sample):
+    data = json.loads(sample.payload.to_bytes())
+    # Process data
+
+subscriber = session.declare_subscriber("other/topic", on_message)
+```
+
+### Changing Configuration
+Edit `config.yaml`:
+```yaml
+publish_topic: "/{{node_name}}/output"
+rate_hz: 10.0  # Adjust publish rate
+```
+
+## Zenoh Topics
+
+| Topic | Direction | Format | Description |
+|-------|-----------|--------|-------------|
+| `/{{node_name}}/output` | Publish | JSON | Main output data |
+
+Data published to these topics is:
+- Visible in the Bubbaloop Dashboard
+- Available to other nodes on the Zenoh network
+- Persisted if a recorder node is running
+
+## Dependencies
+
+This node has no dependencies on other nodes.

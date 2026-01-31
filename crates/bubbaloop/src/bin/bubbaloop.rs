@@ -1,37 +1,157 @@
-//! Bubbaloop CLI
-//!
-//! Main command-line interface for Bubbaloop.
+//! Bubbaloop CLI - Unified command-line interface
 //!
 //! Usage:
-//!   bubbaloop plugin init my-sensor --type rust
-//!   bubbaloop plugin init my-sensor --type python
-//!   bubbaloop plugin list
+//!   bubbaloop tui                      # Launch TUI
+//!   bubbaloop status [-f format]       # Show services status
+//!   bubbaloop doctor                   # Run all system diagnostics
+//!   bubbaloop doctor -c zenoh          # Check Zenoh connectivity only
+//!   bubbaloop doctor -c daemon         # Check daemon health only
+//!   bubbaloop doctor --json            # Output diagnostics as JSON
+//!   bubbaloop doctor --fix             # Auto-fix issues
+//!   bubbaloop node list                # List registered nodes
+//!   bubbaloop node add <path|url>      # Add node from path or GitHub
+//!   bubbaloop node start <name>        # Start a node
+//!   bubbaloop node stop <name>         # Stop a node
+//!   bubbaloop node logs <name>         # View node logs
+//!   bubbaloop debug topics             # List active Zenoh topics
+//!   bubbaloop debug subscribe <key>    # Subscribe to Zenoh topic
+//!   bubbaloop debug query <key>        # Query Zenoh endpoint
+//!   bubbaloop debug info               # Show Zenoh connection info
 
 use argh::FromArgs;
-use bubbaloop::cli::{PluginCommand, PluginError};
+use bubbaloop::cli::{DebugCommand, NodeCommand};
 
-/// Bubbaloop - Physical AI camera streaming platform
+/// Bubbaloop - AI-native orchestration for Physical AI
 #[derive(FromArgs)]
 struct Args {
+    /// show version information
+    #[argh(switch, short = 'V')]
+    version: bool,
+
     #[argh(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum Command {
-    Plugin(PluginCommand),
+    Tui(TuiArgs),
+    Status(StatusArgs),
+    Doctor(DoctorArgs),
+    Daemon(DaemonArgs),
+    Node(NodeCommand),
+    Debug(DebugCommand),
 }
 
-fn main() -> Result<(), PluginError> {
-    // Initialize logging
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+/// Launch the terminal user interface
+#[derive(FromArgs)]
+#[argh(subcommand, name = "tui")]
+struct TuiArgs {}
+
+/// Show services status (non-interactive)
+#[derive(FromArgs)]
+#[argh(subcommand, name = "status")]
+struct StatusArgs {
+    /// output format: table, json, yaml (default: table)
+    #[argh(option, short = 'f', default = "String::from(\"table\")")]
+    format: String,
+}
+
+/// Run system diagnostics and health checks
+#[derive(FromArgs)]
+#[argh(subcommand, name = "doctor")]
+struct DoctorArgs {
+    /// automatically fix issues that can be resolved
+    #[argh(switch)]
+    fix: bool,
+
+    /// output results as JSON
+    #[argh(switch)]
+    json: bool,
+
+    /// specific check to run: all, zenoh, daemon (default: all)
+    #[argh(option, short = 'c', default = "String::from(\"all\")")]
+    check: String,
+}
+
+/// Run the daemon (node manager service)
+#[derive(FromArgs)]
+#[argh(subcommand, name = "daemon")]
+struct DaemonArgs {
+    /// zenoh endpoint to connect to (default: auto-discover local zenohd)
+    #[argh(option, short = 'z')]
+    zenoh_endpoint: Option<String>,
+
+    /// exit with error if another daemon is already running
+    #[argh(switch)]
+    strict: bool,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logging (stderr to avoid interfering with TUI)
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
         .target(env_logger::Target::Stderr)
         .init();
 
     let args: Args = argh::from_env();
 
-    match args.command {
-        Command::Plugin(cmd) => cmd.run(),
+    // Handle --version flag
+    if args.version {
+        println!("bubbaloop {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
     }
+
+    match args.command {
+        // No subcommand = show help
+        None => {
+            eprintln!("Bubbaloop - AI-native orchestration for Physical AI\n");
+            eprintln!("Usage: bubbaloop <command>\n");
+            eprintln!("Commands:");
+            eprintln!("  tui       Launch the terminal user interface");
+            eprintln!("  status    Show services status (non-interactive)");
+            eprintln!("  doctor    Run system diagnostics and health checks");
+            eprintln!("              --json: Output as JSON");
+            eprintln!("              -c, --check <type>: all|zenoh|daemon (default: all)");
+            eprintln!("              --fix: Auto-fix issues");
+            eprintln!("  daemon    Run the daemon (node manager service)");
+            eprintln!("  node      Manage nodes:");
+            eprintln!("              init, validate, list, add, remove");
+            eprintln!("              install, uninstall, start, stop, restart");
+            eprintln!("              logs, build");
+            eprintln!("  debug     Debug Zenoh connectivity:");
+            eprintln!("              info, topics, query, subscribe");
+            eprintln!("\nRun 'bubbaloop <command> --help' for more information.");
+            return Ok(());
+        }
+        Some(Command::Tui(_)) => {
+            bubbaloop::tui::run().await?;
+        }
+        Some(Command::Status(status_args)) => {
+            bubbaloop::cli::status::run(&status_args.format).await?;
+        }
+        Some(Command::Doctor(args)) => {
+            bubbaloop::cli::doctor::run(args.fix, args.json, &args.check).await?;
+        }
+        Some(Command::Daemon(args)) => {
+            // Re-initialize logging for daemon (info level, not warn)
+            drop(
+                env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+                    .try_init(),
+            );
+            bubbaloop::daemon::run(args.zenoh_endpoint, args.strict).await?;
+        }
+        Some(Command::Node(cmd)) => {
+            cmd.run()
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        }
+        Some(Command::Debug(cmd)) => {
+            cmd.run()
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        }
+    }
+
+    Ok(())
 }

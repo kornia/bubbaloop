@@ -164,6 +164,11 @@ export interface EndpointConfig {
   endpoint?: string; // WebSocket URL for remote endpoints
 }
 
+export interface SubscribeOptions {
+  /** When true, subscribe to the exact topic string without appending /** wildcard */
+  exactMatch?: boolean;
+}
+
 interface TopicSubscription {
   subscriber: Subscriber | null;
   listeners: Map<string, SampleCallback>;
@@ -173,6 +178,7 @@ interface TopicSubscription {
   undeclaring: boolean; // True while undeclare is in progress
   endpointId: string;
   subscriberId: number; // Unique ID for debugging
+  exactMatch: boolean; // When true, skip wildcard pattern conversion
 }
 
 // Global counter for subscriber IDs (for debugging)
@@ -332,10 +338,12 @@ export class ZenohSubscriptionManager {
   subscribe(
     topic: string,
     callback: SampleCallback,
-    endpointId: string = DEFAULT_ENDPOINT_ID
+    endpointId: string = DEFAULT_ENDPOINT_ID,
+    options?: SubscribeOptions
   ): string {
     const listenerId = `listener_${++this.listenerIdCounter}`;
     const endpoint = this.endpoints.get(endpointId);
+    const exactMatch = options?.exactMatch ?? false;
 
     if (!endpoint) {
       console.error(`[SubscriptionManager] Unknown endpoint: ${endpointId}`);
@@ -343,12 +351,13 @@ export class ZenohSubscriptionManager {
     }
 
     // Normalize topic to canonical pattern for deduplication
-    const normalizedTopic = normalizeTopicPattern(topic);
+    // Skip normalization for exactMatch to preserve the raw topic
+    const normalizedTopic = exactMatch ? topic : normalizeTopicPattern(topic);
 
     let subscription = endpoint.subscriptions.get(normalizedTopic);
     const isNewSubscription = !subscription;
 
-    console.log(`[SubscriptionManager] subscribe("${topic}") -> normalized: "${normalizedTopic}", exists: ${!isNewSubscription}, existingSubs: [${Array.from(endpoint.subscriptions.keys()).join(', ')}]`);
+    console.log(`[SubscriptionManager] subscribe("${topic}") -> normalized: "${normalizedTopic}", exactMatch: ${exactMatch}, exists: ${!isNewSubscription}, existingSubs: [${Array.from(endpoint.subscriptions.keys()).join(', ')}]`);
 
     if (!subscription) {
       // First listener for this topic - create subscription entry (lazy, no Zenoh sub yet)
@@ -362,9 +371,10 @@ export class ZenohSubscriptionManager {
         undeclaring: false,
         endpointId,
         subscriberId: subId,
+        exactMatch,
       };
       endpoint.subscriptions.set(normalizedTopic, subscription);
-      console.log(`[SubscriptionManager] New subscription #${subId}: ${normalizedTopic}`);
+      console.log(`[SubscriptionManager] New subscription #${subId}: ${normalizedTopic} (exactMatch: ${exactMatch})`);
     }
 
     // Add listener
@@ -386,12 +396,12 @@ export class ZenohSubscriptionManager {
    * Unsubscribe a specific listener from a topic.
    * When the last listener is removed, the Zenoh subscriber is automatically cleaned up.
    */
-  unsubscribe(topic: string, listenerId: string, endpointId: string = DEFAULT_ENDPOINT_ID): void {
+  unsubscribe(topic: string, listenerId: string, endpointId: string = DEFAULT_ENDPOINT_ID, options?: SubscribeOptions): void {
     const endpoint = this.endpoints.get(endpointId);
     if (!endpoint) return;
 
-    // Normalize topic to match subscription key
-    const normalizedTopic = normalizeTopicPattern(topic);
+    // Normalize topic to match subscription key (skip for exactMatch)
+    const normalizedTopic = options?.exactMatch ? topic : normalizeTopicPattern(topic);
 
     const subscription = endpoint.subscriptions.get(normalizedTopic);
     if (!subscription) return;
@@ -737,7 +747,8 @@ export class ZenohSubscriptionManager {
     subscription.pending = false;
 
     // Convert base topic to wildcard pattern for Zenoh subscription
-    const subscriptionPattern = toSubscriptionPattern(baseTopic);
+    // Skip wildcard conversion for exactMatch subscriptions
+    const subscriptionPattern = subscription.exactMatch ? baseTopic : toSubscriptionPattern(baseTopic);
 
     try {
       const subscriber = await endpoint.session.declareSubscriber(subscriptionPattern, {

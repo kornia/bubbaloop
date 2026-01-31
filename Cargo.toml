@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/bubbaloop",
-    "crates/bubbaloop-daemon",
     "crates/bubbaloop-nodes/rtsp-camera",
     "crates/bubbaloop-nodes/inference",
     "crates/bubbaloop-nodes/foxglove",
@@ -37,7 +36,7 @@ flume = "0.12"
 ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
 
 # Zenoh
-zenoh = { version = "1.6.2", features = ["shared-memory"] }
+zenoh = "1.7"
 
 # Logging
 log = "0.4"
@@ -61,5 +60,25 @@ reqwest = { version = "0.12", features = ["json"] }
 # Foxglove WebSocket server
 foxglove = "0.16.1"
 
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Directories
+dirs = "6"
+
+# Error handling
+anyhow = "1"
+
+# Hex encoding
+hex = "0.4"
+
 # internal dependencies
 bubbaloop = { path = "crates/bubbaloop" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
+opt-level = "z"
+panic = "abort"

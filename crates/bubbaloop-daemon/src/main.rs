@@ -22,6 +22,10 @@ struct Args {
     /// Default: connects to local zenohd via default discovery
     #[argh(option, short = 'z')]
     zenoh_endpoint: Option<String>,
+
+    /// exit with error if another daemon is already running
+    #[argh(switch)]
+    strict: bool,
 }
 
 #[tokio::main]
@@ -67,9 +71,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // Start systemd signal listener for real-time state updates
+    log::info!("Starting systemd signal listener...");
+    if let Err(e) = node_manager.clone().start_signal_listener().await {
+        log::warn!(
+            "Failed to start signal listener (will rely on polling): {}",
+            e
+        );
+    }
+
     // Create shared Zenoh session
     log::info!("Connecting to Zenoh...");
     let session = create_session(args.zenoh_endpoint.as_deref()).await?;
+
+    // Check for duplicate daemon instances
+    log::info!("Checking for duplicate daemon instances...");
+    match session
+        .get("bubbaloop/daemon/api/health")
+        .timeout(std::time::Duration::from_secs(1))
+        .await
+    {
+        Ok(replies) => {
+            // Try to get a reply
+            let mut has_response = false;
+            while let Ok(reply) = replies.recv_async().await {
+                match reply.result() {
+                    Ok(_) => {
+                        has_response = true;
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+
+            if has_response {
+                log::warn!("Another daemon is already running!");
+                log::warn!("Multiple daemons will cause conflicting queryables and 'Query not found' errors.");
+                log::warn!(
+                    "To prevent this, use the --strict flag to exit when a duplicate is detected."
+                );
+
+                if args.strict {
+                    return Err("Another daemon is already running (strict mode)".into());
+                }
+            } else {
+                log::info!("No existing daemon detected, proceeding with startup.");
+            }
+        }
+        Err(e) => {
+            log::debug!(
+                "Health check query failed (this is expected if no daemon is running): {}",
+                e
+            );
+        }
+    }
+
+    // Start health monitor for Zenoh heartbeats
+    log::info!("Starting health monitor...");
+    if let Err(e) = node_manager
+        .clone()
+        .start_health_monitor(session.clone())
+        .await
+    {
+        log::warn!("Failed to start health monitor: {}", e);
+    }
 
     // Start Zenoh API service (REST-like queryables with JSON responses)
     let api_manager = node_manager.clone();

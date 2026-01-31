@@ -6,15 +6,13 @@
 # - Zenoh router (zenohd)
 # - Zenoh WebSocket bridge (zenoh-bridge-remote-api)
 # - Bubbaloop daemon
+# - Bubbaloop TUI
 # - Systemd user services for zenohd, zenoh-bridge, and bubbaloop-daemon
-#
-# After installation, install the TUI separately:
-#   npm install -g @kornia-ai/bubbaloop
 
 set -euo pipefail
 
 REPO="kornia/bubbaloop"
-ZENOH_VERSION="1.2.1"
+ZENOH_VERSION="1.7.1"
 INSTALL_DIR="$HOME/.bubbaloop"
 BIN_DIR="$INSTALL_DIR/bin"
 SERVICE_DIR="$HOME/.config/systemd/user"
@@ -131,24 +129,24 @@ install_zenoh() {
     info "Zenoh installed: $("$BIN_DIR/zenohd" --version 2>/dev/null | head -1 || echo "$ZENOH_VERSION")"
 }
 
-# Install Bubbaloop daemon
+# Install Bubbaloop binaries
 install_bubbaloop() {
     local version="$1"
     local os="$2"
     local arch="$3"
 
-    step "Installing Bubbaloop daemon $version..."
+    step "Installing Bubbaloop $version..."
 
     local base_url="https://github.com/$REPO/releases/download/$version"
 
-    # Download daemon
-    download "$base_url/bubbaloop-daemon-$os-$arch" "$BIN_DIR/bubbaloop-daemon"
-    chmod +x "$BIN_DIR/bubbaloop-daemon"
+    # Download bubbaloop (includes CLI, TUI, and daemon)
+    download "$base_url/bubbaloop-$os-$arch" "$BIN_DIR/bubbaloop"
+    chmod +x "$BIN_DIR/bubbaloop"
 
     # Save version
     echo "$version" > "$INSTALL_DIR/version"
 
-    info "Bubbaloop daemon $version installed"
+    info "Bubbaloop $version installed"
 }
 
 # Setup systemd services
@@ -158,21 +156,20 @@ setup_systemd() {
     mkdir -p "$SERVICE_DIR"
     mkdir -p "$INSTALL_DIR/configs"
 
-    # Create Zenoh config
+    # Create Zenoh config (compatible with Zenoh 1.6.x and 1.7.x)
     cat > "$INSTALL_DIR/zenoh.json5" << 'CONFIG'
 {
   mode: "router",
   listen: {
     endpoints: ["tcp/0.0.0.0:7447"]
-  },
-  plugins_search_dirs: []
+  }
 }
 CONFIG
 
     # Zenoh router service
-    cat > "$SERVICE_DIR/zenohd.service" << EOF
+    cat > "$SERVICE_DIR/bubbaloop-zenohd.service" << EOF
 [Unit]
-Description=Zenoh Router
+Description=Zenoh Router for Bubbaloop
 After=network.target
 
 [Service]
@@ -186,11 +183,11 @@ WantedBy=default.target
 EOF
 
     # Zenoh WebSocket bridge service
-    cat > "$SERVICE_DIR/zenoh-bridge.service" << EOF
+    cat > "$SERVICE_DIR/bubbaloop-bridge.service" << EOF
 [Unit]
-Description=Zenoh WebSocket Bridge
-After=zenohd.service
-Requires=zenohd.service
+Description=Zenoh WebSocket Bridge for Bubbaloop
+After=bubbaloop-zenohd.service
+Requires=bubbaloop-zenohd.service
 
 [Service]
 Type=simple
@@ -206,13 +203,13 @@ EOF
     cat > "$SERVICE_DIR/bubbaloop-daemon.service" << EOF
 [Unit]
 Description=Bubbaloop Daemon
-After=zenohd.service
-Requires=zenohd.service
+After=bubbaloop-zenohd.service
+Requires=bubbaloop-zenohd.service
 
 [Service]
 Type=simple
 Environment="RUST_LOG=info"
-ExecStart=$BIN_DIR/bubbaloop-daemon
+ExecStart=$BIN_DIR/bubbaloop daemon
 Restart=on-failure
 RestartSec=5
 
@@ -224,39 +221,54 @@ EOF
     systemctl --user daemon-reload
 
     # Enable services
-    systemctl --user enable zenohd.service
-    systemctl --user enable zenoh-bridge.service
+    systemctl --user enable bubbaloop-zenohd.service
+    systemctl --user enable bubbaloop-bridge.service
     systemctl --user enable bubbaloop-daemon.service
 
     info "Systemd services configured"
+}
+
+# Stop existing services before upgrade (must run before copying binaries)
+stop_services() {
+    if systemctl --user is-active --quiet bubbaloop-daemon.service 2>/dev/null || \
+       systemctl --user is-active --quiet bubbaloop-bridge.service 2>/dev/null || \
+       systemctl --user is-active --quiet bubbaloop-zenohd.service 2>/dev/null; then
+        step "Stopping existing services for upgrade..."
+        systemctl --user stop bubbaloop-daemon.service 2>/dev/null || true
+        systemctl --user stop bubbaloop-bridge.service 2>/dev/null || true
+        systemctl --user stop bubbaloop-zenohd.service 2>/dev/null || true
+    fi
+    # Clean up legacy separate daemon binary
+    rm -f "$BIN_DIR/bubbaloop-daemon" 2>/dev/null || true
+    # Clean up legacy non-prefixed services if present
+    systemctl --user stop zenoh-bridge.service 2>/dev/null || true
+    systemctl --user stop zenohd.service 2>/dev/null || true
+    systemctl --user disable zenoh-bridge.service 2>/dev/null || true
+    systemctl --user disable zenohd.service 2>/dev/null || true
+    rm -f "$SERVICE_DIR/zenohd.service" "$SERVICE_DIR/zenoh-bridge.service" 2>/dev/null || true
 }
 
 # Start services
 start_services() {
     step "Starting services..."
 
-    # Stop existing services first (for upgrade)
-    systemctl --user stop bubbaloop-daemon.service 2>/dev/null || true
-    systemctl --user stop zenoh-bridge.service 2>/dev/null || true
-    systemctl --user stop zenohd.service 2>/dev/null || true
-
     # Start services
-    systemctl --user start zenohd.service
+    systemctl --user start bubbaloop-zenohd.service
     sleep 1
-    systemctl --user start zenoh-bridge.service
+    systemctl --user start bubbaloop-bridge.service
     systemctl --user start bubbaloop-daemon.service
 
     # Check status
-    if systemctl --user is-active --quiet zenohd.service; then
-        info "zenohd: running"
+    if systemctl --user is-active --quiet bubbaloop-zenohd.service; then
+        info "bubbaloop-zenohd: running"
     else
-        warn "zenohd: failed to start"
+        warn "bubbaloop-zenohd: failed to start"
     fi
 
-    if systemctl --user is-active --quiet zenoh-bridge.service; then
-        info "zenoh-bridge: running"
+    if systemctl --user is-active --quiet bubbaloop-bridge.service; then
+        info "bubbaloop-bridge: running"
     else
-        warn "zenoh-bridge: failed to start"
+        warn "bubbaloop-bridge: failed to start"
     fi
 
     if systemctl --user is-active --quiet bubbaloop-daemon.service; then
@@ -331,6 +343,9 @@ main() {
     mkdir -p "$BIN_DIR"
     mkdir -p "$INSTALL_DIR/configs"
 
+    # Stop running services before overwriting binaries (upgrade path)
+    stop_services
+
     # Install components
     install_zenoh "$arch"
     install_bubbaloop "$version" "$os" "$short_arch"
@@ -343,24 +358,22 @@ main() {
 
     echo
     echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║       Installation Complete!         ║${NC}"
+    echo -e "${GREEN}║         Bubbaloop is ready!          ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════╝${NC}"
     echo
-    echo "Installed to: $INSTALL_DIR"
+
+    # Auto-verify installation
+    if [ -x "$BIN_DIR/bubbaloop" ]; then
+        echo -e "${BLUE}Verifying installation...${NC}"
+        echo
+        "$BIN_DIR/bubbaloop" status 2>&1 || true
+        echo
+    fi
+
+    echo -e "${YELLOW}To get started:${NC}"
     echo
-    echo "Services running:"
-    echo "  - zenohd (Zenoh router)"
-    echo "  - zenoh-bridge (WebSocket bridge)"
-    echo "  - bubbaloop-daemon (Node manager)"
-    echo
-    echo "Service management:"
-    echo "  systemctl --user status zenohd"
-    echo "  systemctl --user status bubbaloop-daemon"
-    echo "  systemctl --user restart bubbaloop-daemon"
-    echo
-    echo -e "${YELLOW}Next step: Install the TUI${NC}"
-    echo "  npm install -g @kornia-ai/bubbaloop"
-    echo "  bubbaloop"
+    echo "  source $shell_rc   # Add bubbaloop to PATH (or open new terminal)"
+    echo "  bubbaloop          # Launch the TUI"
     echo
 }
 
