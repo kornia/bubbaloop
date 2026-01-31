@@ -839,6 +839,7 @@ impl App {
 
     pub async fn tick(&mut self) -> Result<()> {
         let now = Instant::now();
+        self.check_exit_timeout();
 
         // Drain messages from background tasks
         while let Ok((msg, msg_type)) = self.message_rx.try_recv() {
@@ -858,12 +859,12 @@ impl App {
 
         // Get nodes from subscription (non-blocking read)
         // Subscription data OVERRIDES initial query data
-        let mut nodes_changed = false;
+        let mut nodes_updated = false;
         if let Some(ref sub) = self.daemon_subscription {
             let mut sub_nodes = sub.get_nodes().await;
             if !sub_nodes.is_empty() {
                 sub_nodes.sort_by(|a, b| a.name.cmp(&b.name));
-                nodes_changed = sub_nodes.len() != self.nodes.len();
+                nodes_updated = true;
                 self.nodes = sub_nodes;
                 if !self.nodes.is_empty() {
                     self.node_index = self.node_index.min(self.nodes.len() - 1);
@@ -873,7 +874,7 @@ impl App {
             }
             self.daemon_available = sub.is_connected().await;
         }
-        if nodes_changed {
+        if nodes_updated {
             self.refresh_discoverable_nodes();
         }
 
@@ -976,9 +977,15 @@ impl App {
             if let Some(client) = &self.daemon_client {
                 let client = client.clone();
                 let path = path.clone();
+                let tx = self.message_tx.clone();
                 // Spawn in background so we don't block
                 tokio::spawn(async move {
-                    let _ = client.add_node(&path).await;
+                    if let Err(e) = client.add_node(&path).await {
+                        let _ = tx.send((
+                            format!("Failed to register node: {}", e),
+                            MessageType::Error,
+                        ));
+                    }
                 });
             }
         }
@@ -1044,12 +1051,18 @@ impl App {
                         }
                     }
                 } else {
-                    let error = String::from_utf8_lossy(&out.stderr);
-                    self.logs.push(format!("Error fetching logs: {}", error));
+                    log::warn!(
+                        "journalctl failed: {}",
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                    self.logs
+                        .push("Error fetching logs (service may not exist)".to_string());
                 }
             }
             Err(e) => {
-                self.logs.push(format!("Failed to run journalctl: {}", e));
+                log::warn!("Failed to run journalctl: {}", e);
+                self.logs
+                    .push("Unable to fetch logs (journalctl unavailable)".to_string());
             }
         }
     }
@@ -1102,12 +1115,34 @@ impl App {
     async fn systemctl_service(&mut self, action: &str) {
         if let Some(service) = self.services.get(self.service_index) {
             let name = service.name.clone();
-            let _ = tokio::process::Command::new("systemctl")
+            match tokio::process::Command::new("systemctl")
                 .args(["--user", action, &name])
                 .output()
-                .await;
-            let verb = capitalize(action);
-            self.add_message(format!("{}ing {}", verb, name), MessageType::Info);
+                .await
+            {
+                Ok(output) if output.status.success() => {
+                    let verb = capitalize(action);
+                    self.add_message(format!("{}ing {}", verb, name), MessageType::Info);
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    self.add_message(
+                        format!(
+                            "Failed to {} {}: {}",
+                            action,
+                            name,
+                            stderr.lines().next().unwrap_or("unknown error")
+                        ),
+                        MessageType::Error,
+                    );
+                }
+                Err(e) => {
+                    self.add_message(
+                        format!("Failed to run systemctl: {}", e),
+                        MessageType::Error,
+                    );
+                }
+            }
         }
     }
 
@@ -1260,9 +1295,18 @@ impl App {
                 self.refresh_discoverable_nodes();
 
                 tokio::spawn(async move {
-                    let _ = client.send_command(&name, "uninstall").await;
+                    if let Err(e) = client.send_command(&name, "uninstall").await {
+                        let _ = tx.send((
+                            format!("Error uninstalling {}: {}", name, e),
+                            MessageType::Error,
+                        ));
+                        return;
+                    }
                     if let Err(e) = client.send_command(&name, "remove").await {
-                        let _ = tx.send((format!("Error: {}", e), MessageType::Error));
+                        let _ = tx.send((
+                            format!("Error removing {}: {}", name, e),
+                            MessageType::Error,
+                        ));
                     }
                 });
             }
@@ -1499,6 +1543,26 @@ impl App {
         let name = self.create_node_name.trim().to_string();
         if name.is_empty() {
             self.add_message("Error: Name cannot be empty".into(), MessageType::Error);
+            return;
+        }
+
+        // Validate node name: only alphanumeric, hyphens, underscores allowed
+        if !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            self.add_message(
+                "Error: Name may only contain alphanumeric characters, hyphens, and underscores"
+                    .into(),
+                MessageType::Error,
+            );
+            return;
+        }
+        if name.starts_with('-') || name.starts_with('.') {
+            self.add_message(
+                "Error: Name must not start with '-' or '.'".into(),
+                MessageType::Error,
+            );
             return;
         }
 

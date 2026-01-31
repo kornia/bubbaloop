@@ -12,7 +12,9 @@ use crate::tui::ui::components::{colors, flower_spinner};
 fn truncate_path(path: &str, max_chars: usize) -> String {
     let char_count = path.chars().count();
     if char_count > max_chars {
-        let skip = char_count - max_chars;
+        // Reserve 3 chars for "..." prefix
+        let keep = max_chars.saturating_sub(3);
+        let skip = char_count.saturating_sub(keep);
         let suffix: String = path.chars().skip(skip).collect();
         format!("...{}", suffix)
     } else {
@@ -812,5 +814,46 @@ fn render_create_node_form(f: &mut Frame, app: &App) {
             Style::default().fg(colors::ERROR),
         ));
         f.render_widget(Paragraph::new(warning), chunks[6]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_path_short() {
+        assert_eq!(truncate_path("/home/user", 20), "/home/user");
+    }
+
+    #[test]
+    fn test_truncate_path_exact() {
+        assert_eq!(truncate_path("12345", 5), "12345");
+    }
+
+    #[test]
+    fn test_truncate_path_respects_max_chars() {
+        let path = "/home/user/very/long/path/to/node";
+        let result = truncate_path(path, 20);
+        // Result should not exceed max_chars (including "..." prefix)
+        assert!(result.chars().count() <= 20);
+        assert!(result.starts_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_path_keeps_suffix() {
+        let path = "/home/user/very/long/path/to/node";
+        let result = truncate_path(path, 15);
+        // Should keep the end of the path
+        assert!(result.ends_with("node"));
+        assert!(result.starts_with("..."));
+        assert!(result.chars().count() <= 15);
+    }
+
+    #[test]
+    fn test_truncate_path_small_max() {
+        // Edge case: max_chars smaller than "..." length
+        let result = truncate_path("/home/user/node", 3);
+        assert_eq!(result, "...");
     }
 }

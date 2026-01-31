@@ -821,20 +821,18 @@ async fn query_with_timeout<T: for<'de> Deserialize<'de>>(
         .map_err(|e| anyhow!("Zenoh query failed: {}", e))?;
 
     let timeout_duration = Duration::from_secs(TIMEOUT_SECS);
-    let start = std::time::Instant::now();
 
-    while start.elapsed() < timeout_duration {
-        match tokio::time::timeout(timeout_duration - start.elapsed(), replies.recv_async()).await {
-            Ok(Ok(reply)) => {
-                if let Ok(sample) = reply.result() {
-                    let bytes = sample.payload().to_bytes();
-                    let text = String::from_utf8_lossy(&bytes);
-                    let result: T = serde_json::from_str(&text)?;
-                    return Ok(result);
-                }
+    match tokio::time::timeout(timeout_duration, replies.recv_async()).await {
+        Ok(Ok(reply)) => {
+            if let Ok(sample) = reply.result() {
+                let bytes = sample.payload().to_bytes();
+                let text = String::from_utf8_lossy(&bytes);
+                let result: T = serde_json::from_str(&text)?;
+                return Ok(result);
             }
-            Ok(Err(_)) | Err(_) => break,
         }
+        Ok(Err(e)) => return Err(anyhow!("Failed to receive reply: {}", e)),
+        Err(_) => { /* timeout - fall through to error below */ }
     }
 
     Err(anyhow!(

@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package bubbaloop.network_monitor.v1;
+
+import "header.proto";
+
+message NetworkStatus {
+    bubbaloop.header.v1.Header header = 1;
+    repeated HealthCheck checks = 2;
+    Summary summary = 3;
+}
+
+message HealthCheck {
+    string name = 1;
+    CheckType type = 2;
+    string target = 3;
+    CheckStatus status = 4;
+    float latency_ms = 5;
+    int32 status_code = 6;    // HTTP status code (0 for non-HTTP)
+    string resolved = 7;      // DNS resolved IP (empty for non-DNS)
+    string error = 8;         // Error message if failed
+}
+
+enum CheckType {
+    CHECK_TYPE_HTTP = 0;
+    CHECK_TYPE_DNS = 1;
+    CHECK_TYPE_PING = 2;
+}
+
+enum CheckStatus {
+    CHECK_STATUS_OK = 0;
+    CHECK_STATUS_FAILED = 1;
+    CHECK_STATUS_TIMEOUT = 2;
+}
+
+message Summary {
+    uint32 total = 1;
+    uint32 healthy = 2;
+    uint32 unhealthy = 3;
+}

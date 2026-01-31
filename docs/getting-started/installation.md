@@ -16,8 +16,7 @@ This installs:
 |-----------|-------------|
 | `zenohd` | Zenoh router for pub/sub messaging |
 | `zenoh-bridge` | WebSocket bridge for browser access |
-| `bubbaloop-daemon` | Node manager for starting/stopping nodes |
-| `bubbaloop` | Terminal UI for managing nodes |
+| `bubbaloop` | Single binary: CLI, TUI, and daemon |
 
 After installation, start a new terminal or source your shell config, then run:
 

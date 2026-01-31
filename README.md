@@ -34,7 +34,7 @@ The install script sets up systemd services:
 | `zenoh-bridge` | WebSocket bridge for browser access |
 | `bubbaloop-daemon` | Node manager for starting/stopping nodes |
 
-The npm package provides the `bubbaloop` CLI for managing nodes.
+The `bubbaloop` binary is a single 7MB Rust binary that includes the CLI, ratatui TUI, and daemon.
 
 ## Development Setup
 

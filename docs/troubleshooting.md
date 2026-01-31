@@ -455,7 +455,7 @@ This will automatically fix most issues. If it doesn't:
 ```bash
 # Kill everything
 pkill -9 -f zenohd
-pkill -9 -f bubbaloop-daemon
+pkill -9 -f "bubbaloop daemon"
 sleep 2
 
 # Start zenohd first
@@ -492,10 +492,10 @@ journalctl --user -u bubbaloop-daemon -f
 **Step 4: Verify only one daemon is running**
 ```bash
 # Check for multiple instances
-ps aux | grep bubbaloop-daemon | grep -v grep
+ps aux | grep "bubbaloop daemon" | grep -v grep
 
 # Should show only ONE process. If more, kill all:
-pkill -9 bubbaloop-daemon
+pkill -9 -f "bubbaloop daemon"
 sleep 2
 systemctl --user start bubbaloop-daemon
 ```
@@ -528,7 +528,7 @@ bubbaloop status
 
 **Symptoms:**
 - Error: "Address already in use"
-- Multiple bubbaloop-daemon processes visible in `ps aux`
+- Multiple `bubbaloop daemon` processes visible in `ps aux`
 - Only one responds, others hang
 
 **Root Cause:**
@@ -539,7 +539,7 @@ The daemon is running multiple times (usually from crashed restarts or multiple 
 **Immediate fix:**
 ```bash
 # Kill all daemon instances
-pkill -9 bubbaloop-daemon
+pkill -9 -f "bubbaloop daemon"
 sleep 2
 
 # Ensure systemd knows it's stopped
@@ -550,7 +550,7 @@ systemctl --user start bubbaloop-daemon
 sleep 2
 
 # Verify only one is running
-ps aux | grep bubbaloop-daemon | wc -l  # Should be 2 (process + grep)
+ps aux | grep "bubbaloop daemon" | wc -l  # Should be 2 (process + grep)
 ```
 
 **Prevent future duplicates:**
@@ -617,7 +617,7 @@ journalctl --user -u bubbaloop-daemon -n 30 --no-pager
 # 1. "Connection refused" -> zenohd not running
 #    Fix: zenohd &
 # 2. "Failed to bind" -> port in use
-#    Fix: pkill -9 bubbaloop-daemon; pkill zenohd; zenohd &
+#    Fix: pkill -9 -f "bubbaloop daemon"; pkill zenohd; zenohd &
 # 3. "Permission denied" -> systemd hardening issue
 #    Fix: See status 218 section below
 
@@ -1590,7 +1590,7 @@ pixi run build
 # 6. Start fresh
 zenohd &
 sleep 2
-bubbaloop-daemon &
+bubbaloop daemon &
 sleep 2
 bubbaloop
 ```
@@ -1620,7 +1620,7 @@ A: Set `BUBBALOOP_ZENOH_ENDPOINT`:
 export BUBBALOOP_ZENOH_ENDPOINT=tcp/192.168.1.50:7447
 
 # Then start daemon/TUI
-bubbaloop-daemon &
+bubbaloop daemon &
 bubbaloop
 
 # Make it permanent (systemd)
@@ -1637,11 +1637,11 @@ A: Yes, with different Zenoh endpoints:
 ```bash
 # Instance 1 (default endpoint)
 zenohd -c zenoh1.json5 &
-BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop-daemon &
+BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop daemon &
 
 # Instance 2 (different endpoint)
 zenohd -c zenoh2.json5 &
-BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7448 bubbaloop-daemon &
+BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7448 bubbaloop daemon &
 
 # Or systemd instances
 systemctl --user start bubbaloop-daemon@instance1

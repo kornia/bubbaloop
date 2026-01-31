@@ -16,7 +16,7 @@ Get started with Bubbaloop in minutes.
 curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
 ```
 
-This installs Zenoh router, WebSocket bridge, and bubbaloop-daemon as systemd services.
+This installs Zenoh router, WebSocket bridge, and the bubbaloop daemon as systemd services.
 
 ### Step 2: Install TUI
 

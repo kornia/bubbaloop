@@ -22,8 +22,8 @@ pixi run dashboard
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│    Dashboard    │     │   bubbaloop-tui │     │   future MCP    │
-│  (React/Vite)   │     │   (Node.js)     │     │                 │
+│    Dashboard    │     │  bubbaloop TUI  │     │   future MCP    │
+│  (React/Vite)   │     │   (ratatui)     │     │                 │
 └────────┬────────┘     └────────┬────────┘     └────────┬────────┘
          │ WebSocket             │                       │
          │ (port 10001)          │                       │
@@ -42,7 +42,7 @@ pixi run dashboard
          ┌───────────────────────┼───────────────────────┐
          │                       │                       │
 ┌────────┴────────┐   ┌─────────┴─────────┐   ┌────────┴────────┐
-│ bubbaloop-daemon│   │   rtsp-camera     │   │    openmeteo    │
+│bubbaloop daemon │   │   rtsp-camera     │   │    openmeteo    │
 │                 │   │                   │   │                 │
 │ • Node registry │   │ • H264 capture    │   │ • Weather API   │
 │ • systemd D-Bus │   │ • Protobuf encode │   │ • Forecast data │
@@ -56,7 +56,7 @@ pixi run dashboard
 |-----------|-------------|--------------|
 | **zenohd** | Central router, all peers connect here | - |
 | **zenoh-bridge-remote-api** | WebSocket bridge for browser | - |
-| **bubbaloop-daemon** | Node manager with systemd integration | `bubbaloop/daemon/*` |
+| **bubbaloop daemon** | Node manager with systemd integration (built into CLI) | `bubbaloop/daemon/*` |
 | **rtsp-camera** | RTSP camera streaming | `/camera/{name}/compressed`, `camera/{name}/raw_shm` |
 | **openmeteo** | Weather data from Open-Meteo API | `/weather/current`, `/weather/hourly`, `/weather/daily` |
 
@@ -64,17 +64,169 @@ pixi run dashboard
 
 ```
 crates/
-├── bubbaloop/           # Core library: schemas + plugin SDK
-├── bubbaloop-daemon/    # Daemon service (manages nodes)
+├── bubbaloop/           # Single binary: CLI + TUI + daemon
+├── bubbaloop-schemas/   # Protobuf schemas for node communication
 └── bubbaloop-nodes/     # All node implementations
     ├── rtsp-camera/     # RTSP camera streaming
     ├── openmeteo/       # Weather data
     ├── foxglove/        # Foxglove bridge
-    └── recorder/        # MCAP recorder
+    ├── recorder/        # MCAP recorder
+    └── inference/       # Inference node
 
 dashboard/               # React dashboard (Vite + TypeScript)
 protos/                  # Protobuf schema definitions
+scripts/                 # Install script, activation scripts
+configs/                 # Zenoh configuration files
+docs/                    # MkDocs documentation site
 ```
+
+### Single Binary Architecture
+
+The `bubbaloop` binary is a single ~7MB statically-linked Rust binary that includes:
+
+- **CLI** (`bubbaloop status`, `bubbaloop node ...`, `bubbaloop doctor`, `bubbaloop debug ...`)
+- **TUI** (`bubbaloop tui` or just `bubbaloop` — ratatui-based terminal UI)
+- **Daemon** (`bubbaloop daemon` — long-running node manager with systemd/D-Bus integration)
+
+The systemd service is named `bubbaloop-daemon.service` but runs `bubbaloop daemon` as its ExecStart.
+The old separate `bubbaloop-daemon` binary no longer exists.
+
+### CLI Subcommands
+
+```
+bubbaloop                     # Show help
+bubbaloop tui                 # Launch ratatui TUI
+bubbaloop status              # Show service status (table format)
+bubbaloop status -f json      # Show service status (JSON)
+bubbaloop doctor              # Run all system diagnostics
+bubbaloop doctor -c zenoh     # Check Zenoh connectivity only
+bubbaloop doctor -c daemon    # Check daemon health only
+bubbaloop doctor --json       # Output diagnostics as JSON
+bubbaloop doctor --fix        # Auto-fix common issues
+bubbaloop daemon              # Run the daemon (node manager)
+bubbaloop daemon -z <endpoint>  # Connect to specific Zenoh endpoint
+bubbaloop daemon --strict     # Exit if another daemon already running
+bubbaloop node init <name>    # Scaffold a new node
+bubbaloop node add <path|url> # Register node with daemon
+bubbaloop node list           # List registered nodes
+bubbaloop node validate <path>  # Validate node.yaml
+bubbaloop node build <name>   # Build a node
+bubbaloop node install <name> # Install as systemd service
+bubbaloop node uninstall <name> # Remove systemd service
+bubbaloop node start <name>   # Start node service
+bubbaloop node stop <name>    # Stop node service
+bubbaloop node restart <name> # Restart node service
+bubbaloop node logs <name>    # View node logs
+bubbaloop node enable <name>  # Enable autostart
+bubbaloop node remove <name>  # Unregister node from daemon
+bubbaloop debug info          # Show Zenoh connection info
+bubbaloop debug topics        # List active Zenoh topics
+bubbaloop debug subscribe <key> # Subscribe to Zenoh topic
+bubbaloop debug query <key>   # Query Zenoh endpoint
+```
+
+### Source Code Map (`crates/bubbaloop/src/`)
+
+```
+bin/
+  bubbaloop.rs              # Entry point: parses CLI args, dispatches to subcommands
+
+lib.rs                      # Library root: protobuf schemas, descriptor utilities, ros-z impls
+config.rs                   # Topic configuration and path helpers
+templates.rs                # Rust/Python node scaffolding templates
+
+cli/                        # CLI command implementations
+  mod.rs                    # Re-exports NodeCommand, DebugCommand
+  doctor.rs                 # System diagnostics: zenoh, daemon, services health checks
+  node.rs                   # Node CRUD: init, add, build, start, stop, logs, etc.
+  status.rs                 # Non-interactive status display (table/json/yaml)
+  debug.rs                  # Low-level Zenoh debugging (topics, subscribe, query, info)
+
+daemon/                     # Long-running daemon process
+  mod.rs                    # Daemon entry point: run() function
+  node_manager.rs           # Core logic: node lifecycle, build queue, health monitoring
+  registry.rs               # Node registry: persists node.yaml manifests to ~/.bubbaloop/
+  systemd.rs                # systemd integration: install/uninstall/start/stop via D-Bus (zbus)
+  zenoh_api.rs              # Zenoh queryable handlers: /api/health, /api/nodes, /api/command
+  zenoh_service.rs          # Zenoh service: pub/sub for state broadcasting
+
+tui/                        # ratatui terminal UI
+  mod.rs                    # TUI entry point: run() function
+  app.rs                    # App state machine: handles keys, ticks, daemon client
+  daemon/
+    mod.rs                  # Daemon client module
+    client.rs               # Zenoh-based client for querying daemon API
+  config/
+    mod.rs                  # Config module
+    registry.rs             # TUI config registry
+  ui/
+    mod.rs                  # UI rendering dispatch
+    home.rs                 # Home screen with status overview
+    services.rs             # Systemd services management view
+    nodes/
+      mod.rs                # Nodes view module
+      list.rs               # Node list: installed, discover, marketplace tabs
+      detail.rs             # Node detail panel
+      logs.rs               # Live log viewer (journalctl)
+    components/
+      mod.rs                # Shared UI components
+      spinner.rs            # Animated flower spinner
+```
+
+### Workspace Crates
+
+| Crate | Binary | Description |
+|-------|--------|-------------|
+| `crates/bubbaloop` | `bubbaloop` | Main binary: CLI + TUI + daemon. Depends on zenoh, ratatui, zbus, prost |
+| `crates/bubbaloop-schemas` | (library) | Standalone protobuf schemas crate for node communication (not in workspace) |
+| `crates/bubbaloop-nodes/rtsp-camera` | `cameras_node` | RTSP camera capture via GStreamer, publishes H264 frames and SHM |
+| `crates/bubbaloop-nodes/openmeteo` | `openmeteo_node` | Weather data from Open-Meteo API, publishes forecasts |
+| `crates/bubbaloop-nodes/foxglove` | `foxglove_bridge` | Foxglove Studio WebSocket bridge for visualization |
+| `crates/bubbaloop-nodes/recorder` | `mcap_recorder` | MCAP file recorder for Zenoh topics |
+| `crates/bubbaloop-nodes/inference` | `inference_node` | ML inference node |
+
+### Protobuf Schema Workflow
+
+Proto source files live in `protos/bubbaloop/`:
+
+| Proto File | Module | Key Types |
+|------------|--------|-----------|
+| `header.proto` | `schemas::header::v1` | `Header` (timestamp, frame_id, seq) |
+| `camera.proto` | `schemas::camera::v1` | `CompressedImage`, `RawImage` |
+| `weather.proto` | `schemas::weather::v1` | `CurrentWeather`, `HourlyForecast`, `DailyForecast` |
+| `daemon.proto` | `schemas::daemon::v1` | `NodeState`, `NodeStatus`, `HealthStatus`, `NodeCommand` |
+| `machine.proto` | — | Machine/device metadata |
+
+Compilation: `prost-build` compiles `.proto` files at build time via `build.rs`. Generated Rust code goes
+to `OUT_DIR` and is included via `include!()` macros in `lib.rs`. All types derive `serde::Serialize`
+and `serde::Deserialize`. A `descriptor.bin` FileDescriptorSet is also generated for runtime schema access
+(used by Foxglove bridge and MCAP recorder).
+
+The `bubbaloop-schemas` crate (`crates/bubbaloop-schemas/`) is a standalone crate (not in the workspace)
+with its own proto files (`header.proto`, `system_telemetry.proto`, `network_monitor.proto`). It's intended
+for sharing schemas with external nodes without pulling in the full `bubbaloop` dependency.
+
+### Zenoh Topic Conventions
+
+```
+bubbaloop/daemon/api/health          # Daemon health queryable (query/reply)
+bubbaloop/daemon/api/nodes           # Node list queryable (query/reply)
+bubbaloop/daemon/api/command         # Node command queryable (query/reply)
+bubbaloop/daemon/nodes               # Node state pub/sub (broadcast)
+bubbaloop/nodes/{name}/health        # Node heartbeat (pub/sub)
+
+/camera/{name}/compressed            # H264 compressed frames (pub/sub)
+camera/{name}/raw_shm                # Raw frames via shared memory (pub/sub)
+
+/weather/current                     # Current weather conditions (pub/sub)
+/weather/hourly                      # Hourly forecast (pub/sub)
+/weather/daily                       # Daily forecast (pub/sub)
+```
+
+Communication patterns:
+- **Query/Reply** for one-time requests (health checks, node commands, node list)
+- **Pub/Sub** for continuous streams (video frames, weather, node state changes)
+- **Shared Memory (SHM)** for high-bandwidth local data (raw camera frames)
 
 ## Running Services
 
@@ -114,24 +266,42 @@ journalctl --user -u bubbaloop-rtsp-camera -f
 ## Pixi Tasks
 
 ```bash
-# Build all
-pixi run build
+# === Orchestration ===
+pixi run up                  # Launch all services via process-compose
 
-# Run daemon (node manager)
-pixi run daemon
+# === Build ===
+pixi run build               # cargo build --release (all crates)
 
-# Run dashboard dev server
-pixi run dashboard
+# === Run Individual Services ===
+pixi run daemon              # Run daemon (bubbaloop daemon)
+pixi run tui                 # Run TUI (bubbaloop tui)
+pixi run dashboard           # Run React dashboard dev server
+pixi run cameras             # Run RTSP camera node
+pixi run openmeteo           # Run weather node
+pixi run foxglove            # Run Foxglove bridge
+pixi run mcap_recorder       # Run MCAP recorder
+pixi run inference           # Run inference node
 
-# Run individual nodes manually
-pixi run cameras -- -c configs/cameras.yaml
-pixi run openmeteo -- -c configs/config.yaml
+# === Development ===
+pixi run check               # cargo check
+pixi run test                # cargo test
+pixi run fmt                 # cargo fmt --all
+pixi run clippy              # cargo clippy --all-targets --all-features -- -D warnings
+pixi run lint                # fmt-check + clippy combined
+pixi run pre-commit-run      # Run all pre-commit hooks
 
-# Development
-pixi run check      # cargo check
-pixi run test       # cargo test
-pixi run fmt        # cargo fmt
-pixi run clippy     # cargo clippy
+# === Documentation ===
+pixi run docs                # Serve docs locally (mkdocs serve)
+pixi run docs-build          # Build static docs site
+
+# === Dashboard ===
+pixi run dashboard-install   # npm install
+pixi run dashboard-proto     # Generate protobuf TypeScript bindings
+pixi run dashboard-build     # Production build
+
+# === Zenoh ===
+pixi run bridge              # Build and run zenoh-bridge-remote-api
+pixi run zenohd-client       # Run zenohd with client config (~/.bubbaloop/zenoh.cli.json5)
 ```
 
 ## Dashboard Features
@@ -323,161 +493,60 @@ zenohd -c configs/zenoh/central-router.json5
 
 # On each Jetson (edit config first with central IP)
 zenohd -c configs/zenoh/jetson-router.json5
-BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop-daemon
+BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop daemon
 ```
 
 ## Key Dependencies
 
-- **Zenoh** - Pub/sub messaging (v1.7.x)
-- **zenoh-ts** - TypeScript Zenoh client for dashboard
-- **ros-z** - ROS 2 compatibility layer
-- **prost** - Protobuf serialization
-- **GStreamer** - H264 camera capture
-- **zbus** - D-Bus client for systemd integration
+| Crate | Version | Purpose |
+|-------|---------|---------|
+| `zenoh` | 1.7 | Pub/sub messaging, query/reply, shared memory |
+| `ros-z` | git main | ROS 2 compatibility layer over Zenoh |
+| `prost` / `prost-build` | 0.14 | Protobuf serialization and code generation |
+| `ratatui` | 0.29 | Terminal UI framework |
+| `crossterm` | 0.28 | Terminal input/output backend |
+| `zbus` | — | D-Bus client for systemd integration |
+| `tokio` | 1.0 (full) | Async runtime |
+| `gstreamer` | 0.24 | H264 camera capture and video processing |
+| `argh` | 0.1 | CLI argument parsing |
+| `foxglove` | 0.16.1 | Foxglove Studio WebSocket bridge |
+| `reqwest` | 0.12 | HTTP client (weather API) |
+| `zenoh-ts` | — | TypeScript Zenoh client (dashboard) |
+
+## Testing
+
+```bash
+pixi run test                    # Run all tests
+cargo test -p bubbaloop          # Test main crate only
+cargo test -p rtsp_camera        # Test specific node
+```
+
+Tests are co-located with source code using `#[cfg(test)] mod tests` blocks. Key test areas:
+- `crates/bubbaloop/src/cli/node.rs` — argument injection prevention, node name validation, git clone safety
+- `crates/bubbaloop/src/daemon/node_manager.rs` — build command validation, health extraction
+- `crates/bubbaloop/src/tui/ui/nodes/list.rs` — path truncation logic
 
 ## Troubleshooting
 
-### "Query not found" or "Timeout" errors in TUI
+Quick diagnostics: `bubbaloop doctor --fix` (auto-fixes common issues).
 
-**Symptoms:**
-- TUI shows "Daemon: disconnected"
-- Zenoh warnings: `Route reply: Query not found!`
-- Error reply with payload "Timeout"
+Common issues:
+- **TUI "Daemon: disconnected"**: Check `ps aux | grep "bubbaloop daemon"` for duplicates. Kill extras, restart: `systemctl --user restart bubbaloop-daemon`
+- **Zenoh timeout**: Ensure zenohd is running: `pgrep zenohd || zenohd &`
+- **Binary mismatch**: `cp target/release/bubbaloop ~/.bubbaloop/bin/ && systemctl --user restart bubbaloop-daemon`
+- **TUI crash in Claude Code**: TUI requires interactive TTY. Use `bubbaloop status` for non-interactive checks
 
-**Common Causes:**
+See [docs/troubleshooting.md](docs/troubleshooting.md) for comprehensive guide.
 
-1. **Duplicate daemon processes** (most common)
-   ```bash
-   # Check for multiple daemons
-   ps aux | grep bubbaloop-daemon
+## Daemon Internals
 
-   # If multiple found, kill extras and restart service
-   pkill -f bubbaloop-daemon
-   systemctl --user restart bubbaloop-daemon
-   ```
+The daemon (`bubbaloop daemon`) manages node lifecycle via systemd D-Bus (zbus):
 
-2. **Daemon not fully initialized**
-   ```bash
-   # Wait for daemon to start (takes ~2 seconds)
-   systemctl --user restart bubbaloop-daemon && sleep 3
-   ```
-
-3. **Zenoh router not running**
-   ```bash
-   # Check zenohd status
-   systemctl --user status bubbaloop-zenohd
-
-   # Or start manually
-   zenohd &
-   ```
-
-4. **Binary mismatch** (installed vs built)
-   ```bash
-   # Update installed daemon binary
-   systemctl --user stop bubbaloop-daemon
-   cp target/release/bubbaloop-daemon ~/.bubbaloop/bin/
-   systemctl --user start bubbaloop-daemon
-   ```
-
-### TUI crashes on startup
-
-If running via Claude Code (no TTY attached):
-```
-Error: No such device or address (os error 6)
-```
-
-The TUI requires an interactive terminal. Run it directly in your terminal, not through non-interactive shells.
-
-## Daemon Service Management
-
-The bubbaloop-daemon provides advanced service management features:
-
-### Security Hardening
-
-Generated systemd service units include security directives:
-
-```ini
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-PrivateTmp=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-# Robotics-compatible settings (allow RT scheduling and JIT)
-RestrictRealtime=false
-MemoryDenyWriteExecute=false
-```
-
-To apply security hardening to existing services, reinstall them:
-```bash
-# Via dashboard: Uninstall then Install the node
-# Or programmatically via Zenoh commands
-```
-
-Analyze service security:
-```bash
-systemd-analyze --user security bubbaloop-rtsp-camera.service
-```
-
-### Real-time State Updates (D-Bus Signals)
-
-The daemon subscribes to systemd D-Bus signals for instant state updates:
-- **JobRemoved** - Service started/stopped/failed
-- **UnitNew** - Service installed
-- **UnitRemoved** - Service uninstalled
-
-This provides <100ms state update latency (vs 5s polling previously). Polling now runs every 30s as a backup sync.
-
-### Build Queue and Timeout
-
-Build operations are managed to prevent issues:
-- **Concurrent build prevention**: Only one build per node at a time
-- **10-minute timeout**: Builds are killed if they exceed the timeout
-- **Process cleanup**: `kill_on_drop(true)` ensures child processes are terminated
-
-Events emitted: `building`, `build_complete`, `build_failed`, `build_timeout`
-
-### Health Monitoring (Zenoh Heartbeats)
-
-Nodes can publish heartbeats to `bubbaloop/nodes/{name}/health` for health monitoring:
-
-```rust
-// In your node, publish periodic heartbeats:
-session.put("bubbaloop/nodes/my-node/health", "ok").await?;
-```
-
-The daemon tracks:
-- **HealthStatus**: `UNKNOWN`, `HEALTHY`, `UNHEALTHY`
-- **last_health_check_ms**: Timestamp of last heartbeat
-
-A node is marked `UNHEALTHY` if no heartbeat is received for 30 seconds while the service is running.
-
-### Protobuf Schema (daemon.proto)
-
-```protobuf
-enum HealthStatus {
-  HEALTH_STATUS_UNKNOWN = 0;
-  HEALTH_STATUS_HEALTHY = 1;
-  HEALTH_STATUS_UNHEALTHY = 2;
-}
-
-message NodeState {
-  string name = 1;
-  string path = 2;
-  NodeStatus status = 3;
-  bool installed = 4;
-  bool autostart_enabled = 5;
-  string version = 6;
-  string description = 7;
-  string node_type = 8;
-  bool is_built = 9;
-  int64 last_updated_ms = 10;
-  repeated string build_output = 11;
-  HealthStatus health_status = 12;
-  int64 last_health_check_ms = 13;
-}
-```
+- **State updates**: D-Bus signals for <100ms latency (JobRemoved, UnitNew, UnitRemoved). 30s polling as backup
+- **Build queue**: One build per node, 10-minute timeout, `kill_on_drop(true)`
+- **Health monitoring**: Nodes publish heartbeats to `bubbaloop/nodes/{name}/health`. Marked UNHEALTHY after 30s silence
+- **Security hardening**: Generated systemd units include `NoNewPrivileges=true`, `ProtectSystem=strict`, etc.
+- **Build validation**: Allowlisted prefixes (`cargo`, `pixi`, `npm`, `make`, `python`, `pip`), rejects shell metacharacters and newlines
 
 ## Git Hygiene & Artifacts
 
@@ -511,157 +580,57 @@ pixi run fmt       # Format Rust code
 pixi run clippy    # Lint Rust code
 ```
 
-## Claude Code Instructions
+## Agent Guidelines
 
-### Adding new boilerplate patterns
+### Coding Style
 
-When you create new templates, generated files, or build artifacts:
+- **Rust edition**: 2021, async/await with tokio
+- **Error handling**: `thiserror` for library errors, `anyhow` for application-level
+- **Naming**: snake_case for files/functions, CamelCase for types, SCREAMING_SNAKE for constants
+- **File size target**: ~500 LOC per module. Split if larger
+- **Imports**: group by std, external crates, internal modules
+- **Tests**: co-located `#[cfg(test)] mod tests` blocks, not separate files (except integration tests)
+- **Protobuf types**: versioned modules (`schemas::camera::v1::CompressedImage`), re-exported at `schemas::` level
+- **Async**: all Zenoh and systemd operations are async. Use `tokio::spawn` for background tasks
 
-1. **Update `.gitignore`** - Add patterns for any new generated/build files
-2. **Update this section** - Document what should/shouldn't be committed
-3. **Check before commit** - Run `git status` to verify no artifacts are staged
+### IMPORTANT: Do and Don't
 
-### Common patterns to watch for
+**DO:**
+- Run `pixi run fmt` and `pixi run clippy` before any commit
+- Run `pixi run check` after modifying Rust code to catch compile errors early
+- Validate build command inputs (allowlisted prefixes, reject shell metacharacters)
+- Validate node names (alphanumeric, hyphens, underscores only; no path traversal)
+- Use `--` separator in git clone commands to prevent argument injection
+- Add tests for security-sensitive code paths
+- Keep this CLAUDE.md updated when architecture changes
+- Update `.gitignore` when adding new generated/build file patterns
 
-When adding new node types or build systems, ensure these are ignored:
+**DON'T:**
+- Don't run `bubbaloop tui` from Claude Code — it requires an interactive TTY
+- Don't use `bubbaloop-daemon` as a binary name — it's now `bubbaloop daemon` (subcommand)
+- Don't edit files in `target/` or `OUT_DIR` — they are generated
+- Don't commit `.env`, credentials, or `target/` directories
+- Don't pass unsanitized user input to `std::process::Command` without validation
+- Don't add `crates/bubbaloop-schemas/` to the workspace — it's intentionally standalone
+- Don't run `git push --force` to main
 
-```gitignore
-# Python nodes
-**/__pycache__/
-**/*.pyc
-**/*.egg-info/
-**/venv/
-**/.venv/
+### Commit Style
 
-# Rust nodes (already covered by target/)
-**/target/
+Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`
 
-# Generated code
-**/*.generated.*
-**/generated/
+### Git Hygiene
 
-# Build outputs
-**/build/
-**/out/
-```
+**Never commit:** `target/`, `node_modules/`, `dist/`, `.pixi/`, `*.pb.js`, `*.pb.d.ts`, `*.pyc`, `*.so`
 
-### Automation checklist
+**Always commit:** `Cargo.lock`, `pixi.lock`, `package-lock.json`
 
-When creating new boilerplate (templates, nodes, etc.):
+**Pre-commit:** `pixi run fmt && pixi run clippy`
 
-- [ ] Add build output patterns to `.gitignore`
-- [ ] Add generated file patterns to `.gitignore`
-- [ ] Document the pattern in this CLAUDE.md file
-- [ ] Verify with `git status` before committing
-- [ ] Run `cargo fmt` and `pixi run clippy` before commit
+### Verification Workflow
 
-## Multi-Terminal Workflow
+After making code changes, verify in this order:
 
-### Permission Modes
-
-Optimize your workflow by choosing the right permission level:
-
-| Mode | How to Enable | Auto-Approves | Best For |
-|------|---------------|---------------|----------|
-| **Default** | Normal startup | Nothing | High-risk operations |
-| **Accept Edits** | `Shift + Tab` | File edits only | Daily development |
-| **Allowlisted** | `settings.json` | Specific commands | Repetitive tasks |
-| **Bypass All** | `--dangerously-skip-permissions` | Everything | Isolated containers |
-
-**Accept Edits Mode** (Recommended for development):
-- Press `Shift + Tab` to toggle
-- Auto-approves `Write` and `Edit` operations
-- Still prompts for shell commands (safe from `rm -rf`)
-
-### Allowlisting Safe Commands
-
-Add frequently-used safe commands to `~/.claude/settings.json`:
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(pixi run build)",
-      "Bash(pixi run test)",
-      "Bash(pixi run fmt)",
-      "Bash(pixi run clippy)",
-      "Bash(cargo check:*)",
-      "Bash(git status)",
-      "Bash(git diff:*)",
-      "Bash(systemctl --user status:*)",
-      "Bash(systemctl --user restart bubbaloop-*)"
-    ]
-  }
-}
-```
-
-### Session Management for Multiple Terminals
-
-| Strategy | Tool | Use Case |
-|----------|------|----------|
-| **Persistence** | `tmux` | Keep Claude running if terminal closes |
-| **Isolation** | `git worktree` | Prevent file conflicts between sessions |
-| **Monitoring** | TUI `/tasks` | Track background agent progress |
-
-**tmux setup for bubbaloop development:**
-```bash
-# Create session with 4 panes
-tmux new-session -s bubbaloop -n dev \; \
-  split-window -h \; \
-  split-window -v \; \
-  select-pane -t 0 \; \
-  split-window -v
-
-# Pane layout:
-# ┌─────────┬─────────┐
-# │ zenohd  │ daemon  │
-# ├─────────┼─────────┤
-# │ claude  │ tui     │
-# └─────────┴─────────┘
-```
-
-**git worktree for parallel Claude sessions:**
-```bash
-# Create isolated worktree for feature work
-git worktree add ../bubbaloop-feature feature-branch
-
-# Run Claude in each worktree independently
-cd ../bubbaloop-feature && claude
-```
-
-### Safety Fences (Deny Rules)
-
-Protect sensitive files even in permissive modes. Add to `~/.claude/settings.json`:
-
-```json
-{
-  "permissions": {
-    "deny": [
-      "Read(.env)",
-      "Read(.env.*)",
-      "Read(~/.ssh/**)",
-      "Read(~/.aws/**)",
-      "Write(.env)",
-      "Bash(rm -rf *)",
-      "Bash(git push --force:*)"
-    ]
-  }
-}
-```
-
-### Project-Specific Preferences
-
-This CLAUDE.md file tells Claude:
-
-1. **Build commands**: `pixi run build`, `pixi run test`
-2. **Code style**: Rust 2021 edition, async/await patterns
-3. **Project structure**: Nodes in `crates/bubbaloop-nodes/`
-4. **Commit style**: Conventional commits with `Co-Authored-By`
-
-### Recommended Workflow
-
-1. **Start services** in tmux panes (zenohd, daemon, bridge)
-2. **Enable Accept Edits** mode (`Shift + Tab`)
-3. **Use TUI** for node management (`bubbaloop`)
-4. **Run Claude** for development tasks
-5. **Verify** with `pixi run clippy` before commits
+1. `pixi run check` — fast compile check
+2. `pixi run clippy` — lint (must pass with zero warnings, `-D warnings` is enforced)
+3. `pixi run test` — run tests
+4. `pixi run fmt` — format check
