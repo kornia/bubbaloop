@@ -244,9 +244,13 @@ version = "0.1.0"
 dependencies = [
  "prost",
  "prost-build",
+ "prost-reflect",
  "prost-types",
  "ros-z",
  "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1977,6 +1981,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "prost-reflect"
+version = "0.16.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b89455ef41ed200cafc47c76c552ee7792370ac420497e551f16123a9135f76e"
+dependencies = [
+ "prost",
+ "prost-types",
 ]
 
 [[package]]

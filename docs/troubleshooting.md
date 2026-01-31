@@ -681,15 +681,11 @@ bubbaloop node install NODENAME
 
 **Step 2: Verify node is built**
 ```bash
-# Check if binary exists
-ls -la crates/bubbaloop-nodes/NODENAME/target/release/NODENAME
+# Check if binary exists (in the node's directory)
+ls -la ~/.bubbaloop/nodes/NODENAME/target/release/NODENAME
 
 # If not found, build it
 bubbaloop node build NODENAME
-
-# Or manually
-cd crates/bubbaloop-nodes/NODENAME
-cargo build --release
 ```
 
 **Step 3: Reinstall service with updated binary**
@@ -745,8 +741,8 @@ systemctl --user start bubbaloop-NODENAME
 
 **For compilation errors:**
 ```bash
-# Get full error details
-cd crates/bubbaloop-nodes/NODENAME
+# Get full error details (from the node's directory)
+cd ~/.bubbaloop/nodes/NODENAME
 cargo build --release 2>&1 | tail -50
 
 # Common fixes:
@@ -896,7 +892,7 @@ systemctl --user start bubbaloop-NODENAME
 If your node accesses hardware (GPIO, I2C, SPI, video devices):
 ```bash
 # Check what permissions the binary needs
-ldd crates/bubbaloop-nodes/NODENAME/target/release/NODENAME
+ldd ~/.bubbaloop/nodes/NODENAME/target/release/NODENAME
 
 # Edit systemd unit
 systemctl --user edit bubbaloop-NODENAME.service

@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package bubbaloop.weather.v1;
+
+import "header.proto";
+
+// Current weather conditions
+message CurrentWeather {
+    bubbaloop.header.v1.Header header = 1;
+
+    // Location information
+    double latitude = 2;
+    double longitude = 3;
+    string timezone = 4;
+
+    // Weather measurements
+    double temperature_2m = 5;          // Temperature at 2m height (Celsius)
+    double relative_humidity_2m = 6;    // Relative humidity at 2m (%)
+    double apparent_temperature = 7;    // Feels-like temperature (Celsius)
+    double precipitation = 8;           // Precipitation (mm)
+    double rain = 9;                    // Rain (mm)
+    double wind_speed_10m = 10;         // Wind speed at 10m (km/h)
+    double wind_direction_10m = 11;     // Wind direction at 10m (degrees)
+    double wind_gusts_10m = 12;         // Wind gusts at 10m (km/h)
+    uint32 weather_code = 13;           // WMO weather code
+    double cloud_cover = 14;            // Cloud cover (%)
+    double pressure_msl = 15;           // Mean sea level pressure (hPa)
+    double surface_pressure = 16;       // Surface pressure (hPa)
+    uint32 is_day = 17;                 // 1 = day, 0 = night
+}
+
+// Single hourly forecast entry
+message HourlyForecastEntry {
+    uint64 time = 1;                    // Unix timestamp (seconds)
+    double temperature_2m = 2;
+    double relative_humidity_2m = 3;
+    double precipitation_probability = 4;
+    double precipitation = 5;
+    uint32 weather_code = 6;
+    double wind_speed_10m = 7;
+    double wind_direction_10m = 8;
+    double cloud_cover = 9;
+}
+
+// Hourly forecast data
+message HourlyForecast {
+    bubbaloop.header.v1.Header header = 1;
+
+    // Location information
+    double latitude = 2;
+    double longitude = 3;
+    string timezone = 4;
+
+    // Forecast entries (typically 24-168 hours)
+    repeated HourlyForecastEntry entries = 5;
+}
+
+// Single daily forecast entry
+message DailyForecastEntry {
+    uint64 time = 1;                    // Unix timestamp (seconds) - start of day
+    double temperature_2m_max = 2;
+    double temperature_2m_min = 3;
+    double precipitation_sum = 4;
+    double precipitation_probability_max = 5;
+    uint32 weather_code = 6;
+    double wind_speed_10m_max = 7;
+    double wind_gusts_10m_max = 8;
+    string sunrise = 9;                 // ISO 8601 time
+    string sunset = 10;                 // ISO 8601 time
+}
+
+// Daily forecast data
+message DailyForecast {
+    bubbaloop.header.v1.Header header = 1;
+
+    // Location information
+    double latitude = 2;
+    double longitude = 3;
+    string timezone = 4;
+
+    // Forecast entries (typically 7-16 days)
+    repeated DailyForecastEntry entries = 5;
+}
+
+// Location configuration for setting weather location
+message LocationConfig {
+    double latitude = 1;
+    double longitude = 2;
+    string timezone = 3;     // Optional timezone (e.g., "Europe/Madrid")
+}
