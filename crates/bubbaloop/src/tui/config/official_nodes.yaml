@@ -1,0 +1,49 @@
+nodes:
+  - name: rtsp-camera
+    description: "RTSP camera capture with hardware H264 decode"
+    version: "0.1.0"
+    type: rust
+    repo: kornia/bubbaloop-nodes-official
+    subdir: rtsp-camera
+
+  - name: openmeteo
+    description: "Open-Meteo weather data publisher"
+    version: "0.1.0"
+    type: rust
+    repo: kornia/bubbaloop-nodes-official
+    subdir: openmeteo
+
+  - name: foxglove
+    description: "Foxglove Studio bridge for camera visualization"
+    version: "0.1.0"
+    type: rust
+    repo: kornia/bubbaloop-nodes-official
+    subdir: foxglove
+
+  - name: recorder
+    description: "MCAP file recorder for ROS-Z topics"
+    version: "0.1.0"
+    type: rust
+    repo: kornia/bubbaloop-nodes-official
+    subdir: recorder
+
+  - name: inference
+    description: "ML inference node for camera processing"
+    version: "0.1.0"
+    type: rust
+    repo: kornia/bubbaloop-nodes-official
+    subdir: inference
+
+  - name: system-telemetry
+    description: "System telemetry metrics (CPU, memory, disk, network, load)"
+    version: "0.1.0"
+    type: rust
+    repo: kornia/bubbaloop-nodes-official
+    subdir: system-telemetry
+
+  - name: network-monitor
+    description: "Network connectivity monitor (HTTP, DNS, ping health checks)"
+    version: "0.1.0"
+    type: python
+    repo: kornia/bubbaloop-nodes-official
+    subdir: network-monitor

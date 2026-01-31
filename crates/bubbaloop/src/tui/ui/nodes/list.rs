@@ -428,10 +428,10 @@ fn render_marketplace_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
                 format!("  {}", source.name)
             };
 
-            let type_color = if source.source_type == "git" {
-                colors::ERROR
-            } else {
-                colors::SUCCESS
+            let type_color = match source.source_type.as_str() {
+                "git" => colors::ERROR,
+                "builtin" => colors::PRIMARY,
+                _ => colors::SUCCESS,
             };
 
             let path_display = truncate_path(&source.path, 50);
