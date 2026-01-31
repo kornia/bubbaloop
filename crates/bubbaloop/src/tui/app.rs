@@ -1324,37 +1324,39 @@ impl App {
                 && !path.starts_with('.')
                 && !path.starts_with('~');
 
+            // For local nodes, we need a daemon client
+            if !is_remote && self.daemon_client.is_none() {
+                return;
+            }
+
+            let label = if is_remote { "Installing" } else { "Adding" };
+            self.add_message(format!("{} {}...", label, node.name), MessageType::Info);
+
+            // Optimistic local state update (shared by both paths)
+            let new_node = NodeInfo {
+                name: node.name.clone(),
+                path: node.path.clone(),
+                version: node.version.clone(),
+                node_type: node.node_type.clone(),
+                description: String::new(),
+                status: "stopped".to_string(),
+                is_built: false,
+                build_output: Vec::new(),
+            };
+            self.nodes.push(new_node);
+            self.nodes.sort_by(|a, b| a.name.cmp(&b.name));
+            self.discoverable_nodes.retain(|n| n.path != path);
+            self.view = View::Nodes(NodesTab::Installed);
+            self.node_index = self
+                .nodes
+                .iter()
+                .position(|n| n.name == node.name)
+                .unwrap_or(0);
+
+            let tx = self.message_tx.clone();
+            let node_name = node.name.clone();
+
             if is_remote {
-                // Remote node: spawn `bubbaloop node add <repo> --subdir <name> --build`
-                let tx = self.message_tx.clone();
-                let node_name = node.name.clone();
-                self.add_message(
-                    format!("Installing {} (remote)...", node.name),
-                    MessageType::Info,
-                );
-
-                // Optimistic local state update
-                let new_node = NodeInfo {
-                    name: node.name.clone(),
-                    path: node.path.clone(),
-                    version: node.version.clone(),
-                    node_type: node.node_type.clone(),
-                    description: String::new(),
-                    status: "stopped".to_string(),
-                    is_built: false,
-                    build_output: Vec::new(),
-                };
-                self.nodes.push(new_node);
-                self.nodes.sort_by(|a, b| a.name.cmp(&b.name));
-                self.discoverable_nodes.retain(|n| n.path != path);
-                self.view = View::Nodes(NodesTab::Installed);
-                self.node_index = self
-                    .nodes
-                    .iter()
-                    .position(|n| n.name == node.name)
-                    .unwrap_or(0);
-
-                // Parse "repo --subdir name" into args
                 let parts: Vec<String> = path.split_whitespace().map(|s| s.to_string()).collect();
                 tokio::spawn(async move {
                     let exe = std::env::current_exe().unwrap_or_else(|_| "bubbaloop".into());
@@ -1384,34 +1386,8 @@ impl App {
                         }
                     }
                 });
-            } else if let Some(client) = &self.daemon_client {
-                // Local node: use daemon API
-                let client = client.clone();
-                let node_name = node.name.clone();
-                let tx = self.message_tx.clone();
-                self.add_message(format!("Adding {}...", node.name), MessageType::Info);
-
-                // Optimistic local state update
-                let new_node = NodeInfo {
-                    name: node.name.clone(),
-                    path: node.path.clone(),
-                    version: node.version.clone(),
-                    node_type: node.node_type.clone(),
-                    description: String::new(),
-                    status: "stopped".to_string(),
-                    is_built: false,
-                    build_output: Vec::new(),
-                };
-                self.nodes.push(new_node);
-                self.nodes.sort_by(|a, b| a.name.cmp(&b.name));
-                self.discoverable_nodes.retain(|n| n.path != path);
-                self.view = View::Nodes(NodesTab::Installed);
-                self.node_index = self
-                    .nodes
-                    .iter()
-                    .position(|n| n.name == node.name)
-                    .unwrap_or(0);
-
+            } else {
+                let client = self.daemon_client.clone().unwrap();
                 tokio::spawn(async move {
                     if let Err(e) = client.send_add_node(&path).await {
                         let _ = tx.send((

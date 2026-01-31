@@ -47,11 +47,9 @@ struct OfficialNodesYaml {
     nodes: Vec<OfficialNodeEntry>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize)]
 struct OfficialNodeEntry {
     name: String,
-    #[allow(dead_code)]
-    description: String,
     version: String,
     #[serde(rename = "type")]
     node_type: String,
