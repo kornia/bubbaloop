@@ -117,9 +117,10 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>> {
         .ok();
     config.insert_json5("scouting/gossip/enabled", "false").ok();
 
-    // Enable shared memory if available
+    // Disable shared memory - it prevents the bridge from receiving larger payloads
+    // because the bridge doesn't participate in the SHM segment
     config
-        .insert_json5("transport/shared_memory/enabled", "true")
+        .insert_json5("transport/shared_memory/enabled", "false")
         .ok();
 
     let session = zenoh::open(config).await?;
@@ -192,6 +193,16 @@ impl ZenohService {
         log::info!("Declared publisher on {}", keys::EVENTS_LEGACY);
         log::info!("Declared publisher on {}", events_key_new);
 
+        // Declare queryable for node list (returns current state on GET)
+        let nodes_queryable = self
+            .session
+            .declare_queryable(keys::NODES_LIST_LEGACY)
+            .await?;
+        log::info!(
+            "Declared nodes queryable on {}",
+            keys::NODES_LIST_LEGACY
+        );
+
         // Give Zenoh time to propagate queryable declarations across the network
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         log::info!("All queryables registered, ready to accept commands");
@@ -210,8 +221,8 @@ impl ZenohService {
             initial_list.nodes.len()
         );
 
-        // Create periodic publish timer (30s backup sync - primary updates come from D-Bus signals)
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        // Create periodic publish timer (5s - frequent enough that new subscribers get data quickly)
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
 
         loop {
             tokio::select! {
@@ -228,15 +239,34 @@ impl ZenohService {
                         log::warn!("Failed to refresh node state: {}", e);
                     }
 
-                    // Publish current state (both legacy and new)
+                    // Publish current state (both legacy and new), but only if non-empty
                     let list = self.node_manager.get_node_list().await;
-                    let bytes = Self::encode_proto(&list);
-                    let bytes_new = Self::encode_proto(&list);
-                    if let Err(e) = list_publisher.put(bytes).await {
-                        log::warn!("Failed to publish node list (legacy): {}", e);
+                    if !list.nodes.is_empty() {
+                        let bytes = Self::encode_proto(&list);
+                        let bytes_new = Self::encode_proto(&list);
+                        if let Err(e) = list_publisher.put(bytes).await {
+                            log::warn!("Failed to publish node list (legacy): {}", e);
+                        }
+                        if let Err(e) = list_publisher_new.put(bytes_new).await {
+                            log::warn!("Failed to publish node list (new): {}", e);
+                        }
                     }
-                    if let Err(e) = list_publisher_new.put(bytes_new).await {
-                        log::warn!("Failed to publish node list (new): {}", e);
+                }
+
+                // Handle node list queries (GET on bubbaloop/daemon/nodes)
+                nodes_query = nodes_queryable.recv_async() => {
+                    match nodes_query {
+                        Ok(query) => {
+                            let list = self.node_manager.get_node_list().await;
+                            let bytes = Self::encode_proto(&list);
+                            log::debug!("Replying to nodes query with {} nodes ({} bytes)", list.nodes.len(), bytes.len());
+                            if let Err(e) = query.reply(query.key_expr(), bytes).await {
+                                log::warn!("Failed to reply to nodes query: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Nodes query receive error: {}", e);
+                        }
                     }
                 }
 
@@ -292,15 +322,17 @@ impl ZenohService {
                                 }
                             }
 
-                            // Publish updated list (both legacy and new)
+                            // Publish updated list (both legacy and new), but only if non-empty
                             let list = self.node_manager.get_node_list().await;
-                            let list_bytes = Self::encode_proto(&list);
-                            let list_bytes_new = Self::encode_proto(&list);
-                            if let Err(e) = list_publisher.put(list_bytes).await {
-                                log::warn!("Failed to publish node list (legacy): {}", e);
-                            }
-                            if let Err(e) = list_publisher_new.put(list_bytes_new).await {
-                                log::warn!("Failed to publish node list (new): {}", e);
+                            if !list.nodes.is_empty() {
+                                let list_bytes = Self::encode_proto(&list);
+                                let list_bytes_new = Self::encode_proto(&list);
+                                if let Err(e) = list_publisher.put(list_bytes).await {
+                                    log::warn!("Failed to publish node list (legacy): {}", e);
+                                }
+                                if let Err(e) = list_publisher_new.put(list_bytes_new).await {
+                                    log::warn!("Failed to publish node list (new): {}", e);
+                                }
                             }
                         }
                         Err(_) => {
