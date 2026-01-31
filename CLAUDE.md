@@ -65,13 +65,7 @@ pixi run dashboard
 ```
 crates/
 ├── bubbaloop/           # Single binary: CLI + TUI + daemon
-├── bubbaloop-schemas/   # Protobuf schemas for node communication (standalone, not in workspace)
-└── bubbaloop-nodes/     # Official node implementations (standalone, not in workspace)
-    ├── rtsp-camera/     # RTSP camera streaming
-    ├── openmeteo/       # Weather data
-    ├── foxglove/        # Foxglove bridge
-    ├── recorder/        # MCAP recorder
-    └── inference/       # Inference node
+└── bubbaloop-schemas/   # Protobuf schemas for node communication (standalone, not in workspace)
 
 dashboard/               # React dashboard (Vite + TypeScript)
 protos/                  # Protobuf schema definitions
@@ -80,10 +74,10 @@ configs/                 # Zenoh configuration files
 docs/                    # MkDocs documentation site
 ```
 
-**Note:** Node crates in `crates/bubbaloop-nodes/` are **standalone** (not workspace members).
-They depend on `bubbaloop-schemas` via path dependency and each have their own `[workspace]`
-table. They are designed to be extracted to a separate repo (`bubbaloop-nodes-official`).
-External nodes should depend on `bubbaloop-schemas` (not the full `bubbaloop` crate).
+**Note:** Official nodes (rtsp-camera, openmeteo, foxglove, recorder, inference) live in the
+separate [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official) repo.
+They depend on `bubbaloop-schemas` via git dependency. External nodes should also depend on
+`bubbaloop-schemas` (not the full `bubbaloop` crate).
 
 ### Single Binary Architecture
 
@@ -189,15 +183,20 @@ tui/                        # ratatui terminal UI
 | Crate | Binary | Description |
 |-------|--------|-------------|
 | `crates/bubbaloop-schemas` | (library) | Protobuf schemas + utilities. Features: `ros-z`, `descriptor`, `config` |
-| `crates/bubbaloop-nodes/rtsp-camera` | `cameras_node` | RTSP camera capture via GStreamer, publishes H264 frames and SHM |
-| `crates/bubbaloop-nodes/openmeteo` | `openmeteo_node` | Weather data from Open-Meteo API, publishes forecasts |
-| `crates/bubbaloop-nodes/foxglove` | `foxglove_bridge` | Foxglove Studio WebSocket bridge for visualization |
-| `crates/bubbaloop-nodes/recorder` | `mcap_recorder` | MCAP file recorder for Zenoh topics |
-| `crates/bubbaloop-nodes/inference` | `inference_node` | ML inference node |
 
-Nodes depend on `bubbaloop-schemas` (not the full `bubbaloop` crate). To check a node:
+Official nodes live in the [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official) repo:
+
+| Node | Binary | Description |
+|------|--------|-------------|
+| `rtsp-camera` | `cameras_node` | RTSP camera capture via GStreamer, publishes H264 frames and SHM |
+| `openmeteo` | `openmeteo_node` | Weather data from Open-Meteo API, publishes forecasts |
+| `foxglove` | `foxglove_bridge` | Foxglove Studio WebSocket bridge for visualization |
+| `recorder` | `mcap_recorder` | MCAP file recorder for Zenoh topics |
+| `inference` | `inference_node` | ML inference node |
+
+Nodes depend on `bubbaloop-schemas` via git (not the full `bubbaloop` crate). Install with:
 ```bash
-cd crates/bubbaloop-nodes/<name> && cargo check
+bubbaloop node add kornia/bubbaloop-nodes-official --subdir rtsp-camera
 ```
 
 ### Protobuf Schema Workflow
@@ -332,7 +331,7 @@ pixi run zenohd-client       # Run zenohd with client config (~/.bubbaloop/zenoh
 
 ## Node Development
 
-Each node lives in `crates/bubbaloop-nodes/{name}/` with:
+Each node is a standalone crate (in its own repo or directory) with:
 
 ```
 {name}/
@@ -369,8 +368,8 @@ The `depends_on` field specifies other nodes that must be running before this no
 ### Building a node
 
 ```bash
-cd crates/bubbaloop-nodes/my-node
-pixi run cargo build --release
+cd my-node
+cargo build --release
 ```
 
 ## Creating a New Node

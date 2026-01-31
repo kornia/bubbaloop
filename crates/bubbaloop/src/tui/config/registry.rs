@@ -170,29 +170,6 @@ impl Registry {
             }
         }
 
-        // Also scan local development path
-        let local_dev = std::env::current_dir()
-            .map(|p| p.join("crates/bubbaloop-nodes"))
-            .unwrap_or_default();
-        if local_dev.exists() {
-            let found = scan_for_nodes(local_dev.to_string_lossy().as_ref());
-            for node in found {
-                let normalized = normalize_path(&node.path);
-                if !registered_paths.contains(&normalized)
-                    && !discovered_paths.contains(&normalized)
-                {
-                    discovered_paths.insert(normalized);
-                    discovered.push(DiscoverableNode {
-                        path: node.path,
-                        name: node.name,
-                        version: node.version,
-                        node_type: node.node_type,
-                        source: "bubbaloop-nodes".into(),
-                    });
-                }
-            }
-        }
-
         discovered
     }
 }
