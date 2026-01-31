@@ -50,6 +50,71 @@ should not need to know about `CompressedImage` or `CurrentWeather` specifically
 
 ---
 
+## Deployment Model: Central Only
+
+The storage service runs as a **single instance on the central server** -- the same machine
+that hosts the Zenoh router, WebSocket bridge, dashboard, and daemon.
+
+### Why Central?
+
+In a multi-machine bubbaloop deployment (e.g., multiple Jetsons + a central server), the
+central Zenoh router already sees **all traffic** from all machines via mesh routing. The
+storage service connects to this central router and receives every published message across
+the entire fleet -- no per-machine instances needed.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                       Central Server                                │
+│                                                                     │
+│  ┌──────────┐    ┌──────────────────┐    ┌────────────────────┐    │
+│  │ zenohd   │───>│ storage service  │───>│  GCS (LanceDB)    │    │
+│  │ (router) │    │ (subscribes to   │    │  gs://bucket/data  │    │
+│  │ :7447    │    │  all topics)     │    │                    │    │
+│  └────┬─────┘    └──────────────────┘    └────────────────────┘    │
+│       │                                                             │
+│       │  Zenoh mesh routing                                         │
+│       │                                                             │
+├───────┼─────────────────────────────────────────────────────────────┤
+        │
+   ┌────┴────────────────────────────────────┐
+   │         Zenoh Mesh (gossip)             │
+   │                                         │
+   ├─────────────┐  ┌──────────┐  ┌─────────┤
+   │  Jetson #1  │  │ Jetson #2│  │ Jetson #3│
+   │  - zenohd   │  │ - zenohd │  │ - zenohd │
+   │  - cameras  │  │ - cameras│  │ - lidar  │
+   │  - daemon   │  │ - daemon │  │ - daemon │
+   └─────────────┘  └──────────┘  └──────────┘
+```
+
+### Implications
+
+| Concern | How It's Handled |
+|---------|-----------------|
+| **Multi-machine attribution** | `machine_id` field in Header identifies which machine produced each message. Stored in the `messages` table and queryable. |
+| **Network bandwidth** | Camera frames (~30fps H264) traverse the network to reach central. This is acceptable because (a) H264 is already compressed, (b) Zenoh uses efficient transport, (c) recordings are opt-in (start/stop). For very high bandwidth scenarios, consider recording only selected topics. |
+| **Single point of failure** | If the central server goes down, recording stops. This is the accepted trade-off for simplicity. The storage service can resume recording in a new session when it comes back. |
+| **GCS access** | Only the central server needs GCS credentials (`GOOGLE_APPLICATION_CREDENTIALS`). Edge devices never touch GCS. |
+| **Latency** | Message timestamps come from the Header's `acq_time` (set at the source), not arrival time. So network latency doesn't affect timestamp accuracy. |
+
+### Configuration for Central Deployment
+
+The storage node connects to the local Zenoh router on the central server (default
+`tcp/127.0.0.1:7447`). No special configuration needed -- it's just another node
+managed by the daemon on the central machine:
+
+```bash
+# On central server
+bubbaloop node add crates/bubbaloop-nodes/storage
+bubbaloop node install storage
+bubbaloop node start storage
+```
+
+The Zenoh router on the central server already receives all traffic from edge devices
+via mesh routing, so the storage service sees everything automatically.
+
+---
+
 ## Core Design: Message-Type Agnostic Storage
 
 ### Single `messages` Table
@@ -562,3 +627,4 @@ nanosecond timestamp, not zero or far-future). Fall back to wall clock time on f
 5. **Performance:** Batch inserts of 30 messages in <2s; no drops at 30fps single camera
 6. **Reliable:** SIGTERM flushes + finalizes; sessions always have end_time on stop
 7. **aarch64:** Validated on Jetson before implementation
+8. **Central:** Single instance on central server records from all machines; `machine_id` correctly identifies data source
