@@ -1,11 +1,6 @@
 [workspace]
 members = [
     "crates/bubbaloop",
-    "crates/bubbaloop-nodes/rtsp-camera",
-    "crates/bubbaloop-nodes/inference",
-    "crates/bubbaloop-nodes/foxglove",
-    "crates/bubbaloop-nodes/recorder",
-    "crates/bubbaloop-nodes/openmeteo",
 ]
 resolver = "2"
 
@@ -30,7 +25,6 @@ serde_yaml = "0.9"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
-flume = "0.12"
 
 # ROS-Z pub/sub
 ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
@@ -46,19 +40,8 @@ env_logger = "0.11"
 argh = "0.1"
 ctrlc = "3.4"
 
-# GStreamer for H264 capture and decode
-gstreamer = "0.24"
-gstreamer-app = "0.24"
-gstreamer-video = "0.24"
-
 # Error handling
 thiserror = "2.0"
-
-# HTTP client
-reqwest = { version = "0.12", features = ["json"] }
-
-# Foxglove WebSocket server
-foxglove = "0.16.1"
 
 # TUI
 ratatui = "0.30"

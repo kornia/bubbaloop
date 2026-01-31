@@ -36,16 +36,6 @@ processes:
   #     restart: on_failure
   #     max_restarts: 3
 
-  foxglove:
-    command: pixi run foxglove
-    namespace: visualization
-    depends_on:
-      build:
-        condition: process_completed_successfully
-    availability:
-      restart: on_failure
-      max_restarts: 3
-
   weather:
     command: pixi run openmeteo
     namespace: nodes

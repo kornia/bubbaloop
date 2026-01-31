@@ -57,7 +57,7 @@ pixi run dashboard
 | **zenohd** | Central router, all peers connect here | - |
 | **zenoh-bridge-remote-api** | WebSocket bridge for browser | - |
 | **bubbaloop daemon** | Node manager with systemd integration (built into CLI) | `bubbaloop/daemon/*` |
-| **rtsp-camera** | RTSP camera streaming | `/camera/{name}/compressed`, `camera/{name}/raw_shm` |
+| **rtsp-camera** | RTSP camera streaming | `/camera/{name}/compressed` |
 | **openmeteo** | Weather data from Open-Meteo API | `/weather/current`, `/weather/hourly`, `/weather/daily` |
 
 ### Directory Structure
@@ -65,13 +65,7 @@ pixi run dashboard
 ```
 crates/
 ├── bubbaloop/           # Single binary: CLI + TUI + daemon
-├── bubbaloop-schemas/   # Protobuf schemas for node communication
-└── bubbaloop-nodes/     # All node implementations
-    ├── rtsp-camera/     # RTSP camera streaming
-    ├── openmeteo/       # Weather data
-    ├── foxglove/        # Foxglove bridge
-    ├── recorder/        # MCAP recorder
-    └── inference/       # Inference node
+└── bubbaloop-schemas/   # Protobuf schemas for node communication (standalone, not in workspace)
 
 dashboard/               # React dashboard (Vite + TypeScript)
 protos/                  # Protobuf schema definitions
@@ -79,6 +73,11 @@ scripts/                 # Install script, activation scripts
 configs/                 # Zenoh configuration files
 docs/                    # MkDocs documentation site
 ```
+
+**Note:** Official nodes (rtsp-camera, openmeteo, inference, system-telemetry, network-monitor) live in the
+separate [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official) repo.
+They depend on `bubbaloop-schemas` via git dependency. External nodes should also depend on
+`bubbaloop-schemas` (not the full `bubbaloop` crate).
 
 ### Single Binary Architecture
 
@@ -178,12 +177,27 @@ tui/                        # ratatui terminal UI
 | Crate | Binary | Description |
 |-------|--------|-------------|
 | `crates/bubbaloop` | `bubbaloop` | Main binary: CLI + TUI + daemon. Depends on zenoh, ratatui, zbus, prost |
-| `crates/bubbaloop-schemas` | (library) | Standalone protobuf schemas crate for node communication (not in workspace) |
-| `crates/bubbaloop-nodes/rtsp-camera` | `cameras_node` | RTSP camera capture via GStreamer, publishes H264 frames and SHM |
-| `crates/bubbaloop-nodes/openmeteo` | `openmeteo_node` | Weather data from Open-Meteo API, publishes forecasts |
-| `crates/bubbaloop-nodes/foxglove` | `foxglove_bridge` | Foxglove Studio WebSocket bridge for visualization |
-| `crates/bubbaloop-nodes/recorder` | `mcap_recorder` | MCAP file recorder for Zenoh topics |
-| `crates/bubbaloop-nodes/inference` | `inference_node` | ML inference node |
+
+### Standalone Crates (not in workspace)
+
+| Crate | Binary | Description |
+|-------|--------|-------------|
+| `crates/bubbaloop-schemas` | (library) | Protobuf schemas + utilities. Features: `ros-z`, `descriptor`, `config` |
+
+Official nodes live in the [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official) repo:
+
+| Node | Binary | Description |
+|------|--------|-------------|
+| `rtsp-camera` | `cameras_node` | RTSP camera capture via GStreamer, publishes H264 frames |
+| `openmeteo` | `openmeteo_node` | Weather data from Open-Meteo API, publishes forecasts |
+| `inference` | `inference_node` | ML inference node |
+| `system-telemetry` | `system_telemetry_node` | System metrics (CPU, memory, disk, network, load) |
+| `network-monitor` | (python) | Network connectivity monitor (HTTP, DNS, ping) |
+
+Nodes depend on `bubbaloop-schemas` via git (not the full `bubbaloop` crate). Install with:
+```bash
+bubbaloop node add kornia/bubbaloop-nodes-official --subdir rtsp-camera
+```
 
 ### Protobuf Schema Workflow
 
@@ -200,7 +214,7 @@ Proto source files live in `protos/bubbaloop/`:
 Compilation: `prost-build` compiles `.proto` files at build time via `build.rs`. Generated Rust code goes
 to `OUT_DIR` and is included via `include!()` macros in `lib.rs`. All types derive `serde::Serialize`
 and `serde::Deserialize`. A `descriptor.bin` FileDescriptorSet is also generated for runtime schema access
-(used by Foxglove bridge and MCAP recorder).
+(used for runtime schema access).
 
 The `bubbaloop-schemas` crate (`crates/bubbaloop-schemas/`) is a standalone crate (not in the workspace)
 with its own proto files (`header.proto`, `system_telemetry.proto`, `network_monitor.proto`). It's intended
@@ -216,8 +230,6 @@ bubbaloop/daemon/nodes               # Node state pub/sub (broadcast)
 bubbaloop/nodes/{name}/health        # Node heartbeat (pub/sub)
 
 /camera/{name}/compressed            # H264 compressed frames (pub/sub)
-camera/{name}/raw_shm                # Raw frames via shared memory (pub/sub)
-
 /weather/current                     # Current weather conditions (pub/sub)
 /weather/hourly                      # Hourly forecast (pub/sub)
 /weather/daily                       # Daily forecast (pub/sub)
@@ -226,7 +238,6 @@ camera/{name}/raw_shm                # Raw frames via shared memory (pub/sub)
 Communication patterns:
 - **Query/Reply** for one-time requests (health checks, node commands, node list)
 - **Pub/Sub** for continuous streams (video frames, weather, node state changes)
-- **Shared Memory (SHM)** for high-bandwidth local data (raw camera frames)
 
 ## Running Services
 
@@ -278,8 +289,6 @@ pixi run tui                 # Run TUI (bubbaloop tui)
 pixi run dashboard           # Run React dashboard dev server
 pixi run cameras             # Run RTSP camera node
 pixi run openmeteo           # Run weather node
-pixi run foxglove            # Run Foxglove bridge
-pixi run mcap_recorder       # Run MCAP recorder
 pixi run inference           # Run inference node
 
 # === Development ===
@@ -317,7 +326,7 @@ pixi run zenohd-client       # Run zenohd with client config (~/.bubbaloop/zenoh
 
 ## Node Development
 
-Each node lives in `crates/bubbaloop-nodes/{name}/` with:
+Each node is a standalone crate (in its own repo or directory) with:
 
 ```
 {name}/
@@ -354,8 +363,8 @@ The `depends_on` field specifies other nodes that must be running before this no
 ### Building a node
 
 ```bash
-cd crates/bubbaloop-nodes/my-node
-pixi run cargo build --release
+cd my-node
+cargo build --release
 ```
 
 ## Creating a New Node
@@ -500,7 +509,7 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop daemon
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| `zenoh` | 1.7 | Pub/sub messaging, query/reply, shared memory |
+| `zenoh` | 1.7 | Pub/sub messaging, query/reply |
 | `ros-z` | git main | ROS 2 compatibility layer over Zenoh |
 | `prost` / `prost-build` | 0.14 | Protobuf serialization and code generation |
 | `ratatui` | 0.29 | Terminal UI framework |
@@ -509,7 +518,6 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop daemon
 | `tokio` | 1.0 (full) | Async runtime |
 | `gstreamer` | 0.24 | H264 camera capture and video processing |
 | `argh` | 0.1 | CLI argument parsing |
-| `foxglove` | 0.16.1 | Foxglove Studio WebSocket bridge |
 | `reqwest` | 0.12 | HTTP client (weather API) |
 | `zenoh-ts` | — | TypeScript Zenoh client (dashboard) |
 
@@ -604,6 +612,8 @@ pixi run clippy    # Lint Rust code
 - Add tests for security-sensitive code paths
 - Keep this CLAUDE.md updated when architecture changes
 - Update `.gitignore` when adding new generated/build file patterns
+- **Include tests with every PR** — any new feature, bug fix, or refactor must include relevant unit tests. Tests ensure future agents can verify correctness and detect regressions. Use `tempfile` for filesystem tests, co-located `#[cfg(test)] mod tests` blocks
+- When adding proto schema changes, verify both `bubbaloop-schemas` and the main `bubbaloop` crate compile (protos are duplicated with different import paths)
 
 **DON'T:**
 - Don't run `bubbaloop tui` from Claude Code — it requires an interactive TTY
@@ -613,6 +623,7 @@ pixi run clippy    # Lint Rust code
 - Don't pass unsanitized user input to `std::process::Command` without validation
 - Don't add `crates/bubbaloop-schemas/` to the workspace — it's intentionally standalone
 - Don't run `git push --force` to main
+- Don't combine `git` and `path` in Cargo dependency specs — Cargo rejects this. Use `git` only (Cargo discovers crates by scanning the repo) or `path` only (local dev). For `bubbaloop-schemas` in external nodes: `{ git = "https://github.com/kornia/bubbaloop.git", branch = "main" }`. For local dev nodes: `{ path = "../../bubbaloop-schemas" }`. Pin to a tag for stability: `{ git = "...", tag = "schemas-v0.1.0" }`
 
 ### Commit Style
 
