@@ -6,11 +6,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::tui::app::{DiscoverableNode, MarketplaceSource, NodeInfo};
 
-/// Embedded official nodes registry, compiled into the binary.
-const OFFICIAL_NODES_YAML: &str = include_str!("official_nodes.yaml");
 const OFFICIAL_SOURCE_NAME: &str = "Official Nodes";
 const OFFICIAL_SOURCE_PATH: &str = "kornia/bubbaloop-nodes-official";
 const OFFICIAL_SOURCE_TYPE: &str = "builtin";
+
+/// Raw URL for the official nodes registry on GitHub.
+const OFFICIAL_NODES_URL: &str =
+    "https://raw.githubusercontent.com/kornia/bubbaloop-nodes-official/main/nodes.yaml";
+
+/// Local cache filename inside ~/.bubbaloop/cache/
+const OFFICIAL_NODES_CACHE: &str = "official_nodes.yaml";
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct SourcesRegistry {
@@ -36,16 +41,16 @@ struct NodeManifest {
     description: String,
 }
 
-/// Parsed representation of the embedded official_nodes.yaml
+/// Schema for nodes.yaml in the official repo.
 #[derive(Debug, Deserialize)]
 struct OfficialNodesYaml {
     nodes: Vec<OfficialNodeEntry>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[allow(dead_code)]
 struct OfficialNodeEntry {
     name: String,
+    #[allow(dead_code)]
     description: String,
     version: String,
     #[serde(rename = "type")]
@@ -179,6 +184,28 @@ impl Registry {
         }
     }
 
+    /// Trigger a background fetch of the official nodes registry from GitHub.
+    /// The result is cached to disk; `scan_discoverable_nodes` reads from cache.
+    pub fn refresh_builtin_cache(&self) {
+        let cache_dir = self.config_dir.join("cache");
+        let _ = fs::create_dir_all(&cache_dir);
+
+        let cache_path = cache_dir.join(OFFICIAL_NODES_CACHE);
+        let url = OFFICIAL_NODES_URL.to_string();
+
+        // Non-blocking: spawn a thread so the TUI doesn't stall on network I/O.
+        std::thread::spawn(move || {
+            if let Ok(output) = std::process::Command::new("curl")
+                .args(["-sSfL", "--connect-timeout", "5", "--max-time", "10", &url])
+                .output()
+            {
+                if output.status.success() {
+                    let _ = fs::write(cache_path, output.stdout);
+                }
+            }
+        });
+    }
+
     pub fn scan_discoverable_nodes(&self, registered_nodes: &[NodeInfo]) -> Vec<DiscoverableNode> {
         let mut discovered = Vec::new();
         // Use name-based dedup so installed nodes don't re-appear from builtin sources
@@ -194,8 +221,8 @@ impl Registry {
         // Scan enabled sources (first, so configured sources win over local dev)
         for source in self.get_enabled_sources() {
             if source.source_type == OFFICIAL_SOURCE_TYPE {
-                // Parse builtin nodes from embedded YAML
-                for node in parse_builtin_nodes() {
+                // Parse official nodes from cached YAML (fetched from GitHub)
+                for node in self.load_builtin_nodes() {
                     if !registered_names.contains(node.name.as_str())
                         && !discovered_names.contains(&node.name)
                     {
@@ -228,11 +255,21 @@ impl Registry {
 
         discovered
     }
+
+    /// Load official nodes from the local cache file.
+    fn load_builtin_nodes(&self) -> Vec<DiscoverableNode> {
+        let cache_path = self.config_dir.join("cache").join(OFFICIAL_NODES_CACHE);
+        let yaml = match fs::read_to_string(&cache_path) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        parse_nodes_yaml(&yaml)
+    }
 }
 
-/// Parse the embedded official nodes YAML into discoverable nodes.
-fn parse_builtin_nodes() -> Vec<DiscoverableNode> {
-    let registry: OfficialNodesYaml = match serde_yaml::from_str(OFFICIAL_NODES_YAML) {
+/// Parse a nodes.yaml string into discoverable nodes.
+fn parse_nodes_yaml(yaml: &str) -> Vec<DiscoverableNode> {
+    let registry: OfficialNodesYaml = match serde_yaml::from_str(yaml) {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
@@ -317,38 +354,71 @@ fn expand_tilde(path: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// Sample YAML matching the nodes.yaml schema in bubbaloop-nodes-official.
+    const TEST_NODES_YAML: &str = r#"
+nodes:
+  - name: rtsp-camera
+    description: "RTSP camera capture"
+    version: "0.1.0"
+    type: rust
+    category: camera
+    tags: [video]
+    repo: kornia/bubbaloop-nodes-official
+    subdir: rtsp-camera
+    binary: cameras_node
+
+  - name: openmeteo
+    description: "Weather data"
+    version: "0.1.0"
+    type: rust
+    category: weather
+    tags: [weather]
+    repo: kornia/bubbaloop-nodes-official
+    subdir: openmeteo
+    binary: openmeteo_node
+
+  - name: network-monitor
+    description: "Network monitor"
+    version: "0.1.0"
+    type: python
+    category: monitoring
+    tags: [network]
+    repo: kornia/bubbaloop-nodes-official
+    subdir: network-monitor
+"#;
+
     #[test]
-    fn test_parse_builtin_nodes() {
-        let nodes = parse_builtin_nodes();
-        assert!(
-            nodes.len() >= 7,
-            "Expected at least 7 builtin nodes, got {}",
-            nodes.len()
-        );
+    fn test_parse_nodes_yaml() {
+        let nodes = parse_nodes_yaml(TEST_NODES_YAML);
+        assert_eq!(nodes.len(), 3);
 
         let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
         assert!(names.contains(&"rtsp-camera"));
         assert!(names.contains(&"openmeteo"));
-        assert!(names.contains(&"foxglove"));
-        assert!(names.contains(&"recorder"));
-        assert!(names.contains(&"inference"));
-        assert!(names.contains(&"system-telemetry"));
         assert!(names.contains(&"network-monitor"));
     }
 
     #[test]
-    fn test_builtin_node_fields() {
-        let nodes = parse_builtin_nodes();
+    fn test_parse_nodes_yaml_fields() {
+        let nodes = parse_nodes_yaml(TEST_NODES_YAML);
         let camera = nodes.iter().find(|n| n.name == "rtsp-camera").unwrap();
 
         assert_eq!(camera.version, "0.1.0");
         assert_eq!(camera.node_type, "rust");
         assert_eq!(camera.source, OFFICIAL_SOURCE_NAME);
-        assert!(camera.path.contains("--subdir"));
-        assert!(camera.path.contains("kornia/bubbaloop-nodes-official"));
+        assert_eq!(
+            camera.path,
+            "kornia/bubbaloop-nodes-official --subdir rtsp-camera"
+        );
 
         let netmon = nodes.iter().find(|n| n.name == "network-monitor").unwrap();
         assert_eq!(netmon.node_type, "python");
+    }
+
+    #[test]
+    fn test_parse_nodes_yaml_invalid() {
+        let nodes = parse_nodes_yaml("not valid yaml: [[[");
+        assert!(nodes.is_empty());
     }
 
     #[test]
@@ -356,14 +426,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sources_path = dir.path().join("sources.json");
 
-        // Simulate first-run: no sources.json exists
         assert!(!sources_path.exists());
 
-        // Load triggers seeding
         let registry = Registry {
             config_dir: dir.path().to_path_buf(),
             sources: {
-                // Reproduce the seeding logic
                 let seeded = SourcesRegistry {
                     sources: vec![SourceEntry {
                         name: OFFICIAL_SOURCE_NAME.to_string(),
@@ -379,10 +446,8 @@ mod tests {
             },
         };
 
-        // Verify the file was created
         assert!(sources_path.exists());
 
-        // Verify source content
         let sources = registry.get_sources();
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].name, OFFICIAL_SOURCE_NAME);
@@ -394,6 +459,12 @@ mod tests {
     #[test]
     fn test_builtin_dedup_with_registered_nodes() {
         let dir = tempfile::tempdir().unwrap();
+
+        // Write a cached nodes.yaml
+        let cache_dir = dir.path().join("cache");
+        let _ = fs::create_dir_all(&cache_dir);
+        let _ = fs::write(cache_dir.join(OFFICIAL_NODES_CACHE), TEST_NODES_YAML);
+
         let registry = Registry {
             config_dir: dir.path().to_path_buf(),
             sources: SourcesRegistry {
@@ -406,7 +477,6 @@ mod tests {
             },
         };
 
-        // Simulate a registered node with the same name
         let registered = vec![NodeInfo {
             name: "rtsp-camera".to_string(),
             path: "/some/local/path".to_string(),
@@ -419,15 +489,24 @@ mod tests {
         }];
 
         let discovered = registry.scan_discoverable_nodes(&registered);
-        // rtsp-camera should NOT appear (already registered)
         assert!(
             !discovered.iter().any(|n| n.name == "rtsp-camera"),
             "rtsp-camera should be deduplicated"
         );
-        // Other nodes should still appear
         assert!(
             discovered.iter().any(|n| n.name == "openmeteo"),
             "openmeteo should still be discoverable"
         );
+    }
+
+    #[test]
+    fn test_load_builtin_nodes_no_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Registry {
+            config_dir: dir.path().to_path_buf(),
+            sources: SourcesRegistry::default(),
+        };
+        // No cache file => empty result
+        assert!(registry.load_builtin_nodes().is_empty());
     }
 }

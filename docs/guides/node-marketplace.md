@@ -28,9 +28,9 @@ Official nodes are maintained at [kornia/bubbaloop-nodes-official](https://githu
 |------|----------|-------------|
 | rtsp-camera | camera | RTSP camera capture with hardware H264 decode |
 | openmeteo | weather | Open-Meteo weather data publisher |
-| foxglove | bridge | Foxglove Studio visualization bridge |
-| recorder | recording | MCAP file recorder for ROS-Z topics |
 | inference | inference | ML inference for camera processing |
+| system-telemetry | telemetry | System metrics (CPU, memory, disk, network, load) |
+| network-monitor | monitoring | Network connectivity monitor (HTTP, DNS, ping) |
 
 Install any official node:
 

@@ -212,6 +212,9 @@ impl App {
     pub async fn new() -> Self {
         let registry = Registry::load();
 
+        // Fetch official nodes registry from GitHub (non-blocking, cached)
+        registry.refresh_builtin_cache();
+
         // Try to connect to daemon
         let (daemon_client, daemon_available) = match DaemonClient::new().await {
             Ok(client) => {

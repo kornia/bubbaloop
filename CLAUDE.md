@@ -57,7 +57,7 @@ pixi run dashboard
 | **zenohd** | Central router, all peers connect here | - |
 | **zenoh-bridge-remote-api** | WebSocket bridge for browser | - |
 | **bubbaloop daemon** | Node manager with systemd integration (built into CLI) | `bubbaloop/daemon/*` |
-| **rtsp-camera** | RTSP camera streaming | `/camera/{name}/compressed`, `camera/{name}/raw_shm` |
+| **rtsp-camera** | RTSP camera streaming | `/camera/{name}/compressed` |
 | **openmeteo** | Weather data from Open-Meteo API | `/weather/current`, `/weather/hourly`, `/weather/daily` |
 
 ### Directory Structure
@@ -74,7 +74,7 @@ configs/                 # Zenoh configuration files
 docs/                    # MkDocs documentation site
 ```
 
-**Note:** Official nodes (rtsp-camera, openmeteo, foxglove, recorder, inference) live in the
+**Note:** Official nodes (rtsp-camera, openmeteo, inference, system-telemetry, network-monitor) live in the
 separate [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official) repo.
 They depend on `bubbaloop-schemas` via git dependency. External nodes should also depend on
 `bubbaloop-schemas` (not the full `bubbaloop` crate).
@@ -188,11 +188,11 @@ Official nodes live in the [bubbaloop-nodes-official](https://github.com/kornia/
 
 | Node | Binary | Description |
 |------|--------|-------------|
-| `rtsp-camera` | `cameras_node` | RTSP camera capture via GStreamer, publishes H264 frames and SHM |
+| `rtsp-camera` | `cameras_node` | RTSP camera capture via GStreamer, publishes H264 frames |
 | `openmeteo` | `openmeteo_node` | Weather data from Open-Meteo API, publishes forecasts |
-| `foxglove` | `foxglove_bridge` | Foxglove Studio WebSocket bridge for visualization |
-| `recorder` | `mcap_recorder` | MCAP file recorder for Zenoh topics |
 | `inference` | `inference_node` | ML inference node |
+| `system-telemetry` | `system_telemetry_node` | System metrics (CPU, memory, disk, network, load) |
+| `network-monitor` | (python) | Network connectivity monitor (HTTP, DNS, ping) |
 
 Nodes depend on `bubbaloop-schemas` via git (not the full `bubbaloop` crate). Install with:
 ```bash
@@ -214,7 +214,7 @@ Proto source files live in `protos/bubbaloop/`:
 Compilation: `prost-build` compiles `.proto` files at build time via `build.rs`. Generated Rust code goes
 to `OUT_DIR` and is included via `include!()` macros in `lib.rs`. All types derive `serde::Serialize`
 and `serde::Deserialize`. A `descriptor.bin` FileDescriptorSet is also generated for runtime schema access
-(used by Foxglove bridge and MCAP recorder).
+(used for runtime schema access).
 
 The `bubbaloop-schemas` crate (`crates/bubbaloop-schemas/`) is a standalone crate (not in the workspace)
 with its own proto files (`header.proto`, `system_telemetry.proto`, `network_monitor.proto`). It's intended
@@ -230,8 +230,6 @@ bubbaloop/daemon/nodes               # Node state pub/sub (broadcast)
 bubbaloop/nodes/{name}/health        # Node heartbeat (pub/sub)
 
 /camera/{name}/compressed            # H264 compressed frames (pub/sub)
-camera/{name}/raw_shm                # Raw frames via shared memory (pub/sub)
-
 /weather/current                     # Current weather conditions (pub/sub)
 /weather/hourly                      # Hourly forecast (pub/sub)
 /weather/daily                       # Daily forecast (pub/sub)
@@ -240,7 +238,6 @@ camera/{name}/raw_shm                # Raw frames via shared memory (pub/sub)
 Communication patterns:
 - **Query/Reply** for one-time requests (health checks, node commands, node list)
 - **Pub/Sub** for continuous streams (video frames, weather, node state changes)
-- **Shared Memory (SHM)** for high-bandwidth local data (raw camera frames)
 
 ## Running Services
 
@@ -292,8 +289,6 @@ pixi run tui                 # Run TUI (bubbaloop tui)
 pixi run dashboard           # Run React dashboard dev server
 pixi run cameras             # Run RTSP camera node
 pixi run openmeteo           # Run weather node
-pixi run foxglove            # Run Foxglove bridge
-pixi run mcap_recorder       # Run MCAP recorder
 pixi run inference           # Run inference node
 
 # === Development ===
@@ -514,7 +509,7 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop daemon
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| `zenoh` | 1.7 | Pub/sub messaging, query/reply, shared memory |
+| `zenoh` | 1.7 | Pub/sub messaging, query/reply |
 | `ros-z` | git main | ROS 2 compatibility layer over Zenoh |
 | `prost` / `prost-build` | 0.14 | Protobuf serialization and code generation |
 | `ratatui` | 0.29 | Terminal UI framework |
@@ -523,7 +518,6 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop daemon
 | `tokio` | 1.0 (full) | Async runtime |
 | `gstreamer` | 0.24 | H264 camera capture and video processing |
 | `argh` | 0.1 | CLI argument parsing |
-| `foxglove` | 0.16.1 | Foxglove Studio WebSocket bridge |
 | `reqwest` | 0.12 | HTTP client (weather API) |
 | `zenoh-ts` | — | TypeScript Zenoh client (dashboard) |
 
