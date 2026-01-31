@@ -330,7 +330,7 @@ After=network.target
 
 [Service]
 ExecStartPre=/usr/local/bin/bubbaloop doctor --fix
-ExecStart=/usr/local/bin/bubbaloop-daemon
+ExecStart=/usr/local/bin/bubbaloop daemon
 Restart=on-failure
 
 [Install]
@@ -380,4 +380,4 @@ fi
 
 - [Distributed Deployment Guide](distributed-deployment.md) - Multi-machine setup
 - [Debug Commands](../crates/bubbaloop/src/cli/debug.rs) - Low-level Zenoh debugging
-- [Daemon Documentation](../crates/bubbaloop-daemon/README.md) - Daemon architecture
+- [Daemon Documentation](../CLAUDE.md#daemon-service-management) - Daemon architecture

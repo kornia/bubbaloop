@@ -113,7 +113,7 @@ nano ~/.config/zenoh/zenoh.json5
 zenohd -c ~/.config/zenoh/zenoh.json5
 
 # 4. Start the daemon
-BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop-daemon
+BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447 bubbaloop daemon
 
 # 5. Start nodes (they connect to local router automatically)
 bubbaloop node start rtsp-camera
@@ -257,7 +257,7 @@ Shared memory only works for processes on the same machine connecting to the sam
 |-----------|-----|-----|-------|
 | zenohd (router) | 15-25 MB | <5% | Minimal overhead |
 | zenohd + SHM | +256 MB | - | For camera frames |
-| bubbaloop-daemon | 20-30 MB | <5% | Node management |
+| bubbaloop daemon | 20-30 MB | <5% | Node management |
 
 ## Next Steps
 

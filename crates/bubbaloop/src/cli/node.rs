@@ -644,6 +644,10 @@ async fn add_node(args: AddArgs) -> Result<()> {
 }
 
 fn normalize_git_url(source: &str) -> String {
+    // If it's an existing local path, return it unchanged
+    if std::path::Path::new(source).exists() {
+        return source.to_string();
+    }
     if source.starts_with("https://") || source.starts_with("git@") {
         source.to_string()
     } else if source.starts_with("github.com/") {
@@ -654,7 +658,6 @@ fn normalize_git_url(source: &str) -> String {
         && !source.starts_with('.')
     {
         // Shorthand: user/repo -> https://github.com/user/repo
-        // Exclude relative paths starting with . (e.g., ./node, ../node)
         format!("https://github.com/{}", source)
     } else {
         source.to_string()
@@ -685,6 +688,17 @@ fn extract_node_name(path: &str) -> Result<String> {
 }
 
 fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -> Result<String> {
+    // Prevent argument injection via branch or URL starting with '-'
+    if branch.starts_with('-') {
+        return Err(NodeError::InvalidUrl(format!(
+            "Invalid branch name: {}",
+            branch
+        )));
+    }
+    if url.starts_with('-') {
+        return Err(NodeError::InvalidUrl(format!("Invalid URL: {}", url)));
+    }
+
     // Extract repo name from URL
     let repo_name = url
         .trim_end_matches('/')
@@ -731,6 +745,7 @@ fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -> Result<St
             "1",
             "--branch",
             branch,
+            "--", // Prevent URL from being treated as an option
             url,
             &target_dir.to_string_lossy(),
         ])
@@ -1094,5 +1109,80 @@ mod tests {
         let response: LogsResponse = serde_json::from_str(json).unwrap();
         assert!(!response.success);
         assert_eq!(response.error, Some("Node not found".to_string()));
+    }
+
+    #[test]
+    fn test_clone_rejects_branch_argument_injection() {
+        // Branch starting with '-' could be interpreted as a git flag
+        let result = clone_from_github("https://github.com/user/repo", None, "--upload-pack=evil");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid branch name"));
+    }
+
+    #[test]
+    fn test_clone_rejects_url_argument_injection() {
+        let result = clone_from_github("--upload-pack=evil", None, "main");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid URL"));
+    }
+
+    #[test]
+    fn test_clone_accepts_valid_branch() {
+        // This will fail at the git clone step (no network), but should not
+        // fail at the argument validation step. We check by verifying the error
+        // is NOT about an invalid branch/URL.
+        let result = clone_from_github(
+            "https://github.com/user/repo",
+            Some("/tmp/bubbaloop-test-nonexistent"),
+            "main",
+        );
+        // Either succeeds or fails for a reason other than argument injection
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(!msg.contains("Invalid branch name"));
+            assert!(!msg.contains("Invalid URL"));
+        }
+    }
+
+    /// Validate node name checking logic (mirrors submit_create_node_form validation)
+    fn is_valid_node_name(name: &str) -> bool {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            && !name.starts_with('-')
+            && !name.starts_with('.')
+    }
+
+    #[test]
+    fn test_valid_node_names() {
+        assert!(is_valid_node_name("my-node"));
+        assert!(is_valid_node_name("my_node"));
+        assert!(is_valid_node_name("sensor1"));
+        assert!(is_valid_node_name("MyNode"));
+    }
+
+    #[test]
+    fn test_invalid_node_names_path_traversal() {
+        assert!(!is_valid_node_name("../etc/passwd"));
+        assert!(!is_valid_node_name("../../root"));
+        assert!(!is_valid_node_name("foo/bar"));
+    }
+
+    #[test]
+    fn test_invalid_node_names_special_chars() {
+        assert!(!is_valid_node_name("node;evil"));
+        assert!(!is_valid_node_name("node name"));
+        assert!(!is_valid_node_name("node&evil"));
+        assert!(!is_valid_node_name("$HOME"));
+    }
+
+    #[test]
+    fn test_invalid_node_names_edge_cases() {
+        assert!(!is_valid_node_name(""));
+        assert!(!is_valid_node_name("-starts-with-dash"));
+        assert!(!is_valid_node_name(".hidden"));
     }
 }
