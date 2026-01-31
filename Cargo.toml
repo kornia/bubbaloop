@@ -61,7 +61,7 @@ reqwest = { version = "0.12", features = ["json"] }
 foxglove = "0.16.1"
 
 # TUI
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = "0.28"
 
 # Directories
