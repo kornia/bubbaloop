@@ -34,22 +34,17 @@ jobs:
         with:
           pixi-version: v0.39.0
 
-      - name: Build bubbaloop-daemon
-        run: pixi run cargo build --release --package bubbaloop-daemon
-
-      - name: Build bubbaloop-tui
-        run: pixi run cargo build --release --package bubbaloop-tui
+      - name: Build bubbaloop
+        run: pixi run cargo build --release --package bubbaloop
 
       - name: Rename binaries
         run: |
-          mv target/release/bubbaloop-daemon bubbaloop-daemon-linux-${{ matrix.arch }}
           mv target/release/bubbaloop bubbaloop-linux-${{ matrix.arch }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.arch }}
           path: |
-            bubbaloop-daemon-linux-${{ matrix.arch }}
             bubbaloop-linux-${{ matrix.arch }}
 
   release:
@@ -69,8 +64,6 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
-          cp artifacts/binaries-amd64/bubbaloop-daemon-linux-amd64 release-assets/
-          cp artifacts/binaries-arm64/bubbaloop-daemon-linux-arm64 release-assets/
           cp artifacts/binaries-amd64/bubbaloop-linux-amd64 release-assets/
           cp artifacts/binaries-arm64/bubbaloop-linux-arm64 release-assets/
           cp scripts/install.sh release-assets/
@@ -93,8 +86,6 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.version }}
           files: |
-            release-assets/bubbaloop-daemon-linux-amd64
-            release-assets/bubbaloop-daemon-linux-arm64
             release-assets/bubbaloop-linux-amd64
             release-assets/bubbaloop-linux-arm64
             release-assets/install.sh
@@ -107,22 +98,17 @@ jobs:
             curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
             ```
 
-            ### Manual Install
+            ### Usage
             ```bash
-            # Download TUI binary for your architecture
-            curl -fsSL https://github.com/kornia/bubbaloop/releases/latest/download/bubbaloop-linux-amd64 -o ~/.local/bin/bubbaloop
-            chmod +x ~/.local/bin/bubbaloop
-
-            # Download daemon binary for your architecture
-            curl -fsSL https://github.com/kornia/bubbaloop/releases/latest/download/bubbaloop-daemon-linux-amd64 -o ~/.local/bin/bubbaloop-daemon
-            chmod +x ~/.local/bin/bubbaloop-daemon
+            bubbaloop           # Launch TUI
+            bubbaloop status    # Show services status
+            bubbaloop tui       # Launch TUI explicitly
+            bubbaloop daemon    # Run daemon directly
             ```
 
             ### Assets
-            - `bubbaloop-linux-amd64` - TUI for x86_64
-            - `bubbaloop-linux-arm64` - TUI for ARM64 (Jetson, Raspberry Pi)
-            - `bubbaloop-daemon-linux-amd64` - Daemon for x86_64
-            - `bubbaloop-daemon-linux-arm64` - Daemon for ARM64 (Jetson, Raspberry Pi)
+            - `bubbaloop-linux-amd64` - Single binary for x86_64 (CLI + daemon + TUI)
+            - `bubbaloop-linux-arm64` - Single binary for ARM64 (Jetson, Raspberry Pi)
             - `install.sh` - Full installation script (includes Zenoh + systemd setup)
 
       # When triggered manually, create a new release
@@ -136,8 +122,6 @@ jobs:
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
           generate_release_notes: true
           files: |
-            release-assets/bubbaloop-daemon-linux-amd64
-            release-assets/bubbaloop-daemon-linux-arm64
             release-assets/bubbaloop-linux-amd64
             release-assets/bubbaloop-linux-arm64
             release-assets/install.sh
@@ -149,22 +133,17 @@ jobs:
             curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
             ```
 
-            ### Manual Install
+            ### Usage
             ```bash
-            # Download TUI binary for your architecture
-            curl -fsSL https://github.com/kornia/bubbaloop/releases/latest/download/bubbaloop-linux-amd64 -o ~/.local/bin/bubbaloop
-            chmod +x ~/.local/bin/bubbaloop
-
-            # Download daemon binary for your architecture
-            curl -fsSL https://github.com/kornia/bubbaloop/releases/latest/download/bubbaloop-daemon-linux-amd64 -o ~/.local/bin/bubbaloop-daemon
-            chmod +x ~/.local/bin/bubbaloop-daemon
+            bubbaloop           # Launch TUI
+            bubbaloop status    # Show services status
+            bubbaloop tui       # Launch TUI explicitly
+            bubbaloop daemon    # Run daemon directly
             ```
 
             ### Assets
-            - `bubbaloop-linux-amd64` - TUI for x86_64
-            - `bubbaloop-linux-arm64` - TUI for ARM64 (Jetson, Raspberry Pi)
-            - `bubbaloop-daemon-linux-amd64` - Daemon for x86_64
-            - `bubbaloop-daemon-linux-arm64` - Daemon for ARM64 (Jetson, Raspberry Pi)
+            - `bubbaloop-linux-amd64` - Single binary for x86_64 (CLI + daemon + TUI)
+            - `bubbaloop-linux-arm64` - Single binary for ARM64 (Jetson, Raspberry Pi)
             - `install.sh` - Full installation script (includes Zenoh + systemd setup)
 
             ## What's Changed

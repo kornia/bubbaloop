@@ -1,11 +1,13 @@
 //! {{node_name}} node implementation
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use zenoh::prelude::*;
+use zenoh::handlers::FifoChannelHandler;
+use zenoh::pubsub::{Publisher, Subscriber};
+use zenoh::sample::Sample;
 
 /// Node configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +25,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            publish_topic: "/{{node_name}}/output".to_string(),
+            publish_topic: "{{node_name}}/output".to_string(),
             subscribe_topic: None,
             rate_hz: 1.0,
         }
@@ -54,15 +56,13 @@ impl {{node_name_pascal}}Node {
         let mut zenoh_config = zenoh::Config::default();
         if let Some(ep) = endpoint {
             zenoh_config
-                .connect
-                .endpoints
-                .set(vec![ep.parse().unwrap()])
+                .insert_json5("connect/endpoints", &format!(r#"["{}"]"#, ep))
                 .unwrap();
         }
 
         let session = zenoh::open(zenoh_config)
             .await
-            .context("Failed to open zenoh session")?;
+            .map_err(|e| anyhow!("Failed to open zenoh session: {}", e))?;
 
         log::info!("Connected to zenoh");
         log::info!("Publishing to: {}", config.publish_topic);
@@ -75,18 +75,18 @@ impl {{node_name_pascal}}Node {
 
     /// Run the node main loop
     pub async fn run(&mut self, running: Arc<AtomicBool>) -> Result<()> {
-        let publisher = self.session
+        let publisher: Publisher<'_> = self.session
             .declare_publisher(&self.config.publish_topic)
             .await
-            .context("Failed to create publisher")?;
+            .map_err(|e| anyhow!("Failed to create publisher: {}", e))?;
 
         // Optional subscriber
-        let subscriber = if let Some(ref topic) = self.config.subscribe_topic {
+        let subscriber: Option<Subscriber<FifoChannelHandler<Sample>>> = if let Some(ref topic) = self.config.subscribe_topic {
             Some(
                 self.session
                     .declare_subscriber(topic)
                     .await
-                    .context("Failed to create subscriber")?
+                    .map_err(|e| anyhow!("Failed to create subscriber: {}", e))?
             )
         } else {
             None
@@ -98,7 +98,7 @@ impl {{node_name_pascal}}Node {
         while running.load(Ordering::SeqCst) {
             // Check for incoming messages
             if let Some(ref sub) = subscriber {
-                while let Ok(sample) = sub.try_recv() {
+                while let Ok(Some(sample)) = sub.try_recv() {
                     self.handle_message(&sample).await?;
                 }
             }
@@ -108,7 +108,7 @@ impl {{node_name_pascal}}Node {
             publisher
                 .put(output)
                 .await
-                .context("Failed to publish")?;
+                .map_err(|e| anyhow!("Failed to publish: {}", e))?;
 
             sequence += 1;
             tokio::time::sleep(interval).await;
@@ -118,7 +118,7 @@ impl {{node_name_pascal}}Node {
     }
 
     /// Handle incoming message
-    async fn handle_message(&self, sample: &zenoh::sample::Sample) -> Result<()> {
+    async fn handle_message(&self, sample: &Sample) -> Result<()> {
         let payload = sample.payload().to_bytes();
         log::debug!(
             "Received {} bytes from {}",

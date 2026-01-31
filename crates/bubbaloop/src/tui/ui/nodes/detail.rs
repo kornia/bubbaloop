@@ -75,9 +75,14 @@ pub fn render_detail(f: &mut Frame, app: &App, node_name: &str) {
         f.render_widget(Paragraph::new(line), chunks[1]);
     }
 
+    let left_width = if chunks[2].width < 80 {
+        Constraint::Length(chunks[2].width.min(30).max(20))
+    } else {
+        Constraint::Percentage(25)
+    };
     let content_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
+        .constraints([left_width, Constraint::Min(20)])
         .split(chunks[2]);
 
     render_info_panel(f, app, node, content_chunks[0]);
@@ -126,7 +131,7 @@ fn render_info_panel(
         _ => ("UNKNOWN", colors::DIMMED),
     };
 
-    let is_building = node.status == "building" || app.is_building;
+    let is_busy = app.is_node_busy(node);
 
     let info_lines = vec![
         Line::from(vec![
@@ -165,7 +170,7 @@ fn render_info_panel(
         ]),
         Line::from(vec![
             Span::styled("Built:       ", Style::default().fg(colors::DIMMED)),
-            if is_building {
+            if is_busy {
                 flower_spinner(app.spinner_frame)
             } else if node.is_built {
                 Span::styled(
@@ -218,63 +223,69 @@ fn render_info_panel(
     }
 
     if node.status != "not-installed" && node.status != "unknown" {
-        if node.status == "running" {
-            action_lines.push(Line::from(vec![
-                Span::styled("[s]", Style::default().fg(colors::PRIMARY)),
-                Span::styled("top", Style::default().fg(colors::DIMMED)),
-            ]));
-        } else if node.is_built {
-            action_lines.push(Line::from(vec![
-                Span::styled("[s]", Style::default().fg(colors::PRIMARY)),
-                Span::styled("tart", Style::default().fg(colors::DIMMED)),
-            ]));
+        if !is_busy {
+            // Start/stop actions (only when idle)
+            if node.status == "running" {
+                action_lines.push(Line::from(vec![
+                    Span::styled("[s]", Style::default().fg(colors::PRIMARY)),
+                    Span::styled("top", Style::default().fg(colors::DIMMED)),
+                ]));
+            } else if node.is_built {
+                action_lines.push(Line::from(vec![
+                    Span::styled("[s]", Style::default().fg(colors::PRIMARY)),
+                    Span::styled("tart", Style::default().fg(colors::DIMMED)),
+                ]));
+            } else {
+                action_lines.push(Line::from(vec![
+                    Span::styled("[s]tart ", Style::default().fg(colors::DIMMED)),
+                    Span::styled("(build first)", Style::default().fg(colors::ERROR)),
+                ]));
+            }
+
+            // Build/clean actions (only when idle)
+            if node.is_built {
+                if app.confirm_clean {
+                    action_lines.push(Line::from(Span::styled(
+                        "Press [c] again to CLEAN",
+                        Style::default()
+                            .fg(colors::ERROR)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                } else if node.status == "running" {
+                    action_lines.push(Line::from(vec![
+                        Span::styled("[c]", Style::default().fg(colors::PRIMARY)),
+                        Span::styled("lean ", Style::default().fg(colors::DIMMED)),
+                        Span::styled("(will stop)", Style::default().fg(colors::WARNING)),
+                    ]));
+                } else {
+                    action_lines.push(Line::from(vec![
+                        Span::styled("[c]", Style::default().fg(colors::PRIMARY)),
+                        Span::styled("lean", Style::default().fg(colors::DIMMED)),
+                    ]));
+                }
+            } else if node.status == "running" {
+                action_lines.push(Line::from(vec![
+                    Span::styled("[b]", Style::default().fg(colors::PRIMARY)),
+                    Span::styled("uild ", Style::default().fg(colors::DIMMED)),
+                    Span::styled("(will stop)", Style::default().fg(colors::WARNING)),
+                ]));
+            } else {
+                action_lines.push(Line::from(vec![
+                    Span::styled("[b]", Style::default().fg(colors::PRIMARY)),
+                    Span::styled("uild", Style::default().fg(colors::DIMMED)),
+                ]));
+            }
         } else {
-            action_lines.push(Line::from(vec![
-                Span::styled("[s]tart ", Style::default().fg(colors::DIMMED)),
-                Span::styled("(build first)", Style::default().fg(colors::ERROR)),
-            ]));
+            action_lines.push(Line::from(Span::styled(
+                "Build in progress...",
+                Style::default().fg(colors::DIMMED),
+            )));
         }
 
+        // Logs — always shown (works during builds)
         action_lines.push(Line::from(vec![
             Span::styled("[l]", Style::default().fg(colors::PRIMARY)),
             Span::styled("ogs", Style::default().fg(colors::DIMMED)),
-        ]));
-    }
-
-    if !is_building {
-        action_lines.push(Line::from(vec![
-            Span::styled("[b]", Style::default().fg(colors::PRIMARY)),
-            Span::styled("uild", Style::default().fg(colors::DIMMED)),
-        ]));
-    }
-
-    if !is_building {
-        if app.confirm_clean {
-            action_lines.push(Line::from(Span::styled(
-                "Press [c] again to CLEAN",
-                Style::default()
-                    .fg(colors::ERROR)
-                    .add_modifier(Modifier::BOLD),
-            )));
-        } else {
-            action_lines.push(Line::from(vec![
-                Span::styled("[c]", Style::default().fg(colors::PRIMARY)),
-                Span::styled("lean", Style::default().fg(colors::DIMMED)),
-            ]));
-        }
-    }
-
-    if app.confirm_uninstall {
-        action_lines.push(Line::from(Span::styled(
-            "Press [u] again to UNINSTALL",
-            Style::default()
-                .fg(colors::ERROR)
-                .add_modifier(Modifier::BOLD),
-        )));
-    } else {
-        action_lines.push(Line::from(vec![
-            Span::styled("[u]", Style::default().fg(colors::PRIMARY)),
-            Span::styled("ninstall node", Style::default().fg(colors::DIMMED)),
         ]));
     }
 
@@ -287,41 +298,28 @@ fn render_status_panel(
     node: &crate::tui::app::NodeInfo,
     area: ratatui::layout::Rect,
 ) {
-    let is_building = node.status == "building" || app.is_building;
+    let is_busy = app.is_node_busy(node);
 
-    let title = if is_building {
-        Line::from(vec![
-            flower_spinner(app.spinner_frame),
-            Span::styled(" Building...", Style::default().fg(colors::WARNING)),
-        ])
-    } else {
-        Line::from(Span::styled(
+    // Split into two vertical sections
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    // --- Top: Systemd Status (always visible) ---
+    let systemd_block = Block::default()
+        .title(Span::styled(
             " Systemd Status ",
             Style::default().fg(colors::PRIMARY),
         ))
-    };
-
-    let block = Block::default()
-        .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(colors::BORDER));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let systemd_inner = systemd_block.inner(chunks[0]);
+    f.render_widget(systemd_block, chunks[0]);
 
-    let content: Vec<Line> = if is_building && !app.build_output.is_empty() {
-        app.build_output
-            .iter()
-            .take(16)
-            .map(|line| {
-                Line::from(Span::styled(
-                    line.clone(),
-                    Style::default().fg(colors::DIMMED),
-                ))
-            })
-            .collect()
-    } else if !app.service_status_text.is_empty() {
+    let systemd_content: Vec<Line> = if !app.service_status_text.is_empty() {
         app.service_status_text
             .iter()
             .map(|line| {
@@ -338,5 +336,64 @@ fn render_status_panel(
         ))]
     };
 
-    f.render_widget(Paragraph::new(content), inner);
+    f.render_widget(Paragraph::new(systemd_content), systemd_inner);
+
+    // --- Bottom: Terminal Status (per-node build output) ---
+    let node_output = &node.build_output;
+
+    let terminal_title = if is_busy {
+        let activity_label =
+            if app.build_activity == crate::tui::app::BuildActivity::Cleaning
+                && app.build_activity_node == node.name
+            {
+                format!(" Cleaning {}... ", node.name)
+            } else {
+                format!(" Building {}... ", node.name)
+            };
+        Line::from(vec![
+            flower_spinner(app.spinner_frame),
+            Span::styled(activity_label, Style::default().fg(colors::WARNING)),
+        ])
+    } else {
+        Line::from(Span::styled(
+            " Terminal Status ",
+            Style::default().fg(colors::PRIMARY),
+        ))
+    };
+
+    let terminal_block = Block::default()
+        .title(terminal_title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(colors::BORDER));
+
+    let terminal_inner = terminal_block.inner(chunks[1]);
+    f.render_widget(terminal_block, chunks[1]);
+
+    let max_lines = terminal_inner.height as usize;
+    let terminal_content: Vec<Line> = if !node_output.is_empty() {
+        let skip = node_output.len().saturating_sub(max_lines);
+        node_output
+            .iter()
+            .skip(skip)
+            .map(|line| {
+                Line::from(Span::styled(
+                    line.clone(),
+                    Style::default().fg(colors::DIMMED),
+                ))
+            })
+            .collect()
+    } else if is_busy {
+        vec![Line::from(Span::styled(
+            "Waiting for output...",
+            Style::default().fg(colors::DIMMED),
+        ))]
+    } else {
+        vec![Line::from(Span::styled(
+            "No build output",
+            Style::default().fg(colors::DIMMED),
+        ))]
+    };
+
+    f.render_widget(Paragraph::new(terminal_content), terminal_inner);
 }

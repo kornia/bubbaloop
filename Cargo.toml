@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/bubbaloop",
-    "crates/bubbaloop-daemon",
     "crates/bubbaloop-nodes/rtsp-camera",
     "crates/bubbaloop-nodes/inference",
     "crates/bubbaloop-nodes/foxglove",
@@ -37,7 +36,7 @@ flume = "0.12"
 ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
 
 # Zenoh
-zenoh = { version = "1.7", features = ["shared-memory"] }
+zenoh = "1.7"
 
 # Logging
 log = "0.4"
@@ -81,5 +80,5 @@ bubbaloop = { path = "crates/bubbaloop" }
 lto = true
 codegen-units = 1
 strip = "symbols"
-opt-level = "s"
+opt-level = "z"
 panic = "abort"

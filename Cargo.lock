@@ -348,8 +348,10 @@ dependencies = [
  "anyhow",
  "argh",
  "crossterm",
+ "ctrlc",
  "dirs",
  "env_logger",
+ "futures",
  "hex",
  "hostname",
  "log",
@@ -364,31 +366,9 @@ dependencies = [
  "serde_yaml",
  "thiserror 2.0.17",
  "tokio",
+ "uuid",
  "walkdir",
  "whoami",
- "zenoh",
-]
-
-[[package]]
-name = "bubbaloop-daemon"
-version = "0.0.1"
-dependencies = [
- "argh",
- "ctrlc",
- "dirs",
- "env_logger",
- "futures",
- "hostname",
- "log",
- "prost 0.14.1",
- "prost-build",
- "prost-types 0.14.1",
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.17",
- "tokio",
- "uuid",
  "zbus",
  "zenoh",
 ]
@@ -1003,9 +983,9 @@ dependencies = [
 
 [[package]]
 name = "dtoa"
-version = "1.0.10"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6add3b8cff394282be81f3fc1a0605db594ed69890078ca6e2cab1c408bcf04"
+checksum = "4c3cf4824e2d5f025c7b531afcb2325364084a16806f6d47fbc1f5fbd9960590"
 
 [[package]]
 name = "dyn-clone"
@@ -1287,6 +1267,7 @@ dependencies = [
  "env_logger",
  "foxglove",
  "futures",
+ "hostname",
  "log",
  "prost 0.14.1",
  "prost-types 0.14.1",
@@ -2059,7 +2040,9 @@ name = "inference"
 version = "0.0.1"
 dependencies = [
  "bubbaloop",
+ "ctrlc",
  "env_logger",
+ "hostname",
  "log",
  "prost 0.14.1",
  "prost-types 0.14.1",
@@ -2430,6 +2413,7 @@ dependencies = [
  "env_logger",
  "flume 0.12.0",
  "futures",
+ "hostname",
  "log",
  "mcap",
  "prost 0.14.1",
@@ -2738,6 +2722,7 @@ dependencies = [
  "bubbaloop",
  "ctrlc",
  "env_logger",
+ "hostname",
  "log",
  "prost 0.14.1",
  "prost-types 0.14.1",
@@ -3615,6 +3600,7 @@ dependencies = [
  "gstreamer",
  "gstreamer-app",
  "gstreamer-video",
+ "hostname",
  "log",
  "prost 0.14.1",
  "prost-types 0.14.1",

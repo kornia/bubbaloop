@@ -147,12 +147,17 @@ impl Registry {
             .iter()
             .map(|n| normalize_path(&n.path))
             .collect();
+        let mut discovered_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // Scan enabled sources
+        // Scan enabled sources (first, so configured sources win over local dev)
         for source in self.get_enabled_sources() {
             let found = scan_for_nodes(&source.path);
             for node in found {
-                if !registered_paths.contains(&normalize_path(&node.path)) {
+                let normalized = normalize_path(&node.path);
+                if !registered_paths.contains(&normalized)
+                    && !discovered_paths.contains(&normalized)
+                {
+                    discovered_paths.insert(normalized);
                     discovered.push(DiscoverableNode {
                         path: node.path,
                         name: node.name,
@@ -171,7 +176,11 @@ impl Registry {
         if local_dev.exists() {
             let found = scan_for_nodes(local_dev.to_string_lossy().as_ref());
             for node in found {
-                if !registered_paths.contains(&normalize_path(&node.path)) {
+                let normalized = normalize_path(&node.path);
+                if !registered_paths.contains(&normalized)
+                    && !discovered_paths.contains(&normalized)
+                {
+                    discovered_paths.insert(normalized);
                     discovered.push(DiscoverableNode {
                         path: node.path,
                         name: node.name,

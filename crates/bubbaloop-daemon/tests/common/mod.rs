@@ -151,6 +151,9 @@ pub fn create_test_command(
         node_name: node_name.to_string(),
         node_path: node_path.to_string(),
         request_id: uuid::Uuid::new_v4().to_string(),
+        timestamp_ms: 0,
+        source_machine: String::new(),
+        target_machine: String::new(),
     }
 }
 
@@ -166,6 +169,8 @@ pub fn create_test_result(
         message: message.to_string(),
         output: String::new(),
         node_state: None,
+        timestamp_ms: 0,
+        responding_machine: String::new(),
     }
 }
 

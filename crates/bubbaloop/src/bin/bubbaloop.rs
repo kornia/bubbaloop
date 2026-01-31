@@ -38,6 +38,7 @@ enum Command {
     Tui(TuiArgs),
     Status(StatusArgs),
     Doctor(DoctorArgs),
+    Daemon(DaemonArgs),
     Node(NodeCommand),
     Debug(DebugCommand),
 }
@@ -73,6 +74,19 @@ struct DoctorArgs {
     check: String,
 }
 
+/// Run the daemon (node manager service)
+#[derive(FromArgs)]
+#[argh(subcommand, name = "daemon")]
+struct DaemonArgs {
+    /// zenoh endpoint to connect to (default: auto-discover local zenohd)
+    #[argh(option, short = 'z')]
+    zenoh_endpoint: Option<String>,
+
+    /// exit with error if another daemon is already running
+    #[argh(switch)]
+    strict: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging (stderr to avoid interfering with TUI)
@@ -100,6 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              --json: Output as JSON");
             eprintln!("              -c, --check <type>: all|zenoh|daemon (default: all)");
             eprintln!("              --fix: Auto-fix issues");
+            eprintln!("  daemon    Run the daemon (node manager service)");
             eprintln!("  node      Manage nodes:");
             eprintln!("              init, validate, list, add, remove");
             eprintln!("              install, uninstall, start, stop, restart");
@@ -117,6 +132,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Command::Doctor(args)) => {
             bubbaloop::cli::doctor::run(args.fix, args.json, &args.check).await?;
+        }
+        Some(Command::Daemon(args)) => {
+            // Re-initialize logging for daemon (info level, not warn)
+            drop(env_logger::Builder::from_env(
+                env_logger::Env::default().default_filter_or("info"),
+            )
+            .try_init());
+            bubbaloop::daemon::run(args.zenoh_endpoint, args.strict).await?;
         }
         Some(Command::Node(cmd)) => {
             cmd.run()

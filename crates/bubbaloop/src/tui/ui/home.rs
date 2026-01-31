@@ -10,22 +10,24 @@ use super::components::{colors, footer_line, header_line};
 use crate::tui::app::{App, InputMode, MessageType};
 
 const VERSION: &str = "0.1.0";
-const MAIN_BOX_HEIGHT: u16 = 12; // Fixed height for main content box
 
 pub fn render(f: &mut Frame, app: &App) {
     let area = f.area();
 
-    // Create main layout with fixed box height
+    // Fixed chrome: header(1) + footer(1) + messages(3) + input(3) + hints(1) = 9
+    let main_height = area.height.saturating_sub(9).max(3);
+
+    // Create main layout with dynamic box height
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),               // Header
-            Constraint::Length(MAIN_BOX_HEIGHT), // Main content (fixed)
-            Constraint::Length(1),               // Footer border
-            Constraint::Min(0),                  // Spacer (absorbs extra space)
-            Constraint::Length(3),               // Messages (if any)
-            Constraint::Length(3),               // Input area
-            Constraint::Length(1),               // Exit warning / hints
+            Constraint::Length(1),            // Header
+            Constraint::Length(main_height),  // Main content (dynamic)
+            Constraint::Length(1),            // Footer border
+            Constraint::Min(0),              // Spacer (absorbs extra space)
+            Constraint::Length(3),            // Messages (if any)
+            Constraint::Length(3),            // Input area
+            Constraint::Length(1),            // Exit warning / hints
         ])
         .split(area);
 

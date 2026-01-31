@@ -37,7 +37,6 @@ struct NodeState {
     description: String,
     node_type: String,
     is_built: bool,
-    #[allow(dead_code)]
     build_output: Vec<String>,
 }
 
@@ -77,8 +76,8 @@ fn proto_status_to_string(status: i32) -> String {
 
 /// Decode protobuf NodeList to Vec<NodeInfo>
 fn decode_node_list(bytes: &[u8]) -> Result<Vec<NodeInfo>> {
-    let node_list = NodeList::decode(bytes)
-        .map_err(|e| anyhow!("Failed to decode NodeList: {}", e))?;
+    let node_list =
+        NodeList::decode(bytes).map_err(|e| anyhow!("Failed to decode NodeList: {}", e))?;
 
     Ok(node_list
         .nodes
@@ -91,6 +90,7 @@ fn decode_node_list(bytes: &[u8]) -> Result<Vec<NodeInfo>> {
             description: n.description,
             status: proto_status_to_string(n.status),
             is_built: n.is_built,
+            build_output: n.build_output,
         })
         .collect())
 }
@@ -139,9 +139,8 @@ impl DaemonClient {
             getter = getter.payload(p.as_bytes());
         }
 
-        // Increased timeout from 5s to 10s for more reliability on slow networks
         let replies = getter
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(5))
             .await
             .map_err(|e| {
                 anyhow!(
@@ -156,18 +155,19 @@ impl DaemonClient {
                 Ok(sample) => {
                     let bytes = sample.payload().to_bytes();
                     let text = String::from_utf8_lossy(&bytes);
-                    let result: T = serde_json::from_str(&text)
-                        .map_err(|e| anyhow!("Failed to parse response from '{}': {}", key_expr, e))?;
+                    let result: T = serde_json::from_str(&text).map_err(|e| {
+                        anyhow!("Failed to parse response from '{}': {}", key_expr, e)
+                    })?;
                     return Ok(result);
                 }
                 Err(e) => {
-                    eprintln!("Received error reply for '{}': {:?}", key_expr, e);
+                    log::debug!("Received error reply for '{}': {:?}", key_expr, e);
                 }
             }
         }
 
         Err(anyhow!(
-            "No valid reply received for '{}' (timeout after 10s - daemon may be unavailable)",
+            "No reply received for '{}' (5s timeout) - daemon may be unavailable",
             key_expr
         ))
     }
@@ -196,6 +196,7 @@ impl DaemonClient {
                 description: n.description,
                 status: n.status,
                 is_built: n.is_built,
+                build_output: n.build_output,
             })
             .collect())
     }
@@ -214,6 +215,50 @@ impl DaemonClient {
         } else {
             Err(anyhow!("{}", response.message))
         }
+    }
+
+    /// Fire-and-forget: send a Zenoh query and consume replies in the background.
+    /// Used when the caller relies on the subscription for state confirmation
+    /// rather than waiting for the reply inline.
+    async fn fire_and_forget(&self, key_expr: &str, payload: &str) -> Result<()> {
+        let replies = self
+            .session
+            .get(key_expr)
+            .payload(payload.as_bytes())
+            .timeout(Duration::from_secs(5))
+            .await
+            .map_err(|e| anyhow!("Failed to send to '{}': {}", key_expr, e))?;
+
+        // Consume replies in background so Zenoh doesn't log warnings
+        tokio::spawn(async move {
+            while let Ok(reply) = replies.recv_async().await {
+                if let Err(e) = reply.result() {
+                    log::debug!("Reply error: {:?}", e);
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Send a command without waiting for the reply.
+    /// Use the subscription for real-time state confirmation instead.
+    pub async fn send_command(&self, node_name: &str, command: &str) -> Result<()> {
+        let key_expr = format!("{}/{}/command", API_NODES, node_name);
+        let payload = serde_json::to_string(&CommandRequest {
+            command: command.to_string(),
+            node_path: String::new(),
+        })?;
+        self.fire_and_forget(&key_expr, &payload).await
+    }
+
+    /// Send an add_node command without waiting for the reply.
+    pub async fn send_add_node(&self, path: &str) -> Result<()> {
+        let payload = serde_json::to_string(&CommandRequest {
+            command: "add".to_string(),
+            node_path: path.to_string(),
+        })?;
+        self.fire_and_forget(API_NODES_ADD, &payload).await
     }
 
     pub async fn add_node(&self, path: &str) -> Result<()> {
@@ -447,6 +492,7 @@ mod tests {
             description: node_state.description.clone(),
             status: node_state.status.clone(),
             is_built: node_state.is_built,
+            build_output: node_state.build_output.clone(),
         };
 
         assert_eq!(node_info.name, "sensor");

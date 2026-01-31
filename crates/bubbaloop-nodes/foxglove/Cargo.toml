@@ -38,6 +38,7 @@ bubbaloop.workspace = true
 
 # Error handling
 thiserror.workspace = true
+hostname = "0.4"
 
 [[bin]]
 name = "foxglove_bridge"

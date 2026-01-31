@@ -11,32 +11,26 @@
 //! - Provides REST-like API via Zenoh queryables (JSON)
 //! - Runs as a systemd user service
 
-use argh::FromArgs;
-use bubbaloop_daemon::{create_session, run_zenoh_api_server, NodeManager, ZenohService};
-use tokio::sync::watch;
+pub mod node_manager;
+pub mod registry;
+pub mod systemd;
+pub mod zenoh_api;
+pub mod zenoh_service;
 
-#[derive(FromArgs)]
-/// Bubbaloop daemon - central service for node management
-struct Args {
-    /// zenoh endpoint to connect to (optional)
-    /// Default: connects to local zenohd via default discovery
-    #[argh(option, short = 'z')]
+pub use node_manager::NodeManager;
+pub use zenoh_api::run_zenoh_api_server;
+pub use zenoh_service::{create_session, ZenohService};
+
+/// Run the daemon with the given configuration.
+///
+/// This is the main entry point called by `bubbaloop daemon`.
+pub async fn run(
     zenoh_endpoint: Option<String>,
-
-    /// exit with error if another daemon is already running
-    #[argh(switch)]
     strict: bool,
-}
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::sync::watch;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    let env = env_logger::Env::default().default_filter_or("info");
-    env_logger::init_from_env(env);
-
-    let args: Args = argh::from_env();
-
-    log::info!("Starting bubbaloop-daemon...");
+    log::info!("Starting bubbaloop daemon...");
 
     // Create shutdown channel
     let (shutdown_tx, shutdown_rx) = watch::channel(());
@@ -82,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create shared Zenoh session
     log::info!("Connecting to Zenoh...");
-    let session = create_session(args.zenoh_endpoint.as_deref()).await?;
+    let session = create_session(zenoh_endpoint.as_deref()).await?;
 
     // Check for duplicate daemon instances
     log::info!("Checking for duplicate daemon instances...");
@@ -111,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "To prevent this, use the --strict flag to exit when a duplicate is detected."
                 );
 
-                if args.strict {
+                if strict {
                     return Err("Another daemon is already running (strict mode)".into());
                 }
             } else {

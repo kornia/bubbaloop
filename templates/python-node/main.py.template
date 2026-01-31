@@ -7,7 +7,7 @@ import logging
 import signal
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -33,7 +33,7 @@ class {{node_name_pascal}}Node:
         else:
             logger.warning(f"Config file not found: {config_path}, using defaults")
             self.config = {
-                "publish_topic": "/{{node_name}}/output",
+                "publish_topic": "{{node_name}}/output",
                 "subscribe_topic": None,
                 "rate_hz": 1.0,
             }
@@ -73,7 +73,7 @@ class {{node_name_pascal}}Node:
         # TODO: Implement your processing logic here
         output = {
             "sequence": self.sequence,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "data": f"Hello from {{node_name}}",
         }
         return json.dumps(output).encode()

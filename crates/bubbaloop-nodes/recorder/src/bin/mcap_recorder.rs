@@ -69,19 +69,65 @@ async fn main() -> ZResult<()> {
         }
     })?;
 
+    // Read scope/machine env vars for health heartbeat
+    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+    let machine_id = std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
+        hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".to_string())
+    });
+    log::info!("Scope: {}, Machine ID: {}", scope, machine_id);
+
     // Initialize ROS-Z context
     // Use ZENOH_ENDPOINT env var if set, otherwise use multicast scouting
-    let ctx = if let Ok(endpoint) = std::env::var("ZENOH_ENDPOINT") {
-        log::info!("Connecting to Zenoh at: {}", endpoint);
+    let endpoint = std::env::var("ZENOH_ENDPOINT").ok();
+    let ctx = if let Some(ref ep) = endpoint {
+        log::info!("Connecting to Zenoh at: {}", ep);
         Arc::new(
             ZContextBuilder::default()
-                .with_json("connect/endpoints", json!([endpoint]))
+                .with_json("connect/endpoints", json!([ep]))
                 .build()?,
         )
     } else {
         log::info!("Using Zenoh multicast scouting for discovery");
         Arc::new(ZContextBuilder::default().build()?)
     };
+
+    // Create vanilla zenoh session for health heartbeat
+    let zenoh_session = {
+        let mut c = zenoh::Config::default();
+        if let Some(ref ep) = endpoint {
+            c.insert_json5("connect/endpoints", &format!(r#"["{}"]"#, ep))
+                .unwrap();
+        }
+        zenoh::open(c)
+            .await
+            .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(format!("Zenoh session error: {}", e)))?
+    };
+
+    // Start health heartbeat task
+    let health_topic = format!("bubbaloop/{}/{}/health/mcap-recorder", scope, machine_id);
+    let health_publisher = zenoh_session
+        .declare_publisher(&health_topic)
+        .await
+        .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(format!("Health publisher error: {}", e)))?;
+    log::info!("Health heartbeat topic: {}", health_topic);
+
+    let mut health_shutdown_rx = shutdown_tx.subscribe();
+    tokio::spawn(async move {
+        let mut health_interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                biased;
+                _ = health_shutdown_rx.changed() => break,
+                _ = health_interval.tick() => {
+                    if let Err(e) = health_publisher.put("ok").await {
+                        log::warn!("Failed to publish health heartbeat: {}", e);
+                    }
+                }
+            }
+        }
+    });
 
     // Create ros-z node
     let node = Arc::new(ctx.create_node("mcap_recorder").build()?);

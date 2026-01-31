@@ -55,6 +55,7 @@ enum NodeAction {
     Restart(RestartArgs),
     Logs(LogsArgs),
     Build(BuildArgs),
+    Clean(CleanArgs),
     Enable(EnableArgs),
     Disable(DisableArgs),
 }
@@ -211,6 +212,15 @@ struct BuildArgs {
     name: String,
 }
 
+/// Clean a node's build artifacts
+#[derive(FromArgs)]
+#[argh(subcommand, name = "clean")]
+struct CleanArgs {
+    /// node name
+    #[argh(positional)]
+    name: String,
+}
+
 /// Enable autostart for a node
 #[derive(FromArgs)]
 #[argh(subcommand, name = "enable")]
@@ -283,6 +293,7 @@ impl NodeCommand {
             Some(NodeAction::Restart(args)) => send_command(&args.name, "restart").await,
             Some(NodeAction::Logs(args)) => view_logs(args).await,
             Some(NodeAction::Build(args)) => send_command(&args.name, "build").await,
+            Some(NodeAction::Clean(args)) => send_command(&args.name, "clean").await,
             Some(NodeAction::Enable(args)) => send_command(&args.name, "enable").await,
             Some(NodeAction::Disable(args)) => send_command(&args.name, "disable").await,
         }
@@ -304,6 +315,7 @@ impl NodeCommand {
         eprintln!("  restart     Restart a node service");
         eprintln!("  logs        View logs for a node");
         eprintln!("  build       Build a node");
+        eprintln!("  clean       Clean a node's build artifacts");
         eprintln!("  enable      Enable autostart for a node");
         eprintln!("  disable     Disable autostart for a node");
         eprintln!("\nRun 'bubbaloop node <command> --help' for more information.");

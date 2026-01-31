@@ -32,6 +32,7 @@ fn convert_current_weather(
     response: CurrentWeatherResponse,
     location_name: &str,
     sequence: u32,
+    machine_id: &str,
 ) -> CurrentWeather {
     let now = get_pub_time();
     CurrentWeather {
@@ -40,6 +41,7 @@ fn convert_current_weather(
             pub_time: now,
             sequence,
             frame_id: location_name.to_string(),
+            machine_id: machine_id.to_string(),
         }),
         latitude: response.latitude,
         longitude: response.longitude,
@@ -64,6 +66,7 @@ fn convert_hourly_forecast(
     response: HourlyForecastResponse,
     location_name: &str,
     sequence: u32,
+    machine_id: &str,
 ) -> HourlyForecast {
     let now = get_pub_time();
     let entries: Vec<HourlyForecastEntry> = response
@@ -115,6 +118,7 @@ fn convert_hourly_forecast(
             pub_time: now,
             sequence,
             frame_id: location_name.to_string(),
+            machine_id: machine_id.to_string(),
         }),
         latitude: response.latitude,
         longitude: response.longitude,
@@ -160,6 +164,7 @@ fn convert_daily_forecast(
     response: DailyForecastResponse,
     location_name: &str,
     sequence: u32,
+    machine_id: &str,
 ) -> DailyForecast {
     let now = get_pub_time();
     let entries: Vec<DailyForecastEntry> = response
@@ -217,6 +222,7 @@ fn convert_daily_forecast(
             pub_time: now,
             sequence,
             frame_id: location_name.to_string(),
+            machine_id: machine_id.to_string(),
         }),
         latitude: response.latitude,
         longitude: response.longitude,
@@ -271,6 +277,7 @@ pub struct OpenMeteoNode {
     location: ResolvedLocation,
     fetch_config: FetchConfig,
     client: OpenMeteoClient,
+    machine_id: String,
 }
 
 impl OpenMeteoNode {
@@ -278,16 +285,24 @@ impl OpenMeteoNode {
         ctx: Arc<ZContext>,
         location: ResolvedLocation,
         fetch_config: FetchConfig,
+        machine_id: String,
     ) -> ZResult<Self> {
         Ok(Self {
             ctx,
             location,
             fetch_config,
             client: OpenMeteoClient::new(),
+            machine_id,
         })
     }
 
-    pub async fn run(self, shutdown_tx: tokio::sync::watch::Sender<()>) -> ZResult<()> {
+    pub async fn run(
+        self,
+        shutdown_tx: tokio::sync::watch::Sender<()>,
+        zenoh_session: zenoh::Session,
+        scope: String,
+        machine_id: String,
+    ) -> ZResult<()> {
         let mut shutdown_rx = shutdown_tx.subscribe();
 
         // Mutable location that can be updated via Zenoh
@@ -296,6 +311,17 @@ impl OpenMeteoNode {
             .city
             .clone()
             .unwrap_or_else(|| format!("{:.2},{:.2}", location.latitude, location.longitude));
+
+        // Create health heartbeat publisher
+        let health_topic = format!(
+            "bubbaloop/{}/{}/health/openmeteo",
+            scope, machine_id
+        );
+        let health_publisher = zenoh_session
+            .declare_publisher(&health_topic)
+            .await
+            .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(format!("Health publisher error: {}", e)))?;
+        log::info!("Health heartbeat topic: {}", health_topic);
 
         // Create ROS-Z node
         let node = Arc::new(self.ctx.create_node("weather").build()?);
@@ -383,6 +409,7 @@ impl OpenMeteoNode {
         let mut current_seq: u32 = 0;
         let mut hourly_seq: u32 = 0;
         let mut daily_seq: u32 = 0;
+        let mut health_interval = interval(Duration::from_secs(5));
 
         loop {
             tokio::select! {
@@ -391,6 +418,13 @@ impl OpenMeteoNode {
                 _ = shutdown_rx.changed() => {
                     log::info!("[{}] Weather node received shutdown", location_label);
                     break;
+                }
+
+                // Health heartbeat
+                _ = health_interval.tick() => {
+                    if let Err(e) = health_publisher.put("ok").await {
+                        log::warn!("[{}] Failed to publish health heartbeat: {}", location_label, e);
+                    }
                 }
 
                 // Handle location updates
@@ -431,7 +465,7 @@ impl OpenMeteoNode {
                     ).await {
                         Ok(response) => {
                             let temp = response.current.temperature_2m;
-                            let msg = convert_current_weather(response, &location_label, current_seq);
+                            let msg = convert_current_weather(response, &location_label, current_seq, &self.machine_id);
                             if current_pub.async_publish(&msg).await.is_ok() {
                                 log::info!("[{}] Current weather: {:.1}°C (seq={})", location_label, temp, current_seq);
                                 current_seq = current_seq.wrapping_add(1);
@@ -452,7 +486,7 @@ impl OpenMeteoNode {
                     ).await {
                         Ok(response) => {
                             let count = response.hourly.time.len();
-                            let msg = convert_hourly_forecast(response, &location_label, hourly_seq);
+                            let msg = convert_hourly_forecast(response, &location_label, hourly_seq, &self.machine_id);
                             if hourly_pub.async_publish(&msg).await.is_ok() {
                                 log::info!("[{}] Hourly forecast: {} entries (seq={})", location_label, count, hourly_seq);
                                 hourly_seq = hourly_seq.wrapping_add(1);
@@ -473,7 +507,7 @@ impl OpenMeteoNode {
                     ).await {
                         Ok(response) => {
                             let count = response.daily.time.len();
-                            let msg = convert_daily_forecast(response, &location_label, daily_seq);
+                            let msg = convert_daily_forecast(response, &location_label, daily_seq, &self.machine_id);
                             if daily_pub.async_publish(&msg).await.is_ok() {
                                 log::info!("[{}] Daily forecast: {} days (seq={})", location_label, count, daily_seq);
                                 daily_seq = daily_seq.wrapping_add(1);

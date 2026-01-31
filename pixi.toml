@@ -32,7 +32,7 @@ docs-build = "mkdocs build"
 
 # individual nodes
 # Daemon manages all nodes via systemd and Zenoh
-daemon = "RUST_LOG=info cargo run --bin bubbaloop-daemon --package bubbaloop-daemon --release --"
+daemon = "RUST_LOG=info cargo run --bin bubbaloop --package bubbaloop --release -- daemon"
 
 # Cameras connects to local zenohd by default (tcp/127.0.0.1:7447)
 # Override with: pixi run cameras -- -z tcp/other:7447
@@ -49,7 +49,7 @@ dashboard-build = { cmd = "cd dashboard && npm run build", depends-on = ["dashbo
 dashboard = { cmd = "cd dashboard && npm run dev", depends-on = ["dashboard-proto"] }
 
 # TUI (Rust)
-tui = "RUST_LOG=info cargo run --bin bubbaloop --package bubbaloop-tui --release"
+tui = "RUST_LOG=info cargo run --bin bubbaloop --package bubbaloop --release -- tui"
 
 # TUI (Legacy Ink - deprecated)
 bubbaloop-legacy-install = "cd bubbaloop-tui && npm install"

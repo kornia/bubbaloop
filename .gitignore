@@ -69,3 +69,6 @@ bubbaloop-tui/dist/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Tool config
+.omc/

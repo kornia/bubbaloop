@@ -9,6 +9,17 @@ use ratatui::{
 use crate::tui::app::{App, InputMode, NodesTab, View};
 use crate::tui::ui::components::{colors, flower_spinner};
 
+fn truncate_path(path: &str, max_chars: usize) -> String {
+    let char_count = path.chars().count();
+    if char_count > max_chars {
+        let skip = char_count - max_chars;
+        let suffix: String = path.chars().skip(skip).collect();
+        format!("...{}", suffix)
+    } else {
+        path.to_string()
+    }
+}
+
 pub fn render_list(f: &mut Frame, app: &App) {
     // Handle create node form
     if app.input_mode == InputMode::CreateNode {
@@ -318,11 +329,7 @@ fn render_discover_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 colors::PYTHON_TYPE
             };
 
-            let path_display = if node.path.len() > 35 {
-                format!("...{}", &node.path[node.path.len() - 32..])
-            } else {
-                node.path.clone()
-            };
+            let path_display = truncate_path(&node.path, 35);
 
             Row::new(vec![
                 Span::styled(name_text, name_style),
@@ -425,11 +432,7 @@ fn render_marketplace_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
                 colors::SUCCESS
             };
 
-            let path_display = if source.path.len() > 50 {
-                format!("...{}", &source.path[source.path.len() - 47..])
-            } else {
-                source.path.clone()
-            };
+            let path_display = truncate_path(&source.path, 50);
 
             Row::new(vec![
                 Span::styled(enabled_symbol, Style::default().fg(enabled_color)),
@@ -464,16 +467,26 @@ fn render_hints(f: &mut Frame, app: &App, area: ratatui::layout::Rect, current_t
                     Span::styled("esc/q", Style::default().fg(colors::PRIMARY)),
                     Span::styled(" back", Style::default().fg(colors::DIMMED)),
                 ])
+            } else if app.confirm_uninstall {
+                let suffix = app
+                    .nodes
+                    .get(app.node_index)
+                    .map(|n| format!(" {}", n.name))
+                    .unwrap_or_default();
+                Line::from(Span::styled(
+                    format!("Press [u] again to UNINSTALL{}", suffix),
+                    Style::default().fg(colors::ERROR),
+                ))
             } else {
                 Line::from(vec![
                     Span::styled("s", Style::default().fg(colors::PRIMARY)),
                     Span::styled(" start/stop • ", Style::default().fg(colors::DIMMED)),
+                    Span::styled("u", Style::default().fg(colors::PRIMARY)),
+                    Span::styled(" uninstall • ", Style::default().fg(colors::DIMMED)),
                     Span::styled("enter", Style::default().fg(colors::PRIMARY)),
                     Span::styled(" details • ", Style::default().fg(colors::DIMMED)),
                     Span::styled("↑↓", Style::default().fg(colors::PRIMARY)),
-                    Span::styled(" select • ", Style::default().fg(colors::DIMMED)),
-                    Span::styled("esc/q", Style::default().fg(colors::PRIMARY)),
-                    Span::styled(" back", Style::default().fg(colors::DIMMED)),
+                    Span::styled(" select", Style::default().fg(colors::DIMMED)),
                 ])
             }
         }
@@ -542,6 +555,54 @@ fn render_messages(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     }
 }
 
+fn render_text_field(
+    f: &mut Frame,
+    area: ratatui::layout::Rect,
+    label: &str,
+    value: &str,
+    placeholder: &str,
+    is_active: bool,
+) {
+    let label_style = if is_active {
+        Style::default().fg(colors::PRIMARY)
+    } else {
+        Style::default().fg(colors::DIMMED)
+    };
+    let border_color = if is_active {
+        colors::PRIMARY
+    } else {
+        colors::BORDER
+    };
+
+    let block = Block::default()
+        .title(Span::styled(format!(" {} ", label), label_style))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let content = if is_active {
+        format!("{}|", value)
+    } else if value.is_empty() {
+        placeholder.to_string()
+    } else {
+        value.to_string()
+    };
+    let text_style = if is_active {
+        Style::default().fg(colors::TEXT)
+    } else if value.is_empty() {
+        Style::default().fg(colors::DIMMED)
+    } else {
+        Style::default().fg(colors::TEXT)
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(content, text_style)),
+        inner,
+    );
+}
+
 fn render_edit_source_form(f: &mut Frame, app: &App) {
     let area = f.area();
     let is_editing = app.marketplace_edit_path.is_some();
@@ -588,84 +649,22 @@ fn render_edit_source_form(f: &mut Frame, app: &App) {
     ]);
     f.render_widget(Paragraph::new(hints), header_inner);
 
-    let name_active = app.marketplace_active_field == 0;
-    let name_style = if name_active {
-        Style::default().fg(colors::PRIMARY)
-    } else {
-        Style::default().fg(colors::DIMMED)
-    };
-    let name_border_color = if name_active {
-        colors::PRIMARY
-    } else {
-        colors::BORDER
-    };
-
-    let name_block = Block::default()
-        .title(Span::styled(" Name ", name_style))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(name_border_color));
-
-    let name_inner = name_block.inner(chunks[1]);
-    f.render_widget(name_block, chunks[1]);
-
-    let name_content = if name_active {
-        format!("{}|", app.marketplace_name)
-    } else if app.marketplace_name.is_empty() {
-        "(empty)".to_string()
-    } else {
-        app.marketplace_name.clone()
-    };
-    let name_text_style = if name_active {
-        Style::default().fg(colors::TEXT)
-    } else if app.marketplace_name.is_empty() {
-        Style::default().fg(colors::DIMMED)
-    } else {
-        Style::default().fg(colors::TEXT)
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(name_content, name_text_style)),
-        name_inner,
+    render_text_field(
+        f,
+        chunks[1],
+        "Name",
+        &app.marketplace_name,
+        "(empty)",
+        app.marketplace_active_field == 0,
     );
 
-    let path_active = app.marketplace_active_field == 1;
-    let path_style = if path_active {
-        Style::default().fg(colors::PRIMARY)
-    } else {
-        Style::default().fg(colors::DIMMED)
-    };
-    let path_border_color = if path_active {
-        colors::PRIMARY
-    } else {
-        colors::BORDER
-    };
-
-    let path_block = Block::default()
-        .title(Span::styled(" Path ", path_style))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(path_border_color));
-
-    let path_inner = path_block.inner(chunks[2]);
-    f.render_widget(path_block, chunks[2]);
-
-    let path_content = if path_active {
-        format!("{}|", app.marketplace_path)
-    } else if app.marketplace_path.is_empty() {
-        "(empty)".to_string()
-    } else {
-        app.marketplace_path.clone()
-    };
-    let path_text_style = if path_active {
-        Style::default().fg(colors::TEXT)
-    } else if app.marketplace_path.is_empty() {
-        Style::default().fg(colors::DIMMED)
-    } else {
-        Style::default().fg(colors::TEXT)
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(path_content, path_text_style)),
-        path_inner,
+    render_text_field(
+        f,
+        chunks[2],
+        "Path",
+        &app.marketplace_path,
+        "(empty)",
+        app.marketplace_active_field == 1,
     );
 
     let help_lines = vec![
@@ -735,44 +734,13 @@ fn render_create_node_form(f: &mut Frame, app: &App) {
     f.render_widget(Paragraph::new(hints), header_inner);
 
     // Name field
-    let name_active = app.create_node_active_field == 0;
-    let name_style = if name_active {
-        Style::default().fg(colors::PRIMARY)
-    } else {
-        Style::default().fg(colors::DIMMED)
-    };
-    let name_border_color = if name_active {
-        colors::PRIMARY
-    } else {
-        colors::BORDER
-    };
-
-    let name_block = Block::default()
-        .title(Span::styled(" Name ", name_style))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(name_border_color));
-
-    let name_inner = name_block.inner(chunks[1]);
-    f.render_widget(name_block, chunks[1]);
-
-    let name_content = if name_active {
-        format!("{}|", app.create_node_name)
-    } else if app.create_node_name.is_empty() {
-        "(e.g., my-sensor)".to_string()
-    } else {
-        app.create_node_name.clone()
-    };
-    let name_text_style = if name_active {
-        Style::default().fg(colors::TEXT)
-    } else if app.create_node_name.is_empty() {
-        Style::default().fg(colors::DIMMED)
-    } else {
-        Style::default().fg(colors::TEXT)
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(name_content, name_text_style)),
-        name_inner,
+    render_text_field(
+        f,
+        chunks[1],
+        "Name",
+        &app.create_node_name,
+        "(e.g., my-sensor)",
+        app.create_node_active_field == 0,
     );
 
     // Type field
@@ -828,44 +796,13 @@ fn render_create_node_form(f: &mut Frame, app: &App) {
     f.render_widget(Paragraph::new(Line::from(type_spans)), type_inner);
 
     // Description field
-    let desc_active = app.create_node_active_field == 2;
-    let desc_style = if desc_active {
-        Style::default().fg(colors::PRIMARY)
-    } else {
-        Style::default().fg(colors::DIMMED)
-    };
-    let desc_border_color = if desc_active {
-        colors::PRIMARY
-    } else {
-        colors::BORDER
-    };
-
-    let desc_block = Block::default()
-        .title(Span::styled(" Description ", desc_style))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(desc_border_color));
-
-    let desc_inner = desc_block.inner(chunks[3]);
-    f.render_widget(desc_block, chunks[3]);
-
-    let desc_content = if desc_active {
-        format!("{}|", app.create_node_description)
-    } else if app.create_node_description.is_empty() {
-        "(optional)".to_string()
-    } else {
-        app.create_node_description.clone()
-    };
-    let desc_text_style = if desc_active {
-        Style::default().fg(colors::TEXT)
-    } else if app.create_node_description.is_empty() {
-        Style::default().fg(colors::DIMMED)
-    } else {
-        Style::default().fg(colors::TEXT)
-    };
-    f.render_widget(
-        Paragraph::new(Span::styled(desc_content, desc_text_style)),
-        desc_inner,
+    render_text_field(
+        f,
+        chunks[3],
+        "Description",
+        &app.create_node_description,
+        "(optional)",
+        app.create_node_active_field == 2,
     );
 
     // Messages

@@ -291,6 +291,8 @@ async fn test_node_state_publishing() {
         build_output: vec!["Build successful".to_string()],
         health_status: HealthStatus::Healthy as i32,
         last_health_check_ms: 1234567890,
+        machine_id: String::new(),
+        machine_hostname: String::new(),
     };
 
     // Set up subscriber
@@ -357,6 +359,8 @@ async fn test_node_list_publishing() {
             build_output: vec![],
             health_status: HealthStatus::Healthy as i32,
             last_health_check_ms: 1000,
+            machine_id: String::new(),
+            machine_hostname: String::new(),
         },
         NodeState {
             name: "weather".to_string(),
@@ -372,12 +376,15 @@ async fn test_node_list_publishing() {
             build_output: vec![],
             health_status: HealthStatus::Unknown as i32,
             last_health_check_ms: 0,
+            machine_id: String::new(),
+            machine_hostname: String::new(),
         },
     ];
 
     let original_list = NodeList {
         nodes: nodes.clone(),
         timestamp_ms: 1234567890,
+        machine_id: String::new(),
     };
 
     // Set up subscriber
@@ -445,6 +452,8 @@ async fn test_event_publishing() {
         build_output: vec![],
         health_status: HealthStatus::Healthy as i32,
         last_health_check_ms: 1000,
+        machine_id: String::new(),
+        machine_hostname: String::new(),
     };
 
     let original_event = NodeEvent {
@@ -533,6 +542,8 @@ async fn test_command_queryable() {
                 message: format!("Executed command {:?}", cmd.command),
                 output: format!("Node: {}", cmd.node_name),
                 node_state: None,
+                timestamp_ms: 0,
+                responding_machine: String::new(),
             };
 
             // Send reply
@@ -552,6 +563,9 @@ async fn test_command_queryable() {
         node_name: "test-node".to_string(),
         node_path: "/path/to/node".to_string(),
         request_id: "req-123".to_string(),
+        timestamp_ms: 0,
+        source_machine: String::new(),
+        target_machine: String::new(),
     };
 
     let encoded_command = encode_proto(&command);
@@ -610,6 +624,8 @@ async fn test_health_status_values() {
             build_output: vec![],
             health_status: status as i32,
             last_health_check_ms: 1000,
+            machine_id: String::new(),
+            machine_hostname: String::new(),
         };
 
         // Verify encoding/decoding preserves health status
@@ -647,6 +663,9 @@ async fn test_command_types() {
             node_name: "test".to_string(),
             node_path: "/test".to_string(),
             request_id: "req-1".to_string(),
+            timestamp_ms: 0,
+            source_machine: String::new(),
+            target_machine: String::new(),
         };
 
         // Verify encoding/decoding preserves command type

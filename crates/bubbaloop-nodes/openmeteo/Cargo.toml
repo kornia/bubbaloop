@@ -37,6 +37,7 @@ thiserror.workspace = true
 
 # Schema crate
 bubbaloop.workspace = true
+hostname = "0.4"
 
 [[bin]]
 name = "openmeteo_node"

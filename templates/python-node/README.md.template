@@ -1,0 +1,41 @@
+# {{node_name}}
+
+{{description}}
+
+## Quick Start
+
+```bash
+# Install dependencies (if using pixi)
+pixi run install
+
+# Start the node
+bubbaloop node start {{node_name}}
+
+# View logs
+bubbaloop node logs {{node_name}} -f
+```
+
+## Configuration
+
+Edit `config.yaml`:
+
+```yaml
+publish_topic: "/{{node_name}}/output"
+rate_hz: 1.0
+```
+
+## Development
+
+```bash
+# Run directly
+python3 main.py -c config.yaml
+
+# With custom endpoint
+python3 main.py -c config.yaml -e tcp/192.168.1.100:7447
+```
+
+## Zenoh Topics
+
+| Topic | Direction | Description |
+|-------|-----------|-------------|
+| `/{{node_name}}/output` | Publish | Node output data |

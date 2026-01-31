@@ -61,6 +61,27 @@ async fn main() -> ZResult<()> {
             .build()?,
     );
 
+    // Read scope/machine env vars for health heartbeat
+    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+    let machine_id = std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
+        hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".to_string())
+    });
+    log::info!("Scope: {}, Machine ID: {}", scope, machine_id);
+
+    // Create vanilla zenoh session for health heartbeat
+    let zenoh_session = {
+        let mut c = zenoh::Config::default();
+        c.insert_json5("connect/endpoints", &format!(r#"["{}"]"#, endpoint))
+            .unwrap();
+        std::sync::Arc::new(
+            zenoh::open(c)
+                .await
+                .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(format!("Zenoh session error: {}", e)))?,
+        )
+    };
+
     // Spawn camera nodes
     let mut tasks = Vec::new();
 
@@ -71,9 +92,14 @@ async fn main() -> ZResult<()> {
             camera_config.url
         );
 
-        match RtspCameraNode::new(ctx.clone(), camera_config.clone()) {
+        match RtspCameraNode::new(ctx.clone(), camera_config.clone(), machine_id.clone()) {
             Ok(node) => {
-                tasks.push(tokio::spawn(node.run(shutdown_tx.clone())));
+                tasks.push(tokio::spawn(node.run(
+                    shutdown_tx.clone(),
+                    zenoh_session.clone(),
+                    scope.clone(),
+                    machine_id.clone(),
+                )));
             }
             Err(e) => {
                 log::error!(

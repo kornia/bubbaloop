@@ -90,7 +90,7 @@ impl FixAction {
             }
             FixAction::StartBridgeService => {
                 let output = Command::new("systemctl")
-                    .args(["--user", "start", "zenoh-bridge.service"])
+                    .args(["--user", "start", "bubbaloop-bridge.service"])
                     .output()
                     .await?;
 
@@ -516,7 +516,7 @@ async fn check_system_services() -> Vec<DiagnosticResult> {
     }
 
     // Check zenoh-bridge (optional, so we don't fail hard)
-    let bridge_service = check_systemd_service("zenoh-bridge.service").await;
+    let bridge_service = check_systemd_service("bubbaloop-bridge.service").await;
     if bridge_service == "active" {
         results.push(DiagnosticResult::pass("zenoh-bridge", "service active"));
     } else {

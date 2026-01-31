@@ -101,6 +101,29 @@ struct InfoArgs {
     json: bool,
 }
 
+/// Print a JSON envelope to stdout, attempting to parse `payload` as JSON first
+/// so it is embedded as structured data rather than an escaped string.
+fn print_json_envelope(
+    envelope: &serde_json::Value,
+    payload_key: &str,
+    payload: &[u8],
+) -> Result<()> {
+    let mut obj = envelope.as_object().cloned().unwrap_or_default();
+    if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(payload) {
+        obj.insert(payload_key.to_string(), json_val);
+    } else {
+        obj.insert(
+            payload_key.to_string(),
+            serde_json::Value::String(String::from_utf8_lossy(payload).into_owned()),
+        );
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::Value::Object(obj))?
+    );
+    Ok(())
+}
+
 impl DebugCommand {
     pub async fn run(self) -> Result<()> {
         match self.action {
@@ -158,7 +181,10 @@ async fn get_zenoh_session() -> Result<zenoh::Session> {
 async fn list_topics(args: TopicsArgs) -> Result<()> {
     let session = get_zenoh_session().await?;
 
-    println!("Scanning Zenoh network for topics (timeout: {}s)...", args.timeout);
+    println!(
+        "Scanning Zenoh network for topics (timeout: {}s)...",
+        args.timeout
+    );
 
     // Query the admin space for topic information
     // Note: This requires Zenoh admin API which may not be available in all deployments
@@ -191,10 +217,13 @@ async fn list_topics(args: TopicsArgs) -> Result<()> {
 
     if args.format == "json" {
         let topics: Vec<_> = found_topics.iter().collect();
-        println!("{}", serde_json::to_string_pretty(&json!({
-            "topics": topics,
-            "count": topics.len()
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "topics": topics,
+                "count": topics.len()
+            }))?
+        );
     } else if found_topics.is_empty() {
         println!("No topics found. The network may be empty or daemon not running.");
     } else {
@@ -233,23 +262,17 @@ async fn subscribe_topic(args: SubscribeArgs) -> Result<()> {
 
         let key = sample.key_expr().to_string();
         let payload = sample.payload().to_bytes();
-        let timestamp = sample.timestamp().map(|t| t.to_string()).unwrap_or_else(|| "N/A".to_string());
+        let timestamp = sample
+            .timestamp()
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "N/A".to_string());
 
         if args.json {
-            // Try to parse as JSON
-            if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&payload) {
-                println!("{}", serde_json::to_string_pretty(&json!({
-                    "key": key,
-                    "timestamp": timestamp,
-                    "payload": json_val
-                }))?);
-            } else {
-                println!("{}", serde_json::to_string_pretty(&json!({
-                    "key": key,
-                    "timestamp": timestamp,
-                    "payload": String::from_utf8_lossy(&payload)
-                }))?);
-            }
+            print_json_envelope(
+                &json!({"key": key, "timestamp": timestamp}),
+                "payload",
+                &payload,
+            )?;
         } else {
             println!("[{}] {}", timestamp, key);
 
@@ -303,10 +326,13 @@ async fn query_endpoint(args: QueryArgs) -> Result<()> {
 
     if replies.is_empty() {
         if args.json {
-            println!("{}", serde_json::to_string_pretty(&json!({
-                "error": "No replies received",
-                "key": args.key
-            }))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "error": "No replies received",
+                    "key": args.key
+                }))?
+            );
         } else {
             println!("No replies received. Endpoint may not exist or is not responding.");
         }
@@ -319,20 +345,11 @@ async fn query_endpoint(args: QueryArgs) -> Result<()> {
                 let payload = sample.payload().to_bytes();
 
                 if args.json {
-                    // Try to parse as JSON
-                    if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&payload) {
-                        println!("{}", serde_json::to_string_pretty(&json!({
-                            "reply": i + 1,
-                            "key": sample.key_expr().to_string(),
-                            "payload": json_val
-                        }))?);
-                    } else {
-                        println!("{}", serde_json::to_string_pretty(&json!({
-                            "reply": i + 1,
-                            "key": sample.key_expr().to_string(),
-                            "payload": String::from_utf8_lossy(&payload)
-                        }))?);
-                    }
+                    print_json_envelope(
+                        &json!({"reply": i + 1, "key": sample.key_expr().to_string()}),
+                        "payload",
+                        &payload,
+                    )?;
                 } else {
                     println!("Reply {} from: {}", i + 1, sample.key_expr());
 
@@ -355,10 +372,13 @@ async fn query_endpoint(args: QueryArgs) -> Result<()> {
             }
             Err(e) => {
                 if args.json {
-                    println!("{}", serde_json::to_string_pretty(&json!({
-                        "reply": i + 1,
-                        "error": e.to_string()
-                    }))?);
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "reply": i + 1,
+                            "error": e.to_string()
+                        }))?
+                    );
                 } else {
                     println!("Reply {} ERROR: {}", i + 1, e);
                 }
@@ -382,12 +402,15 @@ async fn show_info(args: InfoArgs) -> Result<()> {
     let session_id = session.zid().to_string();
 
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&json!({
-            "endpoint": endpoint,
-            "session_id": session_id,
-            "mode": "client",
-            "status": "connected"
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "endpoint": endpoint,
+                "session_id": session_id,
+                "mode": "client",
+                "status": "connected"
+            }))?
+        );
     } else {
         println!("Zenoh Connection Info");
         println!("{}", "=".repeat(80));
@@ -396,10 +419,15 @@ async fn show_info(args: InfoArgs) -> Result<()> {
         println!("Mode:         client");
         println!("Status:       connected");
         println!("\nEnvironment:");
-        println!("  BUBBALOOP_ZENOH_ENDPOINT: {}",
-            std::env::var("BUBBALOOP_ZENOH_ENDPOINT").unwrap_or_else(|_| "(not set, using default)".to_string()));
-        println!("  RUST_LOG: {}",
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "(not set)".to_string()));
+        println!(
+            "  BUBBALOOP_ZENOH_ENDPOINT: {}",
+            std::env::var("BUBBALOOP_ZENOH_ENDPOINT")
+                .unwrap_or_else(|_| "(not set, using default)".to_string())
+        );
+        println!(
+            "  RUST_LOG: {}",
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "(not set)".to_string())
+        );
     }
 
     session

@@ -239,7 +239,7 @@ async fn collect_status() -> Result<StatusOutput> {
     };
 
     // Check bridge
-    let bridge_service = check_systemd_service("zenoh-bridge.service").await;
+    let bridge_service = check_systemd_service("bubbaloop-bridge.service").await;
     let bridge = BridgeStatus {
         running: bridge_service == "active",
     };

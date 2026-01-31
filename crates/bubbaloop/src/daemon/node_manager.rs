@@ -2,12 +2,12 @@
 //!
 //! Maintains authoritative state for all nodes and handles commands.
 
-use crate::proto::{
+use crate::schemas::daemon::v1::{
     CommandResult, CommandType, HealthStatus, NodeCommand, NodeEvent, NodeList, NodeState,
     NodeStatus,
 };
-use crate::registry::{self, NodeManifest};
-use crate::systemd::{self, ActiveState, SystemdClient, SystemdSignalEvent};
+use crate::daemon::registry::{self, NodeManifest};
+use crate::daemon::systemd::{self, ActiveState, SystemdClient, SystemdSignalEvent};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -25,10 +25,10 @@ const HEALTH_TIMEOUT_MS: i64 = 30_000;
 #[derive(Error, Debug)]
 pub enum NodeManagerError {
     #[error("Registry error: {0}")]
-    Registry(#[from] crate::registry::RegistryError),
+    Registry(#[from] crate::daemon::registry::RegistryError),
 
     #[error("Systemd error: {0}")]
-    Systemd(#[from] crate::systemd::SystemdError),
+    Systemd(#[from] crate::daemon::systemd::SystemdError),
 
     #[error("Node not found: {0}")]
     NodeNotFound(String),

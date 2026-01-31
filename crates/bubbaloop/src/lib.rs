@@ -9,6 +9,9 @@ pub mod config;
 /// CLI commands
 pub mod cli;
 
+/// Daemon module
+pub mod daemon;
+
 /// TUI (Terminal User Interface)
 pub mod tui;
 
@@ -40,14 +43,14 @@ pub mod schemas {
 
     // Re-export commonly used types
     pub use camera::v1::{CompressedImage, RawImage};
+    pub use daemon::v1::{
+        CommandResult, CommandType, HealthStatus, NodeCommand, NodeEvent, NodeList,
+        NodeState as DaemonNodeState, NodeStatus,
+    };
     pub use header::v1::Header;
     pub use weather::v1::{
         CurrentWeather, DailyForecast, DailyForecastEntry, HourlyForecast, HourlyForecastEntry,
         LocationConfig,
-    };
-    pub use daemon::v1::{
-        CommandResult, CommandType, HealthStatus, NodeCommand, NodeEvent, NodeList,
-        NodeState as DaemonNodeState, NodeStatus,
     };
 }
 

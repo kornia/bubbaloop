@@ -42,7 +42,7 @@ crossterm.workspace = true
 zenoh.workspace = true
 
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process"] }
+tokio.workspace = true
 
 # Directories
 dirs.workspace = true
@@ -51,6 +51,18 @@ dirs.workspace = true
 whoami = "1"
 hostname = "0.4"
 hex.workspace = true
+
+# D-Bus for systemd communication (daemon)
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+# Async (daemon)
+futures.workspace = true
+
+# Signal handling (daemon)
+ctrlc.workspace = true
+
+# UUID generation (daemon)
+uuid = { version = "1", features = ["v4"] }
 
 [build-dependencies]
 prost-build.workspace = true

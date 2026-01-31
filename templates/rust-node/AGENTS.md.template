@@ -1,0 +1,69 @@
+# {{node_name}}
+
+{{description}}
+
+## Quick Reference
+
+| Item | Value |
+|------|-------|
+| Type | Rust |
+| Build | `cargo build --release` |
+| Run | `bubbaloop node start {{node_name}}` |
+| Logs | `bubbaloop node logs {{node_name}} -f` |
+
+## File Structure
+
+```
+{{node_name}}/
+├── AGENTS.md       # This file - AI agent context
+├── node.yaml       # Daemon manifest (name, type, command)
+├── config.yaml     # Runtime configuration
+├── Cargo.toml      # Rust dependencies
+└── src/
+    ├── main.rs     # Entry point (CLI args, shutdown handling)
+    └── node.rs     # Main implementation (EDIT THIS)
+```
+
+## How to Modify
+
+### Adding a New Zenoh Publisher
+Edit `src/node.rs`:
+```rust
+// In the node struct, add a publisher field
+let publisher = session.declare_publisher("{{node_name}}/my_topic").await?;
+
+// In the run loop, publish data
+publisher.put(serde_json::to_vec(&data)?).await?;
+```
+
+### Adding a Subscriber
+```rust
+let subscriber = session.declare_subscriber("other/topic").await?;
+// Handle in select! loop
+```
+
+### Changing Configuration
+Edit `config.yaml`:
+```yaml
+publish_topic: "/{{node_name}}/output"
+rate_hz: 10.0  # Adjust publish rate
+```
+
+## Zenoh Topics
+
+| Topic | Direction | Format | Description |
+|-------|-----------|--------|-------------|
+| `/{{node_name}}/output` | Publish | JSON | Main output data |
+
+Data published to these topics is:
+- Visible in the Bubbaloop Dashboard
+- Available to other nodes on the Zenoh network
+- Persisted if a recorder node is running
+
+## Dependencies
+
+This node has no dependencies on other nodes. To add dependencies, specify in `node.yaml`:
+```yaml
+depends_on:
+  - other-node-name
+```
