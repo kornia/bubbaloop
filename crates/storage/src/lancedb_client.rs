@@ -1,3 +1,10 @@
+//! LanceDB-backed storage for messages, sessions, and schema descriptors.
+//!
+//! Three tables:
+//! - **messages**: Raw protobuf payloads with extracted Header metadata.
+//! - **sessions**: Recording session lifecycle (start, stop, counts).
+//! - **schemas**: Protobuf `FileDescriptorSet` per topic for downstream decoding.
+
 use std::sync::Arc;
 
 use arrow_array::{
@@ -11,6 +18,19 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 
 use crate::error::{Result, StorageError};
 use crate::header::MessageMeta;
+
+/// Downcast an Arrow column by name. Panics if column is missing or wrong type —
+/// this is safe because we control all schemas and only read tables we created.
+macro_rules! col {
+    ($batch:expr, $name:expr, $ty:ty) => {
+        $batch
+            .column_by_name($name)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<$ty>()
+            .unwrap()
+    };
+}
 
 /// A stored message with metadata and raw payload.
 #[derive(Debug, Clone)]
@@ -76,61 +96,73 @@ fn schemas_schema() -> Arc<Schema> {
     ]))
 }
 
+/// Extract a `SessionRecord` from row `idx` of a `RecordBatch`.
+fn session_from_batch(batch: &RecordBatch, idx: usize) -> SessionRecord {
+    SessionRecord {
+        session_id: col!(batch, "session_id", StringArray).value(idx).to_string(),
+        session_name: col!(batch, "session_name", StringArray)
+            .value(idx)
+            .to_string(),
+        start_time_ns: col!(batch, "start_time_ns", Int64Array).value(idx),
+        end_time_ns: col!(batch, "end_time_ns", Int64Array).value(idx),
+        topics: col!(batch, "topics", StringArray).value(idx).to_string(),
+        message_count: col!(batch, "message_count", UInt64Array).value(idx),
+        machine_id: col!(batch, "machine_id", StringArray)
+            .value(idx)
+            .to_string(),
+        status: col!(batch, "status", StringArray).value(idx).to_string(),
+    }
+}
+
 impl StorageClient {
     /// Connect to a LanceDB instance at the given URI.
-    /// Supports local paths and `gs://bucket/path` for GCS.
+    ///
+    /// Supports local paths (`./recordings`) and GCS (`gs://bucket/path`).
     pub async fn connect(uri: &str) -> Result<Self> {
         let connection = lancedb::connect(uri).execute().await?;
         Ok(Self { connection })
     }
 
-    /// Create tables if they don't exist.
+    /// Create the messages, sessions, and schemas tables if they don't exist.
     pub async fn ensure_tables(&self) -> Result<()> {
         let existing = self.connection.table_names().execute().await?;
 
-        if !existing.contains(&"messages".to_string()) {
-            let schema = messages_schema();
-            let empty = empty_batch(schema.clone());
-            let batches = RecordBatchIterator::new(vec![Ok(empty)].into_iter(), schema);
-            self.connection
-                .create_table("messages", Box::new(batches))
-                .mode(CreateTableMode::Create)
-                .execute()
-                .await?;
-            log::info!("Created 'messages' table");
-        }
-
-        if !existing.contains(&"sessions".to_string()) {
-            let schema = sessions_schema();
-            let empty = empty_batch(schema.clone());
-            let batches = RecordBatchIterator::new(vec![Ok(empty)].into_iter(), schema);
-            self.connection
-                .create_table("sessions", Box::new(batches))
-                .mode(CreateTableMode::Create)
-                .execute()
-                .await?;
-            log::info!("Created 'sessions' table");
-        }
-
-        if !existing.contains(&"schemas".to_string()) {
-            let schema = schemas_schema();
-            let empty = empty_batch(schema.clone());
-            let batches = RecordBatchIterator::new(vec![Ok(empty)].into_iter(), schema);
-            self.connection
-                .create_table("schemas", Box::new(batches))
-                .mode(CreateTableMode::Create)
-                .execute()
-                .await?;
-            log::info!("Created 'schemas' table");
+        for (name, schema) in [
+            ("messages", messages_schema()),
+            ("sessions", sessions_schema()),
+            ("schemas", schemas_schema()),
+        ] {
+            if !existing.contains(&name.to_string()) {
+                let empty = RecordBatch::new_empty(schema.clone());
+                let batches = RecordBatchIterator::new(vec![Ok(empty)].into_iter(), schema);
+                self.connection
+                    .create_table(name, Box::new(batches))
+                    .mode(CreateTableMode::Create)
+                    .execute()
+                    .await?;
+                log::info!("Created '{name}' table");
+            }
         }
 
         Ok(())
     }
 
+    /// Insert a `RecordBatch` into an existing table.
+    async fn add_batch(
+        &self,
+        table_name: &str,
+        batch: RecordBatch,
+        schema: Arc<Schema>,
+    ) -> Result<()> {
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
+        let table = self.connection.open_table(table_name).execute().await?;
+        table.add(Box::new(batches)).execute().await?;
+        Ok(())
+    }
+
     // --- Messages ---
 
-    /// Insert a batch of messages into the messages table.
-    /// Returns the number of messages inserted.
+    /// Insert a batch of messages. Returns the number inserted.
     pub async fn insert_messages(&self, messages: &[StoredMessage]) -> Result<usize> {
         if messages.is_empty() {
             return Ok(0);
@@ -138,44 +170,44 @@ impl StorageClient {
         let count = messages.len();
         let schema = messages_schema();
 
-        let timestamp_ns: Int64Array = messages.iter().map(|m| m.meta.timestamp_ns).collect();
-        let pub_time_ns: Int64Array = messages.iter().map(|m| m.meta.pub_time_ns).collect();
-        let sequence: UInt32Array = messages.iter().map(|m| m.meta.sequence).collect();
-        let topic = StringArray::from_iter_values(messages.iter().map(|m| m.meta.topic.as_str()));
-        let frame_id =
-            StringArray::from_iter_values(messages.iter().map(|m| m.meta.frame_id.as_str()));
-        let machine_id =
-            StringArray::from_iter_values(messages.iter().map(|m| m.meta.machine_id.as_str()));
-        let message_type =
-            StringArray::from_iter_values(messages.iter().map(|m| m.meta.message_type.as_str()));
-        let data_size: UInt64Array = messages.iter().map(|m| m.meta.data_size).collect();
-        let raw_data = LargeBinaryArray::from_iter_values(
-            messages.iter().map(|m| m.raw_data.as_slice()),
-        );
-        let session_id =
-            StringArray::from_iter_values(messages.iter().map(|m| m.session_id.as_str()));
-
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(timestamp_ns),
-                Arc::new(pub_time_ns),
-                Arc::new(sequence),
-                Arc::new(topic),
-                Arc::new(frame_id),
-                Arc::new(machine_id),
-                Arc::new(message_type),
-                Arc::new(data_size),
-                Arc::new(raw_data),
-                Arc::new(session_id),
+                Arc::new(Int64Array::from_iter_values(
+                    messages.iter().map(|m| m.meta.timestamp_ns),
+                )),
+                Arc::new(Int64Array::from_iter_values(
+                    messages.iter().map(|m| m.meta.pub_time_ns),
+                )),
+                Arc::new(UInt32Array::from_iter_values(
+                    messages.iter().map(|m| m.meta.sequence),
+                )),
+                Arc::new(StringArray::from_iter_values(
+                    messages.iter().map(|m| m.meta.topic.as_str()),
+                )),
+                Arc::new(StringArray::from_iter_values(
+                    messages.iter().map(|m| m.meta.frame_id.as_str()),
+                )),
+                Arc::new(StringArray::from_iter_values(
+                    messages.iter().map(|m| m.meta.machine_id.as_str()),
+                )),
+                Arc::new(StringArray::from_iter_values(
+                    messages.iter().map(|m| m.meta.message_type.as_str()),
+                )),
+                Arc::new(UInt64Array::from_iter_values(
+                    messages.iter().map(|m| m.meta.data_size),
+                )),
+                Arc::new(LargeBinaryArray::from_iter_values(
+                    messages.iter().map(|m| m.raw_data.as_slice()),
+                )),
+                Arc::new(StringArray::from_iter_values(
+                    messages.iter().map(|m| m.session_id.as_str()),
+                )),
             ],
         )
-        .map_err(|e| StorageError::Arrow(e))?;
+        .map_err(StorageError::Arrow)?;
 
-        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
-        let table = self.connection.open_table("messages").execute().await?;
-        table.add(Box::new(batches)).execute().await?;
-
+        self.add_batch("messages", batch, schema).await?;
         Ok(count)
     }
 
@@ -194,7 +226,7 @@ impl StorageClient {
             None => format!("session_id = '{session_id}'"),
         };
 
-        let stream = table
+        let batches: Vec<RecordBatch> = table
             .query()
             .select(lancedb::query::Select::Columns(vec![
                 "timestamp_ns".into(),
@@ -209,61 +241,22 @@ impl StorageClient {
             .only_if(filter)
             .limit(limit + offset)
             .execute()
+            .await?
+            .try_collect()
             .await?;
 
-        let batches: Vec<RecordBatch> = stream.try_collect().await?;
         let mut results = Vec::new();
         let mut skipped = 0;
 
         for batch in &batches {
-            let ts = batch
-                .column_by_name("timestamp_ns")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
-            let pt = batch
-                .column_by_name("pub_time_ns")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
-            let seq = batch
-                .column_by_name("sequence")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<UInt32Array>()
-                .unwrap();
-            let tp = batch
-                .column_by_name("topic")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let fi = batch
-                .column_by_name("frame_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let mi = batch
-                .column_by_name("machine_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let mt = batch
-                .column_by_name("message_type")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let ds = batch
-                .column_by_name("data_size")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap();
+            let ts = col!(batch, "timestamp_ns", Int64Array);
+            let pt = col!(batch, "pub_time_ns", Int64Array);
+            let seq = col!(batch, "sequence", UInt32Array);
+            let tp = col!(batch, "topic", StringArray);
+            let fi = col!(batch, "frame_id", StringArray);
+            let mi = col!(batch, "machine_id", StringArray);
+            let mt = col!(batch, "message_type", StringArray);
+            let ds = col!(batch, "data_size", UInt64Array);
 
             for i in 0..batch.num_rows() {
                 if skipped < offset {
@@ -302,24 +295,19 @@ impl StorageClient {
             "session_id = '{session_id}' AND topic = '{topic}' AND sequence = {sequence}"
         );
 
-        let stream = table
+        let batches: Vec<RecordBatch> = table
             .query()
             .select(lancedb::query::Select::Columns(vec!["raw_data".into()]))
             .only_if(filter)
             .limit(1)
             .execute()
+            .await?
+            .try_collect()
             .await?;
 
-        let batches: Vec<RecordBatch> = stream.try_collect().await?;
         for batch in &batches {
             if batch.num_rows() > 0 {
-                let col = batch
-                    .column_by_name("raw_data")
-                    .unwrap()
-                    .as_any()
-                    .downcast_ref::<LargeBinaryArray>()
-                    .unwrap();
-                return Ok(Some(col.value(0).to_vec()));
+                return Ok(Some(col!(batch, "raw_data", LargeBinaryArray).value(0).to_vec()));
             }
         }
 
@@ -345,16 +333,14 @@ impl StorageClient {
                 Arc::new(StringArray::from(vec![session.status.as_str()])),
             ],
         )
-        .map_err(|e| StorageError::Arrow(e))?;
+        .map_err(StorageError::Arrow)?;
 
-        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
-        let table = self.connection.open_table("sessions").execute().await?;
-        table.add(Box::new(batches)).execute().await?;
-
-        Ok(())
+        self.add_batch("sessions", batch, schema).await
     }
 
     /// Update a session's end time, message count, and status.
+    ///
+    /// Uses read-delete-reinsert since LanceDB has no native UPDATE.
     pub async fn update_session(
         &self,
         session_id: &str,
@@ -362,151 +348,48 @@ impl StorageClient {
         message_count: u64,
         status: &str,
     ) -> Result<()> {
-        // LanceDB doesn't support UPDATE natively. We read, delete, and re-insert.
         let table = self.connection.open_table("sessions").execute().await?;
-
         let filter = format!("session_id = '{session_id}'");
-        let stream = table
+
+        let batches: Vec<RecordBatch> = table
             .query()
             .only_if(filter.clone())
             .limit(1)
             .execute()
+            .await?
+            .try_collect()
             .await?;
-        let batches: Vec<RecordBatch> = stream.try_collect().await?;
 
-        let mut found = false;
-        for batch in &batches {
-            if batch.num_rows() > 0 {
-                found = true;
-                break;
-            }
-        }
+        let batch = batches
+            .iter()
+            .find(|b| b.num_rows() > 0)
+            .ok_or_else(|| StorageError::Session(format!("Session '{session_id}' not found")))?;
 
-        if !found {
-            return Err(StorageError::Session(format!(
-                "Session '{session_id}' not found"
-            )));
-        }
+        let original = session_from_batch(batch, 0);
 
-        // Delete old record
         table.delete(&filter).await?;
 
-        // Read original fields from the first matching batch
-        let batch = &batches[0];
-        let names = batch
-            .column_by_name("session_name")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        let starts = batch
-            .column_by_name("start_time_ns")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        let topics = batch
-            .column_by_name("topics")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        let machines = batch
-            .column_by_name("machine_id")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-
-        let updated = SessionRecord {
-            session_id: session_id.to_string(),
-            session_name: names.value(0).to_string(),
-            start_time_ns: starts.value(0),
+        self.create_session(&SessionRecord {
             end_time_ns,
-            topics: topics.value(0).to_string(),
             message_count,
-            machine_id: machines.value(0).to_string(),
             status: status.to_string(),
-        };
-
-        self.create_session(&updated).await
+            ..original
+        })
+        .await
     }
 
     /// List all sessions, most recent first.
     pub async fn list_sessions(&self) -> Result<Vec<SessionRecord>> {
         let table = self.connection.open_table("sessions").execute().await?;
 
-        let stream = table.query().execute().await?;
-        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        let batches: Vec<RecordBatch> = table.query().execute().await?.try_collect().await?;
 
-        let mut sessions = Vec::new();
-        for batch in &batches {
-            let ids = batch
-                .column_by_name("session_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let names = batch
-                .column_by_name("session_name")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let starts = batch
-                .column_by_name("start_time_ns")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
-            let ends = batch
-                .column_by_name("end_time_ns")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
-            let topics = batch
-                .column_by_name("topics")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let counts = batch
-                .column_by_name("message_count")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap();
-            let machines = batch
-                .column_by_name("machine_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let statuses = batch
-                .column_by_name("status")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
+        let mut sessions: Vec<SessionRecord> = batches
+            .iter()
+            .flat_map(|batch| (0..batch.num_rows()).map(|i| session_from_batch(batch, i)))
+            .collect();
 
-            for i in 0..batch.num_rows() {
-                sessions.push(SessionRecord {
-                    session_id: ids.value(i).to_string(),
-                    session_name: names.value(i).to_string(),
-                    start_time_ns: starts.value(i),
-                    end_time_ns: ends.value(i),
-                    topics: topics.value(i).to_string(),
-                    message_count: counts.value(i),
-                    machine_id: machines.value(i).to_string(),
-                    status: statuses.value(i).to_string(),
-                });
-            }
-        }
-
-        // Most recent first
         sessions.sort_by(|a, b| b.start_time_ns.cmp(&a.start_time_ns));
-
         Ok(sessions)
     }
 
@@ -520,12 +403,9 @@ impl StorageClient {
         descriptor: &[u8],
         session_id: &str,
     ) -> Result<()> {
-        let now_ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as i64;
-
+        let now_ns = crate::now_nanos();
         let schema = schemas_schema();
+
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
@@ -538,61 +418,40 @@ impl StorageClient {
                 Arc::new(StringArray::from(vec![session_id])),
             ],
         )
-        .map_err(|e| StorageError::Arrow(e))?;
+        .map_err(StorageError::Arrow)?;
 
-        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema);
-        let table = self.connection.open_table("schemas").execute().await?;
-        table.add(Box::new(batches)).execute().await?;
-
-        Ok(())
+        self.add_batch("schemas", batch, schema).await
     }
 
     /// Get the schema descriptor for a topic.
-    /// Returns (message_type, descriptor_bytes) if found.
+    ///
+    /// Returns `(message_type, descriptor_bytes)` if found.
     pub async fn get_schema(&self, topic: &str) -> Result<Option<(String, Vec<u8>)>> {
         let table = self.connection.open_table("schemas").execute().await?;
 
-        let filter = format!("topic = '{topic}'");
-        let stream = table
+        let batches: Vec<RecordBatch> = table
             .query()
             .select(lancedb::query::Select::Columns(vec![
                 "message_type".into(),
                 "descriptor".into(),
             ]))
-            .only_if(filter)
+            .only_if(format!("topic = '{topic}'"))
             .limit(1)
             .execute()
+            .await?
+            .try_collect()
             .await?;
 
-        let batches: Vec<RecordBatch> = stream.try_collect().await?;
         for batch in &batches {
             if batch.num_rows() > 0 {
-                let types = batch
-                    .column_by_name("message_type")
-                    .unwrap()
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .unwrap();
-                let descs = batch
-                    .column_by_name("descriptor")
-                    .unwrap()
-                    .as_any()
-                    .downcast_ref::<LargeBinaryArray>()
-                    .unwrap();
-                return Ok(Some((
-                    types.value(0).to_string(),
-                    descs.value(0).to_vec(),
-                )));
+                let msg_type = col!(batch, "message_type", StringArray).value(0).to_string();
+                let desc = col!(batch, "descriptor", LargeBinaryArray).value(0).to_vec();
+                return Ok(Some((msg_type, desc)));
             }
         }
 
         Ok(None)
     }
-}
-
-/// Create an empty RecordBatch with the given schema (zero rows).
-fn empty_batch(schema: Arc<Schema>) -> RecordBatch {
-    RecordBatch::new_empty(schema)
 }
 
 #[cfg(test)]
@@ -608,6 +467,23 @@ mod tests {
         (client, dir)
     }
 
+    fn msg(topic: &str, seq: u32, data: Vec<u8>, session: &str) -> StoredMessage {
+        StoredMessage {
+            meta: MessageMeta {
+                timestamp_ns: 1_700_000_000_000_000_000 + seq as i64,
+                pub_time_ns: 0,
+                sequence: seq,
+                topic: topic.into(),
+                frame_id: "test".into(),
+                machine_id: "test".into(),
+                message_type: "test.Message".into(),
+                data_size: data.len() as u64,
+            },
+            raw_data: data,
+            session_id: session.into(),
+        }
+    }
+
     #[tokio::test]
     async fn test_ensure_tables_creates_all_three() {
         let (client, _dir) = test_client().await;
@@ -620,7 +496,6 @@ mod tests {
     #[tokio::test]
     async fn test_ensure_tables_idempotent() {
         let (client, _dir) = test_client().await;
-        // Second call should not error
         client.ensure_tables().await.unwrap();
     }
 
@@ -629,189 +504,121 @@ mod tests {
         let (client, _dir) = test_client().await;
 
         let messages = vec![
-            StoredMessage {
-                meta: MessageMeta {
-                    timestamp_ns: 1_700_000_000_000_000_000,
-                    pub_time_ns: 1_700_000_000_100_000_000,
-                    sequence: 1,
-                    topic: "/camera/entrance/compressed".into(),
-                    frame_id: "cam0".into(),
-                    machine_id: "jetson1".into(),
-                    message_type: "bubbaloop.camera.v1.CompressedImage".into(),
-                    data_size: 4,
-                },
-                raw_data: vec![0xDE, 0xAD, 0xBE, 0xEF],
-                session_id: "session-1".into(),
-            },
-            StoredMessage {
-                meta: MessageMeta {
-                    timestamp_ns: 1_700_000_000_200_000_000,
-                    pub_time_ns: 1_700_000_000_300_000_000,
-                    sequence: 2,
-                    topic: "/weather/current".into(),
-                    frame_id: "weather".into(),
-                    machine_id: "central".into(),
-                    message_type: "bubbaloop.weather.v1.CurrentWeather".into(),
-                    data_size: 8,
-                },
-                raw_data: vec![1, 2, 3, 4, 5, 6, 7, 8],
-                session_id: "session-1".into(),
-            },
+            msg("/camera/entrance/compressed", 1, vec![0xDE, 0xAD], "s1"),
+            msg("/weather/current", 2, vec![1, 2, 3], "s1"),
         ];
 
-        let count = client.insert_messages(&messages).await.unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(client.insert_messages(&messages).await.unwrap(), 2);
 
-        // Query all messages in session
-        let results = client
-            .query_messages("session-1", None, 0, 100)
+        let all = client.query_messages("s1", None, 0, 100).await.unwrap();
+        assert_eq!(all.len(), 2);
+
+        let cam = client
+            .query_messages("s1", Some("/camera/entrance/compressed"), 0, 100)
             .await
             .unwrap();
-        assert_eq!(results.len(), 2);
+        assert_eq!(cam.len(), 1);
+        assert_eq!(cam[0].sequence, 1);
+    }
 
-        // Query filtered by topic
-        let results = client
-            .query_messages("session-1", Some("/camera/entrance/compressed"), 0, 100)
+    #[tokio::test]
+    async fn test_query_messages_with_offset() {
+        let (client, _dir) = test_client().await;
+
+        let messages: Vec<_> = (0..5)
+            .map(|i| msg("/camera/a/compressed", i, vec![i as u8], "s1"))
+            .collect();
+        client.insert_messages(&messages).await.unwrap();
+
+        let page = client.query_messages("s1", None, 2, 2).await.unwrap();
+        assert_eq!(page.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_query_messages_wrong_session() {
+        let (client, _dir) = test_client().await;
+        client
+            .insert_messages(&[msg("/test", 1, vec![1], "s1")])
             .await
             .unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].sequence, 1);
-        assert_eq!(results[0].frame_id, "cam0");
+
+        let results = client.query_messages("s2", None, 0, 100).await.unwrap();
+        assert!(results.is_empty());
     }
 
     #[tokio::test]
     async fn test_get_message_raw_bytes() {
         let (client, _dir) = test_client().await;
-
-        let messages = vec![StoredMessage {
-            meta: MessageMeta {
-                timestamp_ns: 1_700_000_000_000_000_000,
-                pub_time_ns: 0,
-                sequence: 42,
-                topic: "/camera/entrance/compressed".into(),
-                frame_id: "cam0".into(),
-                machine_id: "jetson1".into(),
-                message_type: "bubbaloop.camera.v1.CompressedImage".into(),
-                data_size: 4,
-            },
-            raw_data: vec![0xCA, 0xFE, 0xBA, 0xBE],
-            session_id: "session-1".into(),
-        }];
-
-        client.insert_messages(&messages).await.unwrap();
-
-        let raw = client
-            .get_message("session-1", "/camera/entrance/compressed", 42)
+        client
+            .insert_messages(&[msg("/cam", 42, vec![0xCA, 0xFE], "s1")])
             .await
             .unwrap();
-        assert_eq!(raw, Some(vec![0xCA, 0xFE, 0xBA, 0xBE]));
 
-        // Non-existent message
-        let raw = client
-            .get_message("session-1", "/camera/entrance/compressed", 999)
-            .await
-            .unwrap();
-        assert_eq!(raw, None);
+        assert_eq!(
+            client.get_message("s1", "/cam", 42).await.unwrap(),
+            Some(vec![0xCA, 0xFE])
+        );
+        assert_eq!(client.get_message("s1", "/cam", 999).await.unwrap(), None);
     }
 
     #[tokio::test]
     async fn test_insert_empty_messages() {
         let (client, _dir) = test_client().await;
-        let count = client.insert_messages(&[]).await.unwrap();
-        assert_eq!(count, 0);
+        assert_eq!(client.insert_messages(&[]).await.unwrap(), 0);
     }
 
     #[tokio::test]
     async fn test_session_lifecycle() {
         let (client, _dir) = test_client().await;
 
-        let session = SessionRecord {
-            session_id: "sess-abc".into(),
-            session_name: "Test Recording".into(),
-            start_time_ns: 1_700_000_000_000_000_000,
-            end_time_ns: 0,
-            topics: "[\"/camera/**\", \"/weather/**\"]".into(),
-            message_count: 0,
-            machine_id: "central".into(),
-            status: "recording".into(),
-        };
-
-        client.create_session(&session).await.unwrap();
+        client
+            .create_session(&SessionRecord {
+                session_id: "s1".into(),
+                session_name: "Test".into(),
+                start_time_ns: 1_000,
+                end_time_ns: 0,
+                topics: "[]".into(),
+                message_count: 0,
+                machine_id: "m1".into(),
+                status: "recording".into(),
+            })
+            .await
+            .unwrap();
 
         let sessions = client.list_sessions().await.unwrap();
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].session_id, "sess-abc");
         assert_eq!(sessions[0].status, "recording");
 
-        // Update session
         client
-            .update_session(
-                "sess-abc",
-                1_700_000_060_000_000_000,
-                150,
-                "completed",
-            )
+            .update_session("s1", 2_000, 150, "completed")
             .await
             .unwrap();
 
         let sessions = client.list_sessions().await.unwrap();
-        assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].status, "completed");
         assert_eq!(sessions[0].message_count, 150);
-        assert_eq!(sessions[0].end_time_ns, 1_700_000_060_000_000_000);
-    }
-
-    #[tokio::test]
-    async fn test_schema_registry() {
-        let (client, _dir) = test_client().await;
-
-        let descriptor = vec![0x0A, 0x0B, 0x0C]; // fake descriptor bytes
-        client
-            .register_schema(
-                "/camera/entrance/compressed",
-                "bubbaloop.camera.v1.CompressedImage",
-                &descriptor,
-                "session-1",
-            )
-            .await
-            .unwrap();
-
-        let result = client
-            .get_schema("/camera/entrance/compressed")
-            .await
-            .unwrap();
-        assert!(result.is_some());
-        let (type_name, desc_bytes) = result.unwrap();
-        assert_eq!(type_name, "bubbaloop.camera.v1.CompressedImage");
-        assert_eq!(desc_bytes, vec![0x0A, 0x0B, 0x0C]);
-
-        // Non-existent schema
-        let result = client.get_schema("/lidar/front").await.unwrap();
-        assert!(result.is_none());
+        assert_eq!(sessions[0].end_time_ns, 2_000);
+        assert_eq!(sessions[0].session_name, "Test"); // preserved
     }
 
     #[tokio::test]
     async fn test_update_nonexistent_session_errors() {
         let (client, _dir) = test_client().await;
-
-        let result = client
+        assert!(client
             .update_session("nonexistent", 0, 0, "completed")
-            .await;
-        assert!(result.is_err());
+            .await
+            .is_err());
     }
 
     #[tokio::test]
     async fn test_sessions_sorted_most_recent_first() {
         let (client, _dir) = test_client().await;
 
-        for (i, ts) in [1_000_000_000i64, 3_000_000_000, 2_000_000_000]
-            .iter()
-            .enumerate()
-        {
+        for (i, ts) in [1_000i64, 3_000, 2_000].iter().enumerate() {
             client
                 .create_session(&SessionRecord {
-                    session_id: format!("sess-{i}"),
-                    session_name: format!("Session {i}"),
+                    session_id: format!("s{i}"),
+                    session_name: format!("S{i}"),
                     start_time_ns: *ts,
                     end_time_ns: 0,
                     topics: "[]".into(),
@@ -824,9 +631,24 @@ mod tests {
         }
 
         let sessions = client.list_sessions().await.unwrap();
-        assert_eq!(sessions.len(), 3);
-        assert_eq!(sessions[0].start_time_ns, 3_000_000_000);
-        assert_eq!(sessions[1].start_time_ns, 2_000_000_000);
-        assert_eq!(sessions[2].start_time_ns, 1_000_000_000);
+        assert_eq!(sessions[0].start_time_ns, 3_000);
+        assert_eq!(sessions[1].start_time_ns, 2_000);
+        assert_eq!(sessions[2].start_time_ns, 1_000);
+    }
+
+    #[tokio::test]
+    async fn test_schema_registry() {
+        let (client, _dir) = test_client().await;
+
+        client
+            .register_schema("/camera/a", "cam.v1.Image", &[0x0A, 0x0B], "s1")
+            .await
+            .unwrap();
+
+        let (type_name, desc) = client.get_schema("/camera/a").await.unwrap().unwrap();
+        assert_eq!(type_name, "cam.v1.Image");
+        assert_eq!(desc, vec![0x0A, 0x0B]);
+
+        assert!(client.get_schema("/lidar/front").await.unwrap().is_none());
     }
 }

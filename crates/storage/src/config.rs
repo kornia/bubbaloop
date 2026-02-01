@@ -162,4 +162,41 @@ topics:
         assert_eq!(config.flush_interval_secs, 5);
         assert!(config.schema_hints.is_empty());
     }
+
+    #[test]
+    fn test_load_full_config() {
+        let yaml = r#"
+storage_uri: "gs://my-bucket/recordings"
+topics:
+  - "/camera/**"
+  - "/weather/**"
+batch_size: 100
+flush_interval_secs: 10
+schema_hints:
+  "/camera/*/compressed": "bubbaloop.camera.v1.CompressedImage"
+  "/weather/current": "bubbaloop.weather.v1.CurrentWeather"
+"#;
+        let config: StorageConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.storage_uri, "gs://my-bucket/recordings");
+        assert_eq!(config.batch_size, 100);
+        assert_eq!(config.flush_interval_secs, 10);
+        assert_eq!(config.schema_hints.len(), 2);
+    }
+
+    #[test]
+    fn test_double_wildcard_matches_root() {
+        assert!(topic_matches_pattern("/a/b/c", "/**"));
+        assert!(topic_matches_pattern("/a", "/**"));
+    }
+
+    #[test]
+    fn test_double_wildcard_matches_zero_segments() {
+        // ** at the end matches zero additional segments
+        assert!(topic_matches_pattern("/camera", "/camera/**"));
+    }
+
+    #[test]
+    fn test_no_match_empty_topic() {
+        assert!(!topic_matches_pattern("", "/camera/**"));
+    }
 }
