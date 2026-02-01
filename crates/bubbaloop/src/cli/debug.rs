@@ -39,6 +39,7 @@ enum DebugAction {
     Subscribe(SubscribeArgs),
     Query(QueryArgs),
     Info(InfoArgs),
+    Liveliness(LivelinessArgs),
 }
 
 /// List all active Zenoh topics
@@ -101,6 +102,23 @@ struct InfoArgs {
     json: bool,
 }
 
+/// Query Zenoh liveliness tokens (ros-z entity discovery)
+#[derive(FromArgs)]
+#[argh(subcommand, name = "liveliness")]
+struct LivelinessArgs {
+    /// key expression pattern (default: "@ros2_lv/**")
+    #[argh(positional, default = "String::from(\"@ros2_lv/**\")")]
+    pattern: String,
+
+    /// timeout in seconds (default: 3)
+    #[argh(option, short = 't', default = "3")]
+    timeout: u64,
+
+    /// output as JSON
+    #[argh(switch)]
+    json: bool,
+}
+
 /// Print a JSON envelope to stdout, attempting to parse `payload` as JSON first
 /// so it is embedded as structured data rather than an escaped string.
 fn print_json_envelope(
@@ -135,6 +153,7 @@ impl DebugCommand {
             Some(DebugAction::Subscribe(args)) => subscribe_topic(args).await,
             Some(DebugAction::Query(args)) => query_endpoint(args).await,
             Some(DebugAction::Info(args)) => show_info(args).await,
+            Some(DebugAction::Liveliness(args)) => query_liveliness(args).await,
         }
     }
 
@@ -146,6 +165,7 @@ impl DebugCommand {
         eprintln!("  topics      List all active Zenoh topics");
         eprintln!("  query       Query a Zenoh queryable endpoint");
         eprintln!("  subscribe   Subscribe to a Zenoh topic and watch messages");
+        eprintln!("  liveliness  Query liveliness tokens (ros-z entity discovery)");
         eprintln!("\nRun 'bubbaloop debug <command> --help' for more information.");
     }
 }
@@ -428,6 +448,109 @@ async fn show_info(args: InfoArgs) -> Result<()> {
             "  RUST_LOG: {}",
             std::env::var("RUST_LOG").unwrap_or_else(|_| "(not set)".to_string())
         );
+    }
+
+    session
+        .close()
+        .await
+        .map_err(|e| DebugError::Zenoh(e.to_string()))?;
+    Ok(())
+}
+
+async fn query_liveliness(args: LivelinessArgs) -> Result<()> {
+    let session = get_zenoh_session().await?;
+
+    if !args.json {
+        println!("Querying liveliness tokens: {}", args.pattern);
+        println!("Timeout: {}s\n", args.timeout);
+    }
+
+    let replies: Vec<_> = session
+        .liveliness()
+        .get(&args.pattern)
+        .timeout(Duration::from_secs(args.timeout))
+        .await
+        .map_err(|e| DebugError::Zenoh(e.to_string()))?
+        .into_iter()
+        .collect();
+
+    let mut tokens: Vec<String> = Vec::new();
+    for reply in &replies {
+        if let Ok(sample) = reply.result() {
+            tokens.push(sample.key_expr().to_string());
+        }
+    }
+    tokens.sort();
+
+    if args.json {
+        // Parse ros-z liveliness tokens into structured data
+        let parsed: Vec<serde_json::Value> = tokens
+            .iter()
+            .map(|t| {
+                let parts: Vec<&str> = t.split('/').collect();
+                // @ros2_lv/<domain>/<zid>/<nid>/<eid>/<kind>/<enclave>/<ns>/<node>/<topic>/<type>/<hash>/<qos>
+                if parts.len() >= 9 {
+                    json!({
+                        "raw": t,
+                        "domain": parts.get(1).unwrap_or(&""),
+                        "kind": parts.get(5).unwrap_or(&""),
+                        "namespace": parts.get(7).unwrap_or(&"").replace('%', "/"),
+                        "node": parts.get(8).unwrap_or(&"").replace('%', "/"),
+                        "topic": parts.get(9).map(|s| s.replace('%', "/")).unwrap_or_default(),
+                        "type": parts.get(10).unwrap_or(&""),
+                    })
+                } else {
+                    json!({"raw": t})
+                }
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "tokens": parsed,
+                "count": tokens.len()
+            }))?
+        );
+    } else if tokens.is_empty() {
+        println!("No liveliness tokens found.");
+        println!("This could mean:");
+        println!("  - No ros-z nodes are running");
+        println!("  - Nodes are using plain Zenoh pub/sub (not ros-z ZPub/ZSub)");
+        println!(
+            "  - The pattern '{}' doesn't match any tokens",
+            args.pattern
+        );
+    } else {
+        println!("Liveliness Tokens ({}):", tokens.len());
+        println!("{}", "-".repeat(80));
+        for token in &tokens {
+            // Try to parse ros-z format for friendly display
+            let parts: Vec<&str> = token.split('/').collect();
+            if parts.len() >= 9 {
+                let kind = match parts.get(5).unwrap_or(&"") {
+                    &"NN" => "Node",
+                    &"MP" => "Publisher",
+                    &"MS" => "Subscriber",
+                    &"SS" => "Service",
+                    &"SC" => "Client",
+                    k => k,
+                };
+                let node = parts.get(8).unwrap_or(&"").replace('%', "/");
+                let topic = parts
+                    .get(9)
+                    .map(|s| s.replace('%', "/"))
+                    .unwrap_or_default();
+                let msg_type = parts.get(10).unwrap_or(&"");
+
+                if topic.is_empty() {
+                    println!("  [{:<10}] {}", kind, node);
+                } else {
+                    println!("  [{:<10}] {} -> {} ({})", kind, node, topic, msg_type);
+                }
+            } else {
+                println!("  {}", token);
+            }
+        }
     }
 
     session

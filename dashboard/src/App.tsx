@@ -1,8 +1,13 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useZenohSession, useZenohTopicDiscovery, ConnectionStatus } from './lib/zenoh';
 import { ZenohSubscriptionProvider } from './contexts/ZenohSubscriptionContext';
+import { FleetProvider } from './contexts/FleetContext';
 import { Dashboard } from './components/Dashboard';
+import { FleetBar } from './components/FleetBar';
+import { MeshView } from './components/MeshView';
 import { H264Decoder } from './lib/h264-decoder';
+
+type AppView = 'dashboard' | 'loop';
 
 // Zenoh endpoint - proxied through Vite on /zenoh path
 // This allows single-port HTTPS access (WebSocket tunneled through same connection)
@@ -190,13 +195,44 @@ export default function App() {
   const zenohConfig = useMemo(() => ({ endpoint: ZENOH_ENDPOINT }), []);
   const { session, status, error, reconnect } = useZenohSession(zenohConfig);
   const { topics: availableTopics } = useZenohTopicDiscovery(session, '**');
+  const [currentView, setCurrentView] = useState<AppView>('dashboard');
 
   return (
     <div className="app">
       <header className="app-header">
         <div className="header-left">
           <h1>Bubbaloop</h1>
-          <span className="header-subtitle">Dashboard</span>
+          <div className="view-switcher">
+            <button
+              className={`view-tab ${currentView === 'dashboard' ? 'active' : ''}`}
+              onClick={() => setCurrentView('dashboard')}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" />
+                <rect x="14" y="14" width="7" height="7" rx="1" />
+              </svg>
+              Dashboard
+            </button>
+            <button
+              className={`view-tab ${currentView === 'loop' ? 'active' : ''}`}
+              onClick={() => setCurrentView('loop')}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3" />
+                <circle cx="5" cy="6" r="2" />
+                <circle cx="19" cy="6" r="2" />
+                <circle cx="5" cy="18" r="2" />
+                <circle cx="19" cy="18" r="2" />
+                <line x1="9.5" y1="10.5" x2="6.5" y2="7.5" />
+                <line x1="14.5" y1="10.5" x2="17.5" y2="7.5" />
+                <line x1="9.5" y1="13.5" x2="6.5" y2="16.5" />
+                <line x1="14.5" y1="13.5" x2="17.5" y2="16.5" />
+              </svg>
+              The Loop
+            </button>
+          </div>
         </div>
         <StatusIndicator status={status} endpoint={ZENOH_ENDPOINT} onReconnect={reconnect} />
       </header>
@@ -210,9 +246,16 @@ export default function App() {
       )}
 
       {session ? (
-        <ZenohSubscriptionProvider session={session}>
-          <Dashboard cameras={DEFAULT_CAMERAS} availableTopics={availableTopics} />
-        </ZenohSubscriptionProvider>
+        <FleetProvider>
+          <ZenohSubscriptionProvider session={session}>
+            <FleetBar />
+            {currentView === 'dashboard' ? (
+              <Dashboard cameras={DEFAULT_CAMERAS} availableTopics={availableTopics} />
+            ) : (
+              <MeshView availableTopics={availableTopics} zenohEndpoint={ZENOH_ENDPOINT} connectionStatus={status} />
+            )}
+          </ZenohSubscriptionProvider>
+        </FleetProvider>
       ) : (
         <div className="connecting-placeholder">
           <div className="placeholder-content">
@@ -260,8 +303,8 @@ export default function App() {
 
         .header-left {
           display: flex;
-          align-items: baseline;
-          gap: 12px;
+          align-items: center;
+          gap: 16px;
         }
 
         .app-header h1 {
@@ -273,10 +316,45 @@ export default function App() {
           background-clip: text;
         }
 
-        .header-subtitle {
-          font-size: 13px;
+        .view-switcher {
+          display: flex;
+          gap: 2px;
+          background: var(--bg-primary);
+          padding: 3px;
+          border-radius: 10px;
+          border: 1px solid var(--border-color);
+        }
+
+        .view-tab {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 5px 14px;
+          border: none;
+          border-radius: 7px;
+          background: transparent;
           color: var(--text-muted);
-          font-weight: 400;
+          font-size: 12px;
+          font-weight: 500;
+          font-family: inherit;
+          cursor: pointer;
+          transition: all 0.2s;
+          white-space: nowrap;
+        }
+
+        .view-tab:hover {
+          color: var(--text-secondary);
+          background: rgba(255,255,255,0.03);
+        }
+
+        .view-tab.active {
+          background: var(--bg-tertiary);
+          color: var(--text-primary);
+          box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+        }
+
+        .view-tab.active svg {
+          stroke: var(--accent-secondary);
         }
 
         .connecting-placeholder {
@@ -347,8 +425,15 @@ export default function App() {
             font-size: 16px;
           }
 
-          .header-subtitle {
-            display: none;
+          .view-tab {
+            padding: 5px 10px;
+            font-size: 11px;
+            gap: 4px;
+          }
+
+          .view-tab svg {
+            width: 12px;
+            height: 12px;
           }
 
           .error-banner {
@@ -364,6 +449,19 @@ export default function App() {
 
           .app-header h1 {
             font-size: 14px;
+          }
+
+          .view-switcher {
+            padding: 2px;
+          }
+
+          .view-tab {
+            padding: 4px 8px;
+            font-size: 10px;
+          }
+
+          .view-tab svg {
+            display: none;
           }
         }
       `}</style>

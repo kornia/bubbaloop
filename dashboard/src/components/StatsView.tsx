@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
+import { useFleetContext } from '../contexts/FleetContext';
+import { MachineBadge } from './MachineBadge';
 
 interface DragHandleProps {
   [key: string]: unknown;
@@ -22,6 +24,7 @@ export function StatsViewPanel({
   onRemove,
   dragHandleProps,
 }: StatsViewProps) {
+  const { machines } = useFleetContext();
   const { getAllMonitoredStats, startMonitoring, isMonitoringEnabled } = useZenohSubscriptionContext();
   const [stats, setStats] = useState<DisplayStats[]>([]);
   const [monitoringStarted, setMonitoringStarted] = useState(false);
@@ -95,6 +98,7 @@ export function StatsViewPanel({
             <path d="M18 20V10M12 20V4M6 20v-6" />
           </svg>
           <span className="panel-type-badge">STATS</span>
+          <MachineBadge machines={machines} />
         </div>
         <div className="panel-actions">
           <button
@@ -191,6 +195,19 @@ export function StatsViewPanel({
           background: rgba(0, 229, 255, 0.15);
           color: var(--accent-secondary);
           text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .panel-machine-badge {
+          font-size: 10px;
+          font-family: 'JetBrains Mono', monospace;
+          color: var(--text-muted);
+          background: var(--bg-tertiary);
+          padding: 2px 6px;
+          border-radius: 4px;
+          max-width: 120px;
+          overflow: hidden;
+          text-overflow: ellipsis;
           white-space: nowrap;
         }
 

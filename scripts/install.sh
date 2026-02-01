@@ -122,11 +122,35 @@ install_zenoh() {
 
     # Copy binaries
     cp "$zenoh_dir/zenohd" "$BIN_DIR/"
-    cp "$zenoh_dir/zenoh-bridge-remote-api" "$BIN_DIR/" 2>/dev/null || true
     chmod +x "$BIN_DIR/zenohd"
-    chmod +x "$BIN_DIR/zenoh-bridge-remote-api" 2>/dev/null || true
 
     info "Zenoh installed: $("$BIN_DIR/zenohd" --version 2>/dev/null | head -1 || echo "$ZENOH_VERSION")"
+}
+
+# Install Zenoh Bridge
+install_bridge() {
+    local arch="$1"
+    local bridge_dir="$INSTALL_DIR/zenoh-bridge"
+
+    step "Installing zenoh-bridge-remote-api $ZENOH_VERSION..."
+
+    mkdir -p "$bridge_dir"
+
+    # Download zenoh-bridge-remote-api from zenoh-ts repo
+    local bridge_url="https://github.com/eclipse-zenoh/zenoh-ts/releases/download/${ZENOH_VERSION}/zenoh-ts-${ZENOH_VERSION}-${arch}-standalone.zip"
+
+    info "Downloading zenoh-bridge-remote-api..."
+    curl -sSL "$bridge_url" -o "/tmp/zenoh-bridge.zip" || error "Failed to download zenoh-bridge-remote-api"
+
+    info "Extracting zenoh-bridge-remote-api..."
+    unzip -o -q "/tmp/zenoh-bridge.zip" -d "$bridge_dir"
+    rm "/tmp/zenoh-bridge.zip"
+
+    # Copy binary
+    cp "$bridge_dir/zenoh-bridge-remote-api" "$BIN_DIR/"
+    chmod +x "$BIN_DIR/zenoh-bridge-remote-api"
+
+    info "zenoh-bridge-remote-api installed"
 }
 
 # Install Bubbaloop binaries
@@ -348,6 +372,7 @@ main() {
 
     # Install components
     install_zenoh "$arch"
+    install_bridge "$arch"
     install_bubbaloop "$version" "$os" "$short_arch"
     setup_systemd
     enable_linger
