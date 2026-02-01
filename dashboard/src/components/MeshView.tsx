@@ -1447,19 +1447,6 @@ function StatusRow({ label, color, text }: { label: string; color: string; text:
   );
 }
 
-function TopicsList({ topics }: { topics: string[] }) {
-  if (topics.length === 0) {
-    return <div className="mesh-detail-empty">No matching topics</div>;
-  }
-  return (
-    <>
-      {topics.map((t, i) => (
-        <div key={i} className="mesh-detail-topic" title={t}>{t}</div>
-      ))}
-    </>
-  );
-}
-
 function getDetailTitle(detailNode: SimNode | null): { title: string; dotColor: string } {
   if (!detailNode) return { title: '', dotColor: '' };
 
@@ -1502,11 +1489,6 @@ function DetailSidePanel({
   if (detailNode?.type === 'machine') {
     const data = detailNode.data as MachineInfo;
     const childNodes = fleetNodes.filter(n => n.machineId === data.machineId);
-    const machineTopics = availableTopics.filter(t => {
-      const lower = t.toLowerCase();
-      return lower.includes(data.hostname.toLowerCase()) || lower.includes(data.machineId.toLowerCase());
-    });
-
     body = (
       <>
         <div className="mesh-detail-section">
@@ -1539,19 +1521,12 @@ function DetailSidePanel({
             <div className="mesh-detail-empty">No service nodes</div>
           )}
         </div>
-
-        <div className="mesh-detail-section">
-          <div className="mesh-detail-section-title">Zenoh Topics</div>
-          <TopicsList topics={machineTopics} />
-        </div>
       </>
     );
   } else if (detailNode?.type === 'service') {
     const data = detailNode.data as FleetNodeInfo;
     const parentMachine = machines.find(m => m.machineId === data.machineId);
     const color = STATUS_COLORS[data.status] || STATUS_COLORS.unknown;
-    const nodeTopics = availableTopics.filter(t => t.toLowerCase().includes(data.name.toLowerCase()));
-
     body = (
       <>
         <div className="mesh-detail-section">
@@ -1567,11 +1542,6 @@ function DetailSidePanel({
           {(parentMachine?.ips || data.ips || []).map((ip, i) => (
             <DetailRow key={i} label={i === 0 ? 'IP' : ''} value={ip} />
           ))}
-        </div>
-
-        <div className="mesh-detail-section">
-          <div className="mesh-detail-section-title">Zenoh Topics</div>
-          <TopicsList topics={nodeTopics} />
         </div>
       </>
     );
