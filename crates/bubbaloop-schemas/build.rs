@@ -1,8 +1,3 @@
-// NOTE: The protos in `protos/` are manually synced from the main bubbaloop repo's
-// `protos/bubbaloop/` directory (with import paths changed from "bubbaloop/header.proto"
-// to "header.proto" for the flat layout). A CI check should diff header.proto, camera.proto,
-// and weather.proto between both locations (stripping import path differences) to prevent drift.
-
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -68,7 +68,6 @@ crates/
 └── bubbaloop-schemas/   # Protobuf schemas for node communication (standalone, not in workspace)
 
 dashboard/               # React dashboard (Vite + TypeScript)
-protos/                  # Protobuf schema definitions
 scripts/                 # Install script, activation scripts
 configs/                 # Zenoh configuration files
 docs/                    # MkDocs documentation site
@@ -201,7 +200,7 @@ bubbaloop node add kornia/bubbaloop-nodes-official --subdir rtsp-camera
 
 ### Protobuf Schema Workflow
 
-Proto source files live in `protos/bubbaloop/`:
+All proto source files live in `crates/bubbaloop-schemas/protos/` (single source of truth):
 
 | Proto File | Module | Key Types |
 |------------|--------|-----------|
@@ -209,16 +208,17 @@ Proto source files live in `protos/bubbaloop/`:
 | `camera.proto` | `schemas::camera::v1` | `CompressedImage`, `RawImage` |
 | `weather.proto` | `schemas::weather::v1` | `CurrentWeather`, `HourlyForecast`, `DailyForecast` |
 | `daemon.proto` | `schemas::daemon::v1` | `NodeState`, `NodeStatus`, `HealthStatus`, `NodeCommand` |
-| `machine.proto` | — | Machine/device metadata |
+| `machine.proto` | `schemas::machine::v1` | `MachineInfo`, `MachineList`, `MachineHeartbeat` |
+| `system_telemetry.proto` | `schemas::system_telemetry::v1` | `SystemMetrics`, `CpuMetrics`, etc. |
+| `network_monitor.proto` | `schemas::network_monitor::v1` | `NetworkStatus`, `HealthCheck`, etc. |
 
 Compilation: `prost-build` compiles `.proto` files at build time via `build.rs`. Generated Rust code goes
 to `OUT_DIR` and is included via `include!()` macros in `lib.rs`. All types derive `serde::Serialize`
-and `serde::Deserialize`. A `descriptor.bin` FileDescriptorSet is also generated for runtime schema access
-(used for runtime schema access).
+and `serde::Deserialize`. A `descriptor.bin` FileDescriptorSet is also generated for runtime schema access.
 
-The `bubbaloop-schemas` crate (`crates/bubbaloop-schemas/`) is a standalone crate (not in the workspace)
-with its own proto files (`header.proto`, `system_telemetry.proto`, `network_monitor.proto`). It's intended
-for sharing schemas with external nodes without pulling in the full `bubbaloop` dependency.
+The `bubbaloop-schemas` crate (`crates/bubbaloop-schemas/`) is a standalone crate (not in the workspace).
+Both the main `bubbaloop` crate and external nodes compile protos from the same source directory.
+External nodes depend on `bubbaloop-schemas` via git (not the full `bubbaloop` crate).
 
 ### Zenoh Topic Conventions
 
@@ -600,6 +600,7 @@ pixi run clippy    # Lint Rust code
 - **Tests**: co-located `#[cfg(test)] mod tests` blocks, not separate files (except integration tests)
 - **Protobuf types**: versioned modules (`schemas::camera::v1::CompressedImage`), re-exported at `schemas::` level
 - **Async**: all Zenoh and systemd operations are async. Use `tokio::spawn` for background tasks
+- **Logging**: use `log::info!`, `log::warn!`, `log::debug!`, `log::error!` instead of `println!`/`eprintln!` for operational messages. Reserve `println!` for CLI user-facing output only (e.g., command results, tables). The daemon and TUI should exclusively use `log::` macros
 
 ### IMPORTANT: Do and Don't
 
@@ -613,7 +614,7 @@ pixi run clippy    # Lint Rust code
 - Keep this CLAUDE.md updated when architecture changes
 - Update `.gitignore` when adding new generated/build file patterns
 - **Include tests with every PR** — any new feature, bug fix, or refactor must include relevant unit tests. Tests ensure future agents can verify correctness and detect regressions. Use `tempfile` for filesystem tests, co-located `#[cfg(test)] mod tests` blocks
-- When adding proto schema changes, verify both `bubbaloop-schemas` and the main `bubbaloop` crate compile (protos are duplicated with different import paths)
+- When adding proto schema changes, verify both `bubbaloop-schemas` and the main `bubbaloop` crate compile (both compile from `crates/bubbaloop-schemas/protos/`)
 
 **DON'T:**
 - Don't run `bubbaloop tui` from Claude Code — it requires an interactive TTY

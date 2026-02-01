@@ -73,7 +73,9 @@ pub struct DiscoverableNode {
     pub name: String,
     pub version: String,
     pub node_type: String,
+    pub description: String,
     pub source: String,
+    pub source_type: String, // "builtin", "local", "git"
 }
 
 /// Marketplace source
@@ -630,14 +632,14 @@ impl App {
                 }
             }
             KeyCode::Char('e') => {
-                self.enable_source().await;
+                self.enable_source();
             }
             KeyCode::Char('d') => {
-                self.disable_source().await;
+                self.disable_source();
             }
             KeyCode::Char('r') => {
                 if self.confirm_remove {
-                    self.remove_source().await;
+                    self.remove_source();
                     self.confirm_remove = false;
                 } else {
                     self.confirm_remove = true;
@@ -979,7 +981,6 @@ impl App {
         if let Some(path) = self.pending_node_path.take() {
             if let Some(client) = &self.daemon_client {
                 let client = client.clone();
-                let path = path.clone();
                 let tx = self.message_tx.clone();
                 // Spawn in background so we don't block
                 tokio::spawn(async move {
@@ -1283,7 +1284,7 @@ impl App {
     }
 
     fn uninstall_selected_node(&mut self) {
-        if let Some(node) = self.nodes.get(self.node_index).cloned() {
+        if let Some(node) = self.nodes.get(self.node_index) {
             if let Some(client) = &self.daemon_client {
                 let client = client.clone();
                 let name = node.name.clone();
@@ -1357,13 +1358,33 @@ impl App {
             let node_name = node.name.clone();
 
             if is_remote {
-                let parts: Vec<String> = path.split_whitespace().map(|s| s.to_string()).collect();
+                // Parse expected "owner/repo --subdir name" format safely.
+                // Only pass validated repo and subdir as explicit args to
+                // prevent injection of extra CLI flags from a tampered cache.
+                let parts: Vec<&str> = path.split_whitespace().collect();
+                let (repo, subdir) = if parts.len() == 3 && parts[1] == "--subdir" {
+                    (parts[0].to_string(), parts[2].to_string())
+                } else {
+                    let _ = tx.send((
+                        format!("Invalid marketplace path for {}", node_name),
+                        MessageType::Error,
+                    ));
+                    return;
+                };
+
+                // Validate repo format
+                if crate::registry::validate_repo(&repo).is_err() {
+                    let _ = tx.send((
+                        format!("Invalid repo '{}' for {}", repo, node_name),
+                        MessageType::Error,
+                    ));
+                    return;
+                }
+
                 tokio::spawn(async move {
                     let exe = std::env::current_exe().unwrap_or_else(|_| "bubbaloop".into());
                     let mut cmd = tokio::process::Command::new(exe);
-                    cmd.args(["node", "add"]);
-                    cmd.args(&parts);
-                    cmd.arg("--build");
+                    cmd.args(["node", "add", &repo, "--subdir", &subdir, "--build"]);
 
                     match cmd.output().await {
                         Ok(output) if output.status.success() => {
@@ -1400,7 +1421,7 @@ impl App {
         }
     }
 
-    async fn enable_source(&mut self) {
+    fn enable_source(&mut self) {
         if let Some(source) = self.sources.get(self.source_index) {
             if !source.enabled {
                 self.registry.toggle_source(&source.path);
@@ -1410,7 +1431,7 @@ impl App {
         }
     }
 
-    async fn disable_source(&mut self) {
+    fn disable_source(&mut self) {
         if let Some(source) = self.sources.get(self.source_index) {
             if source.enabled {
                 self.registry.toggle_source(&source.path);
@@ -1420,7 +1441,7 @@ impl App {
         }
     }
 
-    async fn remove_source(&mut self) {
+    fn remove_source(&mut self) {
         if let Some(source) = self.sources.get(self.source_index) {
             let name = source.name.clone();
             self.registry.remove_source(&source.path);

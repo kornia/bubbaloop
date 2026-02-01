@@ -4,18 +4,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::registry as shared_registry;
 use crate::tui::app::{DiscoverableNode, MarketplaceSource, NodeInfo};
 
 const OFFICIAL_SOURCE_NAME: &str = "Official Nodes";
 const OFFICIAL_SOURCE_PATH: &str = "kornia/bubbaloop-nodes-official";
 const OFFICIAL_SOURCE_TYPE: &str = "builtin";
-
-/// Raw URL for the official nodes registry on GitHub.
-const OFFICIAL_NODES_URL: &str =
-    "https://raw.githubusercontent.com/kornia/bubbaloop-nodes-official/main/nodes.yaml";
-
-/// Local cache filename inside ~/.bubbaloop/cache/
-const OFFICIAL_NODES_CACHE: &str = "official_nodes.yaml";
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct SourcesRegistry {
@@ -41,22 +35,6 @@ struct NodeManifest {
     description: String,
 }
 
-/// Schema for nodes.yaml in the official repo.
-#[derive(Debug, Deserialize)]
-struct OfficialNodesYaml {
-    nodes: Vec<OfficialNodeEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OfficialNodeEntry {
-    name: String,
-    version: String,
-    #[serde(rename = "type")]
-    node_type: String,
-    repo: String,
-    subdir: String,
-}
-
 pub struct Registry {
     config_dir: PathBuf,
     sources: SourcesRegistry,
@@ -73,27 +51,31 @@ impl Registry {
 
         // Load sources registry
         let sources_path = config_dir.join("sources.json");
-        let sources = if sources_path.exists() {
+        let mut sources: SourcesRegistry = if sources_path.exists() {
             fs::read_to_string(&sources_path)
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default()
         } else {
-            // Seed with official builtin source on first run
-            let seeded = SourcesRegistry {
-                sources: vec![SourceEntry {
-                    name: OFFICIAL_SOURCE_NAME.to_string(),
-                    path: OFFICIAL_SOURCE_PATH.to_string(),
-                    source_type: OFFICIAL_SOURCE_TYPE.to_string(),
-                    enabled: true,
-                }],
-            };
-            // Persist the seeded sources
-            if let Ok(json) = serde_json::to_string_pretty(&seeded) {
+            SourcesRegistry::default()
+        };
+
+        // Ensure the official builtin source exists (handles fresh installs and upgrades)
+        let has_builtin = sources
+            .sources
+            .iter()
+            .any(|s| s.source_type == OFFICIAL_SOURCE_TYPE);
+        if !has_builtin {
+            sources.sources.push(SourceEntry {
+                name: OFFICIAL_SOURCE_NAME.to_string(),
+                path: OFFICIAL_SOURCE_PATH.to_string(),
+                source_type: OFFICIAL_SOURCE_TYPE.to_string(),
+                enabled: true,
+            });
+            if let Ok(json) = serde_json::to_string_pretty(&sources) {
                 let _ = fs::write(&sources_path, json);
             }
-            seeded
-        };
+        }
 
         Self {
             config_dir,
@@ -185,23 +167,7 @@ impl Registry {
     /// Trigger a background fetch of the official nodes registry from GitHub.
     /// The result is cached to disk; `scan_discoverable_nodes` reads from cache.
     pub fn refresh_builtin_cache(&self) {
-        let cache_dir = self.config_dir.join("cache");
-        let _ = fs::create_dir_all(&cache_dir);
-
-        let cache_path = cache_dir.join(OFFICIAL_NODES_CACHE);
-        let url = OFFICIAL_NODES_URL.to_string();
-
-        // Non-blocking: spawn a thread so the TUI doesn't stall on network I/O.
-        std::thread::spawn(move || {
-            if let Ok(output) = std::process::Command::new("curl")
-                .args(["-sSfL", "--connect-timeout", "5", "--max-time", "10", &url])
-                .output()
-            {
-                if output.status.success() {
-                    let _ = fs::write(cache_path, output.stdout);
-                }
-            }
-        });
+        shared_registry::refresh_cache_async();
     }
 
     pub fn scan_discoverable_nodes(&self, registered_nodes: &[NodeInfo]) -> Vec<DiscoverableNode> {
@@ -244,7 +210,9 @@ impl Registry {
                             name: node.name,
                             version: node.version,
                             node_type: node.node_type,
+                            description: node.description,
                             source: source.name.clone(),
+                            source_type: source.source_type.clone(),
                         });
                     }
                 }
@@ -254,41 +222,33 @@ impl Registry {
         discovered
     }
 
-    /// Load official nodes from the local cache file.
+    /// Load official nodes from the local cache, delegating parsing to the shared registry.
     fn load_builtin_nodes(&self) -> Vec<DiscoverableNode> {
-        let cache_path = self.config_dir.join("cache").join(OFFICIAL_NODES_CACHE);
+        let cache_path = self
+            .config_dir
+            .join("cache")
+            .join(shared_registry::OFFICIAL_NODES_CACHE);
         let yaml = match fs::read_to_string(&cache_path) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        parse_nodes_yaml(&yaml)
+
+        shared_registry::parse_nodes_yaml(&yaml)
+            .into_iter()
+            .map(|entry| {
+                let path = format!("{} --subdir {}", entry.repo, entry.subdir);
+                DiscoverableNode {
+                    path,
+                    name: entry.name,
+                    version: entry.version,
+                    node_type: entry.node_type,
+                    description: entry.description,
+                    source: OFFICIAL_SOURCE_NAME.to_string(),
+                    source_type: OFFICIAL_SOURCE_TYPE.to_string(),
+                }
+            })
+            .collect()
     }
-}
-
-/// Parse a nodes.yaml string into discoverable nodes.
-fn parse_nodes_yaml(yaml: &str) -> Vec<DiscoverableNode> {
-    let registry: OfficialNodesYaml = match serde_yaml::from_str(yaml) {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
-    };
-
-    registry
-        .nodes
-        .into_iter()
-        .map(|entry| {
-            // Path format: "user/repo --subdir name"
-            // This is readable in the TUI and maps directly to the CLI command:
-            //   bubbaloop node add kornia/bubbaloop-nodes-official --subdir rtsp-camera
-            let path = format!("{} --subdir {}", entry.repo, entry.subdir);
-            DiscoverableNode {
-                path,
-                name: entry.name,
-                version: entry.version,
-                node_type: entry.node_type,
-                source: OFFICIAL_SOURCE_NAME.to_string(),
-            }
-        })
-        .collect()
 }
 
 struct ScannedNode {
@@ -296,6 +256,7 @@ struct ScannedNode {
     name: String,
     version: String,
     node_type: String,
+    description: String,
 }
 
 fn scan_for_nodes(base_path: &str) -> Vec<ScannedNode> {
@@ -320,6 +281,7 @@ fn scan_for_nodes(base_path: &str) -> Vec<ScannedNode> {
                                 name: manifest.name,
                                 version: manifest.version,
                                 node_type: manifest.node_type,
+                                description: manifest.description,
                             });
                         }
                     }
@@ -333,19 +295,16 @@ fn scan_for_nodes(base_path: &str) -> Vec<ScannedNode> {
 
 fn normalize_path(path: &str) -> String {
     let p = path.trim_end_matches('/');
-    if let Some(expanded) = expand_tilde(p) {
-        expanded
-    } else {
-        p.to_string()
-    }
+    expand_tilde(p)
 }
 
-fn expand_tilde(path: &str) -> Option<String> {
+fn expand_tilde(path: &str) -> String {
     if path.starts_with('~') {
-        dirs::home_dir().map(|home| path.replacen('~', &home.to_string_lossy(), 1))
-    } else {
-        Some(path.to_string())
+        if let Some(home) = dirs::home_dir() {
+            return path.replacen('~', &home.to_string_lossy(), 1);
+        }
     }
+    path.to_string()
 }
 
 #[cfg(test)]
@@ -386,24 +345,29 @@ nodes:
 "#;
 
     #[test]
-    fn test_parse_nodes_yaml() {
-        let nodes = parse_nodes_yaml(TEST_NODES_YAML);
+    fn test_load_builtin_nodes_from_shared_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join("cache");
+        let _ = fs::create_dir_all(&cache_dir);
+        let _ = fs::write(
+            cache_dir.join(shared_registry::OFFICIAL_NODES_CACHE),
+            TEST_NODES_YAML,
+        );
+
+        let registry = Registry {
+            config_dir: dir.path().to_path_buf(),
+            sources: SourcesRegistry::default(),
+        };
+
+        let nodes = registry.load_builtin_nodes();
         assert_eq!(nodes.len(), 3);
 
-        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
-        assert!(names.contains(&"rtsp-camera"));
-        assert!(names.contains(&"openmeteo"));
-        assert!(names.contains(&"network-monitor"));
-    }
-
-    #[test]
-    fn test_parse_nodes_yaml_fields() {
-        let nodes = parse_nodes_yaml(TEST_NODES_YAML);
         let camera = nodes.iter().find(|n| n.name == "rtsp-camera").unwrap();
-
         assert_eq!(camera.version, "0.1.0");
         assert_eq!(camera.node_type, "rust");
         assert_eq!(camera.source, OFFICIAL_SOURCE_NAME);
+        assert_eq!(camera.source_type, OFFICIAL_SOURCE_TYPE);
+        assert_eq!(camera.description, "RTSP camera capture");
         assert_eq!(
             camera.path,
             "kornia/bubbaloop-nodes-official --subdir rtsp-camera"
@@ -411,47 +375,99 @@ nodes:
 
         let netmon = nodes.iter().find(|n| n.name == "network-monitor").unwrap();
         assert_eq!(netmon.node_type, "python");
+        assert_eq!(netmon.source_type, OFFICIAL_SOURCE_TYPE);
     }
 
     #[test]
     fn test_parse_nodes_yaml_invalid() {
-        let nodes = parse_nodes_yaml("not valid yaml: [[[");
+        let nodes = shared_registry::parse_nodes_yaml("not valid yaml: [[[");
         assert!(nodes.is_empty());
     }
 
     #[test]
-    fn test_official_source_seeded() {
+    fn test_official_source_seeded_on_fresh_install() {
         let dir = tempfile::tempdir().unwrap();
         let sources_path = dir.path().join("sources.json");
 
         assert!(!sources_path.exists());
 
+        // Simulate Registry::load() logic for a fresh install (no sources.json)
+        let mut sources = SourcesRegistry::default();
+        let has_builtin = sources
+            .sources
+            .iter()
+            .any(|s| s.source_type == OFFICIAL_SOURCE_TYPE);
+        assert!(!has_builtin);
+
+        sources.sources.push(SourceEntry {
+            name: OFFICIAL_SOURCE_NAME.to_string(),
+            path: OFFICIAL_SOURCE_PATH.to_string(),
+            source_type: OFFICIAL_SOURCE_TYPE.to_string(),
+            enabled: true,
+        });
+        let _ = fs::write(
+            &sources_path,
+            serde_json::to_string_pretty(&sources).unwrap(),
+        );
+
         let registry = Registry {
             config_dir: dir.path().to_path_buf(),
-            sources: {
-                let seeded = SourcesRegistry {
-                    sources: vec![SourceEntry {
-                        name: OFFICIAL_SOURCE_NAME.to_string(),
-                        path: OFFICIAL_SOURCE_PATH.to_string(),
-                        source_type: OFFICIAL_SOURCE_TYPE.to_string(),
-                        enabled: true,
-                    }],
-                };
-                if let Ok(json) = serde_json::to_string_pretty(&seeded) {
-                    let _ = fs::write(&sources_path, json);
-                }
-                seeded
-            },
+            sources,
         };
 
         assert!(sources_path.exists());
+        let result = registry.get_sources();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, OFFICIAL_SOURCE_NAME);
+        assert_eq!(result[0].source_type, OFFICIAL_SOURCE_TYPE);
+        assert!(result[0].enabled);
+    }
 
-        let sources = registry.get_sources();
-        assert_eq!(sources.len(), 1);
-        assert_eq!(sources[0].name, OFFICIAL_SOURCE_NAME);
-        assert_eq!(sources[0].path, OFFICIAL_SOURCE_PATH);
-        assert_eq!(sources[0].source_type, OFFICIAL_SOURCE_TYPE);
-        assert!(sources[0].enabled);
+    #[test]
+    fn test_official_source_added_on_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let sources_path = dir.path().join("sources.json");
+
+        // Simulate an existing sources.json without the builtin source (upgrade case)
+        let old_sources = SourcesRegistry {
+            sources: vec![SourceEntry {
+                name: "My Local Nodes".to_string(),
+                path: "/some/local/path".to_string(),
+                source_type: "local".to_string(),
+                enabled: true,
+            }],
+        };
+        let _ = fs::write(
+            &sources_path,
+            serde_json::to_string_pretty(&old_sources).unwrap(),
+        );
+
+        // Simulate Registry::load() logic
+        let mut sources: SourcesRegistry =
+            serde_json::from_str(&fs::read_to_string(&sources_path).unwrap()).unwrap();
+        let has_builtin = sources
+            .sources
+            .iter()
+            .any(|s| s.source_type == OFFICIAL_SOURCE_TYPE);
+        assert!(!has_builtin);
+
+        sources.sources.push(SourceEntry {
+            name: OFFICIAL_SOURCE_NAME.to_string(),
+            path: OFFICIAL_SOURCE_PATH.to_string(),
+            source_type: OFFICIAL_SOURCE_TYPE.to_string(),
+            enabled: true,
+        });
+
+        let registry = Registry {
+            config_dir: dir.path().to_path_buf(),
+            sources,
+        };
+
+        let result = registry.get_sources();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "My Local Nodes");
+        assert_eq!(result[1].name, OFFICIAL_SOURCE_NAME);
+        assert_eq!(result[1].source_type, OFFICIAL_SOURCE_TYPE);
     }
 
     #[test]
@@ -461,7 +477,10 @@ nodes:
         // Write a cached nodes.yaml
         let cache_dir = dir.path().join("cache");
         let _ = fs::create_dir_all(&cache_dir);
-        let _ = fs::write(cache_dir.join(OFFICIAL_NODES_CACHE), TEST_NODES_YAML);
+        let _ = fs::write(
+            cache_dir.join(shared_registry::OFFICIAL_NODES_CACHE),
+            TEST_NODES_YAML,
+        );
 
         let registry = Registry {
             config_dir: dir.path().to_path_buf(),

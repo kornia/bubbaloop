@@ -10,6 +10,7 @@ use std::process::Command;
 use thiserror::Error;
 use zenoh::query::QueryTarget;
 
+use crate::registry;
 use crate::templates;
 
 #[derive(Debug, Error)]
@@ -60,6 +61,7 @@ enum NodeAction {
     Clean(CleanArgs),
     Enable(EnableArgs),
     Disable(DisableArgs),
+    Search(SearchArgs),
 }
 
 /// Initialize a new node from template
@@ -147,13 +149,21 @@ struct RemoveArgs {
     delete_files: bool,
 }
 
-/// Install a node as a systemd service
+/// Install a node as a systemd service (or from marketplace by name)
 #[derive(FromArgs)]
 #[argh(subcommand, name = "install")]
 struct InstallArgs {
-    /// node name
+    /// node name (registered node or marketplace name)
     #[argh(positional)]
     name: String,
+
+    /// git branch for marketplace install (default: main)
+    #[argh(option, short = 'b', default = "String::from(\"main\")")]
+    branch: String,
+
+    /// skip the build step (marketplace install only)
+    #[argh(switch)]
+    no_build: bool,
 }
 
 /// Uninstall a node's systemd service
@@ -245,6 +255,23 @@ struct DisableArgs {
     name: String,
 }
 
+/// Search the node marketplace
+#[derive(FromArgs)]
+#[argh(subcommand, name = "search")]
+struct SearchArgs {
+    /// search query (matches name, description, tags)
+    #[argh(positional, default = "String::new()")]
+    query: String,
+
+    /// filter by category
+    #[argh(option, short = 'c')]
+    category: Option<String>,
+
+    /// filter by tag
+    #[argh(option, short = 't')]
+    tag: Option<String>,
+}
+
 /// Response from daemon API
 #[derive(Deserialize)]
 struct CommandResponse {
@@ -292,7 +319,7 @@ impl NodeCommand {
             Some(NodeAction::List(args)) => list_nodes(args).await,
             Some(NodeAction::Add(args)) => add_node(args).await,
             Some(NodeAction::Remove(args)) => remove_node(args).await,
-            Some(NodeAction::Install(args)) => send_command(&args.name, "install").await,
+            Some(NodeAction::Install(args)) => handle_install(args).await,
             Some(NodeAction::Uninstall(args)) => send_command(&args.name, "uninstall").await,
             Some(NodeAction::Start(args)) => send_command(&args.name, "start").await,
             Some(NodeAction::Stop(args)) => send_command(&args.name, "stop").await,
@@ -302,6 +329,7 @@ impl NodeCommand {
             Some(NodeAction::Clean(args)) => send_command(&args.name, "clean").await,
             Some(NodeAction::Enable(args)) => send_command(&args.name, "enable").await,
             Some(NodeAction::Disable(args)) => send_command(&args.name, "disable").await,
+            Some(NodeAction::Search(args)) => search_nodes(args),
         }
     }
 
@@ -314,7 +342,8 @@ impl NodeCommand {
         eprintln!("  list        List all registered nodes");
         eprintln!("  add         Add a node from local path or GitHub URL");
         eprintln!("  remove      Remove a node from the registry");
-        eprintln!("  install     Install a node as a systemd service");
+        eprintln!("  search      Search the node marketplace");
+        eprintln!("  install     Install a node (or from marketplace by name)");
         eprintln!("  uninstall   Uninstall a node's systemd service");
         eprintln!("  start       Start a node service");
         eprintln!("  stop        Stop a node service");
@@ -359,11 +388,10 @@ async fn get_zenoh_session() -> Result<zenoh::Session> {
 
 fn init_node(args: InitArgs) -> Result<()> {
     // Determine output directory (default: ./<name> in current directory)
-    let output_dir = if let Some(output) = args.output {
-        PathBuf::from(output)
-    } else {
-        PathBuf::from(".").join(&args.name)
-    };
+    let output_dir = args
+        .output
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".").join(&args.name));
 
     // Use shared template module
     let output_dir = templates::create_node_at(
@@ -815,54 +843,52 @@ fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -> Result<St
 
     // Determine target directory
     let target_dir = if let Some(out) = output {
-        std::path::PathBuf::from(out)
+        PathBuf::from(out)
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        std::path::PathBuf::from(home)
+        PathBuf::from(home)
             .join(".bubbaloop")
             .join("nodes")
             .join(repo_name)
     };
 
     if target_dir.exists() {
-        return Err(NodeError::GitClone(format!(
-            "Directory already exists: {}",
-            target_dir.display()
-        )));
-    }
+        // Reuse existing clone (e.g., installing a second node from the same multi-node repo)
+        println!("Using existing clone at {}", target_dir.display());
+    } else {
+        // Create parent directory
+        if let Some(parent) = target_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
 
-    // Create parent directory
-    if let Some(parent) = target_dir.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    println!(
-        "Cloning {} (branch: {}) to {}...",
-        url,
-        branch,
-        target_dir.display()
-    );
-
-    // Clone the repository with branch
-    let clone_output = Command::new("git")
-        .args([
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            branch,
-            "--", // Prevent URL from being treated as an option
+        println!(
+            "Cloning {} (branch: {}) to {}...",
             url,
-            &target_dir.to_string_lossy(),
-        ])
-        .output()?;
+            branch,
+            target_dir.display()
+        );
 
-    if !clone_output.status.success() {
-        let stderr = String::from_utf8_lossy(&clone_output.stderr);
-        return Err(NodeError::GitClone(stderr.to_string()));
+        // Clone the repository with branch
+        let clone_output = Command::new("git")
+            .args([
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                branch,
+                "--", // Prevent URL from being treated as an option
+                url,
+                &target_dir.to_string_lossy(),
+            ])
+            .output()?;
+
+        if !clone_output.status.success() {
+            let stderr = String::from_utf8_lossy(&clone_output.stderr);
+            return Err(NodeError::GitClone(stderr.to_string()));
+        }
+
+        println!("Cloned successfully!");
     }
-
-    println!("Cloned successfully!");
 
     // Check for node.yaml
     let manifest = target_dir.join("node.yaml");
@@ -988,6 +1014,235 @@ async fn send_command(name: &str, command: &str) -> Result<()> {
     Ok(())
 }
 
+/// Handle `node install`: if the node is already registered with the daemon,
+/// install it as a systemd service (existing behavior). Otherwise, look up the
+/// name in the marketplace registry, clone, register, build, and install.
+async fn handle_install(args: InstallArgs) -> Result<()> {
+    // First, check if node is already registered with the daemon
+    let session = get_zenoh_session().await?;
+
+    let replies_result = session
+        .get("bubbaloop/daemon/api/nodes")
+        .target(QueryTarget::BestMatching)
+        .timeout(std::time::Duration::from_secs(10))
+        .await;
+
+    let mut is_registered = false;
+
+    if let Ok(replies) = replies_result {
+        for reply in replies {
+            if let Ok(sample) = reply.into_result() {
+                let payload = sample.payload().to_bytes();
+                if let Ok(data) = serde_json::from_slice::<NodeListResponse>(&payload) {
+                    is_registered = data.nodes.iter().any(|n| n.name == args.name);
+                }
+            }
+        }
+    }
+
+    session
+        .close()
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+
+    if is_registered {
+        log::info!(
+            "node install: '{}' is registered, installing systemd service",
+            args.name
+        );
+        return send_command(&args.name, "install").await;
+    }
+
+    // Not registered -> try marketplace lookup
+    log::info!(
+        "node install: '{}' not registered, checking marketplace",
+        args.name
+    );
+    println!(
+        "Node '{}' not registered. Checking marketplace...",
+        args.name
+    );
+
+    if let Err(e) = registry::refresh_cache() {
+        log::warn!("registry refresh failed: {}", e);
+        eprintln!("Warning: could not refresh registry (using cache): {}", e);
+    }
+    let nodes = registry::load_cached_registry();
+
+    let entry = match registry::find_by_name(&nodes, &args.name) {
+        Some(entry) => entry,
+        None => {
+            // Search for suggestions
+            let suggestions = registry::search_registry(&nodes, &args.name, None, None);
+            let mut msg = format!("Node '{}' not found in registry.", args.name);
+            if !suggestions.is_empty() {
+                msg.push_str("\n\nDid you mean:");
+                for s in suggestions.iter().take(5) {
+                    msg.push_str(&format!("\n  {}", s.name));
+                }
+            }
+            msg.push_str("\n\nTry: bubbaloop node search");
+            return Err(NodeError::NotFound(msg));
+        }
+    };
+
+    log::info!(
+        "node install: found '{}' in marketplace (repo={}, subdir={})",
+        entry.name,
+        entry.repo,
+        entry.subdir
+    );
+    println!("Found '{}' in marketplace ({})", entry.name, entry.repo);
+
+    // Validate repo before constructing URL
+    registry::validate_repo(&entry.repo)
+        .map_err(|e| NodeError::InvalidUrl(format!("Invalid registry repo: {}", e)))?;
+
+    // Clone from GitHub
+    let url = format!("https://github.com/{}", entry.repo);
+    log::info!("node install: cloning {} branch={}", url, args.branch);
+    let base_path = clone_from_github(&url, None, &args.branch)?;
+
+    // Resolve subdir
+    let node_path = resolve_node_path(&base_path, Some(&entry.subdir))?;
+
+    // Register with daemon
+    let session = get_zenoh_session().await?;
+
+    let payload = serde_json::to_string(&serde_json::json!({
+        "command": "add",
+        "node_path": node_path
+    }))?;
+
+    let mut registered_ok = false;
+
+    for attempt in 1..=3 {
+        let replies_result = session
+            .get("bubbaloop/daemon/api/nodes/add")
+            .payload(payload.clone())
+            .target(QueryTarget::BestMatching)
+            .timeout(std::time::Duration::from_secs(30))
+            .await;
+
+        match replies_result {
+            Ok(replies) => {
+                for reply in replies {
+                    if let Ok(sample) = reply.into_result() {
+                        let data: CommandResponse =
+                            serde_json::from_slice(&sample.payload().to_bytes())?;
+                        if data.success {
+                            log::info!("node install: registered '{}' with daemon", args.name);
+                            println!("Registered node: {}", args.name);
+                            registered_ok = true;
+                            break;
+                        }
+                    }
+                }
+                if registered_ok {
+                    break;
+                }
+            }
+            Err(_) if attempt < 3 => {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            Err(e) => {
+                session
+                    .close()
+                    .await
+                    .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+                return Err(NodeError::Zenoh(e.to_string()));
+            }
+        }
+    }
+
+    session
+        .close()
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+
+    if !registered_ok {
+        return Err(NodeError::CommandFailed(
+            "Failed to register node with daemon".into(),
+        ));
+    }
+
+    // Build (unless --no-build)
+    if !args.no_build {
+        println!("Building {}...", args.name);
+        send_command(&args.name, "build").await?;
+    }
+
+    // Install as systemd service
+    println!("Installing {} as systemd service...", args.name);
+    send_command(&args.name, "install").await?;
+
+    log::info!(
+        "node install: completed marketplace install of '{}' from {}",
+        args.name,
+        entry.repo
+    );
+    println!("\nInstalled '{}' from {}", args.name, entry.repo);
+
+    Ok(())
+}
+
+fn search_nodes(args: SearchArgs) -> Result<()> {
+    log::info!(
+        "node search: query={:?} category={:?} tag={:?}",
+        args.query,
+        args.category,
+        args.tag
+    );
+    println!("Refreshing marketplace registry...");
+    if let Err(e) = registry::refresh_cache() {
+        log::warn!("registry refresh failed: {}", e);
+        eprintln!("Warning: could not refresh registry (using cache): {}", e);
+    }
+    let all_nodes = registry::load_cached_registry();
+
+    if all_nodes.is_empty() {
+        println!("No nodes found in marketplace registry.");
+        println!("The registry cache may not have been fetched yet.");
+        return Ok(());
+    }
+
+    let results = registry::search_registry(
+        &all_nodes,
+        &args.query,
+        args.category.as_deref(),
+        args.tag.as_deref(),
+    );
+
+    if results.is_empty() {
+        println!("No nodes matching your search.");
+        if !args.query.is_empty() || args.category.is_some() || args.tag.is_some() {
+            println!("Try: bubbaloop node search  (no arguments to list all)");
+        }
+        return Ok(());
+    }
+
+    println!(
+        "{:<20} {:<10} {:<8} {:<12} {:<30} REPO",
+        "NAME", "VERSION", "TYPE", "CATEGORY", "DESCRIPTION"
+    );
+    println!("{}", "-".repeat(110));
+    for node in &results {
+        println!(
+            "{:<20} {:<10} {:<8} {:<12} {:<30} {}",
+            node.name,
+            node.version,
+            node.node_type,
+            node.category,
+            truncate(&node.description, 28),
+            node.repo
+        );
+    }
+    println!();
+    println!("Install with: bubbaloop node install <name>");
+
+    Ok(())
+}
+
 async fn view_logs(args: LogsArgs) -> Result<()> {
     if args.follow {
         // Use journalctl directly for follow mode
@@ -1039,10 +1294,19 @@ async fn view_logs(args: LogsArgs) -> Result<()> {
 
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max - 3])
+        return s.to_string();
     }
+    // Find the last char that *ends* at or before byte position max-3.
+    let target = max.saturating_sub(3);
+    let mut end = 0;
+    for (i, c) in s.char_indices() {
+        let char_end = i + c.len_utf8();
+        if char_end > target {
+            break;
+        }
+        end = char_end;
+    }
+    format!("{}...", &s[..end])
 }
 
 #[cfg(test)]
@@ -1140,6 +1404,23 @@ mod tests {
         // Function takes first (max - 3) chars and adds "..."
         assert_eq!(truncate(long, 30), "This is a very long descrip...");
         assert_eq!(truncate(long, 30).len(), 30);
+    }
+
+    #[test]
+    fn test_truncate_multibyte_utf8() {
+        // Should not panic when truncation would fall inside a multi-byte char
+        let s = "cafe\u{0301} is great"; // "café is great" with combining accent
+        let result = truncate(s, 8);
+        assert!(result.ends_with("..."));
+        // Result must be valid UTF-8 and not exceed max bytes
+        assert!(result.len() <= 8);
+
+        // Pure multi-byte: each snowman is 3 bytes, 5 snowmen = 15 bytes
+        let s = "\u{2603}\u{2603}\u{2603}\u{2603}\u{2603}";
+        let result = truncate(s, 10);
+        assert!(result.ends_with("..."));
+        // 10 - 3 = 7 target bytes, fits 2 snowmen (6 bytes) + "..." = 9
+        assert_eq!(result, "\u{2603}\u{2603}...");
     }
 
     #[test]
