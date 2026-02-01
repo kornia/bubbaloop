@@ -18,6 +18,9 @@ pub mod tui;
 /// Template processing for node creation
 pub mod templates;
 
+/// Shared node registry for marketplace operations
+pub mod registry;
+
 /// Protobuf schemas for bubbaloop
 pub mod schemas {
     pub mod camera {

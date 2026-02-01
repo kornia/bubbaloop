@@ -4,18 +4,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::registry as shared_registry;
 use crate::tui::app::{DiscoverableNode, MarketplaceSource, NodeInfo};
 
 const OFFICIAL_SOURCE_NAME: &str = "Official Nodes";
 const OFFICIAL_SOURCE_PATH: &str = "kornia/bubbaloop-nodes-official";
 const OFFICIAL_SOURCE_TYPE: &str = "builtin";
-
-/// Raw URL for the official nodes registry on GitHub.
-const OFFICIAL_NODES_URL: &str =
-    "https://raw.githubusercontent.com/kornia/bubbaloop-nodes-official/main/nodes.yaml";
-
-/// Local cache filename inside ~/.bubbaloop/cache/
-const OFFICIAL_NODES_CACHE: &str = "official_nodes.yaml";
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct SourcesRegistry {
@@ -39,22 +33,6 @@ struct NodeManifest {
     node_type: String,
     #[serde(default)]
     description: String,
-}
-
-/// Schema for nodes.yaml in the official repo.
-#[derive(Debug, Deserialize)]
-struct OfficialNodesYaml {
-    nodes: Vec<OfficialNodeEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OfficialNodeEntry {
-    name: String,
-    version: String,
-    #[serde(rename = "type")]
-    node_type: String,
-    repo: String,
-    subdir: String,
 }
 
 pub struct Registry {
@@ -185,23 +163,7 @@ impl Registry {
     /// Trigger a background fetch of the official nodes registry from GitHub.
     /// The result is cached to disk; `scan_discoverable_nodes` reads from cache.
     pub fn refresh_builtin_cache(&self) {
-        let cache_dir = self.config_dir.join("cache");
-        let _ = fs::create_dir_all(&cache_dir);
-
-        let cache_path = cache_dir.join(OFFICIAL_NODES_CACHE);
-        let url = OFFICIAL_NODES_URL.to_string();
-
-        // Non-blocking: spawn a thread so the TUI doesn't stall on network I/O.
-        std::thread::spawn(move || {
-            if let Ok(output) = std::process::Command::new("curl")
-                .args(["-sSfL", "--connect-timeout", "5", "--max-time", "10", &url])
-                .output()
-            {
-                if output.status.success() {
-                    let _ = fs::write(cache_path, output.stdout);
-                }
-            }
-        });
+        shared_registry::refresh_cache_async();
     }
 
     pub fn scan_discoverable_nodes(&self, registered_nodes: &[NodeInfo]) -> Vec<DiscoverableNode> {
@@ -254,41 +216,31 @@ impl Registry {
         discovered
     }
 
-    /// Load official nodes from the local cache file.
+    /// Load official nodes from the local cache, delegating parsing to the shared registry.
     fn load_builtin_nodes(&self) -> Vec<DiscoverableNode> {
-        let cache_path = self.config_dir.join("cache").join(OFFICIAL_NODES_CACHE);
+        let cache_path = self
+            .config_dir
+            .join("cache")
+            .join(shared_registry::OFFICIAL_NODES_CACHE);
         let yaml = match fs::read_to_string(&cache_path) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        parse_nodes_yaml(&yaml)
+
+        shared_registry::parse_nodes_yaml(&yaml)
+            .into_iter()
+            .map(|entry| {
+                let path = format!("{} --subdir {}", entry.repo, entry.subdir);
+                DiscoverableNode {
+                    path,
+                    name: entry.name,
+                    version: entry.version,
+                    node_type: entry.node_type,
+                    source: OFFICIAL_SOURCE_NAME.to_string(),
+                }
+            })
+            .collect()
     }
-}
-
-/// Parse a nodes.yaml string into discoverable nodes.
-fn parse_nodes_yaml(yaml: &str) -> Vec<DiscoverableNode> {
-    let registry: OfficialNodesYaml = match serde_yaml::from_str(yaml) {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
-    };
-
-    registry
-        .nodes
-        .into_iter()
-        .map(|entry| {
-            // Path format: "user/repo --subdir name"
-            // This is readable in the TUI and maps directly to the CLI command:
-            //   bubbaloop node add kornia/bubbaloop-nodes-official --subdir rtsp-camera
-            let path = format!("{} --subdir {}", entry.repo, entry.subdir);
-            DiscoverableNode {
-                path,
-                name: entry.name,
-                version: entry.version,
-                node_type: entry.node_type,
-                source: OFFICIAL_SOURCE_NAME.to_string(),
-            }
-        })
-        .collect()
 }
 
 struct ScannedNode {
@@ -386,21 +338,24 @@ nodes:
 "#;
 
     #[test]
-    fn test_parse_nodes_yaml() {
-        let nodes = parse_nodes_yaml(TEST_NODES_YAML);
+    fn test_load_builtin_nodes_from_shared_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join("cache");
+        let _ = fs::create_dir_all(&cache_dir);
+        let _ = fs::write(
+            cache_dir.join(shared_registry::OFFICIAL_NODES_CACHE),
+            TEST_NODES_YAML,
+        );
+
+        let registry = Registry {
+            config_dir: dir.path().to_path_buf(),
+            sources: SourcesRegistry::default(),
+        };
+
+        let nodes = registry.load_builtin_nodes();
         assert_eq!(nodes.len(), 3);
 
-        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
-        assert!(names.contains(&"rtsp-camera"));
-        assert!(names.contains(&"openmeteo"));
-        assert!(names.contains(&"network-monitor"));
-    }
-
-    #[test]
-    fn test_parse_nodes_yaml_fields() {
-        let nodes = parse_nodes_yaml(TEST_NODES_YAML);
         let camera = nodes.iter().find(|n| n.name == "rtsp-camera").unwrap();
-
         assert_eq!(camera.version, "0.1.0");
         assert_eq!(camera.node_type, "rust");
         assert_eq!(camera.source, OFFICIAL_SOURCE_NAME);
@@ -415,7 +370,7 @@ nodes:
 
     #[test]
     fn test_parse_nodes_yaml_invalid() {
-        let nodes = parse_nodes_yaml("not valid yaml: [[[");
+        let nodes = shared_registry::parse_nodes_yaml("not valid yaml: [[[");
         assert!(nodes.is_empty());
     }
 
@@ -461,7 +416,10 @@ nodes:
         // Write a cached nodes.yaml
         let cache_dir = dir.path().join("cache");
         let _ = fs::create_dir_all(&cache_dir);
-        let _ = fs::write(cache_dir.join(OFFICIAL_NODES_CACHE), TEST_NODES_YAML);
+        let _ = fs::write(
+            cache_dir.join(shared_registry::OFFICIAL_NODES_CACHE),
+            TEST_NODES_YAML,
+        );
 
         let registry = Registry {
             config_dir: dir.path().to_path_buf(),
