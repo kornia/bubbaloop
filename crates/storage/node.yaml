@@ -1,0 +1,6 @@
+name: storage
+version: "0.1.0"
+description: "LanceDB-based storage service for recording Zenoh messages to GCP Cloud Storage"
+type: rust
+build: "cargo build --release"
+command: "./target/release/storage_node"

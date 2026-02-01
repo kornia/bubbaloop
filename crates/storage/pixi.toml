@@ -1,0 +1,20 @@
+[project]
+name = "bubbaloop-storage"
+version = "0.1.0"
+description = "LanceDB-based storage service for bubbaloop"
+channels = ["conda-forge"]
+platforms = ["linux-aarch64", "linux-64"]
+
+[dependencies]
+rust = ">=1.80"
+pkg-config = "*"
+openssl = "*"
+protobuf = ">=3"
+
+[tasks]
+build = "cargo build --release"
+check = "cargo check"
+clippy = "cargo clippy --all-targets -- -D warnings"
+fmt = "cargo fmt --all"
+test = "cargo test"
+run = "cargo run --release --bin storage_node"

@@ -1,0 +1,17 @@
+# Backend: gs://bucket/path for GCS, or local filesystem path
+storage_uri: "./recordings"
+
+# Topic patterns to subscribe to (supports wildcards)
+topics:
+  - "/camera/**"
+  - "/weather/**"
+
+# Optional: explicit topic-to-type mapping for schema registration
+# If omitted, types are auto-detected from ros-z topic encoding
+schema_hints:
+  "/camera/*/compressed": "bubbaloop.camera.v1.CompressedImage"
+  "/weather/current": "bubbaloop.weather.v1.CurrentWeather"
+
+# Performance
+batch_size: 30
+flush_interval_secs: 5

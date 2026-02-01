@@ -1,0 +1,60 @@
+[package]
+name = "bubbaloop-storage"
+version = "0.1.0"
+edition = "2021"
+description = "LanceDB-based storage service for recording Zenoh messages"
+
+[[bin]]
+name = "storage_node"
+path = "src/bin/storage_node.rs"
+
+[dependencies]
+# LanceDB (v56 arrow internally)
+lancedb = "0.23"
+
+# Arrow (pinned to match lancedb internals -- avoid duplicate versions)
+arrow-schema = "56"
+arrow-array = "56"
+
+# Zenoh pub/sub + queryables
+zenoh = "1.7"
+
+# ros-z for typed pub/sub
+ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
+
+# Protobuf (matching bubbaloop-schemas)
+prost = "0.14"
+
+# Shared schemas
+bubbaloop-schemas = { path = "../bubbaloop-schemas", features = ["ros-z", "descriptor"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# CLI args
+argh = "0.1"
+
+# Unique session IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Graceful shutdown
+ctrlc = "3.4"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Opt out of parent workspace
+[workspace]
