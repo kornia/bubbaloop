@@ -506,6 +506,7 @@ export function NodesViewPanel({
                 <span className="col-status">St</span>
                 <span className="col-name">Name</span>
                 <span className="col-machine">Machine</span>
+                <span className="col-ip">IP</span>
                 <span className="col-version">Version</span>
                 <span className="col-type">Type</span>
               </div>
@@ -529,6 +530,7 @@ export function NodesViewPanel({
                       </span>
                       <span className="col-name">{node.name}</span>
                       <span className="col-machine">{node.machine_hostname || 'local'}</span>
+                      <span className="col-ip mono">{node.machine_ips?.[0] || ''}</span>
                       <span className="col-version">{node.version}</span>
                       <span className={`col-type type-${node.node_type}`}>{node.node_type}</span>
                     </div>
@@ -570,6 +572,7 @@ export function NodesViewPanel({
                             </span>
                             <span className="col-name">{node.name}</span>
                             <span className="col-machine">{node.machine_hostname || 'local'}</span>
+                            <span className="col-ip mono">{node.machine_ips?.[0] || ''}</span>
                             <span className="col-version">{node.version}</span>
                             <span className={`col-type type-${node.node_type}`}>{node.node_type}</span>
                           </div>
@@ -756,6 +759,11 @@ export function NodesViewPanel({
           z-index: 1;
         }
 
+        .list-header .col-ip {
+          font-family: inherit;
+          font-size: inherit;
+        }
+
         .node-row {
           display: flex;
           padding: 10px 16px;
@@ -777,6 +785,15 @@ export function NodesViewPanel({
         .col-status { width: 30px; text-align: center; }
         .col-name { flex: 1; color: var(--text-primary); font-weight: 500; }
         .col-machine { width: 100px; color: var(--text-muted); font-size: 11px; }
+        .col-ip {
+          flex: 1.2;
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 11px;
+          color: var(--text-muted);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
         .col-version { width: 70px; color: var(--accent-secondary); font-family: 'JetBrains Mono', monospace; }
         .col-type { width: 60px; text-transform: uppercase; font-size: 10px; font-weight: 600; }
 

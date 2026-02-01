@@ -2,6 +2,8 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
+import { useFleetContext } from '../contexts/FleetContext';
+import { MachineBadge } from './MachineBadge';
 import { H264Decoder } from '../lib/h264-decoder';
 import { decodeCompressedImage, Header } from '../proto/camera';
 
@@ -30,6 +32,7 @@ export function CameraView({
   availableTopics = [],
   dragHandleProps,
 }: CameraViewProps) {
+  const { machines } = useFleetContext();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const decoderRef = useRef<H264Decoder | null>(null);
@@ -181,6 +184,7 @@ export function CameraView({
             </button>
           )}
           <span className="panel-type-badge">CAMERA</span>
+          <MachineBadge machines={machines} />
         </div>
         <div className="camera-stats">
           {dimensions && (
@@ -399,6 +403,19 @@ export function CameraView({
           background: rgba(0, 229, 255, 0.15);
           color: var(--accent-secondary);
           text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .panel-machine-badge {
+          font-size: 10px;
+          font-family: 'JetBrains Mono', monospace;
+          color: var(--text-muted);
+          background: var(--bg-tertiary);
+          padding: 2px 6px;
+          border-radius: 4px;
+          max-width: 120px;
+          overflow: hidden;
+          text-overflow: ellipsis;
           white-space: nowrap;
         }
 

@@ -7,7 +7,7 @@ import { useFleetContext, type MachineInfo, type FleetNodeInfo } from '../contex
 
 interface SimNode {
   id: string;
-  type: 'hub' | 'machine' | 'service';
+  type: 'hub' | 'machine' | 'service' | 'client';
   x: number;
   y: number;
   vx: number;
@@ -15,17 +15,24 @@ interface SimNode {
   fx: number | null; // fixed x (while dragging)
   fy: number | null;
   radius: number;
-  data: HubData | MachineInfo | FleetNodeInfo;
+  data: HubData | MachineInfo | FleetNodeInfo | DashboardData;
 }
 
 interface HubData {
   label: string;
 }
 
+interface DashboardData {
+  label: string;
+  host: string;        // window.location.host
+  endpoint: string;    // Zenoh WebSocket endpoint
+  status: string;      // 'connected' | 'connecting' | 'disconnected' | 'error'
+}
+
 interface SimEdge {
   source: string;
   target: string;
-  type: 'mesh' | 'service';
+  type: 'mesh' | 'service' | 'client';
 }
 
 interface TooltipInfo {
@@ -41,6 +48,7 @@ interface TooltipInfo {
 const HUB_RADIUS = 36;
 const MACHINE_RADIUS = 28;
 const SERVICE_RADIUS = 10;
+const DASHBOARD_RADIUS = 22;
 
 const STATUS_COLORS: Record<string, string> = {
   running: '#00c853',
@@ -76,16 +84,30 @@ function applyRepulsion(nodes: SimNode[], strength: number) {
       const a = nodes[i];
       const b = nodes[j];
       if (a.fx !== null && b.fx !== null) continue;
-      const d = distance(a, b);
-      const minDist = a.radius + b.radius + 40;
+      const d = Math.max(distance(a, b), 1);
+      const minDist = a.radius + b.radius + 60;
       if (d < minDist) {
-        const force = (strength * (minDist - d)) / d;
-        const dx = (a.x - b.x) * force;
-        const dy = (a.y - b.y) * force;
+        // Smooth quadratic falloff capped to prevent jitter on overlap
+        const overlap = (minDist - d) / minDist; // 0..1
+        const force = Math.min(strength * overlap * overlap, 1.5);
+        const dx = ((a.x - b.x) / d) * force;
+        const dy = ((a.y - b.y) / d) * force;
         if (a.fx === null) { a.vx += dx; a.vy += dy; }
         if (b.fx === null) { b.vx -= dx; b.vy -= dy; }
       }
     }
+  }
+}
+
+// Very subtle ambient motion so the graph feels alive even when settled
+function applyBreathing(nodes: SimNode[], time: number) {
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (n.fx !== null || n.type === 'hub') continue;
+    const phase = i * 2.39996; // golden angle for unique phase
+    const amp = n.type === 'service' ? 0.012 : 0.006;
+    n.vx += Math.sin(time * 0.0004 + phase) * amp;
+    n.vy += Math.cos(time * 0.0003 + phase * 1.3) * amp;
   }
 }
 
@@ -95,8 +117,8 @@ function applySpringForce(_nodes: SimNode[], edges: SimEdge[], nodeMap: Map<stri
     const target = nodeMap.get(edge.target);
     if (!source || !target) continue;
 
-    const idealLen = edge.type === 'mesh' ? 180 : 80;
-    const stiffness = edge.type === 'mesh' ? 0.004 : 0.008;
+    const idealLen = edge.type === 'mesh' ? 200 : edge.type === 'client' ? 180 : 90;
+    const stiffness = edge.type === 'mesh' ? 0.003 : edge.type === 'client' ? 0.003 : 0.006;
 
     const d = distance(source, target);
     const displacement = d - idealLen;
@@ -120,8 +142,8 @@ function updatePositions(nodes: SimNode[]): number {
   let totalKinetic = 0;
   for (const n of nodes) {
     if (n.fx !== null) { n.x = n.fx; n.y = n.fy!; n.vx = 0; n.vy = 0; continue; }
-    // Clamp velocity
-    const maxV = 8;
+    // Clamp velocity for smooth motion
+    const maxV = 3;
     n.vx = Math.max(-maxV, Math.min(maxV, n.vx));
     n.vy = Math.max(-maxV, Math.min(maxV, n.vy));
     n.x += n.vx;
@@ -135,7 +157,7 @@ function updatePositions(nodes: SimNode[]): number {
 // Build simulation graph from fleet data
 // ---------------------------------------------------------------------------
 
-function buildGraph(machines: MachineInfo[], fleetNodes: FleetNodeInfo[], cx: number, cy: number): { nodes: SimNode[]; edges: SimEdge[] } {
+function buildGraph(machines: MachineInfo[], fleetNodes: FleetNodeInfo[], cx: number, cy: number, dashboardData: DashboardData): { nodes: SimNode[]; edges: SimEdge[] } {
   const simNodes: SimNode[] = [];
   const edges: SimEdge[] = [];
 
@@ -150,6 +172,21 @@ function buildGraph(machines: MachineInfo[], fleetNodes: FleetNodeInfo[], cx: nu
     radius: HUB_RADIUS,
     data: { label: 'Zenoh Mesh' } as HubData,
   });
+
+  // Dashboard client node -- positioned opposite to machines
+  const dashAngle = Math.PI * 0.75; // bottom-left
+  const dashR = 200;
+  simNodes.push({
+    id: '__dashboard__',
+    type: 'client',
+    x: cx + Math.cos(dashAngle) * dashR,
+    y: cy + Math.sin(dashAngle) * dashR,
+    vx: 0, vy: 0,
+    fx: null, fy: null,
+    radius: DASHBOARD_RADIUS,
+    data: dashboardData,
+  });
+  edges.push({ source: '__hub__', target: '__dashboard__', type: 'client' });
 
   // Machines
   const machineCount = machines.length;
@@ -207,7 +244,7 @@ function buildGraph(machines: MachineInfo[], fleetNodes: FleetNodeInfo[], cx: nu
 // Component
 // ---------------------------------------------------------------------------
 
-export function MeshView() {
+export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionStatus = 'connected' }: { availableTopics?: string[]; zenohEndpoint?: string; connectionStatus?: string }) {
   const { machines, nodes: fleetNodes } = useFleetContext();
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -239,6 +276,9 @@ export function MeshView() {
   // Selected machine
   const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null);
 
+  // Detail side panel
+  const [detailNode, setDetailNode] = useState<SimNode | null>(null);
+
   // Dimensions
   const [dims, setDims] = useState({ w: 1200, h: 800 });
   useEffect(() => {
@@ -266,7 +306,13 @@ export function MeshView() {
   useEffect(() => {
     const cx = dims.w / 2;
     const cy = dims.h / 2;
-    const { nodes, edges } = buildGraph(machines, fleetNodes, cx, cy);
+    const dashboardData: DashboardData = {
+      label: 'Dashboard',
+      host: window.location.host,
+      endpoint: zenohEndpoint,
+      status: connectionStatus,
+    };
+    const { nodes, edges } = buildGraph(machines, fleetNodes, cx, cy, dashboardData);
 
     // Preserve positions for nodes that already exist
     const oldMap = nodeMapRef.current;
@@ -294,7 +340,7 @@ export function MeshView() {
     isSettledRef.current = false;
 
     // Update viewBox to center
-    setViewBox({ x: 0, y: 0, w: dims.w, h: dims.h });
+    setViewBox({ x: dims.w * 0.15, y: dims.h * 0.15, w: dims.w * 0.7, h: dims.h * 0.7 });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphKey, dims.w, dims.h]);
 
@@ -309,7 +355,12 @@ export function MeshView() {
       const node = map.get(`service-${fn.machineId}-${fn.name}`);
       if (node) node.data = fn;
     }
-  }, [machines, fleetNodes]);
+    // Update dashboard status
+    const dashNode = map.get('__dashboard__');
+    if (dashNode) {
+      (dashNode.data as DashboardData).status = connectionStatus;
+    }
+  }, [machines, fleetNodes, connectionStatus]);
 
   // Render loop
   const render = useCallback(() => {
@@ -342,18 +393,26 @@ export function MeshView() {
         line.setAttribute('y2', String(tgt.y));
 
         const isMesh = edge.type === 'mesh';
+        const isClient = edge.type === 'client';
         const isSelected = selectedMachineId && (
           edge.target === `machine-${selectedMachineId}` ||
           edge.source === `machine-${selectedMachineId}` ||
           tgt.id.startsWith(`service-${selectedMachineId}-`) ||
           src.id.startsWith(`service-${selectedMachineId}-`)
         );
+        const isDashSelected = edge.target === '__dashboard__' && detailNode?.id === '__dashboard__';
 
-        line.setAttribute('stroke', isMesh
-          ? (isSelected ? 'rgba(61,90,254,0.7)' : 'rgba(61,90,254,0.25)')
-          : (isSelected ? 'rgba(0,229,255,0.6)' : 'rgba(0,229,255,0.15)'));
-        line.setAttribute('stroke-width', isMesh ? '2' : '1');
-        line.setAttribute('stroke-dasharray', isMesh ? '6 4' : '3 3');
+        if (isClient) {
+          line.setAttribute('stroke', isDashSelected ? 'rgba(156,39,176,0.7)' : 'rgba(156,39,176,0.3)');
+          line.setAttribute('stroke-width', '1.5');
+          line.setAttribute('stroke-dasharray', '4 3');
+        } else {
+          line.setAttribute('stroke', isMesh
+            ? (isSelected ? 'rgba(61,90,254,0.7)' : 'rgba(61,90,254,0.25)')
+            : (isSelected ? 'rgba(0,229,255,0.6)' : 'rgba(0,229,255,0.15)'));
+          line.setAttribute('stroke-width', isMesh ? '2' : '1');
+          line.setAttribute('stroke-dasharray', isMesh ? '6 4' : '3 3');
+        }
         line.setAttribute('class', 'sim-edge');
       }
     }
@@ -380,6 +439,8 @@ export function MeshView() {
             buildHubNode(g);
           } else if (node.type === 'machine') {
             buildMachineNode(g);
+          } else if (node.type === 'client') {
+            buildDashboardNode(g);
           } else {
             buildServiceNode(g);
           }
@@ -394,6 +455,8 @@ export function MeshView() {
         } else if (node.type === 'service') {
           updateServiceNode(g, node.data as FleetNodeInfo,
             selectedMachineId === (node.data as FleetNodeInfo).machineId);
+        } else if (node.type === 'client') {
+          updateDashboardNode(g, node.data as DashboardData);
         }
 
         existingMap.delete(node.id);
@@ -404,7 +467,7 @@ export function MeshView() {
         nodeGroup.removeChild(stale);
       }
     }
-  }, [selectedMachineId]);
+  }, [selectedMachineId, detailNode]);
 
   // Animation loop
   useEffect(() => {
@@ -412,20 +475,29 @@ export function MeshView() {
     const cx = dims.w / 2;
     const cy = dims.h / 2;
 
-    const tick = () => {
+    const tick = (time: number) => {
       if (!running) return;
 
       const nodes = simNodesRef.current;
       const edges = simEdgesRef.current;
 
-      if (nodes.length > 0 && !isSettledRef.current) {
-        applyGravity(nodes, cx, cy, 0.002);
-        applyRepulsion(nodes, 2.5);
-        applySpringForce(nodes, edges, nodeMapRef.current);
-        applyDamping(nodes, 0.88);
-        const kinetic = updatePositions(nodes);
-        if (kinetic < 0.01 && !dragNodeIdRef.current) {
-          isSettledRef.current = true;
+      if (nodes.length > 0) {
+        if (!isSettledRef.current) {
+          // Full physics while unsettled
+          applyGravity(nodes, cx, cy, 0.0015);
+          applyRepulsion(nodes, 2.0);
+          applySpringForce(nodes, edges, nodeMapRef.current);
+          applyDamping(nodes, 0.92);
+          applyBreathing(nodes, time);
+          const kinetic = updatePositions(nodes);
+          if (kinetic < 0.01 && !dragNodeIdRef.current) {
+            isSettledRef.current = true;
+          }
+        } else {
+          // Ambient breathing keeps the graph alive (heavy damping = barely perceptible drift)
+          applyBreathing(nodes, time);
+          applyDamping(nodes, 0.85);
+          updatePositions(nodes);
         }
       }
 
@@ -487,7 +559,7 @@ export function MeshView() {
       svg.setPointerCapture(e.pointerId);
       e.preventDefault();
 
-      // Select machine on click
+      // Select machine on click (dashboard/client does not set selectedMachineId)
       if (hit.type === 'machine') {
         const machineData = hit.data as MachineInfo;
         setSelectedMachineId(prev => prev === machineData.machineId ? null : machineData.machineId);
@@ -495,6 +567,9 @@ export function MeshView() {
         const serviceData = hit.data as FleetNodeInfo;
         setSelectedMachineId(prev => prev === serviceData.machineId ? null : serviceData.machineId);
       }
+
+      // Open detail side panel
+      setDetailNode(prev => prev?.id === hit.id ? null : hit);
     } else if (!hit) {
       // Start panning
       isPanningRef.current = true;
@@ -502,6 +577,7 @@ export function MeshView() {
       svg.setPointerCapture(e.pointerId);
       e.preventDefault();
       setSelectedMachineId(null);
+      setDetailNode(null);
     }
   }, [screenToSvg]);
 
@@ -594,40 +670,35 @@ export function MeshView() {
     setViewBox({ x: newX, y: newY, w: newW, h: newH });
   }, []);
 
-  // Empty state
-  const isEmpty = machines.length === 0 && fleetNodes.length === 0;
+  // Zoom control functions
+  const zoomIn = useCallback(() => {
+    setViewBox(prev => {
+      const factor = 0.8;
+      const newW = Math.max(400, prev.w * factor);
+      const newH = Math.max(300, prev.h * factor);
+      const cx = prev.x + prev.w / 2;
+      const cy = prev.y + prev.h / 2;
+      return { x: cx - newW / 2, y: cy - newH / 2, w: newW, h: newH };
+    });
+  }, []);
+
+  const zoomOut = useCallback(() => {
+    setViewBox(prev => {
+      const factor = 1.25;
+      const newW = Math.min(6000, prev.w * factor);
+      const newH = Math.min(4500, prev.h * factor);
+      const cx = prev.x + prev.w / 2;
+      const cy = prev.y + prev.h / 2;
+      return { x: cx - newW / 2, y: cy - newH / 2, w: newW, h: newH };
+    });
+  }, []);
+
+  const fitToView = useCallback(() => {
+    setViewBox({ x: dims.w * 0.15, y: dims.h * 0.15, w: dims.w * 0.7, h: dims.h * 0.7 });
+  }, [dims.w, dims.h]);
 
   return (
     <div className="mesh-view" ref={containerRef}>
-      {isEmpty ? (
-        <div className="mesh-empty">
-          <div className="mesh-empty-inner">
-            <div className="mesh-empty-pulse" />
-            <div className="mesh-empty-icon">
-              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                <circle cx="24" cy="24" r="8" stroke="url(#emptyGrad)" strokeWidth="2" />
-                <circle cx="10" cy="14" r="3" stroke="var(--text-muted)" strokeWidth="1.5" />
-                <circle cx="38" cy="14" r="3" stroke="var(--text-muted)" strokeWidth="1.5" />
-                <circle cx="10" cy="34" r="3" stroke="var(--text-muted)" strokeWidth="1.5" />
-                <circle cx="38" cy="34" r="3" stroke="var(--text-muted)" strokeWidth="1.5" />
-                <line x1="17" y1="19" x2="13" y2="16" stroke="var(--text-muted)" strokeWidth="1" strokeDasharray="2 2" />
-                <line x1="31" y1="19" x2="35" y2="16" stroke="var(--text-muted)" strokeWidth="1" strokeDasharray="2 2" />
-                <line x1="17" y1="29" x2="13" y2="32" stroke="var(--text-muted)" strokeWidth="1" strokeDasharray="2 2" />
-                <line x1="31" y1="29" x2="35" y2="32" stroke="var(--text-muted)" strokeWidth="1" strokeDasharray="2 2" />
-                <defs>
-                  <linearGradient id="emptyGrad" x1="16" y1="16" x2="32" y2="32">
-                    <stop offset="0%" stopColor="#3d5afe" />
-                    <stop offset="100%" stopColor="#00e5ff" />
-                  </linearGradient>
-                </defs>
-              </svg>
-            </div>
-            <p className="mesh-empty-text">Waiting for machines to connect to the mesh...</p>
-            <p className="mesh-empty-hint">Nodes will appear here as they join the Zenoh network</p>
-          </div>
-        </div>
-      ) : (
-        <>
           <svg
             ref={svgRef}
             className="mesh-svg"
@@ -665,6 +736,15 @@ export function MeshView() {
                 <stop offset="0%" stopColor="#3d5afe" />
                 <stop offset="100%" stopColor="#00e5ff" />
               </linearGradient>
+              <radialGradient id="meshDashGradient" cx="40%" cy="40%">
+                <stop offset="0%" stopColor="#ce93d8" />
+                <stop offset="50%" stopColor="#9c27b0" />
+                <stop offset="100%" stopColor="#7b1fa2" />
+              </radialGradient>
+              <radialGradient id="meshDashGlow" cx="50%" cy="50%">
+                <stop offset="0%" stopColor="rgba(156,39,176,0.4)" />
+                <stop offset="100%" stopColor="rgba(156,39,176,0)" />
+              </radialGradient>
             </defs>
 
             {/* Background grid pattern */}
@@ -684,8 +764,47 @@ export function MeshView() {
 
           {/* Tooltip overlay */}
           {tooltip && <MeshTooltip tooltip={tooltip} />}
-        </>
-      )}
+
+          {/* Zoom controls */}
+          <div className="mesh-zoom-controls">
+            <button className="mesh-zoom-btn" onClick={zoomIn} title="Zoom In" aria-label="Zoom In">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="7" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                <line x1="11" y1="8" x2="11" y2="14" />
+                <line x1="8" y1="11" x2="14" y2="11" />
+              </svg>
+            </button>
+            <button className="mesh-zoom-btn" onClick={zoomOut} title="Zoom Out" aria-label="Zoom Out">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="7" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                <line x1="8" y1="11" x2="14" y2="11" />
+              </svg>
+            </button>
+            <button className="mesh-zoom-btn" onClick={fitToView} title="Fit to View" aria-label="Fit to View">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15 3h6v6" />
+                <path d="M9 21H3v-6" />
+                <path d="M21 3l-7 7" />
+                <path d="M3 21l7-7" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Detail side panel */}
+          <DetailSidePanel
+            detailNode={detailNode}
+            machines={machines}
+            fleetNodes={fleetNodes}
+            availableTopics={availableTopics}
+            onClose={() => setDetailNode(null)}
+          />
+
+          {/* "You are here" badge for dashboard node */}
+          {detailNode?.type === 'client' && (
+            <div className="mesh-you-are-here">You are here</div>
+          )}
 
       <style>{`
         .mesh-view {
@@ -726,55 +845,6 @@ export function MeshView() {
 
         .sim-node-hub {
           cursor: default;
-        }
-
-        /* Empty state */
-        .mesh-empty {
-          position: absolute;
-          inset: 0;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .mesh-empty-inner {
-          text-align: center;
-          position: relative;
-        }
-
-        .mesh-empty-pulse {
-          position: absolute;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%);
-          width: 120px;
-          height: 120px;
-          border-radius: 50%;
-          background: radial-gradient(circle, rgba(61,90,254,0.08) 0%, transparent 70%);
-          animation: meshEmptyPulse 3s ease-in-out infinite;
-        }
-
-        @keyframes meshEmptyPulse {
-          0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.6; }
-          50% { transform: translate(-50%, -50%) scale(1.4); opacity: 0.2; }
-        }
-
-        .mesh-empty-icon {
-          position: relative;
-          margin-bottom: 20px;
-          display: inline-block;
-        }
-
-        .mesh-empty-text {
-          font-size: 15px;
-          color: var(--text-secondary);
-          margin: 0 0 6px;
-        }
-
-        .mesh-empty-hint {
-          font-size: 12px;
-          color: var(--text-muted);
-          margin: 0;
         }
 
         /* Tooltip */
@@ -829,10 +899,242 @@ export function MeshView() {
           text-align: right;
         }
 
+        /* Zoom controls */
+        .mesh-zoom-controls {
+          position: absolute;
+          bottom: 16px;
+          right: 16px;
+          display: flex;
+          flex-direction: column;
+          background: var(--bg-card);
+          border: 1px solid var(--border-color);
+          border-radius: 12px;
+          overflow: hidden;
+          box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+          z-index: 100;
+        }
+
+        .mesh-zoom-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 32px;
+          height: 32px;
+          border: none;
+          background: transparent;
+          color: var(--text-secondary);
+          cursor: pointer;
+          transition: background 0.15s, color 0.15s;
+          padding: 0;
+        }
+
+        .mesh-zoom-btn:hover {
+          background: var(--bg-tertiary);
+          color: var(--text-primary);
+        }
+
+        .mesh-zoom-btn:active {
+          background: rgba(61,90,254,0.15);
+          color: var(--accent-primary);
+        }
+
+        .mesh-zoom-btn + .mesh-zoom-btn {
+          border-top: 1px solid var(--border-color);
+        }
+
+        /* Detail side panel */
+        .mesh-detail-panel {
+          position: absolute;
+          top: 0;
+          right: 0;
+          bottom: 0;
+          width: 320px;
+          background: var(--bg-card);
+          border-left: 1px solid var(--border-color);
+          z-index: 150;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          transform: translateX(0);
+          transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+          box-shadow: -4px 0 24px rgba(0,0,0,0.3);
+        }
+
+        .mesh-detail-panel.mesh-detail-panel--hidden {
+          transform: translateX(100%);
+          pointer-events: none;
+        }
+
+        .mesh-detail-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 16px;
+          border-bottom: 1px solid var(--border-color);
+          flex-shrink: 0;
+        }
+
+        .mesh-detail-title {
+          font-size: 15px;
+          font-weight: 600;
+          color: var(--text-primary);
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+        }
+
+        .mesh-detail-title span {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .mesh-detail-close {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 28px;
+          height: 28px;
+          border: none;
+          background: transparent;
+          color: var(--text-muted);
+          cursor: pointer;
+          border-radius: 6px;
+          flex-shrink: 0;
+          transition: background 0.15s, color 0.15s;
+        }
+
+        .mesh-detail-close:hover {
+          background: var(--bg-tertiary);
+          color: var(--text-primary);
+        }
+
+        .mesh-detail-body {
+          flex: 1;
+          overflow-y: auto;
+          padding: 16px;
+        }
+
+        .mesh-detail-section {
+          margin-bottom: 16px;
+        }
+
+        .mesh-detail-section-title {
+          font-size: 10px;
+          font-weight: 700;
+          color: var(--text-muted);
+          text-transform: uppercase;
+          letter-spacing: 0.8px;
+          margin-bottom: 8px;
+        }
+
+        .mesh-detail-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          font-size: 12px;
+          line-height: 1.8;
+        }
+
+        .mesh-detail-label {
+          color: var(--text-muted);
+          flex-shrink: 0;
+        }
+
+        .mesh-detail-value {
+          color: var(--text-secondary);
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 11px;
+          text-align: right;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .mesh-detail-status-dot {
+          display: inline-block;
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+
+        .mesh-detail-node-list {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+        }
+
+        .mesh-detail-node-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 12px;
+          color: var(--text-secondary);
+          padding: 4px 0;
+        }
+
+        .mesh-detail-topic {
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 11px;
+          color: var(--text-secondary);
+          padding: 3px 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .mesh-detail-empty {
+          font-size: 11px;
+          color: var(--text-muted);
+          font-style: italic;
+        }
+
+        /* You are here badge */
+        .mesh-you-are-here {
+          position: absolute;
+          bottom: 16px;
+          left: 16px;
+          background: rgba(156,39,176,0.15);
+          border: 1px solid rgba(156,39,176,0.3);
+          color: #ce93d8;
+          font-size: 11px;
+          font-weight: 600;
+          padding: 4px 12px;
+          border-radius: 20px;
+          z-index: 100;
+          letter-spacing: 0.3px;
+        }
+
         /* Mobile */
         @media (max-width: 768px) {
           .mesh-tooltip {
             display: none;
+          }
+
+          .mesh-detail-panel {
+            width: 100%;
+            border-left: none;
+            border-top: 1px solid var(--border-color);
+            top: 40%;
+            border-radius: 16px 16px 0 0;
+          }
+
+          .mesh-detail-panel.mesh-detail-panel--hidden {
+            transform: translateY(100%);
+          }
+
+          .mesh-zoom-controls {
+            bottom: 12px;
+            right: 12px;
+          }
+        }
+
+        @media (min-width: 769px) and (max-width: 1024px) {
+          .mesh-detail-panel {
+            width: 280px;
           }
         }
       `}</style>
@@ -844,66 +1146,31 @@ export function MeshView() {
 // SVG node builders (imperative for performance in the render loop)
 // ---------------------------------------------------------------------------
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgEl<K extends keyof SVGElementTagNameMap>(
+  parent: SVGElement,
+  tag: K,
+  attrs: Record<string, string>,
+  text?: string,
+): SVGElementTagNameMap[K] {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    el.setAttribute(k, v);
+  }
+  if (text !== undefined) el.textContent = text;
+  parent.appendChild(el);
+  return el;
+}
+
 function buildHubNode(g: SVGGElement) {
-  const ns = 'http://www.w3.org/2000/svg';
-
-  // Outer glow
-  const glowCircle = document.createElementNS(ns, 'circle');
-  glowCircle.setAttribute('r', String(HUB_RADIUS + 20));
-  glowCircle.setAttribute('fill', 'url(#meshHubGlow)');
-  g.appendChild(glowCircle);
-
-  // Pulse ring
-  const pulseRing = document.createElementNS(ns, 'circle');
-  pulseRing.setAttribute('r', String(HUB_RADIUS + 4));
-  pulseRing.setAttribute('fill', 'none');
-  pulseRing.setAttribute('stroke', 'rgba(61,90,254,0.3)');
-  pulseRing.setAttribute('stroke-width', '1');
-  pulseRing.setAttribute('class', 'hub-pulse-ring');
-  g.appendChild(pulseRing);
-
-  // Main circle
-  const circle = document.createElementNS(ns, 'circle');
-  circle.setAttribute('r', String(HUB_RADIUS));
-  circle.setAttribute('fill', 'url(#meshHubGradient)');
-  circle.setAttribute('filter', 'url(#meshGlow)');
-  g.appendChild(circle);
-
-  // Inner highlight
-  const inner = document.createElementNS(ns, 'circle');
-  inner.setAttribute('r', String(HUB_RADIUS - 8));
-  inner.setAttribute('fill', 'none');
-  inner.setAttribute('stroke', 'rgba(255,255,255,0.15)');
-  inner.setAttribute('stroke-width', '1');
-  g.appendChild(inner);
-
-  // Label
-  const text = document.createElementNS(ns, 'text');
-  text.setAttribute('text-anchor', 'middle');
-  text.setAttribute('dy', '0.35em');
-  text.setAttribute('fill', '#fff');
-  text.setAttribute('font-size', '11');
-  text.setAttribute('font-weight', '700');
-  text.setAttribute('font-family', "'Outfit', sans-serif");
-  text.setAttribute('letter-spacing', '0.5');
-  text.textContent = 'ZENOH';
-  g.appendChild(text);
-
-  // Sub-label
-  const sub = document.createElementNS(ns, 'text');
-  sub.setAttribute('text-anchor', 'middle');
-  sub.setAttribute('dy', '0');
-  sub.setAttribute('y', '16');
-  sub.setAttribute('fill', 'rgba(255,255,255,0.6)');
-  sub.setAttribute('font-size', '8');
-  sub.setAttribute('font-family', "'Outfit', sans-serif");
-  sub.setAttribute('letter-spacing', '1');
-  sub.textContent = 'MESH';
-  g.appendChild(sub);
-
-  // Add CSS animation for pulse ring
-  const style = document.createElementNS(ns, 'style');
-  style.textContent = `
+  svgEl(g, 'circle', { r: String(HUB_RADIUS + 20), fill: 'url(#meshHubGlow)' });
+  svgEl(g, 'circle', { r: String(HUB_RADIUS + 4), fill: 'none', stroke: 'rgba(61,90,254,0.3)', 'stroke-width': '1', class: 'hub-pulse-ring' });
+  svgEl(g, 'circle', { r: String(HUB_RADIUS), fill: 'url(#meshHubGradient)', filter: 'url(#meshGlow)' });
+  svgEl(g, 'circle', { r: String(HUB_RADIUS - 8), fill: 'none', stroke: 'rgba(255,255,255,0.15)', 'stroke-width': '1' });
+  svgEl(g, 'text', { 'text-anchor': 'middle', dy: '0.35em', fill: '#fff', 'font-size': '11', 'font-weight': '700', 'font-family': "'Outfit', sans-serif", 'letter-spacing': '0.5' }, 'ZENOH');
+  svgEl(g, 'text', { 'text-anchor': 'middle', dy: '0', y: '16', fill: 'rgba(255,255,255,0.6)', 'font-size': '8', 'font-family': "'Outfit', sans-serif", 'letter-spacing': '1' }, 'MESH');
+  svgEl(g, 'style', {}, `
     .hub-pulse-ring {
       animation: hubPulse 2.5s ease-in-out infinite;
       transform-origin: center;
@@ -912,75 +1179,18 @@ function buildHubNode(g: SVGGElement) {
       0%, 100% { r: ${HUB_RADIUS + 4}; opacity: 0.4; }
       50% { r: ${HUB_RADIUS + 14}; opacity: 0; }
     }
-  `;
-  g.appendChild(style);
+  `);
 }
 
 function buildMachineNode(g: SVGGElement) {
-  const ns = 'http://www.w3.org/2000/svg';
   const w = 130;
   const h = 56;
 
-  // Glow backdrop
-  const glow = document.createElementNS(ns, 'rect');
-  glow.setAttribute('x', String(-w / 2 - 3));
-  glow.setAttribute('y', String(-h / 2 - 3));
-  glow.setAttribute('width', String(w + 6));
-  glow.setAttribute('height', String(h + 6));
-  glow.setAttribute('rx', '14');
-  glow.setAttribute('fill', 'none');
-  glow.setAttribute('stroke', 'rgba(0,200,83,0.2)');
-  glow.setAttribute('stroke-width', '1');
-  glow.setAttribute('class', 'machine-glow');
-  glow.setAttribute('filter', 'url(#meshGlowSmall)');
-  g.appendChild(glow);
-
-  // Background rect
-  const rect = document.createElementNS(ns, 'rect');
-  rect.setAttribute('x', String(-w / 2));
-  rect.setAttribute('y', String(-h / 2));
-  rect.setAttribute('width', String(w));
-  rect.setAttribute('height', String(h));
-  rect.setAttribute('rx', '12');
-  rect.setAttribute('fill', 'var(--bg-card)');
-  rect.setAttribute('stroke', 'var(--border-color)');
-  rect.setAttribute('stroke-width', '1');
-  rect.setAttribute('class', 'machine-rect');
-  g.appendChild(rect);
-
-  // Status dot
-  const dot = document.createElementNS(ns, 'circle');
-  dot.setAttribute('cx', String(-w / 2 + 14));
-  dot.setAttribute('cy', String(-h / 2 + 14));
-  dot.setAttribute('r', '3');
-  dot.setAttribute('fill', '#00c853');
-  dot.setAttribute('class', 'machine-status-dot');
-  g.appendChild(dot);
-
-  // Hostname
-  const hostname = document.createElementNS(ns, 'text');
-  hostname.setAttribute('x', '0');
-  hostname.setAttribute('y', String(-6));
-  hostname.setAttribute('text-anchor', 'middle');
-  hostname.setAttribute('fill', 'var(--text-primary)');
-  hostname.setAttribute('font-size', '12');
-  hostname.setAttribute('font-weight', '600');
-  hostname.setAttribute('font-family', "'Outfit', sans-serif");
-  hostname.setAttribute('class', 'machine-hostname');
-  hostname.textContent = '';
-  g.appendChild(hostname);
-
-  // IP + node count
-  const info = document.createElementNS(ns, 'text');
-  info.setAttribute('x', '0');
-  info.setAttribute('y', String(10));
-  info.setAttribute('text-anchor', 'middle');
-  info.setAttribute('fill', 'var(--text-muted)');
-  info.setAttribute('font-size', '9');
-  info.setAttribute('font-family', "'JetBrains Mono', monospace");
-  info.setAttribute('class', 'machine-info');
-  info.textContent = '';
-  g.appendChild(info);
+  svgEl(g, 'rect', { x: String(-w / 2 - 3), y: String(-h / 2 - 3), width: String(w + 6), height: String(h + 6), rx: '14', fill: 'none', stroke: 'rgba(0,200,83,0.2)', 'stroke-width': '1', class: 'machine-glow', filter: 'url(#meshGlowSmall)' });
+  svgEl(g, 'rect', { x: String(-w / 2), y: String(-h / 2), width: String(w), height: String(h), rx: '12', fill: 'var(--bg-card)', stroke: 'var(--border-color)', 'stroke-width': '1', class: 'machine-rect' });
+  svgEl(g, 'circle', { cx: String(-w / 2 + 14), cy: String(-h / 2 + 14), r: '3', fill: '#00c853', class: 'machine-status-dot' });
+  svgEl(g, 'text', { x: '0', y: String(-6), 'text-anchor': 'middle', fill: 'var(--text-primary)', 'font-size': '12', 'font-weight': '600', 'font-family': "'Outfit', sans-serif", class: 'machine-hostname' }, '');
+  svgEl(g, 'text', { x: '0', y: String(10), 'text-anchor': 'middle', fill: 'var(--text-muted)', 'font-size': '9', 'font-family': "'JetBrains Mono', monospace", class: 'machine-info' }, '');
 }
 
 function updateMachineNode(g: SVGGElement, data: MachineInfo, isSelected: boolean) {
@@ -1015,35 +1225,9 @@ function updateMachineNode(g: SVGGElement, data: MachineInfo, isSelected: boolea
 }
 
 function buildServiceNode(g: SVGGElement) {
-  const ns = 'http://www.w3.org/2000/svg';
-
-  // Outer ring
-  const ring = document.createElementNS(ns, 'circle');
-  ring.setAttribute('r', String(SERVICE_RADIUS + 3));
-  ring.setAttribute('fill', 'none');
-  ring.setAttribute('stroke', 'rgba(0,200,83,0.2)');
-  ring.setAttribute('stroke-width', '1');
-  ring.setAttribute('class', 'service-ring');
-  g.appendChild(ring);
-
-  // Main circle
-  const circle = document.createElementNS(ns, 'circle');
-  circle.setAttribute('r', String(SERVICE_RADIUS));
-  circle.setAttribute('fill', '#00c853');
-  circle.setAttribute('class', 'service-circle');
-  circle.setAttribute('filter', 'url(#meshGlowSmall)');
-  g.appendChild(circle);
-
-  // Label
-  const text = document.createElementNS(ns, 'text');
-  text.setAttribute('y', String(SERVICE_RADIUS + 14));
-  text.setAttribute('text-anchor', 'middle');
-  text.setAttribute('fill', 'var(--text-muted)');
-  text.setAttribute('font-size', '9');
-  text.setAttribute('font-family', "'Outfit', sans-serif");
-  text.setAttribute('class', 'service-label');
-  text.textContent = '';
-  g.appendChild(text);
+  svgEl(g, 'circle', { r: String(SERVICE_RADIUS + 3), fill: 'none', stroke: 'rgba(0,200,83,0.2)', 'stroke-width': '1', class: 'service-ring' });
+  svgEl(g, 'circle', { r: String(SERVICE_RADIUS), fill: '#00c853', class: 'service-circle', filter: 'url(#meshGlowSmall)' });
+  svgEl(g, 'text', { y: String(SERVICE_RADIUS + 14), 'text-anchor': 'middle', fill: 'var(--text-muted)', 'font-size': '9', 'font-family': "'Outfit', sans-serif", class: 'service-label' }, '');
 }
 
 function updateServiceNode(g: SVGGElement, data: FleetNodeInfo, isSelected: boolean) {
@@ -1056,9 +1240,6 @@ function updateServiceNode(g: SVGGElement, data: FleetNodeInfo, isSelected: bool
 
   const ring = g.querySelector('.service-ring') as SVGCircleElement | null;
   if (ring) {
-    const alpha = isSelected ? '0.5' : '0.2';
-    ring.setAttribute('stroke', color.replace(')', `, ${alpha})`).replace('rgb', 'rgba').replace('#', ''));
-    // For hex colors, convert to rgba
     ring.setAttribute('stroke', `${color}${isSelected ? '80' : '33'}`);
     ring.setAttribute('stroke-width', isSelected ? '2' : '1');
   }
@@ -1068,6 +1249,50 @@ function updateServiceNode(g: SVGGElement, data: FleetNodeInfo, isSelected: bool
     const name = data.name.length > 16 ? data.name.slice(0, 15) + '..' : data.name;
     if (label.textContent !== name) label.textContent = name;
     label.setAttribute('fill', isSelected ? 'var(--text-secondary)' : 'var(--text-muted)');
+  }
+}
+
+function buildDashboardNode(g: SVGGElement) {
+  svgEl(g, 'circle', { r: String(DASHBOARD_RADIUS + 12), fill: 'url(#meshDashGlow)', class: 'dashboard-glow' });
+  svgEl(g, 'circle', { r: String(DASHBOARD_RADIUS + 3), fill: 'none', stroke: 'rgba(156,39,176,0.3)', 'stroke-width': '1', class: 'dash-pulse-ring' });
+  svgEl(g, 'circle', { r: String(DASHBOARD_RADIUS), fill: 'url(#meshDashGradient)', filter: 'url(#meshGlowSmall)', class: 'dashboard-circle' });
+  svgEl(g, 'circle', { r: String(DASHBOARD_RADIUS), fill: 'none', stroke: 'rgba(156,39,176,0.4)', 'stroke-width': '1.5', class: 'dashboard-border' });
+
+  // Monitor icon
+  const icon = svgEl(g, 'g', { transform: 'translate(-8, -8) scale(0.7)' });
+  svgEl(icon, 'rect', { x: '2', y: '1', width: '20', height: '14', rx: '2', fill: 'none', stroke: '#fff', 'stroke-width': '2' });
+  svgEl(icon, 'line', { x1: '12', y1: '15', x2: '12', y2: '19', stroke: '#fff', 'stroke-width': '2' });
+  svgEl(icon, 'line', { x1: '8', y1: '19', x2: '16', y2: '19', stroke: '#fff', 'stroke-width': '2', 'stroke-linecap': 'round' });
+
+  svgEl(g, 'text', { y: String(DASHBOARD_RADIUS + 14), 'text-anchor': 'middle', fill: 'var(--text-secondary)', 'font-size': '10', 'font-weight': '600', 'font-family': "'Outfit', sans-serif", class: 'dashboard-label' }, 'Dashboard');
+  svgEl(g, 'text', { y: String(DASHBOARD_RADIUS + 26), 'text-anchor': 'middle', fill: 'var(--text-muted)', 'font-size': '8', 'font-family': "'JetBrains Mono', monospace", class: 'dashboard-host' }, '');
+  svgEl(g, 'style', {}, `
+    .dash-pulse-ring {
+      animation: dashPulse 3s ease-in-out infinite;
+      transform-origin: center;
+    }
+    @keyframes dashPulse {
+      0%, 100% { r: ${DASHBOARD_RADIUS + 3}; opacity: 0.4; }
+      50% { r: ${DASHBOARD_RADIUS + 10}; opacity: 0; }
+    }
+  `);
+}
+
+const DASHBOARD_STATUS_COLORS: Record<string, string> = {
+  connected: 'rgba(156,39,176,0.6)',
+  connecting: 'rgba(255,214,0,0.5)',
+};
+const DASHBOARD_STATUS_DEFAULT = 'rgba(255,23,68,0.4)';
+
+function updateDashboardNode(g: SVGGElement, data: DashboardData) {
+  const host = g.querySelector('.dashboard-host') as SVGTextElement | null;
+  if (host && host.textContent !== data.host) {
+    host.textContent = data.host;
+  }
+
+  const border = g.querySelector('.dashboard-border') as SVGCircleElement | null;
+  if (border) {
+    border.setAttribute('stroke', DASHBOARD_STATUS_COLORS[data.status] || DASHBOARD_STATUS_DEFAULT);
   }
 }
 
@@ -1114,6 +1339,28 @@ function MeshTooltip({ tooltip }: { tooltip: TooltipInfo }) {
         </div>
       </>
     );
+  } else if (node.type === 'client') {
+    const data = node.data as DashboardData;
+    content = (
+      <>
+        <div className="mesh-tooltip-title">
+          <span className="mesh-tooltip-dot" style={{ backgroundColor: data.status === 'connected' ? '#9c27b0' : '#ff1744' }} />
+          Dashboard
+        </div>
+        <div className="mesh-tooltip-row">
+          <span className="mesh-tooltip-label">Host</span>
+          <span className="mesh-tooltip-value">{data.host}</span>
+        </div>
+        <div className="mesh-tooltip-row">
+          <span className="mesh-tooltip-label">Endpoint</span>
+          <span className="mesh-tooltip-value">{data.endpoint}</span>
+        </div>
+        <div className="mesh-tooltip-row">
+          <span className="mesh-tooltip-label">Status</span>
+          <span className="mesh-tooltip-value">{data.status}</span>
+        </div>
+      </>
+    );
   } else {
     const data = node.data as FleetNodeInfo;
     const color = STATUS_COLORS[data.status] || STATUS_COLORS.unknown;
@@ -1154,6 +1401,208 @@ function MeshTooltip({ tooltip }: { tooltip: TooltipInfo }) {
       }}
     >
       {content}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Detail side panel subcomponent
+// ---------------------------------------------------------------------------
+
+// Inline helpers for DetailSidePanel to avoid repeated JSX patterns
+
+function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="mesh-detail-row">
+      <span className="mesh-detail-label">{label}</span>
+      <span className="mesh-detail-value">{value}</span>
+    </div>
+  );
+}
+
+function StatusRow({ label, color, text }: { label: string; color: string; text: string }) {
+  return (
+    <div className="mesh-detail-row">
+      <span className="mesh-detail-label">{label}</span>
+      <span className="mesh-detail-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span className="mesh-detail-status-dot" style={{ backgroundColor: color }} />
+        {text}
+      </span>
+    </div>
+  );
+}
+
+function TopicsList({ topics }: { topics: string[] }) {
+  if (topics.length === 0) {
+    return <div className="mesh-detail-empty">No matching topics</div>;
+  }
+  return (
+    <>
+      {topics.map((t, i) => (
+        <div key={i} className="mesh-detail-topic" title={t}>{t}</div>
+      ))}
+    </>
+  );
+}
+
+function getDetailTitle(detailNode: SimNode | null): { title: string; dotColor: string } {
+  if (!detailNode) return { title: '', dotColor: '' };
+
+  switch (detailNode.type) {
+    case 'machine': {
+      const d = detailNode.data as MachineInfo;
+      return { title: d.hostname, dotColor: d.isOnline ? '#00c853' : '#ff1744' };
+    }
+    case 'service': {
+      const d = detailNode.data as FleetNodeInfo;
+      return { title: d.name, dotColor: STATUS_COLORS[d.status] || STATUS_COLORS.unknown };
+    }
+    case 'client':
+      return {
+        title: 'Dashboard',
+        dotColor: (detailNode.data as DashboardData).status === 'connected' ? '#9c27b0' : '#ff1744',
+      };
+    default:
+      return { title: '', dotColor: '' };
+  }
+}
+
+function DetailSidePanel({
+  detailNode,
+  machines,
+  fleetNodes,
+  availableTopics,
+  onClose,
+}: {
+  detailNode: SimNode | null;
+  machines: MachineInfo[];
+  fleetNodes: FleetNodeInfo[];
+  availableTopics: string[];
+  onClose: () => void;
+}) {
+  const isOpen = detailNode !== null;
+
+  let body: React.ReactNode = null;
+
+  if (detailNode?.type === 'machine') {
+    const data = detailNode.data as MachineInfo;
+    const childNodes = fleetNodes.filter(n => n.machineId === data.machineId);
+    const machineTopics = availableTopics.filter(t => {
+      const lower = t.toLowerCase();
+      return lower.includes(data.hostname.toLowerCase()) || lower.includes(data.machineId.toLowerCase());
+    });
+
+    body = (
+      <>
+        <div className="mesh-detail-section">
+          <div className="mesh-detail-section-title">Status</div>
+          <StatusRow label="State" color={data.isOnline ? '#00c853' : '#ff1744'} text={data.isOnline ? 'Online' : 'Offline'} />
+          <DetailRow label="Machine ID" value={data.machineId} />
+        </div>
+
+        <div className="mesh-detail-section">
+          <div className="mesh-detail-section-title">IP Addresses</div>
+          {data.ips.length > 0 ? data.ips.map((ip, i) => (
+            <div key={i} className="mesh-detail-topic">{ip}</div>
+          )) : (
+            <div className="mesh-detail-empty">No IPs reported</div>
+          )}
+        </div>
+
+        <div className="mesh-detail-section">
+          <div className="mesh-detail-section-title">Nodes ({data.runningCount}/{data.nodeCount} running)</div>
+          {childNodes.length > 0 ? (
+            <ul className="mesh-detail-node-list">
+              {childNodes.map(cn => (
+                <li key={cn.name} className="mesh-detail-node-item">
+                  <span className="mesh-detail-status-dot" style={{ backgroundColor: STATUS_COLORS[cn.status] || STATUS_COLORS.unknown }} />
+                  {cn.name}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="mesh-detail-empty">No service nodes</div>
+          )}
+        </div>
+
+        <div className="mesh-detail-section">
+          <div className="mesh-detail-section-title">Zenoh Topics</div>
+          <TopicsList topics={machineTopics} />
+        </div>
+      </>
+    );
+  } else if (detailNode?.type === 'service') {
+    const data = detailNode.data as FleetNodeInfo;
+    const parentMachine = machines.find(m => m.machineId === data.machineId);
+    const color = STATUS_COLORS[data.status] || STATUS_COLORS.unknown;
+    const nodeTopics = availableTopics.filter(t => t.toLowerCase().includes(data.name.toLowerCase()));
+
+    body = (
+      <>
+        <div className="mesh-detail-section">
+          <div className="mesh-detail-section-title">Status</div>
+          <StatusRow label="State" color={color} text={data.status} />
+          <DetailRow label="Type" value={data.nodeType || 'unknown'} />
+          {data.version && <DetailRow label="Version" value={data.version} />}
+        </div>
+
+        <div className="mesh-detail-section">
+          <div className="mesh-detail-section-title">Machine</div>
+          <DetailRow label="Hostname" value={parentMachine?.hostname || data.hostname} />
+          {(parentMachine?.ips || data.ips || []).map((ip, i) => (
+            <DetailRow key={i} label={i === 0 ? 'IP' : ''} value={ip} />
+          ))}
+        </div>
+
+        <div className="mesh-detail-section">
+          <div className="mesh-detail-section-title">Zenoh Topics</div>
+          <TopicsList topics={nodeTopics} />
+        </div>
+      </>
+    );
+  } else if (detailNode?.type === 'client') {
+    const data = detailNode.data as DashboardData;
+
+    body = (
+      <>
+        <div className="mesh-detail-section">
+          <div className="mesh-detail-section-title">Connection</div>
+          <StatusRow label="Status" color={data.status === 'connected' ? '#9c27b0' : '#ff1744'} text={data.status} />
+          <DetailRow label="Host" value={data.host} />
+          <DetailRow label="Endpoint" value={data.endpoint} />
+        </div>
+        <div className="mesh-detail-section">
+          <div className="mesh-detail-section-title">Discovery</div>
+          <DetailRow label="Topics" value={`${availableTopics.length} discovered`} />
+          <DetailRow label="Machines" value={`${machines.length} connected`} />
+        </div>
+        <div className="mesh-detail-section">
+          <div className="mesh-detail-section-title">Browser</div>
+          <DetailRow label="Protocol" value={window.location.protocol === 'https:' ? 'HTTPS (WSS)' : 'HTTP (WS)'} />
+        </div>
+      </>
+    );
+  }
+
+  const { title, dotColor } = getDetailTitle(detailNode);
+
+  return (
+    <div className={`mesh-detail-panel ${isOpen ? '' : 'mesh-detail-panel--hidden'}`}>
+      <div className="mesh-detail-header">
+        <div className="mesh-detail-title">
+          {dotColor && <span className="mesh-detail-status-dot" style={{ backgroundColor: dotColor }} />}
+          <span>{title}</span>
+        </div>
+        <button className="mesh-detail-close" onClick={onClose} aria-label="Close detail panel">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div className="mesh-detail-body">
+        {body}
+      </div>
     </div>
   );
 }

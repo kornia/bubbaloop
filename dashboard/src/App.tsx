@@ -252,7 +252,7 @@ export default function App() {
             {currentView === 'dashboard' ? (
               <Dashboard cameras={DEFAULT_CAMERAS} availableTopics={availableTopics} />
             ) : (
-              <MeshView />
+              <MeshView availableTopics={availableTopics} zenohEndpoint={ZENOH_ENDPOINT} connectionStatus={status} />
             )}
           </ZenohSubscriptionProvider>
         </FleetProvider>

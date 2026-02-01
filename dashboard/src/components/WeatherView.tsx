@@ -3,6 +3,8 @@ import { Sample, IntoZBytes } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
+import { useFleetContext } from '../contexts/FleetContext';
+import { MachineBadge } from './MachineBadge';
 import {
   decodeCurrentWeather,
   decodeHourlyForecast,
@@ -39,6 +41,7 @@ export function WeatherViewPanel({
   onRemove,
   dragHandleProps,
 }: WeatherViewPanelProps) {
+  const { machines } = useFleetContext();
   // Get session from context for publishing
   const { getSession } = useZenohSubscriptionContext();
   // Store all three types of weather data
@@ -308,6 +311,7 @@ export function WeatherViewPanel({
             </button>
           )}
           <span className="panel-type-badge">WEATHER</span>
+          <MachineBadge machines={machines} />
         </div>
         <div className="panel-stats">
           <span className="stat">
@@ -512,6 +516,19 @@ export function WeatherViewPanel({
           text-transform: uppercase;
           white-space: nowrap;
           flex-shrink: 0;
+        }
+
+        .panel-machine-badge {
+          font-size: 10px;
+          font-family: 'JetBrains Mono', monospace;
+          color: var(--text-muted);
+          background: var(--bg-tertiary);
+          padding: 2px 6px;
+          border-radius: 4px;
+          max-width: 120px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .panel-stats {
