@@ -600,6 +600,7 @@ pixi run clippy    # Lint Rust code
 - **Tests**: co-located `#[cfg(test)] mod tests` blocks, not separate files (except integration tests)
 - **Protobuf types**: versioned modules (`schemas::camera::v1::CompressedImage`), re-exported at `schemas::` level
 - **Async**: all Zenoh and systemd operations are async. Use `tokio::spawn` for background tasks
+- **Logging**: use `log::info!`, `log::warn!`, `log::debug!`, `log::error!` instead of `println!`/`eprintln!` for operational messages. Reserve `println!` for CLI user-facing output only (e.g., command results, tables). The daemon and TUI should exclusively use `log::` macros
 
 ### IMPORTANT: Do and Don't
 
