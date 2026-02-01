@@ -273,11 +273,15 @@ export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionS
   // Tooltip
   const [tooltip, setTooltip] = useState<TooltipInfo | null>(null);
 
-  // Selected machine
+  // Selected machine (ref mirrors state for use in render loop without recreating it)
   const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null);
+  const selectedMachineIdRef = useRef<string | null>(null);
+  selectedMachineIdRef.current = selectedMachineId;
 
   // Detail side panel
   const [detailNode, setDetailNode] = useState<SimNode | null>(null);
+  const detailNodeRef = useRef<SimNode | null>(null);
+  detailNodeRef.current = detailNode;
 
   // Dimensions
   const [dims, setDims] = useState({ w: 1200, h: 800 });
@@ -394,13 +398,14 @@ export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionS
 
         const isMesh = edge.type === 'mesh';
         const isClient = edge.type === 'client';
-        const isSelected = selectedMachineId && (
-          edge.target === `machine-${selectedMachineId}` ||
-          edge.source === `machine-${selectedMachineId}` ||
-          tgt.id.startsWith(`service-${selectedMachineId}-`) ||
-          src.id.startsWith(`service-${selectedMachineId}-`)
+        const selId = selectedMachineIdRef.current;
+        const isSelected = selId && (
+          edge.target === `machine-${selId}` ||
+          edge.source === `machine-${selId}` ||
+          tgt.id.startsWith(`service-${selId}-`) ||
+          src.id.startsWith(`service-${selId}-`)
         );
-        const isDashSelected = edge.target === '__dashboard__' && detailNode?.id === '__dashboard__';
+        const isDashSelected = edge.target === '__dashboard__' && detailNodeRef.current?.id === '__dashboard__';
 
         if (isClient) {
           line.setAttribute('stroke', isDashSelected ? 'rgba(156,39,176,0.7)' : 'rgba(156,39,176,0.3)');
@@ -451,10 +456,10 @@ export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionS
 
         // Update data-dependent attributes
         if (node.type === 'machine') {
-          updateMachineNode(g, node.data as MachineInfo, selectedMachineId === (node.data as MachineInfo).machineId);
+          updateMachineNode(g, node.data as MachineInfo, selectedMachineIdRef.current === (node.data as MachineInfo).machineId);
         } else if (node.type === 'service') {
           updateServiceNode(g, node.data as FleetNodeInfo,
-            selectedMachineId === (node.data as FleetNodeInfo).machineId);
+            selectedMachineIdRef.current === (node.data as FleetNodeInfo).machineId);
         } else if (node.type === 'client') {
           updateDashboardNode(g, node.data as DashboardData);
         }
@@ -467,17 +472,19 @@ export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionS
         nodeGroup.removeChild(stale);
       }
     }
-  }, [selectedMachineId, detailNode]);
+  }, []);
 
   // Animation loop
   useEffect(() => {
     let running = true;
+    let frameCount = 0;
     const cx = dims.w / 2;
     const cy = dims.h / 2;
 
     const tick = (time: number) => {
       if (!running) return;
 
+      frameCount++;
       const nodes = simNodesRef.current;
       const edges = simEdgesRef.current;
 
@@ -493,15 +500,16 @@ export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionS
           if (kinetic < 0.01 && !dragNodeIdRef.current) {
             isSettledRef.current = true;
           }
+          render();
         } else {
-          // Ambient breathing keeps the graph alive (heavy damping = barely perceptible drift)
+          // Ambient breathing - render every 3rd frame to save CPU
           applyBreathing(nodes, time);
           applyDamping(nodes, 0.85);
           updatePositions(nodes);
+          if (frameCount % 3 === 0) render();
         }
       }
 
-      render();
       animRef.current = requestAnimationFrame(tick);
     };
 
@@ -647,7 +655,7 @@ export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionS
   }, []);
 
   // Zoom
-  const handleWheel = useCallback((e: React.WheelEvent) => {
+  const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
     const svg = svgRef.current;
     if (!svg) return;
@@ -655,7 +663,6 @@ export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionS
     const rect = svg.getBoundingClientRect();
     const vb = viewBoxRef.current;
 
-    // Mouse position in SVG coordinates
     const mx = vb.x + ((e.clientX - rect.left) / rect.width) * vb.w;
     const my = vb.y + ((e.clientY - rect.top) / rect.height) * vb.h;
 
@@ -663,12 +670,18 @@ export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionS
     const newW = Math.max(400, Math.min(6000, vb.w * factor));
     const newH = Math.max(300, Math.min(4500, vb.h * factor));
 
-    // Zoom toward mouse position
     const newX = mx - ((mx - vb.x) / vb.w) * newW;
     const newY = my - ((my - vb.y) / vb.h) * newH;
 
     setViewBox({ x: newX, y: newY, w: newW, h: newH });
   }, []);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    svg.addEventListener('wheel', handleWheel, { passive: false });
+    return () => svg.removeEventListener('wheel', handleWheel);
+  }, [handleWheel]);
 
   // Zoom control functions
   const zoomIn = useCallback(() => {
@@ -706,7 +719,6 @@ export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionS
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
-            onWheel={handleWheel}
           >
             <defs>
               <radialGradient id="meshHubGradient" cx="40%" cy="40%">
@@ -1392,13 +1404,16 @@ function MeshTooltip({ tooltip }: { tooltip: TooltipInfo }) {
     );
   }
 
+  // Clamp tooltip to viewport bounds
+  const tooltipW = 280; // max-width from CSS
+  const tooltipH = 120; // estimated height
+  const left = Math.min(x + 16, window.innerWidth - tooltipW - 8);
+  const top = Math.max(8, Math.min(y - 10, window.innerHeight - tooltipH - 8));
+
   return (
     <div
       className="mesh-tooltip"
-      style={{
-        left: x + 16,
-        top: y - 10,
-      }}
+      style={{ left, top }}
     >
       {content}
     </div>
