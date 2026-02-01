@@ -7,3 +7,4 @@
 pub mod config;
 pub mod error;
 pub mod header;
+pub mod lancedb_client;
