@@ -388,11 +388,10 @@ async fn get_zenoh_session() -> Result<zenoh::Session> {
 
 fn init_node(args: InitArgs) -> Result<()> {
     // Determine output directory (default: ./<name> in current directory)
-    let output_dir = if let Some(output) = args.output {
-        PathBuf::from(output)
-    } else {
-        PathBuf::from(".").join(&args.name)
-    };
+    let output_dir = args
+        .output
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".").join(&args.name));
 
     // Use shared template module
     let output_dir = templates::create_node_at(
@@ -844,10 +843,10 @@ fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -> Result<St
 
     // Determine target directory
     let target_dir = if let Some(out) = output {
-        std::path::PathBuf::from(out)
+        PathBuf::from(out)
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        std::path::PathBuf::from(home)
+        PathBuf::from(home)
             .join(".bubbaloop")
             .join("nodes")
             .join(repo_name)

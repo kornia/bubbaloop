@@ -295,19 +295,16 @@ fn scan_for_nodes(base_path: &str) -> Vec<ScannedNode> {
 
 fn normalize_path(path: &str) -> String {
     let p = path.trim_end_matches('/');
-    if let Some(expanded) = expand_tilde(p) {
-        expanded
-    } else {
-        p.to_string()
-    }
+    expand_tilde(p)
 }
 
-fn expand_tilde(path: &str) -> Option<String> {
+fn expand_tilde(path: &str) -> String {
     if path.starts_with('~') {
-        dirs::home_dir().map(|home| path.replacen('~', &home.to_string_lossy(), 1))
-    } else {
-        Some(path.to_string())
+        if let Some(home) = dirs::home_dir() {
+            return path.replacen('~', &home.to_string_lossy(), 1);
+        }
     }
+    path.to_string()
 }
 
 #[cfg(test)]

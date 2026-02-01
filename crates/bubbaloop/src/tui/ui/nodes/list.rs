@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::app::{App, InputMode, NodesTab, View};
+use crate::tui::app::{App, InputMode, MarketplaceSource, MessageType, NodesTab, View};
 use crate::tui::ui::components::{colors, flower_spinner};
 
 fn truncate_path(path: &str, max_chars: usize) -> String {
@@ -330,7 +330,7 @@ fn source_type_label(source_type: &str) -> &'static str {
 }
 
 /// Build a human-readable origin string from a source entry.
-fn format_source_origin(source: &crate::tui::app::MarketplaceSource) -> String {
+fn format_source_origin(source: &MarketplaceSource) -> String {
     if source.source_type == "builtin" {
         format!("https://github.com/{}", source.path)
     } else {
@@ -537,10 +537,10 @@ fn render_hints(f: &mut Frame, app: &App, area: ratatui::layout::Rect, current_t
 fn render_messages(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     if let Some((text, msg_type)) = app.messages.last() {
         let color = match msg_type {
-            crate::tui::app::MessageType::Info => colors::DIMMED,
-            crate::tui::app::MessageType::Success => colors::SUCCESS,
-            crate::tui::app::MessageType::Warning => colors::WARNING,
-            crate::tui::app::MessageType::Error => colors::ERROR,
+            MessageType::Info => colors::DIMMED,
+            MessageType::Success => colors::SUCCESS,
+            MessageType::Warning => colors::WARNING,
+            MessageType::Error => colors::ERROR,
         };
         let line = Line::from(Span::styled(text.clone(), Style::default().fg(color)));
         f.render_widget(Paragraph::new(line), area);
@@ -582,9 +582,7 @@ fn render_text_field(
     } else {
         value.to_string()
     };
-    let text_style = if is_active {
-        Style::default().fg(colors::TEXT)
-    } else if value.is_empty() {
+    let text_style = if !is_active && value.is_empty() {
         Style::default().fg(colors::DIMMED)
     } else {
         Style::default().fg(colors::TEXT)
@@ -869,7 +867,7 @@ mod tests {
 
     #[test]
     fn test_format_source_origin_builtin() {
-        let source = crate::tui::app::MarketplaceSource {
+        let source = MarketplaceSource {
             name: "Official Nodes".into(),
             path: "kornia/bubbaloop-nodes-official".into(),
             source_type: "builtin".into(),
@@ -883,7 +881,7 @@ mod tests {
 
     #[test]
     fn test_format_source_origin_local() {
-        let source = crate::tui::app::MarketplaceSource {
+        let source = MarketplaceSource {
             name: "My Local Nodes".into(),
             path: "/home/user/nodes".into(),
             source_type: "local".into(),
@@ -894,7 +892,7 @@ mod tests {
 
     #[test]
     fn test_format_source_origin_git() {
-        let source = crate::tui::app::MarketplaceSource {
+        let source = MarketplaceSource {
             name: "My Fork".into(),
             path: "https://github.com/user/nodes.git".into(),
             source_type: "git".into(),

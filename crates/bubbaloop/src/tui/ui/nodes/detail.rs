@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::app::App;
+use crate::tui::app::{App, BuildActivity, MessageType, NodeInfo};
 use crate::tui::ui::components::{colors, flower_spinner};
 
 pub fn render_detail(f: &mut Frame, app: &App, node_name: &str) {
@@ -66,10 +66,10 @@ pub fn render_detail(f: &mut Frame, app: &App, node_name: &str) {
 
     if let Some((text, msg_type)) = app.messages.last() {
         let color = match msg_type {
-            crate::tui::app::MessageType::Info => colors::DIMMED,
-            crate::tui::app::MessageType::Success => colors::SUCCESS,
-            crate::tui::app::MessageType::Warning => colors::WARNING,
-            crate::tui::app::MessageType::Error => colors::ERROR,
+            MessageType::Info => colors::DIMMED,
+            MessageType::Success => colors::SUCCESS,
+            MessageType::Warning => colors::WARNING,
+            MessageType::Error => colors::ERROR,
         };
         let line = Line::from(Span::styled(text.clone(), Style::default().fg(color)));
         f.render_widget(Paragraph::new(line), chunks[1]);
@@ -97,12 +97,7 @@ pub fn render_detail(f: &mut Frame, app: &App, node_name: &str) {
     }
 }
 
-fn render_info_panel(
-    f: &mut Frame,
-    app: &App,
-    node: &crate::tui::app::NodeInfo,
-    area: ratatui::layout::Rect,
-) {
+fn render_info_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui::layout::Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(8), Constraint::Length(10)])
@@ -296,12 +291,7 @@ fn render_info_panel(
     f.render_widget(Paragraph::new(action_lines), actions_inner);
 }
 
-fn render_status_panel(
-    f: &mut Frame,
-    app: &App,
-    node: &crate::tui::app::NodeInfo,
-    area: ratatui::layout::Rect,
-) {
+fn render_status_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui::layout::Rect) {
     let is_busy = app.is_node_busy(node);
 
     // Split into two vertical sections
@@ -346,7 +336,7 @@ fn render_status_panel(
     let node_output = &node.build_output;
 
     let terminal_title = if is_busy {
-        let activity_label = if app.build_activity == crate::tui::app::BuildActivity::Cleaning
+        let activity_label = if app.build_activity == BuildActivity::Cleaning
             && app.build_activity_node == node.name
         {
             format!(" Cleaning {}... ", node.name)

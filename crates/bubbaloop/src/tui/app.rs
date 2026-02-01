@@ -632,14 +632,14 @@ impl App {
                 }
             }
             KeyCode::Char('e') => {
-                self.enable_source().await;
+                self.enable_source();
             }
             KeyCode::Char('d') => {
-                self.disable_source().await;
+                self.disable_source();
             }
             KeyCode::Char('r') => {
                 if self.confirm_remove {
-                    self.remove_source().await;
+                    self.remove_source();
                     self.confirm_remove = false;
                 } else {
                     self.confirm_remove = true;
@@ -981,7 +981,6 @@ impl App {
         if let Some(path) = self.pending_node_path.take() {
             if let Some(client) = &self.daemon_client {
                 let client = client.clone();
-                let path = path.clone();
                 let tx = self.message_tx.clone();
                 // Spawn in background so we don't block
                 tokio::spawn(async move {
@@ -1285,7 +1284,7 @@ impl App {
     }
 
     fn uninstall_selected_node(&mut self) {
-        if let Some(node) = self.nodes.get(self.node_index).cloned() {
+        if let Some(node) = self.nodes.get(self.node_index) {
             if let Some(client) = &self.daemon_client {
                 let client = client.clone();
                 let name = node.name.clone();
@@ -1422,7 +1421,7 @@ impl App {
         }
     }
 
-    async fn enable_source(&mut self) {
+    fn enable_source(&mut self) {
         if let Some(source) = self.sources.get(self.source_index) {
             if !source.enabled {
                 self.registry.toggle_source(&source.path);
@@ -1432,7 +1431,7 @@ impl App {
         }
     }
 
-    async fn disable_source(&mut self) {
+    fn disable_source(&mut self) {
         if let Some(source) = self.sources.get(self.source_index) {
             if source.enabled {
                 self.registry.toggle_source(&source.path);
@@ -1442,7 +1441,7 @@ impl App {
         }
     }
 
-    async fn remove_source(&mut self) {
+    fn remove_source(&mut self) {
         if let Some(source) = self.sources.get(self.source_index) {
             let name = source.name.clone();
             self.registry.remove_source(&source.path);
