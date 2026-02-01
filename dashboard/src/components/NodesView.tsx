@@ -397,8 +397,8 @@ export function NodesViewPanel({
     return Array.from(groups.values());
   }, [nodes]);
 
-  // Report machines to FleetContext for the FleetBar
-  const { reportMachines, selectedMachineId } = useFleetContext();
+  // Report machines and nodes to FleetContext for the FleetBar and MeshView
+  const { reportMachines, reportNodes, selectedMachineId } = useFleetContext();
 
   useEffect(() => {
     reportMachines(machineGroups.map(g => ({
@@ -410,6 +410,18 @@ export function NodesViewPanel({
       ips: g.nodes[0]?.machine_ips || [],
     })));
   }, [machineGroups, reportMachines]);
+
+  useEffect(() => {
+    reportNodes(nodes.map(n => ({
+      name: n.name,
+      status: n.status,
+      machineId: n.machine_id || 'local',
+      hostname: n.machine_hostname || 'local',
+      ips: n.machine_ips || [],
+      nodeType: n.node_type,
+      version: n.version,
+    })));
+  }, [nodes, reportNodes]);
 
   // Filter by selected machine from FleetBar
   const filteredMachineGroups = useMemo(() => {
