@@ -5,7 +5,7 @@
 
 use serde::Deserialize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Raw URL for the official nodes registry on GitHub.
 pub const OFFICIAL_NODES_URL: &str =
@@ -71,7 +71,10 @@ pub fn refresh_cache() -> Result<(), String> {
 
     let cache_path = dir.join(OFFICIAL_NODES_CACHE);
 
-    let output = std::process::Command::new("curl")
+    // Use absolute path for curl to prevent PATH hijacking
+    let curl = find_curl().ok_or("curl not found in standard paths")?;
+
+    let output = std::process::Command::new(curl)
         .args([
             "-sSfL",
             "--connect-timeout",
@@ -91,6 +94,17 @@ pub fn refresh_cache() -> Result<(), String> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!("curl failed: {}", stderr))
     }
+}
+
+/// Find curl in standard system paths to avoid PATH hijacking.
+fn find_curl() -> Option<PathBuf> {
+    for dir in &["/usr/bin", "/usr/local/bin", "/bin"] {
+        let path = Path::new(dir).join("curl");
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
 }
 
 /// Refresh cache in a background thread (non-blocking, for TUI).

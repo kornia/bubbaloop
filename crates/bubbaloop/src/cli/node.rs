@@ -1049,17 +1049,25 @@ async fn handle_install(args: InstallArgs) -> Result<()> {
         .map_err(|e| NodeError::Zenoh(e.to_string()))?;
 
     if is_registered {
-        // Node is registered -> standard systemd install
+        log::info!(
+            "node install: '{}' is registered, installing systemd service",
+            args.name
+        );
         return send_command(&args.name, "install").await;
     }
 
     // Not registered -> try marketplace lookup
+    log::info!(
+        "node install: '{}' not registered, checking marketplace",
+        args.name
+    );
     println!(
         "Node '{}' not registered. Checking marketplace...",
         args.name
     );
 
     if let Err(e) = registry::refresh_cache() {
+        log::warn!("registry refresh failed: {}", e);
         eprintln!("Warning: could not refresh registry (using cache): {}", e);
     }
     let nodes = registry::load_cached_registry();
@@ -1081,6 +1089,12 @@ async fn handle_install(args: InstallArgs) -> Result<()> {
         }
     };
 
+    log::info!(
+        "node install: found '{}' in marketplace (repo={}, subdir={})",
+        entry.name,
+        entry.repo,
+        entry.subdir
+    );
     println!("Found '{}' in marketplace ({})", entry.name, entry.repo);
 
     // Validate repo before constructing URL
@@ -1089,6 +1103,7 @@ async fn handle_install(args: InstallArgs) -> Result<()> {
 
     // Clone from GitHub
     let url = format!("https://github.com/{}", entry.repo);
+    log::info!("node install: cloning {} branch={}", url, args.branch);
     let base_path = clone_from_github(&url, None, &args.branch)?;
 
     // Resolve subdir
@@ -1119,6 +1134,7 @@ async fn handle_install(args: InstallArgs) -> Result<()> {
                         let data: CommandResponse =
                             serde_json::from_slice(&sample.payload().to_bytes())?;
                         if data.success {
+                            log::info!("node install: registered '{}' with daemon", args.name);
                             println!("Registered node: {}", args.name);
                             registered_ok = true;
                             break;
@@ -1163,14 +1179,26 @@ async fn handle_install(args: InstallArgs) -> Result<()> {
     println!("Installing {} as systemd service...", args.name);
     send_command(&args.name, "install").await?;
 
+    log::info!(
+        "node install: completed marketplace install of '{}' from {}",
+        args.name,
+        entry.repo
+    );
     println!("\nInstalled '{}' from {}", args.name, entry.repo);
 
     Ok(())
 }
 
 fn search_nodes(args: SearchArgs) -> Result<()> {
+    log::info!(
+        "node search: query={:?} category={:?} tag={:?}",
+        args.query,
+        args.category,
+        args.tag
+    );
     println!("Refreshing marketplace registry...");
     if let Err(e) = registry::refresh_cache() {
+        log::warn!("registry refresh failed: {}", e);
         eprintln!("Warning: could not refresh registry (using cache): {}", e);
     }
     let all_nodes = registry::load_cached_registry();
