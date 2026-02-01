@@ -104,6 +104,7 @@ async fn handle_ws_proxy(client_socket: WebSocket, bridge_url: String) {
                 AxumMessage::Pong(p) => TungsteniteMessage::Pong(p),
                 AxumMessage::Close(_) => {
                     log::debug!("Client closed WebSocket connection");
+                    let _ = bridge_sink.send(TungsteniteMessage::Close(None)).await;
                     break;
                 }
             };
@@ -127,6 +128,7 @@ async fn handle_ws_proxy(client_socket: WebSocket, bridge_url: String) {
                 TungsteniteMessage::Pong(p) => AxumMessage::Pong(p),
                 TungsteniteMessage::Close(_) => {
                     log::debug!("Bridge closed WebSocket connection");
+                    let _ = client_sink.send(AxumMessage::Close(None)).await;
                     break;
                 }
                 TungsteniteMessage::Frame(_) => continue,
@@ -181,8 +183,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install Ctrl+C handler");
+    let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = sigterm.recv() => {},
+        }
+    }
+
+    #[cfg(not(unix))]
+    ctrl_c.await.expect("failed to install Ctrl+C handler");
+
     log::info!("Shutdown signal received");
 }
