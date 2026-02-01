@@ -46,6 +46,12 @@ dashboard-proto = { cmd = "cd dashboard && npm run proto", depends-on = ["dashbo
 dashboard-build = { cmd = "cd dashboard && npm run build", depends-on = ["dashboard-proto"] }
 dashboard = { cmd = "cd dashboard && npm run dev", depends-on = ["dashboard-proto"] }
 
+# Dashboard server (embedded)
+dash = { cmd = "RUST_LOG=info cargo run --bin bubbaloop-dash --package bubbaloop --release --", depends-on = ["dashboard-build"] }
+
+# Build release (with dashboard)
+build-release = { cmd = "cargo build --release", depends-on = ["dashboard-build"] }
+
 # TUI (Rust)
 tui = "RUST_LOG=info cargo run --bin bubbaloop --package bubbaloop --release -- tui"
 

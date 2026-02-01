@@ -35,5 +35,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("cargo:rerun-if-changed={}", protos_dir.to_string_lossy());
 
+    // Rebuild if dashboard dist changes (for rust-embed)
+    println!("cargo:rerun-if-changed=../../dashboard/dist");
+
     Ok(())
 }

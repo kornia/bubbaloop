@@ -10,6 +10,11 @@ description = "Bubbaloop - Physical AI camera streaming platform"
 name = "bubbaloop"
 path = "src/bin/bubbaloop.rs"
 
+[[bin]]
+name = "bubbaloop-dash"
+path = "src/bin/bubbaloop_dash.rs"
+required-features = ["dashboard"]
+
 [dependencies]
 # Protobuf
 prost.workspace = true
@@ -63,6 +68,16 @@ ctrlc.workspace = true
 
 # UUID generation (daemon)
 uuid = { version = "1", features = ["v4"] }
+
+# Dashboard server (optional)
+axum = { workspace = true, optional = true }
+rust-embed = { workspace = true, optional = true }
+mime_guess = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+
+[features]
+default = ["dashboard"]
+dashboard = ["dep:axum", "dep:rust-embed", "dep:mime_guess", "dep:tokio-tungstenite"]
 
 [dev-dependencies]
 tempfile = "3"
