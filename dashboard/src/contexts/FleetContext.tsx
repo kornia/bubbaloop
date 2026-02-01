@@ -6,6 +6,7 @@ export interface MachineInfo {
   nodeCount: number;
   runningCount: number;
   isOnline: boolean;
+  ips: string[];
 }
 
 interface FleetContextValue {

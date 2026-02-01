@@ -20,6 +20,7 @@ interface NodeState {
   build_output: string[];
   machine_id?: string;
   machine_hostname?: string;
+  machine_ips?: string[];
   stale?: boolean;
 }
 
@@ -102,6 +103,7 @@ export function NodesViewPanel({
           build_output: n.buildOutput,
           machine_id: n.machineId || listMachineId,
           machine_hostname: n.machineHostname,
+          machine_ips: n.machineIps || [],
         }));
         setDaemonConnected(true);
         setError(null);
@@ -405,6 +407,7 @@ export function NodesViewPanel({
       nodeCount: g.nodes.length,
       runningCount: g.nodes.filter(n => n.status === 'running').length,
       isOnline: g.isOnline,
+      ips: g.nodes[0]?.machine_ips || [],
     })));
   }, [machineGroups, reportMachines]);
 
@@ -534,6 +537,7 @@ export function NodesViewPanel({
                         <span className={`collapse-arrow ${isCollapsed ? 'collapsed' : ''}`}>&#9660;</span>
                         <span className={`machine-status-dot ${group.isOnline ? 'online' : 'offline'}`} />
                         <span>{group.hostname}</span>
+                        <span className="machine-ip">{group.nodes[0]?.machine_ips?.[0] || ''}</span>
                         <span className="machine-node-count">
                           {runningCount}/{group.nodes.length} running
                         </span>
@@ -814,6 +818,12 @@ export function NodesViewPanel({
           background: var(--error);
         }
 
+        .machine-ip {
+          font-size: 11px;
+          font-family: 'JetBrains Mono', monospace;
+          color: var(--text-muted);
+        }
+
         .machine-node-count {
           color: var(--text-muted);
           font-weight: 400;
@@ -910,6 +920,12 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
           <span className="label">Machine</span>
           <span className="value">{node.machine_hostname || 'local'}</span>
         </div>
+        {node.machine_ips && node.machine_ips.length > 0 && (
+          <div className="info-row full">
+            <span className="label">IPs</span>
+            <span className="value mono">{node.machine_ips.join(', ')}</span>
+          </div>
+        )}
         {node.description && (
           <div className="info-row full">
             <span className="label">Description</span>

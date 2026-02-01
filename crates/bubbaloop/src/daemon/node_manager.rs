@@ -71,6 +71,20 @@ impl Default for BuildState {
     }
 }
 
+/// Get all non-loopback IP addresses of this machine
+fn get_machine_ips() -> Vec<String> {
+    // Use `hostname -I` which returns all IPs (works on Linux)
+    if let Ok(output) = std::process::Command::new("hostname").arg("-I").output() {
+        if output.status.success() {
+            return String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .map(String::from)
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
 /// Cached node information
 #[derive(Debug, Clone)]
 pub struct CachedNode {
@@ -90,7 +104,12 @@ pub struct CachedNode {
 
 impl CachedNode {
     /// Convert to protobuf NodeState (requires machine info from caller)
-    pub fn to_proto(&self, machine_id: &str, machine_hostname: &str) -> NodeState {
+    pub fn to_proto(
+        &self,
+        machine_id: &str,
+        machine_hostname: &str,
+        machine_ips: &[String],
+    ) -> NodeState {
         let manifest = self.manifest.as_ref();
         NodeState {
             name: manifest
@@ -114,6 +133,7 @@ impl CachedNode {
             last_health_check_ms: self.last_health_check_ms,
             machine_id: machine_id.to_string(),
             machine_hostname: machine_hostname.to_string(),
+            machine_ips: machine_ips.to_vec(),
         }
     }
 }
@@ -132,6 +152,8 @@ pub struct NodeManager {
     machine_id: String,
     /// Machine hostname
     machine_hostname: String,
+    /// Machine IP addresses
+    machine_ips: Vec<String>,
 }
 
 impl NodeManager {
@@ -152,10 +174,13 @@ impl NodeManager {
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "unknown".to_string());
 
+        let machine_ips = get_machine_ips();
+
         log::info!(
-            "NodeManager using machine_id: {}, hostname: {}",
+            "NodeManager using machine_id: {}, hostname: {}, ips: {:?}",
             machine_id,
-            machine_hostname
+            machine_hostname,
+            machine_ips
         );
 
         let manager = Arc::new(Self {
@@ -165,6 +190,7 @@ impl NodeManager {
             building_nodes: Mutex::new(HashSet::new()),
             machine_id,
             machine_hostname,
+            machine_ips,
         });
 
         // Initial load
@@ -545,7 +571,7 @@ impl NodeManager {
         NodeList {
             nodes: nodes
                 .values()
-                .map(|n| n.to_proto(&self.machine_id, &self.machine_hostname))
+                .map(|n| n.to_proto(&self.machine_id, &self.machine_hostname, &self.machine_ips))
                 .collect(),
             timestamp_ms: Self::now_ms(),
             machine_id: self.machine_id.clone(),
@@ -558,7 +584,7 @@ impl NodeManager {
         nodes
             .values()
             .find(|n| n.manifest.as_ref().map(|m| m.name == name).unwrap_or(false))
-            .map(|n| n.to_proto(&self.machine_id, &self.machine_hostname))
+            .map(|n| n.to_proto(&self.machine_id, &self.machine_hostname, &self.machine_ips))
     }
 
     /// Execute a command

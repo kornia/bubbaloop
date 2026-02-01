@@ -33,6 +33,9 @@ export function FleetBar() {
             >
               <span className={`chip-dot ${m.isOnline ? 'online' : 'offline'}`} />
               <span className="chip-hostname">{m.hostname}</span>
+              {m.ips.length > 0 && (
+                <span className="chip-ip">{m.ips[0]}</span>
+              )}
               <span className="chip-badge">{m.runningCount}/{m.nodeCount}</span>
             </button>
           ))}
@@ -129,6 +132,12 @@ export function FleetBar() {
           max-width: 120px;
           overflow: hidden;
           text-overflow: ellipsis;
+        }
+
+        .chip-ip {
+          font-size: 10px;
+          font-family: 'JetBrains Mono', monospace;
+          color: var(--text-muted);
         }
 
         .chip-badge {

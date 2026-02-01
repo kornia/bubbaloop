@@ -52,6 +52,8 @@ message NodeState {
   string machine_id = 14;
   // Human-readable hostname
   string machine_hostname = 15;
+  // Network IP addresses of the source machine
+  repeated string machine_ips = 16;
 }
 
 // List of all nodes (published periodically)

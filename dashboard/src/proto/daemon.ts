@@ -29,6 +29,7 @@ export interface NodeState {
   buildOutput: string[];
   machineId: string;
   machineHostname: string;
+  machineIps: string[];
 }
 
 export interface NodeList {
@@ -91,6 +92,7 @@ function decodeNodeState(msg: unknown): NodeState | null {
     buildOutput: (m.buildOutput as string[]) ?? [],
     machineId: (m.machineId as string) ?? '',
     machineHostname: (m.machineHostname as string) ?? '',
+    machineIps: (m.machineIps as string[]) ?? [],
   };
 }
 

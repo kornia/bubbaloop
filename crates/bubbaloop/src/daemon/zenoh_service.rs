@@ -433,6 +433,7 @@ mod tests {
             last_health_check_ms: 1234567890,
             machine_id: "test-machine".to_string(),
             machine_hostname: "test-hostname".to_string(),
+            machine_ips: vec!["192.168.1.100".to_string()],
         };
 
         let bytes = ZenohService::encode_proto(&state);
