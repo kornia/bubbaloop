@@ -87,6 +87,15 @@ get_latest_version() {
     curl -sS "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
 }
 
+# Get latest dashboard release version (tags starting with dash-)
+get_latest_dash_version() {
+    curl -sS "https://api.github.com/repos/$REPO/releases" \
+        | grep '"tag_name":' \
+        | grep 'dash-' \
+        | head -1 \
+        | sed -E 's/.*"([^"]+)".*/\1/'
+}
+
 # Download file
 download() {
     local url="$1"
@@ -174,21 +183,31 @@ install_bubbaloop() {
     info "Bubbaloop $version installed"
 }
 
-# Install Bubbaloop Dashboard server
+# Install Bubbaloop Dashboard server (from separate dash-* release)
 install_dashboard() {
-    local version="$1"
-    local os="$2"
-    local arch="$3"
+    local os="$1"
+    local arch="$2"
 
-    step "Installing Bubbaloop Dashboard $version..."
+    local dash_version
+    dash_version=$(get_latest_dash_version)
 
-    local base_url="https://github.com/$REPO/releases/download/$version"
+    if [ -z "$dash_version" ]; then
+        warn "No dashboard release found, skipping bubbaloop-dash"
+        return 0
+    fi
+
+    step "Installing Bubbaloop Dashboard $dash_version..."
+
+    local base_url="https://github.com/$REPO/releases/download/$dash_version"
 
     # Download bubbaloop-dash (embedded dashboard server)
-    download "$base_url/bubbaloop-dash-$os-$arch" "$BIN_DIR/bubbaloop-dash"
+    if ! download "$base_url/bubbaloop-dash-$os-$arch" "$BIN_DIR/bubbaloop-dash" 2>/dev/null; then
+        warn "Dashboard binary not available for $os-$arch, skipping"
+        return 0
+    fi
     chmod +x "$BIN_DIR/bubbaloop-dash"
 
-    info "Bubbaloop Dashboard $version installed"
+    info "Bubbaloop Dashboard $dash_version installed"
 }
 
 # Setup systemd services
@@ -420,7 +439,7 @@ main() {
     install_zenoh "$arch"
     install_bridge "$arch"
     install_bubbaloop "$version" "$os" "$short_arch"
-    install_dashboard "$version" "$os" "$short_arch"
+    install_dashboard "$os" "$short_arch"
     setup_systemd
     enable_linger
     start_services
