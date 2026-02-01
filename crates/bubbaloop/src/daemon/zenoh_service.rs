@@ -193,12 +193,17 @@ impl ZenohService {
         log::info!("Declared publisher on {}", keys::EVENTS_LEGACY);
         log::info!("Declared publisher on {}", events_key_new);
 
-        // Declare queryable for node list (returns current state on GET)
+        // Declare queryables for node list (returns current state on GET)
         let nodes_queryable = self
             .session
             .declare_queryable(keys::NODES_LIST_LEGACY)
             .await?;
+        let nodes_queryable_new = self
+            .session
+            .declare_queryable(&nodes_list_key_new)
+            .await?;
         log::info!("Declared nodes queryable on {}", keys::NODES_LIST_LEGACY);
+        log::info!("Declared nodes queryable on {}", nodes_list_key_new);
 
         // Give Zenoh time to propagate queryable declarations across the network
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -250,7 +255,7 @@ impl ZenohService {
                     }
                 }
 
-                // Handle node list queries (GET on bubbaloop/daemon/nodes)
+                // Handle node list queries (GET on bubbaloop/daemon/nodes) - legacy
                 nodes_query = nodes_queryable.recv_async() => {
                     match nodes_query {
                         Ok(query) => {
@@ -258,11 +263,28 @@ impl ZenohService {
                             let bytes = Self::encode_proto(&list);
                             log::debug!("Replying to nodes query with {} nodes ({} bytes)", list.nodes.len(), bytes.len());
                             if let Err(e) = query.reply(query.key_expr(), bytes).await {
-                                log::warn!("Failed to reply to nodes query: {}", e);
+                                log::warn!("Failed to reply to nodes query (legacy): {}", e);
                             }
                         }
                         Err(e) => {
-                            log::warn!("Nodes query receive error: {}", e);
+                            log::warn!("Nodes query receive error (legacy): {}", e);
+                        }
+                    }
+                }
+
+                // Handle node list queries (GET on bubbaloop/{machine_id}/daemon/nodes) - new
+                nodes_query_new = nodes_queryable_new.recv_async() => {
+                    match nodes_query_new {
+                        Ok(query) => {
+                            let list = self.node_manager.get_node_list().await;
+                            let bytes = Self::encode_proto(&list);
+                            log::debug!("Replying to nodes query (new) with {} nodes ({} bytes)", list.nodes.len(), bytes.len());
+                            if let Err(e) = query.reply(query.key_expr(), bytes).await {
+                                log::warn!("Failed to reply to nodes query (new): {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Nodes query receive error (new): {}", e);
                         }
                     }
                 }
