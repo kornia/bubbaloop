@@ -1357,13 +1357,33 @@ impl App {
             let node_name = node.name.clone();
 
             if is_remote {
-                let parts: Vec<String> = path.split_whitespace().map(|s| s.to_string()).collect();
+                // Parse expected "owner/repo --subdir name" format safely.
+                // Only pass validated repo and subdir as explicit args to
+                // prevent injection of extra CLI flags from a tampered cache.
+                let parts: Vec<&str> = path.split_whitespace().collect();
+                let (repo, subdir) = if parts.len() == 3 && parts[1] == "--subdir" {
+                    (parts[0].to_string(), parts[2].to_string())
+                } else {
+                    let _ = tx.send((
+                        format!("Invalid marketplace path for {}", node_name),
+                        MessageType::Error,
+                    ));
+                    return;
+                };
+
+                // Validate repo format
+                if crate::registry::validate_repo(&repo).is_err() {
+                    let _ = tx.send((
+                        format!("Invalid repo '{}' for {}", repo, node_name),
+                        MessageType::Error,
+                    ));
+                    return;
+                }
+
                 tokio::spawn(async move {
                     let exe = std::env::current_exe().unwrap_or_else(|_| "bubbaloop".into());
                     let mut cmd = tokio::process::Command::new(exe);
-                    cmd.args(["node", "add"]);
-                    cmd.args(&parts);
-                    cmd.arg("--build");
+                    cmd.args(["node", "add", &repo, "--subdir", &subdir, "--build"]);
 
                     match cmd.output().await {
                         Ok(output) if output.status.success() => {

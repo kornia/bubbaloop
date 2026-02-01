@@ -1059,8 +1059,9 @@ async fn handle_install(args: InstallArgs) -> Result<()> {
         args.name
     );
 
-    // Try refreshing the cache first, fall back to existing cache
-    let _ = registry::refresh_cache();
+    if let Err(e) = registry::refresh_cache() {
+        eprintln!("Warning: could not refresh registry (using cache): {}", e);
+    }
     let nodes = registry::load_cached_registry();
 
     let entry = match registry::find_by_name(&nodes, &args.name) {
@@ -1169,7 +1170,9 @@ async fn handle_install(args: InstallArgs) -> Result<()> {
 
 fn search_nodes(args: SearchArgs) -> Result<()> {
     println!("Refreshing marketplace registry...");
-    let _ = registry::refresh_cache();
+    if let Err(e) = registry::refresh_cache() {
+        eprintln!("Warning: could not refresh registry (using cache): {}", e);
+    }
     let all_nodes = registry::load_cached_registry();
 
     if all_nodes.is_empty() {
