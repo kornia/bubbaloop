@@ -6,6 +6,7 @@ import { useFleetContext } from '../contexts/FleetContext';
 import { MachineBadge } from './MachineBadge';
 import { H264Decoder } from '../lib/h264-decoder';
 import { decodeCompressedImage, Header } from '../proto/camera';
+import { normalizeTopicPattern } from '../lib/subscription-manager';
 
 interface DragHandleProps {
   [key: string]: unknown;
@@ -138,6 +139,58 @@ export function CameraView({
       console.error('[CameraView] Failed to process sample:', e);
     }
   }, []);
+
+  // Auto-detect correct topic from discovered topics.
+  // Camera topics may have machine-specific prefixes (e.g.,
+  //   0/bubbaloop%local%nvidia_orin00%camera%terrace%compressed/...)
+  // that don't match the default patterns (e.g., 0/camera%terrace%compressed/**).
+  // When topic discovery finds the real topic, switch the subscription.
+  const autoDetectedRef = useRef(false);
+  useEffect(() => {
+    if (autoDetectedRef.current || !onTopicChange || availableTopics.length === 0) return;
+
+    // Extract camera name hint from current topic
+    // e.g., "0/camera%terrace%compressed/**" -> decode % to / -> find "terrace"
+    const currentBase = topic.replace(/\/\*{1,2}$/, '');
+    const decoded = currentBase.replace(/%/g, '/');
+    const segments = decoded.split('/').filter(Boolean);
+    const cameraIdx = segments.indexOf('camera');
+    const compressedIdx = segments.indexOf('compressed');
+    const cameraHint = cameraIdx >= 0 && compressedIdx > cameraIdx
+      ? segments.slice(cameraIdx + 1, compressedIdx).join('/')
+      : null;
+
+    if (!cameraHint) return;
+
+    // Check if current topic already receives data (subscription manager matched it)
+    // by looking for it in availableTopics
+    const alreadyMatches = availableTopics.some(t => {
+      const normalized = normalizeTopicPattern(t);
+      return normalized === currentBase;
+    });
+    if (alreadyMatches) return;
+
+    // Find a discovered topic matching the camera name exactly
+    for (const discoveredTopic of availableTopics) {
+      const decodedDiscovered = discoveredTopic.replace(/%/g, '/');
+      const discoveredSegments = decodedDiscovered.split('/');
+      const discCameraIdx = discoveredSegments.indexOf('camera');
+
+      if (discCameraIdx !== -1 && discoveredSegments[discCameraIdx + 2] === 'compressed') {
+        const discoveredHint = discoveredSegments[discCameraIdx + 1];
+        if (discoveredHint === cameraHint) {
+          const normalized = normalizeTopicPattern(discoveredTopic);
+          const newTopic = normalized + '/**';
+          if (newTopic !== topic) {
+            autoDetectedRef.current = true;
+            console.log(`[CameraView] Auto-detected topic for "${cameraHint}": ${topic} -> ${newTopic}`);
+            onTopicChange(newTopic);
+          }
+          return;
+        }
+      }
+    }
+  }, [availableTopics, topic, onTopicChange]);
 
   // Subscribe to camera topic
   useZenohSubscription(topic, handleSample);

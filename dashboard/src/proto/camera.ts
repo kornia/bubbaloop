@@ -12,6 +12,8 @@ export interface Header {
   pubTime: bigint;
   sequence: number;
   frameId: string;
+  machineId: string;
+  scope: string;
 }
 
 export interface CompressedImage {
@@ -44,6 +46,8 @@ export function decodeCompressedImage(data: Uint8Array): CompressedImage {
       pubTime: toLongBigInt(message.header.pubTime as Long | number),
       sequence: message.header.sequence ?? 0,
       frameId: message.header.frameId ?? '',
+      machineId: message.header.machineId ?? '',
+      scope: message.header.scope ?? '',
     } : undefined;
 
     return {

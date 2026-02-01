@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 import { useFleetContext } from '../contexts/FleetContext';
-import { decodeNodeList } from '../proto/daemon';
+import { decodeNodeList, NodeCommandProto, CommandResultProto, CommandType } from '../proto/daemon';
 import { getSamplePayload } from '../lib/zenoh';
 import { Duration } from 'typed-duration';
 import { Reply, ReplyError, Sample } from '@eclipse-zenoh/zenoh-ts';
@@ -232,11 +232,6 @@ export function NodesViewPanel({
     setMessage(null);
 
     try {
-      // Import proto encoder dynamically
-      const { bubbaloop } = await import('../proto/messages.pb.js');
-      const NodeCommand = bubbaloop.daemon.v1.NodeCommand;
-      const CommandType = bubbaloop.daemon.v1.CommandType;
-
       // Map command string to enum
       const commandMap: Record<string, number> = {
         'start': CommandType.COMMAND_TYPE_START,
@@ -257,7 +252,7 @@ export function NodesViewPanel({
         ? `bubbaloop/${targetNode.machine_id}/daemon/command`
         : 'bubbaloop/daemon/command';
 
-      const cmd = NodeCommand.create({
+      const cmd = NodeCommandProto.create({
         command: commandMap[command] ?? CommandType.COMMAND_TYPE_START,
         nodeName: nodeName,
         nodePath: '',
@@ -265,7 +260,7 @@ export function NodesViewPanel({
         targetMachine: targetNode?.machine_id || '',
       });
 
-      const payload = NodeCommand.encode(cmd).finish();
+      const payload = NodeCommandProto.encode(cmd).finish();
 
       // Send query and wait for reply
       const receiver = await session.get(commandKey, {
@@ -295,8 +290,7 @@ export function NodesViewPanel({
             // Extract payload from Sample
             const replyPayload = (sample as { payload: () => { toBytes: () => Uint8Array } })?.payload?.()?.toBytes?.();
             if (replyPayload) {
-              const CommandResult = bubbaloop.daemon.v1.CommandResult;
-              const result = CommandResult.decode(replyPayload);
+              const result = CommandResultProto.decode(replyPayload);
               if (result.success) {
                 setMessage({ text: result.message || 'Command executed', type: 'success' });
               } else {
@@ -329,17 +323,13 @@ export function NodesViewPanel({
       throw new Error('Not connected to Zenoh');
     }
 
-    const { bubbaloop } = await import('../proto/messages.pb.js');
-    const NodeCommand = bubbaloop.daemon.v1.NodeCommand;
-    const CommandType = bubbaloop.daemon.v1.CommandType;
-
     // Look up target node to route logs request to correct machine
     const targetNode = nodes.find(n => n.name === nodeName);
     const commandKey = targetNode?.machine_id
       ? `bubbaloop/${targetNode.machine_id}/daemon/command`
       : 'bubbaloop/daemon/command';
 
-    const cmd = NodeCommand.create({
+    const cmd = NodeCommandProto.create({
       command: CommandType.COMMAND_TYPE_GET_LOGS,
       nodeName: nodeName,
       nodePath: '',
@@ -347,7 +337,7 @@ export function NodesViewPanel({
       targetMachine: targetNode?.machine_id || '',
     });
 
-    const payload = NodeCommand.encode(cmd).finish();
+    const payload = NodeCommandProto.encode(cmd).finish();
 
     const receiver = await session.get(commandKey, {
       payload: payload,
@@ -369,8 +359,7 @@ export function NodesViewPanel({
 
         const replyPayload = (sample as { payload: () => { toBytes: () => Uint8Array } })?.payload?.()?.toBytes?.();
         if (replyPayload) {
-          const CommandResult = bubbaloop.daemon.v1.CommandResult;
-          const result = CommandResult.decode(replyPayload);
+          const result = CommandResultProto.decode(replyPayload);
           if (result.success) {
             return result.output || 'No logs available';
           } else {

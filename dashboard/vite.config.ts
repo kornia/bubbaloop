@@ -158,5 +158,21 @@ export default defineConfig({
       // Transform CommonJS to ESM
       transformMixedEsModules: true,
     },
+    rollupOptions: {
+      onwarn(warning, defaultHandler) {
+        // Suppress eval warning from protobufjs (third-party, cannot fix)
+        if (warning.code === 'EVAL' && warning.id?.includes('@protobufjs')) return;
+        defaultHandler(warning);
+      },
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom'],
+          'vendor-zenoh': ['@eclipse-zenoh/zenoh-ts', 'channel-ts'],
+          'vendor-proto': ['protobufjs/minimal', 'long'],
+          'vendor-dnd': ['@dnd-kit/core', '@dnd-kit/sortable'],
+          'vendor-json-view': ['react18-json-view'],
+        },
+      },
+    },
   },
 });

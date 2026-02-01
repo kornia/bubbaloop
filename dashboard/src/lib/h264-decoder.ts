@@ -4,9 +4,9 @@
  * WebCodecs provides hardware-accelerated video decoding directly in the browser.
  * Decodes H264 NAL units frame-by-frame and renders to canvas.
  *
- * Important: This decoder handles Annex B format (with start codes) as received
- * from GStreamer. WebCodecs can decode Annex B directly, but we need to provide
- * SPS/PPS as 'description' in AVCC format for reliable initialization.
+ * Supports both Annex B format (start codes, from GStreamer) and
+ * AVCC format (length-prefixed, from MP4/RTSP extractors).
+ * Format is auto-detected from the first keyframe.
  */
 
 export type FrameCallback = (frame: VideoFrame) => void;
@@ -24,6 +24,14 @@ interface SPSInfo {
   ppsData?: Uint8Array;
 }
 
+type NalFormat = 'unknown' | 'annexb' | 'avcc';
+
+interface NalUnit {
+  type: number;
+  data: Uint8Array;
+  offset: number;
+}
+
 export class H264Decoder {
   private decoder: VideoDecoder | null = null;
   private options: H264DecoderOptions;
@@ -32,6 +40,9 @@ export class H264Decoder {
   private spsInfo: SPSInfo | null = null;
   private errorCount = 0;
   private maxErrors = 3;
+  private nalFormat: NalFormat = 'unknown';
+  private framesReceived = 0;
+  private lastDiagnosticLog = 0;
 
   constructor(options: H264DecoderOptions) {
     this.options = options;
@@ -45,14 +56,41 @@ export class H264Decoder {
   }
 
   /**
-   * Parse NAL units from Annex B format
-   * Returns array of { type, data } for each NAL unit
+   * Detect whether data is Annex B (start codes) or AVCC (length-prefixed).
    */
-  private parseNalUnits(data: Uint8Array): Array<{ type: number; data: Uint8Array; offset: number }> {
-    const nalUnits: Array<{ type: number; data: Uint8Array; offset: number }> = [];
+  private detectFormat(data: Uint8Array): NalFormat {
+    if (data.length < 5) return 'unknown';
+
+    // Check for Annex B start codes
+    if (data[0] === 0 && data[1] === 0) {
+      if (data[2] === 1) return 'annexb'; // 3-byte start code
+      if (data[2] === 0 && data[3] === 1) return 'annexb'; // 4-byte start code
+    }
+
+    // Check for AVCC: first 4 bytes are big-endian unsigned NAL length
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const nalLen = view.getUint32(0);
+    if (nalLen > 0 && nalLen <= data.length - 4) {
+      // Verify the NAL header byte after the length looks valid
+      const nalHeader = data[4];
+      const forbiddenBit = (nalHeader >> 7) & 1;
+      const nalType = nalHeader & 0x1f;
+      if (forbiddenBit === 0 && nalType > 0 && nalType <= 23) {
+        return 'avcc';
+      }
+    }
+
+    return 'unknown';
+  }
+
+  /**
+   * Parse NAL units from Annex B format (start code delimited).
+   */
+  private parseNalUnitsAnnexB(data: Uint8Array): NalUnit[] {
+    const nalUnits: NalUnit[] = [];
     let i = 0;
 
-    while (i < data.length - 4) {
+    while (i < data.length - 2) {
       // Find start code (0x00 0x00 0x01 or 0x00 0x00 0x00 0x01)
       if (data[i] === 0 && data[i + 1] === 0) {
         let nalStart = -1;
@@ -66,8 +104,8 @@ export class H264Decoder {
         if (nalStart >= 0 && nalStart < data.length) {
           // Find the end of this NAL (next start code or end of data)
           let nalEnd = data.length;
-          for (let j = nalStart; j < data.length - 3; j++) {
-            if (data[j] === 0 && data[j + 1] === 0 && (data[j + 2] === 1 || (data[j + 2] === 0 && data[j + 3] === 1))) {
+          for (let j = nalStart + 1; j < data.length - 2; j++) {
+            if (data[j] === 0 && data[j + 1] === 0 && (data[j + 2] === 1 || (data[j + 2] === 0 && j + 3 < data.length && data[j + 3] === 1))) {
               nalEnd = j;
               break;
             }
@@ -88,6 +126,120 @@ export class H264Decoder {
     }
 
     return nalUnits;
+  }
+
+  /**
+   * Parse NAL units from AVCC format (4-byte big-endian length prefixed).
+   */
+  private parseNalUnitsAVCC(data: Uint8Array): NalUnit[] {
+    const nalUnits: NalUnit[] = [];
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    let i = 0;
+
+    while (i + 4 < data.length) {
+      const nalLen = view.getUint32(i);
+
+      if (nalLen <= 0 || nalLen > data.length - i - 4) {
+        break; // Invalid length
+      }
+
+      const nalStart = i + 4;
+      const nalEnd = nalStart + nalLen;
+      const nalType = data[nalStart] & 0x1f;
+
+      nalUnits.push({
+        type: nalType,
+        data: data.slice(nalStart, nalEnd),
+        offset: i,
+      });
+
+      i = nalEnd;
+    }
+
+    return nalUnits;
+  }
+
+  /**
+   * Parse NAL units, auto-detecting format on first successful parse.
+   */
+  private parseNalUnits(data: Uint8Array): NalUnit[] {
+    // Use cached format if already detected
+    if (this.nalFormat === 'annexb') {
+      return this.parseNalUnitsAnnexB(data);
+    }
+    if (this.nalFormat === 'avcc') {
+      return this.parseNalUnitsAVCC(data);
+    }
+
+    // Auto-detect format
+    const detected = this.detectFormat(data);
+
+    if (detected === 'annexb') {
+      const units = this.parseNalUnitsAnnexB(data);
+      if (units.length > 0) {
+        this.nalFormat = 'annexb';
+        console.log(`[H264Decoder] Detected Annex B format (start code delimited)`);
+        return units;
+      }
+    }
+
+    if (detected === 'avcc') {
+      const units = this.parseNalUnitsAVCC(data);
+      if (units.length > 0) {
+        this.nalFormat = 'avcc';
+        console.log(`[H264Decoder] Detected AVCC format (length-prefixed)`);
+        return units;
+      }
+    }
+
+    // Try both parsers as fallback
+    const annexB = this.parseNalUnitsAnnexB(data);
+    if (annexB.length > 0) {
+      this.nalFormat = 'annexb';
+      console.log(`[H264Decoder] Detected Annex B format (fallback)`);
+      return annexB;
+    }
+
+    const avcc = this.parseNalUnitsAVCC(data);
+    if (avcc.length > 0) {
+      this.nalFormat = 'avcc';
+      console.log(`[H264Decoder] Detected AVCC format (fallback)`);
+      return avcc;
+    }
+
+    return [];
+  }
+
+  /**
+   * Convert AVCC data to Annex B by replacing length prefixes with start codes.
+   * WebCodecs in Annex B mode (no description) expects start codes.
+   */
+  private avccToAnnexB(data: Uint8Array): Uint8Array {
+    const nalUnits = this.parseNalUnitsAVCC(data);
+    if (nalUnits.length === 0) return data;
+
+    // Calculate output size: each NAL gets a 4-byte start code + its data
+    let totalSize = 0;
+    for (const nal of nalUnits) {
+      totalSize += 4 + nal.data.length;
+    }
+
+    const output = new Uint8Array(totalSize);
+    let offset = 0;
+
+    for (const nal of nalUnits) {
+      // Write 4-byte start code
+      output[offset] = 0;
+      output[offset + 1] = 0;
+      output[offset + 2] = 0;
+      output[offset + 3] = 1;
+      offset += 4;
+      // Write NAL data
+      output.set(nal.data, offset);
+      offset += nal.data.length;
+    }
+
+    return output;
   }
 
   /**
@@ -153,7 +305,10 @@ export class H264Decoder {
     this.initialized = true;
     this.waitingForKeyframe = true;
     this.spsInfo = null;
+    this.nalFormat = 'unknown';
     this.errorCount = 0;
+    this.framesReceived = 0;
+    this.lastDiagnosticLog = 0;
 
     console.log('[H264Decoder] Decoder created, waiting for SPS/PPS');
   }
@@ -210,14 +365,40 @@ export class H264Decoder {
   }
 
   /**
+   * Log diagnostic info when stuck waiting for keyframe
+   */
+  private logDiagnostic(data: Uint8Array): void {
+    const now = Date.now();
+    // Log at most every 3 seconds
+    if (now - this.lastDiagnosticLog < 3000) return;
+    this.lastDiagnosticLog = now;
+
+    // Try to parse with both formats to diagnose
+    const annexBNals = this.parseNalUnitsAnnexB(data);
+    const avccNals = this.parseNalUnitsAVCC(data);
+
+    const annexBTypes = annexBNals.map(n => n.type);
+    const avccTypes = avccNals.map(n => n.type);
+
+    console.warn(
+      `[H264Decoder] Waiting for keyframe — received ${this.framesReceived} frames, ` +
+      `last: ${data.length} bytes, format: ${this.nalFormat}, ` +
+      `annexB NALs: [${annexBTypes.join(',')}], ` +
+      `avcc NALs: [${avccTypes.join(',')}]`
+    );
+  }
+
+  /**
    * Decode H264 data
-   * @param data - H264 NAL units in Annex B format
+   * @param data - H264 NAL units in Annex B or AVCC format (auto-detected)
    * @param timestamp - Timestamp in microseconds
    */
   async decode(data: Uint8Array, timestamp: number): Promise<void> {
     if (!this.decoder || !this.initialized) {
       return;
     }
+
+    this.framesReceived++;
 
     // Check if decoder is in a bad state
     if (this.decoder.state === 'closed') {
@@ -231,10 +412,11 @@ export class H264Decoder {
     // Wait for a keyframe to start decoding
     if (this.waitingForKeyframe) {
       if (!isKeyframe) {
+        this.logDiagnostic(data);
         return;
       }
 
-      console.log(`[H264Decoder] Keyframe received (${data.length} bytes)`);
+      console.log(`[H264Decoder] Keyframe received (${data.length} bytes, format: ${this.nalFormat})`);
 
       // Extract SPS/PPS and configure decoder
       const spsInfo = this.extractParameterSets(data);
@@ -266,11 +448,14 @@ export class H264Decoder {
       return;
     }
 
+    // Convert AVCC to Annex B if needed (WebCodecs without description expects Annex B)
+    const decodeData = this.nalFormat === 'avcc' ? this.avccToAnnexB(data) : data;
+
     try {
       const chunk = new EncodedVideoChunk({
         type: isKeyframe ? 'key' : 'delta',
         timestamp,
-        data,
+        data: decodeData,
       });
 
       this.decoder.decode(chunk);
@@ -284,7 +469,7 @@ export class H264Decoder {
           isKeyframe,
           timestamp,
           dataLength: data.length,
-          first16Bytes: Array.from(data.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' '),
+          format: this.nalFormat,
         });
       }
 
@@ -346,7 +531,10 @@ export class H264Decoder {
     this.initialized = false;
     this.waitingForKeyframe = true;
     this.spsInfo = null;
+    this.nalFormat = 'unknown';
     this.errorCount = 0;
+    this.framesReceived = 0;
+    this.lastDiagnosticLog = 0;
   }
 
   get isInitialized(): boolean {
