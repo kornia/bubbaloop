@@ -854,44 +854,42 @@ fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -> Result<St
     };
 
     if target_dir.exists() {
-        return Err(NodeError::GitClone(format!(
-            "Directory already exists: {}",
-            target_dir.display()
-        )));
-    }
+        // Reuse existing clone (e.g., installing a second node from the same multi-node repo)
+        println!("Using existing clone at {}", target_dir.display());
+    } else {
+        // Create parent directory
+        if let Some(parent) = target_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
 
-    // Create parent directory
-    if let Some(parent) = target_dir.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    println!(
-        "Cloning {} (branch: {}) to {}...",
-        url,
-        branch,
-        target_dir.display()
-    );
-
-    // Clone the repository with branch
-    let clone_output = Command::new("git")
-        .args([
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            branch,
-            "--", // Prevent URL from being treated as an option
+        println!(
+            "Cloning {} (branch: {}) to {}...",
             url,
-            &target_dir.to_string_lossy(),
-        ])
-        .output()?;
+            branch,
+            target_dir.display()
+        );
 
-    if !clone_output.status.success() {
-        let stderr = String::from_utf8_lossy(&clone_output.stderr);
-        return Err(NodeError::GitClone(stderr.to_string()));
+        // Clone the repository with branch
+        let clone_output = Command::new("git")
+            .args([
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                branch,
+                "--", // Prevent URL from being treated as an option
+                url,
+                &target_dir.to_string_lossy(),
+            ])
+            .output()?;
+
+        if !clone_output.status.success() {
+            let stderr = String::from_utf8_lossy(&clone_output.stderr);
+            return Err(NodeError::GitClone(stderr.to_string()));
+        }
+
+        println!("Cloned successfully!");
     }
-
-    println!("Cloned successfully!");
 
     // Check for node.yaml
     let manifest = target_dir.join("node.yaml");
