@@ -144,6 +144,12 @@ pub struct NodeEntry {
     pub path: String,
     #[serde(rename = "addedAt")]
     pub added_at: String,
+    /// Instance name override (for multi-instance nodes)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_override: Option<String>,
+    /// Config file path override (passed to binary via -c)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_override: Option<String>,
 }
 
 /// The nodes registry
@@ -206,8 +212,25 @@ pub fn read_manifest(node_path: &Path) -> Result<NodeManifest> {
     Ok(manifest)
 }
 
-/// Register a new node
-pub fn register_node(node_path: &str) -> Result<NodeManifest> {
+/// Get the effective name for a registry entry given its manifest.
+/// Returns name_override if set, otherwise the manifest name.
+pub fn effective_name(entry: &NodeEntry, manifest: &NodeManifest) -> String {
+    entry
+        .name_override
+        .as_deref()
+        .unwrap_or(&manifest.name)
+        .to_string()
+}
+
+/// Register a new node, optionally with an instance name and config override.
+///
+/// Returns `(manifest, effective_name)` where effective_name is `name_override`
+/// if provided, otherwise `manifest.name`.
+pub fn register_node(
+    node_path: &str,
+    name_override: Option<&str>,
+    config_override: Option<&str>,
+) -> Result<(NodeManifest, String)> {
     let path = Path::new(node_path);
 
     // Check directory exists
@@ -221,66 +244,103 @@ pub fn register_node(node_path: &str) -> Result<NodeManifest> {
     // Read and validate manifest
     let manifest = read_manifest(path)?;
 
+    // Determine effective name
+    let eff_name = name_override.unwrap_or(&manifest.name).to_string();
+
+    // Validate override name if provided (same rules as manifest name)
+    if let Some(override_name) = name_override {
+        if override_name.is_empty() || override_name.len() > 64 {
+            return Err(RegistryError::InvalidNode(format!(
+                "Instance name must be 1-64 characters, got: {}",
+                override_name.len()
+            )));
+        }
+        if !override_name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(RegistryError::InvalidNode(format!(
+                "Instance name contains invalid characters: {}",
+                override_name
+            )));
+        }
+    }
+
     // Load registry
     let mut registry = load_registry()?;
 
-    // Check if already registered
+    // Check if an entry with the same effective name already exists
+    for entry in &registry.nodes {
+        let entry_path = Path::new(&entry.path);
+        if let Ok(entry_manifest) = read_manifest(entry_path) {
+            let existing_name = effective_name(entry, &entry_manifest);
+            if existing_name == eff_name {
+                return Err(RegistryError::NodeAlreadyRegistered(eff_name));
+            }
+        }
+    }
+
     let canonical = path
         .canonicalize()
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
         .to_string();
-
-    if registry.nodes.iter().any(|n| {
-        let n_path = Path::new(&n.path);
-        let n_canonical = n_path
-            .canonicalize()
-            .unwrap_or_else(|_| n_path.to_path_buf());
-        n_canonical.to_string_lossy() == canonical
-    }) {
-        return Err(RegistryError::NodeAlreadyRegistered(node_path.to_string()));
-    }
 
     // Add to registry
     registry.nodes.push(NodeEntry {
         path: canonical,
         added_at: chrono_now(),
+        name_override: name_override.map(String::from),
+        config_override: config_override.map(String::from),
     });
 
     save_registry(&registry)?;
-    Ok(manifest)
+    Ok((manifest, eff_name))
 }
 
-/// Unregister a node
-pub fn unregister_node(node_path: &str) -> Result<()> {
+/// Unregister a node by effective name or path.
+///
+/// First tries to match by effective name (name_override or manifest name),
+/// then falls back to path matching for backward compatibility.
+pub fn unregister_node(name_or_path: &str) -> Result<()> {
     let mut registry = load_registry()?;
 
-    let path = Path::new(node_path);
-    let canonical = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .to_string();
-
     let initial_len = registry.nodes.len();
-    registry.nodes.retain(|n| {
-        let n_path = Path::new(&n.path);
-        let n_canonical = n_path
+
+    // Try matching by effective name first
+    registry.nodes.retain(|entry| {
+        let entry_path = Path::new(&entry.path);
+        if let Ok(manifest) = read_manifest(entry_path) {
+            let eff = effective_name(entry, &manifest);
+            if eff == name_or_path {
+                return false; // remove this entry
+            }
+        }
+
+        // Fallback: path matching
+        let n_canonical = entry_path
             .canonicalize()
-            .unwrap_or_else(|_| n_path.to_path_buf());
-        n_canonical.to_string_lossy() != canonical
+            .unwrap_or_else(|_| entry_path.to_path_buf());
+        let query_path = Path::new(name_or_path);
+        let query_canonical = query_path
+            .canonicalize()
+            .unwrap_or_else(|_| query_path.to_path_buf());
+        n_canonical != query_canonical
     });
 
     if registry.nodes.len() == initial_len {
-        return Err(RegistryError::NodeNotFound(node_path.to_string()));
+        return Err(RegistryError::NodeNotFound(name_or_path.to_string()));
     }
 
     save_registry(&registry)?;
     Ok(())
 }
 
-/// List all registered nodes with their manifests
-pub fn list_nodes() -> Result<Vec<(String, Option<NodeManifest>)>> {
+/// List all registered nodes with their entries and manifests.
+///
+/// Returns `(NodeEntry, Option<NodeManifest>)` so callers can access
+/// name_override and config_override for multi-instance support.
+pub fn list_nodes() -> Result<Vec<(NodeEntry, Option<NodeManifest>)>> {
     let registry = load_registry()?;
 
     let nodes = registry
@@ -289,7 +349,7 @@ pub fn list_nodes() -> Result<Vec<(String, Option<NodeManifest>)>> {
         .map(|entry| {
             let path = Path::new(&entry.path);
             let manifest = read_manifest(path).ok();
-            (entry.path.clone(), manifest)
+            (entry.clone(), manifest)
         })
         .collect();
 
@@ -516,5 +576,112 @@ mod tests {
             depends_on: vec![],
         };
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn test_effective_name_with_override() {
+        let entry = NodeEntry {
+            path: "/opt/nodes/rtsp-camera".to_string(),
+            added_at: "1700000000000".to_string(),
+            name_override: Some("rtsp-camera-terrace".to_string()),
+            config_override: Some("/etc/bubbaloop/terrace.yaml".to_string()),
+        };
+        let manifest = NodeManifest {
+            name: "rtsp-camera".to_string(),
+            version: "0.1.0".to_string(),
+            node_type: "rust".to_string(),
+            description: "RTSP camera".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert_eq!(effective_name(&entry, &manifest), "rtsp-camera-terrace");
+    }
+
+    #[test]
+    fn test_effective_name_without_override() {
+        let entry = NodeEntry {
+            path: "/opt/nodes/rtsp-camera".to_string(),
+            added_at: "1700000000000".to_string(),
+            name_override: None,
+            config_override: None,
+        };
+        let manifest = NodeManifest {
+            name: "rtsp-camera".to_string(),
+            version: "0.1.0".to_string(),
+            node_type: "rust".to_string(),
+            description: "RTSP camera".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+        assert_eq!(effective_name(&entry, &manifest), "rtsp-camera");
+    }
+
+    /// Verify that multiple registry entries can share the same path but with
+    /// different name_overrides, simulating multi-instance camera deployment.
+    #[test]
+    fn test_multi_instance_registry_entries() {
+        let manifest = NodeManifest {
+            name: "rtsp-camera".to_string(),
+            version: "0.2.0".to_string(),
+            node_type: "rust".to_string(),
+            description: "RTSP camera node".to_string(),
+            author: None,
+            build: None,
+            command: None,
+            depends_on: vec![],
+        };
+
+        let entries = vec![
+            NodeEntry {
+                path: "/opt/nodes/rtsp-camera".to_string(),
+                added_at: "1700000000000".to_string(),
+                name_override: Some("rtsp-camera-terrace".to_string()),
+                config_override: Some("/etc/bubbaloop/terrace.yaml".to_string()),
+            },
+            NodeEntry {
+                path: "/opt/nodes/rtsp-camera".to_string(),
+                added_at: "1700000001000".to_string(),
+                name_override: Some("rtsp-camera-garage".to_string()),
+                config_override: Some("/etc/bubbaloop/garage.yaml".to_string()),
+            },
+            NodeEntry {
+                path: "/opt/nodes/rtsp-camera".to_string(),
+                added_at: "1700000002000".to_string(),
+                name_override: Some("rtsp-camera-entrance".to_string()),
+                config_override: None,
+            },
+        ];
+
+        // All share the same path but have distinct effective names
+        let names: Vec<String> = entries
+            .iter()
+            .map(|e| effective_name(e, &manifest))
+            .collect();
+        assert_eq!(names.len(), 3);
+        assert_eq!(names[0], "rtsp-camera-terrace");
+        assert_eq!(names[1], "rtsp-camera-garage");
+        assert_eq!(names[2], "rtsp-camera-entrance");
+
+        // All share the same path
+        assert!(entries.iter().all(|e| e.path == "/opt/nodes/rtsp-camera"));
+
+        // Verify they serialize/deserialize correctly in a registry
+        let registry = NodesRegistry {
+            nodes: entries.clone(),
+        };
+        let json = serde_json::to_string_pretty(&registry).unwrap();
+        let restored: NodesRegistry = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.nodes.len(), 3);
+        for (i, entry) in restored.nodes.iter().enumerate() {
+            assert_eq!(
+                effective_name(entry, &manifest),
+                effective_name(&entries[i], &manifest)
+            );
+        }
     }
 }

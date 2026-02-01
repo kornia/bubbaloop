@@ -2,6 +2,7 @@
 
 pub mod debug;
 pub mod doctor;
+pub mod launch;
 pub mod node;
 pub mod status;
 

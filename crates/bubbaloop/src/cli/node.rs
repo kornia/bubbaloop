@@ -134,6 +134,14 @@ struct AddArgs {
     /// subdirectory within repo containing node.yaml (for multi-node repos)
     #[argh(option, short = 's')]
     subdir: Option<String>,
+
+    /// instance name (overrides node.yaml name for multi-instance nodes)
+    #[argh(option, short = 'n')]
+    name: Option<String>,
+
+    /// config file path for this instance (passed to binary via -c)
+    #[argh(option, short = 'c')]
+    config: Option<String>,
 }
 
 /// Remove a node from the registry
@@ -161,9 +169,9 @@ struct InstallArgs {
     #[argh(option, short = 'b', default = "String::from(\"main\")")]
     branch: String,
 
-    /// skip the build step (marketplace install only)
+    /// also build the node (marketplace install only)
     #[argh(switch)]
-    no_build: bool,
+    build: bool,
 }
 
 /// Uninstall a node's systemd service
@@ -292,6 +300,8 @@ struct NodeState {
     description: String,
     node_type: String,
     is_built: bool,
+    #[serde(default)]
+    base_node: String,
 }
 
 #[derive(Deserialize)]
@@ -353,11 +363,12 @@ impl NodeCommand {
         eprintln!("  clean       Clean a node's build artifacts");
         eprintln!("  enable      Enable autostart for a node");
         eprintln!("  disable     Disable autostart for a node");
+        eprintln!("  (See also: bubbaloop launch  -- launch multi-instance YAML)");
         eprintln!("\nRun 'bubbaloop node <command> --help' for more information.");
     }
 }
 
-async fn get_zenoh_session() -> Result<zenoh::Session> {
+pub(crate) async fn get_zenoh_session() -> Result<zenoh::Session> {
     // Connect to local zenoh router, or custom endpoint via env var
     let mut config = zenoh::Config::default();
 
@@ -538,21 +549,47 @@ async fn list_nodes(args: ListArgs) -> Result<()> {
         } else if data.nodes.is_empty() {
             println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
         } else {
-            println!(
-                "{:<20} {:<10} {:<12} {:<8} DESCRIPTION",
-                "NAME", "STATUS", "TYPE", "BUILT"
-            );
-            println!("{}", "-".repeat(70));
-            for node in data.nodes {
-                let built = if node.is_built { "yes" } else { "no" };
+            let has_instances = data.nodes.iter().any(|n| !n.base_node.is_empty());
+            if has_instances {
                 println!(
-                    "{:<20} {:<10} {:<12} {:<8} {}",
-                    node.name,
-                    node.status,
-                    node.node_type,
-                    built,
-                    truncate(&node.description, 30)
+                    "{:<20} {:<10} {:<16} {:<12} {:<8} DESCRIPTION",
+                    "NAME", "STATUS", "BASE", "TYPE", "BUILT"
                 );
+                println!("{}", "-".repeat(86));
+                for node in data.nodes {
+                    let built = if node.is_built { "yes" } else { "no" };
+                    let base = if node.base_node.is_empty() {
+                        "-"
+                    } else {
+                        &node.base_node
+                    };
+                    println!(
+                        "{:<20} {:<10} {:<16} {:<12} {:<8} {}",
+                        node.name,
+                        node.status,
+                        base,
+                        node.node_type,
+                        built,
+                        truncate(&node.description, 30)
+                    );
+                }
+            } else {
+                println!(
+                    "{:<20} {:<10} {:<12} {:<8} DESCRIPTION",
+                    "NAME", "STATUS", "TYPE", "BUILT"
+                );
+                println!("{}", "-".repeat(70));
+                for node in data.nodes {
+                    let built = if node.is_built { "yes" } else { "no" };
+                    println!(
+                        "{:<20} {:<10} {:<12} {:<8} {}",
+                        node.name,
+                        node.status,
+                        node.node_type,
+                        built,
+                        truncate(&node.description, 30)
+                    );
+                }
             }
         }
     } else if let Some(err) = last_error {
@@ -689,7 +726,9 @@ async fn add_node(args: AddArgs) -> Result<()> {
 
     let payload = serde_json::to_string(&serde_json::json!({
         "command": "add",
-        "node_path": node_path
+        "node_path": node_path,
+        "name": args.name,
+        "config": args.config,
     }))?;
 
     // Retry up to 3 times with 1 second delay between retries
@@ -940,7 +979,7 @@ async fn remove_node(args: RemoveArgs) -> Result<()> {
     Ok(())
 }
 
-async fn send_command(name: &str, command: &str) -> Result<()> {
+pub(crate) async fn send_command(name: &str, command: &str) -> Result<()> {
     let session = get_zenoh_session().await?;
 
     let payload = serde_json::to_string(&serde_json::json!({
@@ -1166,8 +1205,8 @@ async fn handle_install(args: InstallArgs) -> Result<()> {
         ));
     }
 
-    // Build (unless --no-build)
-    if !args.no_build {
+    // Build only if --build is passed
+    if args.build {
         println!("Building {}...", args.name);
         send_command(&args.name, "build").await?;
     }
@@ -1464,6 +1503,7 @@ mod tests {
             description: "Test node".to_string(),
             node_type: "rust".to_string(),
             is_built: true,
+            base_node: String::new(),
         };
 
         let json = serde_json::to_string(&node).unwrap();
@@ -1697,6 +1737,25 @@ mod tests {
         assert_eq!(nodes[0].2, "python");
         assert_eq!(nodes[1].0, "sensor");
         assert_eq!(nodes[1].2, "rust");
+    }
+
+    #[test]
+    fn test_node_state_base_node_deserialization() {
+        let json = r#"{"name": "rtsp-camera-terrace", "path": "/path", "status": "running",
+                     "installed": true, "autostart_enabled": false, "version": "1.0.0",
+                     "description": "Test", "node_type": "rust", "is_built": true,
+                     "base_node": "rtsp-camera"}"#;
+        let node: NodeState = serde_json::from_str(json).unwrap();
+        assert_eq!(node.base_node, "rtsp-camera");
+    }
+
+    #[test]
+    fn test_node_state_base_node_defaults_empty() {
+        let json = r#"{"name": "openmeteo", "path": "/path", "status": "stopped",
+                     "installed": true, "autostart_enabled": false, "version": "1.0.0",
+                     "description": "Weather", "node_type": "rust", "is_built": true}"#;
+        let node: NodeState = serde_json::from_str(json).unwrap();
+        assert_eq!(node.base_node, "");
     }
 
     #[test]

@@ -19,6 +19,7 @@
 //!   bubbaloop debug info               # Show Zenoh connection info
 
 use argh::FromArgs;
+use bubbaloop::cli::launch::LaunchCommand;
 use bubbaloop::cli::{DebugCommand, NodeCommand};
 
 /// Bubbaloop - AI-native orchestration for Physical AI
@@ -40,6 +41,7 @@ enum Command {
     Doctor(DoctorArgs),
     Daemon(DaemonArgs),
     Node(NodeCommand),
+    Launch(LaunchCommand),
     Debug(DebugCommand),
 }
 
@@ -119,6 +121,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              init, validate, list, add, remove");
             eprintln!("              install, uninstall, start, stop, restart");
             eprintln!("              logs, build");
+            eprintln!("  launch    Launch node instances from a YAML file");
+            eprintln!("              (default: ~/.bubbaloop/launch.yaml)");
             eprintln!("  debug     Debug Zenoh connectivity:");
             eprintln!("              info, topics, query, subscribe");
             eprintln!("\nRun 'bubbaloop <command> --help' for more information.");
@@ -142,6 +146,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             bubbaloop::daemon::run(args.zenoh_endpoint, args.strict).await?;
         }
         Some(Command::Node(cmd)) => {
+            cmd.run()
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        }
+        Some(Command::Launch(cmd)) => {
             cmd.run()
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;

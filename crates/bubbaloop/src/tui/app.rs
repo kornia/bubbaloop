@@ -64,6 +64,7 @@ pub struct NodeInfo {
     pub status: String,
     pub is_built: bool,
     pub build_output: Vec<String>,
+    pub base_node: String,
 }
 
 /// Discoverable node
@@ -1343,6 +1344,7 @@ impl App {
                 status: "stopped".to_string(),
                 is_built: false,
                 build_output: Vec::new(),
+                base_node: String::new(),
             };
             self.nodes.push(new_node);
             self.nodes.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1384,7 +1386,7 @@ impl App {
                 tokio::spawn(async move {
                     let exe = std::env::current_exe().unwrap_or_else(|_| "bubbaloop".into());
                     let mut cmd = tokio::process::Command::new(exe);
-                    cmd.args(["node", "add", &repo, "--subdir", &subdir, "--build"]);
+                    cmd.args(["node", "add", &repo, "--subdir", &subdir]);
 
                     match cmd.output().await {
                         Ok(output) if output.status.success() => {
@@ -1662,6 +1664,7 @@ impl App {
                     status: "stopped".to_string(),
                     is_built: false,
                     build_output: Vec::new(),
+                    base_node: String::new(),
                 };
                 self.nodes.push(new_node);
                 self.nodes.sort_by(|a, b| a.name.cmp(&b.name));

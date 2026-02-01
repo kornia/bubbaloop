@@ -100,9 +100,24 @@ pub struct CachedNode {
     pub health_status: HealthStatus,
     /// Last heartbeat timestamp (milliseconds since epoch)
     pub last_health_check_ms: i64,
+    /// Instance name override (for multi-instance nodes)
+    pub name_override: Option<String>,
+    /// Config file path override (for multi-instance nodes)
+    pub config_override: Option<String>,
 }
 
 impl CachedNode {
+    /// Get the effective name for this node (name_override or manifest name)
+    pub fn effective_name(&self) -> String {
+        if let Some(ref ov) = self.name_override {
+            return ov.clone();
+        }
+        self.manifest
+            .as_ref()
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
     /// Convert to protobuf NodeState (requires machine info from caller)
     pub fn to_proto(
         &self,
@@ -111,10 +126,9 @@ impl CachedNode {
         machine_ips: &[String],
     ) -> NodeState {
         let manifest = self.manifest.as_ref();
+        let base_name = manifest.map(|m| m.name.clone()).unwrap_or_default();
         NodeState {
-            name: manifest
-                .map(|m| m.name.clone())
-                .unwrap_or_else(|| "unknown".to_string()),
+            name: self.effective_name(),
             path: self.path.clone(),
             status: self.status as i32,
             installed: self.installed,
@@ -134,6 +148,11 @@ impl CachedNode {
             machine_id: machine_id.to_string(),
             machine_hostname: machine_hostname.to_string(),
             machine_ips: machine_ips.to_vec(),
+            base_node: if self.name_override.is_some() && !base_name.is_empty() {
+                base_name
+            } else {
+                String::new()
+            },
         }
     }
 }
@@ -327,12 +346,7 @@ impl NodeManager {
         // Update the node in our cache
         let mut nodes = self.nodes.write().await;
         for node in nodes.values_mut() {
-            if node
-                .manifest
-                .as_ref()
-                .map(|m| m.name == name)
-                .unwrap_or(false)
-            {
+            if node.effective_name() == name {
                 // Preserve build state status override
                 let final_status = match node.build_state.status {
                     BuildStatus::Building | BuildStatus::Cleaning => NodeStatus::Building,
@@ -406,15 +420,10 @@ impl NodeManager {
                     let now = Self::now_ms();
                     log::debug!("Received health heartbeat from node: {}", name);
 
-                    // Update health state
+                    // Update health state (match by effective name)
                     let mut nodes = manager_heartbeat.nodes.write().await;
                     for node in nodes.values_mut() {
-                        if node
-                            .manifest
-                            .as_ref()
-                            .map(|m| m.name == name)
-                            .unwrap_or(false)
-                        {
+                        if node.effective_name() == name {
                             node.health_status = HealthStatus::Healthy;
                             node.last_health_check_ms = now;
                             break;
@@ -442,11 +451,7 @@ impl NodeManager {
                             if age > HEALTH_TIMEOUT_MS
                                 && node.health_status != HealthStatus::Unhealthy
                             {
-                                let name = node
-                                    .manifest
-                                    .as_ref()
-                                    .map(|m| m.name.clone())
-                                    .unwrap_or_else(|| "unknown".to_string());
+                                let name = node.effective_name();
                                 log::warn!(
                                     "Node {} marked unhealthy (no heartbeat for {}ms)",
                                     name,
@@ -480,22 +485,30 @@ impl NodeManager {
         let registered = registry::list_nodes()?;
         let mut nodes = self.nodes.write().await;
 
-        // Track which nodes we've seen
+        // Track which keys we've seen (keyed by effective_name)
         let mut seen = std::collections::HashSet::new();
 
-        for (path, manifest) in registered {
-            seen.insert(path.clone());
-
-            let name = manifest
+        for (entry, manifest) in registered {
+            // Compute effective name: name_override if present, otherwise manifest name
+            let eff_name = manifest
                 .as_ref()
-                .map(|m| m.name.clone())
-                .unwrap_or_else(|| "unknown".to_string());
+                .map(|m| registry::effective_name(&entry, m))
+                .unwrap_or_else(|| {
+                    entry
+                        .name_override
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string())
+                });
 
-            let service_name = systemd::get_service_name(&name);
+            // Use effective name as the HashMap key so each instance is distinct
+            let key = eff_name.clone();
+            seen.insert(key.clone());
+
+            let service_name = systemd::get_service_name(&eff_name);
 
             // Get systemd state
             let active_state = self.systemd.get_active_state(&service_name).await?;
-            let installed = systemd::is_service_installed(&name);
+            let installed = systemd::is_service_installed(&eff_name);
             let autostart_enabled = if installed {
                 self.systemd
                     .is_enabled(&service_name)
@@ -520,12 +533,12 @@ impl NodeManager {
 
             let is_built = manifest
                 .as_ref()
-                .map(|m| registry::check_is_built(&path, m))
+                .map(|m| registry::check_is_built(&entry.path, m))
                 .unwrap_or(false);
 
             // Preserve build state and health state if exists
             let (build_state, health_status, last_health_check_ms) = nodes
-                .get(&path)
+                .get(&key)
                 .map(|n| {
                     (
                         n.build_state.clone(),
@@ -543,7 +556,7 @@ impl NodeManager {
             };
 
             let cached = CachedNode {
-                path: path.clone(),
+                path: entry.path.clone(),
                 manifest,
                 status,
                 installed,
@@ -553,13 +566,15 @@ impl NodeManager {
                 last_updated_ms: Self::now_ms(),
                 health_status,
                 last_health_check_ms,
+                name_override: entry.name_override.clone(),
+                config_override: entry.config_override.clone(),
             };
 
-            nodes.insert(path, cached);
+            nodes.insert(key, cached);
         }
 
         // Remove nodes that are no longer registered
-        nodes.retain(|path, _| seen.contains(path));
+        nodes.retain(|key, _| seen.contains(key));
 
         Ok(())
     }
@@ -583,7 +598,7 @@ impl NodeManager {
         let nodes = self.nodes.read().await;
         nodes
             .values()
-            .find(|n| n.manifest.as_ref().map(|m| m.name == name).unwrap_or(false))
+            .find(|n| n.effective_name() == name)
             .map(|n| n.to_proto(&self.machine_id, &self.machine_hostname, &self.machine_ips))
     }
 
@@ -631,7 +646,19 @@ impl NodeManager {
             CommandType::Clean => self.clean_node(self.clone(), &cmd.node_name).await,
             CommandType::EnableAutostart => self.enable_autostart(&cmd.node_name).await,
             CommandType::DisableAutostart => self.disable_autostart(&cmd.node_name).await,
-            CommandType::AddNode => self.add_node(&cmd.node_path).await,
+            CommandType::AddNode => {
+                let name_ov = if cmd.name_override.is_empty() {
+                    None
+                } else {
+                    Some(cmd.name_override.as_str())
+                };
+                let config_ov = if cmd.config_override.is_empty() {
+                    None
+                } else {
+                    Some(cmd.config_override.as_str())
+                };
+                self.add_node(&cmd.node_path, name_ov, config_ov).await
+            }
             CommandType::RemoveNode => self.remove_node(&cmd.node_name).await,
             CommandType::Refresh => self.refresh_all().await.map(|_| "Refreshed".to_string()),
             CommandType::GetLogs => unreachable!(), // Handled above
@@ -662,12 +689,12 @@ impl NodeManager {
         }
     }
 
-    /// Find a node by name and return its path
+    /// Find a node by effective name and return its path
     async fn find_node_path(&self, name: &str) -> Result<String> {
         let nodes = self.nodes.read().await;
         nodes
             .values()
-            .find(|n| n.manifest.as_ref().map(|m| m.name == name).unwrap_or(false))
+            .find(|n| n.effective_name() == name)
             .map(|n| n.path.clone())
             .ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))
     }
@@ -737,22 +764,34 @@ impl NodeManager {
 
     /// Install a node's systemd service
     async fn install_node(self: &Arc<Self>, name: &str) -> Result<String> {
-        let path = self.find_node_path(name).await?;
+        // Look up by effective name (the HashMap key)
         let nodes = self.nodes.read().await;
         let node = nodes
-            .get(&path)
+            .get(name)
             .ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))?;
 
+        let path = node.path.clone();
         let manifest = node
             .manifest
             .as_ref()
             .ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))?;
 
+        // If config_override is set, append -c <config> to the command
+        let command = if let Some(ref config_path) = node.config_override {
+            let base_cmd = manifest
+                .command
+                .as_deref()
+                .unwrap_or("./target/release/unknown");
+            Some(format!("{} -c {}", base_cmd, config_path))
+        } else {
+            manifest.command.clone()
+        };
+
         systemd::install_service(
             &path,
             name,
             &manifest.node_type,
-            manifest.command.as_deref(),
+            command.as_deref(),
             &manifest.depends_on,
         )
         .await?;
@@ -928,19 +967,25 @@ impl NodeManager {
         Ok(format!("Disabled autostart for {}", name))
     }
 
-    /// Add a node to the registry
-    async fn add_node(&self, path: &str) -> Result<String> {
-        let manifest = registry::register_node(path)?;
+    /// Add a node to the registry, optionally with instance overrides
+    async fn add_node(
+        &self,
+        path: &str,
+        name_override: Option<&str>,
+        config_override: Option<&str>,
+    ) -> Result<String> {
+        let (_manifest, eff_name) = registry::register_node(path, name_override, config_override)?;
 
         self.refresh_all().await?;
-        self.emit_event("added", &manifest.name).await;
+        self.emit_event("added", &eff_name).await;
 
-        Ok(format!("Added node: {}", manifest.name))
+        Ok(format!("Added node: {}", eff_name))
     }
 
     /// Remove a node from the registry
     async fn remove_node(&self, name: &str) -> Result<String> {
-        let path = self.find_node_path(name).await?;
+        // Verify the node exists
+        let _path = self.find_node_path(name).await?;
 
         // Uninstall service if installed before removing from registry
         if systemd::is_service_installed(name) {
@@ -948,7 +993,8 @@ impl NodeManager {
             let _ = systemd::uninstall_service(name).await;
         }
 
-        registry::unregister_node(&path)?;
+        // Unregister by effective name (handles multi-instance correctly)
+        registry::unregister_node(name)?;
 
         self.refresh_all().await?;
         self.emit_event("removed", name).await;
@@ -1152,6 +1198,7 @@ fn extract_health_node_name(key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prost::Message;
 
     #[test]
     fn test_validate_build_command_allowed_prefixes() {
@@ -1215,5 +1262,194 @@ mod tests {
         assert_eq!(extract_health_node_name("invalid/path"), None);
         assert_eq!(extract_health_node_name(""), None);
         assert_eq!(extract_health_node_name("other/nodes/x/health"), None);
+    }
+
+    #[test]
+    fn test_cached_node_base_node_with_override() {
+        let node = CachedNode {
+            path: "/path/to/rtsp-camera".to_string(),
+            manifest: Some(NodeManifest {
+                name: "rtsp-camera".to_string(),
+                version: "0.1.0".to_string(),
+                description: "RTSP camera node".to_string(),
+                node_type: "rust".to_string(),
+                author: None,
+                build: None,
+                command: None,
+                depends_on: vec![],
+            }),
+            status: NodeStatus::Stopped,
+            installed: false,
+            autostart_enabled: false,
+            is_built: false,
+            build_state: BuildState::default(),
+            last_updated_ms: 0,
+            health_status: HealthStatus::Unknown,
+            last_health_check_ms: 0,
+            name_override: Some("rtsp-camera-terrace".to_string()),
+            config_override: None,
+        };
+
+        let proto = node.to_proto("machine1", "host1", &[]);
+        assert_eq!(proto.name, "rtsp-camera-terrace");
+        assert_eq!(proto.base_node, "rtsp-camera");
+    }
+
+    #[test]
+    fn test_cached_node_base_node_without_override() {
+        let node = CachedNode {
+            path: "/path/to/openmeteo".to_string(),
+            manifest: Some(NodeManifest {
+                name: "openmeteo".to_string(),
+                version: "0.1.0".to_string(),
+                description: "Weather node".to_string(),
+                node_type: "rust".to_string(),
+                author: None,
+                build: None,
+                command: None,
+                depends_on: vec![],
+            }),
+            status: NodeStatus::Running,
+            installed: true,
+            autostart_enabled: false,
+            is_built: true,
+            build_state: BuildState::default(),
+            last_updated_ms: 0,
+            health_status: HealthStatus::Unknown,
+            last_health_check_ms: 0,
+            name_override: None,
+            config_override: None,
+        };
+
+        let proto = node.to_proto("machine1", "host1", &[]);
+        assert_eq!(proto.name, "openmeteo");
+        assert_eq!(proto.base_node, "");
+    }
+
+    /// Simulate registering the same rtsp-camera node 3 times with different
+    /// name_overrides (terrace, garage, entrance) and verify the full proto
+    /// output for each instance plus a plain node without override.
+    #[test]
+    fn test_multi_instance_cameras_base_node_tracking() {
+        let camera_manifest = NodeManifest {
+            name: "rtsp-camera".to_string(),
+            version: "0.2.0".to_string(),
+            description: "RTSP camera node".to_string(),
+            node_type: "rust".to_string(),
+            author: None,
+            build: Some("cargo build --release".to_string()),
+            command: Some("./target/release/cameras_node".to_string()),
+            depends_on: vec![],
+        };
+
+        let instances = vec![
+            (
+                "rtsp-camera-terrace",
+                Some("rtsp-camera-terrace"),
+                Some("/etc/bubbaloop/terrace.yaml"),
+            ),
+            (
+                "rtsp-camera-garage",
+                Some("rtsp-camera-garage"),
+                Some("/etc/bubbaloop/garage.yaml"),
+            ),
+            ("rtsp-camera-entrance", Some("rtsp-camera-entrance"), None),
+        ];
+
+        let mut protos = Vec::new();
+
+        for (expected_name, name_override, config_override) in &instances {
+            let node = CachedNode {
+                path: "/opt/nodes/rtsp-camera".to_string(),
+                manifest: Some(camera_manifest.clone()),
+                status: NodeStatus::Running,
+                installed: true,
+                autostart_enabled: true,
+                is_built: true,
+                build_state: BuildState::default(),
+                last_updated_ms: 1700000000000,
+                health_status: HealthStatus::Healthy,
+                last_health_check_ms: 1700000000000,
+                name_override: name_override.map(|s| s.to_string()),
+                config_override: config_override.map(|s| s.to_string()),
+            };
+
+            assert_eq!(node.effective_name(), *expected_name);
+
+            let proto = node.to_proto("jetson-1", "jetson-1.local", &["10.0.0.42".to_string()]);
+            protos.push(proto);
+        }
+
+        // All instances should report "rtsp-camera" as their base_node
+        for (i, proto) in protos.iter().enumerate() {
+            let (expected_name, _, _) = &instances[i];
+            assert_eq!(proto.name, *expected_name, "instance {} name mismatch", i);
+            assert_eq!(
+                proto.base_node, "rtsp-camera",
+                "instance {} should have base_node='rtsp-camera'",
+                i
+            );
+            assert_eq!(proto.version, "0.2.0");
+            assert_eq!(proto.machine_id, "jetson-1");
+        }
+
+        // Now verify a plain node (no override) has empty base_node
+        let plain_node = CachedNode {
+            path: "/opt/nodes/openmeteo".to_string(),
+            manifest: Some(NodeManifest {
+                name: "openmeteo".to_string(),
+                version: "0.1.0".to_string(),
+                description: "Weather".to_string(),
+                node_type: "rust".to_string(),
+                author: None,
+                build: None,
+                command: None,
+                depends_on: vec![],
+            }),
+            status: NodeStatus::Running,
+            installed: true,
+            autostart_enabled: false,
+            is_built: true,
+            build_state: BuildState::default(),
+            last_updated_ms: 0,
+            health_status: HealthStatus::Unknown,
+            last_health_check_ms: 0,
+            name_override: None,
+            config_override: None,
+        };
+
+        let plain_proto = plain_node.to_proto("jetson-1", "jetson-1.local", &[]);
+        assert_eq!(plain_proto.name, "openmeteo");
+        assert_eq!(plain_proto.base_node, "");
+
+        // Build a NodeList containing all 4 nodes and verify it round-trips
+        let node_list = NodeList {
+            nodes: {
+                let mut v = protos.clone();
+                v.push(plain_proto.clone());
+                v
+            },
+            timestamp_ms: 1700000000000,
+            machine_id: "jetson-1".to_string(),
+        };
+
+        assert_eq!(node_list.nodes.len(), 4);
+
+        // Encode to protobuf bytes and decode back
+        let mut buf = Vec::new();
+        prost::Message::encode(&node_list, &mut buf).unwrap();
+        let decoded = NodeList::decode(&buf[..]).unwrap();
+
+        assert_eq!(decoded.nodes.len(), 4);
+        // Instances should preserve base_node through encode/decode
+        assert_eq!(decoded.nodes[0].name, "rtsp-camera-terrace");
+        assert_eq!(decoded.nodes[0].base_node, "rtsp-camera");
+        assert_eq!(decoded.nodes[1].name, "rtsp-camera-garage");
+        assert_eq!(decoded.nodes[1].base_node, "rtsp-camera");
+        assert_eq!(decoded.nodes[2].name, "rtsp-camera-entrance");
+        assert_eq!(decoded.nodes[2].base_node, "rtsp-camera");
+        // Plain node should have empty base_node
+        assert_eq!(decoded.nodes[3].name, "openmeteo");
+        assert_eq!(decoded.nodes[3].base_node, "");
     }
 }

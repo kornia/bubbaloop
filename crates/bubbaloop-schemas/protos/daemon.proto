@@ -54,6 +54,8 @@ message NodeState {
   string machine_hostname = 15;
   // Network IP addresses of the source machine
   repeated string machine_ips = 16;
+  // Base node template name (non-empty only for instances with name_override)
+  string base_node = 17;
 }
 
 // List of all nodes (published periodically)
@@ -97,6 +99,10 @@ message NodeCommand {
   string source_machine = 6;
   // Target machine (empty = local)
   string target_machine = 7;
+  // Instance name override (for multi-instance nodes, overrides node.yaml name)
+  string name_override = 8;
+  // Config file path override (appended as -c to command for this instance)
+  string config_override = 9;
 }
 
 // Result of a command execution

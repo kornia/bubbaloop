@@ -503,6 +503,7 @@ nodes:
             status: "stopped".to_string(),
             is_built: false,
             build_output: Vec::new(),
+            base_node: String::new(),
         }];
 
         let discovered = registry.scan_discoverable_nodes(&registered);

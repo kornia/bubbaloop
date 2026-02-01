@@ -86,6 +86,7 @@ pub struct NodeStateResponse {
     pub node_type: String,
     pub is_built: bool,
     pub build_output: Vec<String>,
+    pub base_node: String,
 }
 
 /// JSON response for node list
@@ -101,6 +102,12 @@ pub struct CommandRequest {
     pub command: String,
     #[serde(default)]
     pub node_path: String,
+    /// Instance name override (for multi-instance nodes)
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Config file path override (for multi-instance nodes)
+    #[serde(default)]
+    pub config: Option<String>,
 }
 
 /// JSON response for commands
@@ -159,6 +166,7 @@ fn node_state_to_response(state: &crate::schemas::daemon::v1::NodeState) -> Node
         node_type: state.node_type.clone(),
         is_built: state.is_built,
         build_output: state.build_output.clone(),
+        base_node: state.base_node.clone(),
     }
 }
 
@@ -364,6 +372,8 @@ impl ZenohApiService {
             timestamp_ms: Self::now_ms(),
             source_machine: "api".to_string(), // API calls don't have a source machine
             target_machine: self.machine_id.clone(),
+            name_override: request.name.unwrap_or_default(),
+            config_override: request.config.unwrap_or_default(),
         };
 
         let result = self.node_manager.execute_command(cmd).await;
@@ -387,6 +397,8 @@ impl ZenohApiService {
             timestamp_ms: Self::now_ms(),
             source_machine: "api".to_string(),
             target_machine: self.machine_id.clone(),
+            name_override: String::new(),
+            config_override: String::new(),
         };
 
         let result = self.node_manager.execute_command(cmd).await;
@@ -532,6 +544,8 @@ impl ZenohApiService {
             timestamp_ms: Self::now_ms(),
             source_machine: "api".to_string(),
             target_machine: self.machine_id.clone(),
+            name_override: request.name.unwrap_or_default(),
+            config_override: request.config.unwrap_or_default(),
         };
 
         let result = self.node_manager.execute_command(cmd).await;

@@ -21,6 +21,7 @@ interface NodeState {
   machine_id?: string;
   machine_hostname?: string;
   machine_ips?: string[];
+  base_node?: string;
   stale?: boolean;
 }
 
@@ -104,6 +105,7 @@ export function NodesViewPanel({
           machine_id: n.machineId || listMachineId,
           machine_hostname: n.machineHostname,
           machine_ips: n.machineIps || [],
+          base_node: n.baseNode || '',
         }));
         setDaemonConnected(true);
         setError(null);
@@ -420,6 +422,7 @@ export function NodesViewPanel({
       ips: n.machine_ips || [],
       nodeType: n.node_type,
       version: n.version,
+      baseNode: n.base_node || '',
     })));
   }, [nodes, reportNodes]);
 

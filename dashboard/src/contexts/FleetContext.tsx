@@ -17,6 +17,7 @@ export interface FleetNodeInfo {
   ips: string[];
   nodeType: string;
   version: string;
+  baseNode: string;
 }
 
 interface FleetContextValue {

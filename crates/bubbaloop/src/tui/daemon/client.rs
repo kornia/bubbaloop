@@ -38,6 +38,8 @@ struct NodeState {
     node_type: String,
     is_built: bool,
     build_output: Vec<String>,
+    #[serde(default)]
+    base_node: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,6 +93,7 @@ fn decode_node_list(bytes: &[u8]) -> Result<Vec<NodeInfo>> {
             status: proto_status_to_string(n.status),
             is_built: n.is_built,
             build_output: n.build_output,
+            base_node: n.base_node,
         })
         .collect())
 }
@@ -197,6 +200,7 @@ impl DaemonClient {
                 status: n.status,
                 is_built: n.is_built,
                 build_output: n.build_output,
+                base_node: n.base_node,
             })
             .collect())
     }
@@ -482,6 +486,7 @@ mod tests {
             node_type: "python".to_string(),
             is_built: true,
             build_output: vec![],
+            base_node: "sensor-base".to_string(),
         };
 
         let node_info = NodeInfo {
@@ -493,6 +498,7 @@ mod tests {
             status: node_state.status.clone(),
             is_built: node_state.is_built,
             build_output: node_state.build_output.clone(),
+            base_node: node_state.base_node.clone(),
         };
 
         assert_eq!(node_info.name, "sensor");
@@ -500,5 +506,6 @@ mod tests {
         assert_eq!(node_info.status, "active");
         assert_eq!(node_info.node_type, "python");
         assert!(node_info.is_built);
+        assert_eq!(node_info.base_node, "sensor-base");
     }
 }
