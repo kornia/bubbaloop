@@ -151,7 +151,7 @@ export function CameraView({
 
     // Extract camera name hint from current topic
     // e.g., "0/camera%terrace%compressed/**" -> decode % to / -> find "terrace"
-    const currentBase = topic.replace(/\/?\*\*$/, '').replace(/\/?\*$/, '');
+    const currentBase = topic.replace(/\/\*{1,2}$/, '');
     const decoded = currentBase.replace(/%/g, '/');
     const segments = decoded.split('/').filter(Boolean);
     const cameraIdx = segments.indexOf('camera');
@@ -170,18 +170,24 @@ export function CameraView({
     });
     if (alreadyMatches) return;
 
-    // Find a discovered topic containing the camera name
+    // Find a discovered topic matching the camera name exactly
     for (const discoveredTopic of availableTopics) {
       const decodedDiscovered = discoveredTopic.replace(/%/g, '/');
-      if (decodedDiscovered.includes(`camera/${cameraHint}/compressed`)) {
-        const normalized = normalizeTopicPattern(discoveredTopic);
-        const newTopic = normalized + '/**';
-        if (newTopic !== topic) {
-          autoDetectedRef.current = true;
-          console.log(`[CameraView] Auto-detected topic for "${cameraHint}": ${topic} -> ${newTopic}`);
-          onTopicChange(newTopic);
+      const discoveredSegments = decodedDiscovered.split('/');
+      const discCameraIdx = discoveredSegments.indexOf('camera');
+
+      if (discCameraIdx !== -1 && discoveredSegments[discCameraIdx + 2] === 'compressed') {
+        const discoveredHint = discoveredSegments[discCameraIdx + 1];
+        if (discoveredHint === cameraHint) {
+          const normalized = normalizeTopicPattern(discoveredTopic);
+          const newTopic = normalized + '/**';
+          if (newTopic !== topic) {
+            autoDetectedRef.current = true;
+            console.log(`[CameraView] Auto-detected topic for "${cameraHint}": ${topic} -> ${newTopic}`);
+            onTopicChange(newTopic);
+          }
+          return;
         }
-        return;
       }
     }
   }, [availableTopics, topic, onTopicChange]);

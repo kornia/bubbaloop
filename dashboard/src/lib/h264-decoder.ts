@@ -67,8 +67,9 @@ export class H264Decoder {
       if (data[2] === 0 && data[3] === 1) return 'annexb'; // 4-byte start code
     }
 
-    // Check for AVCC: first 4 bytes are big-endian NAL length
-    const nalLen = (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3];
+    // Check for AVCC: first 4 bytes are big-endian unsigned NAL length
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const nalLen = view.getUint32(0);
     if (nalLen > 0 && nalLen <= data.length - 4) {
       // Verify the NAL header byte after the length looks valid
       const nalHeader = data[4];
@@ -132,10 +133,11 @@ export class H264Decoder {
    */
   private parseNalUnitsAVCC(data: Uint8Array): NalUnit[] {
     const nalUnits: NalUnit[] = [];
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
     let i = 0;
 
     while (i + 4 < data.length) {
-      const nalLen = (data[i] << 24) | (data[i + 1] << 16) | (data[i + 2] << 8) | data[i + 3];
+      const nalLen = view.getUint32(i);
 
       if (nalLen <= 0 || nalLen > data.length - i - 4) {
         break; // Invalid length
@@ -371,10 +373,6 @@ export class H264Decoder {
     if (now - this.lastDiagnosticLog < 3000) return;
     this.lastDiagnosticLog = now;
 
-    const first16 = Array.from(data.slice(0, 16))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join(' ');
-
     // Try to parse with both formats to diagnose
     const annexBNals = this.parseNalUnitsAnnexB(data);
     const avccNals = this.parseNalUnitsAVCC(data);
@@ -385,7 +383,6 @@ export class H264Decoder {
     console.warn(
       `[H264Decoder] Waiting for keyframe — received ${this.framesReceived} frames, ` +
       `last: ${data.length} bytes, format: ${this.nalFormat}, ` +
-      `first16: [${first16}], ` +
       `annexB NALs: [${annexBTypes.join(',')}], ` +
       `avcc NALs: [${avccTypes.join(',')}]`
     );
@@ -473,7 +470,6 @@ export class H264Decoder {
           timestamp,
           dataLength: data.length,
           format: this.nalFormat,
-          first16Bytes: Array.from(data.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' '),
         });
       }
 
@@ -538,6 +534,7 @@ export class H264Decoder {
     this.nalFormat = 'unknown';
     this.errorCount = 0;
     this.framesReceived = 0;
+    this.lastDiagnosticLog = 0;
   }
 
   get isInitialized(): boolean {
