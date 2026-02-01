@@ -193,12 +193,14 @@ impl ZenohService {
         log::info!("Declared publisher on {}", keys::EVENTS_LEGACY);
         log::info!("Declared publisher on {}", events_key_new);
 
-        // Declare queryable for node list (returns current state on GET)
+        // Declare queryables for node list (returns current state on GET)
         let nodes_queryable = self
             .session
             .declare_queryable(keys::NODES_LIST_LEGACY)
             .await?;
+        let nodes_queryable_new = self.session.declare_queryable(&nodes_list_key_new).await?;
         log::info!("Declared nodes queryable on {}", keys::NODES_LIST_LEGACY);
+        log::info!("Declared nodes queryable on {}", nodes_list_key_new);
 
         // Give Zenoh time to propagate queryable declarations across the network
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -210,9 +212,8 @@ impl ZenohService {
         // Publish initial state (both legacy and new)
         let initial_list = self.node_manager.get_node_list().await;
         let initial_bytes = Self::encode_proto(&initial_list);
-        let initial_bytes_new = Self::encode_proto(&initial_list);
-        list_publisher.put(initial_bytes).await?;
-        list_publisher_new.put(initial_bytes_new).await?;
+        list_publisher.put(initial_bytes.clone()).await?;
+        list_publisher_new.put(initial_bytes).await?;
         log::info!(
             "Published initial node list ({} nodes)",
             initial_list.nodes.len()
@@ -240,31 +241,23 @@ impl ZenohService {
                     let list = self.node_manager.get_node_list().await;
                     if !list.nodes.is_empty() {
                         let bytes = Self::encode_proto(&list);
-                        let bytes_new = Self::encode_proto(&list);
-                        if let Err(e) = list_publisher.put(bytes).await {
+                        if let Err(e) = list_publisher.put(bytes.clone()).await {
                             log::warn!("Failed to publish node list (legacy): {}", e);
                         }
-                        if let Err(e) = list_publisher_new.put(bytes_new).await {
+                        if let Err(e) = list_publisher_new.put(bytes).await {
                             log::warn!("Failed to publish node list (new): {}", e);
                         }
                     }
                 }
 
-                // Handle node list queries (GET on bubbaloop/daemon/nodes)
+                // Handle node list queries - legacy
                 nodes_query = nodes_queryable.recv_async() => {
-                    match nodes_query {
-                        Ok(query) => {
-                            let list = self.node_manager.get_node_list().await;
-                            let bytes = Self::encode_proto(&list);
-                            log::debug!("Replying to nodes query with {} nodes ({} bytes)", list.nodes.len(), bytes.len());
-                            if let Err(e) = query.reply(query.key_expr(), bytes).await {
-                                log::warn!("Failed to reply to nodes query: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("Nodes query receive error: {}", e);
-                        }
-                    }
+                    self.handle_nodes_query(nodes_query, "legacy").await;
+                }
+
+                // Handle node list queries - machine-scoped
+                nodes_query_new = nodes_queryable_new.recv_async() => {
+                    self.handle_nodes_query(nodes_query_new, "new").await;
                 }
 
                 // Handle incoming queries (commands) - legacy
@@ -297,11 +290,10 @@ impl ZenohService {
                         Ok(event) => {
                             // Publish event (both legacy and new)
                             let event_bytes = Self::encode_proto(&event);
-                            let event_bytes_new = Self::encode_proto(&event);
-                            if let Err(e) = event_publisher.put(event_bytes).await {
+                            if let Err(e) = event_publisher.put(event_bytes.clone()).await {
                                 log::warn!("Failed to publish event (legacy): {}", e);
                             }
-                            if let Err(e) = event_publisher_new.put(event_bytes_new).await {
+                            if let Err(e) = event_publisher_new.put(event_bytes).await {
                                 log::warn!("Failed to publish event (new): {}", e);
                             }
 
@@ -310,11 +302,10 @@ impl ZenohService {
                                 let key_legacy = keys::node_state_key_legacy(&state.name);
                                 let key_new = keys::node_state_key(&self.machine_id, &state.name);
                                 let state_bytes = Self::encode_proto(state);
-                                let state_bytes_new = Self::encode_proto(state);
-                                if let Err(e) = self.session.put(&key_legacy, state_bytes).await {
+                                if let Err(e) = self.session.put(&key_legacy, state_bytes.clone()).await {
                                     log::warn!("Failed to publish node state (legacy): {}", e);
                                 }
-                                if let Err(e) = self.session.put(&key_new, state_bytes_new).await {
+                                if let Err(e) = self.session.put(&key_new, state_bytes).await {
                                     log::warn!("Failed to publish node state (new): {}", e);
                                 }
                             }
@@ -323,11 +314,10 @@ impl ZenohService {
                             let list = self.node_manager.get_node_list().await;
                             if !list.nodes.is_empty() {
                                 let list_bytes = Self::encode_proto(&list);
-                                let list_bytes_new = Self::encode_proto(&list);
-                                if let Err(e) = list_publisher.put(list_bytes).await {
+                                if let Err(e) = list_publisher.put(list_bytes.clone()).await {
                                     log::warn!("Failed to publish node list (legacy): {}", e);
                                 }
-                                if let Err(e) = list_publisher_new.put(list_bytes_new).await {
+                                if let Err(e) = list_publisher_new.put(list_bytes).await {
                                     log::warn!("Failed to publish node list (new): {}", e);
                                 }
                             }
@@ -341,6 +331,32 @@ impl ZenohService {
         }
 
         Ok(())
+    }
+
+    /// Handle a node list query (GET on nodes key)
+    async fn handle_nodes_query(
+        &self,
+        result: std::result::Result<zenoh::query::Query, zenoh::Error>,
+        label: &str,
+    ) {
+        match result {
+            Ok(query) => {
+                let list = self.node_manager.get_node_list().await;
+                let bytes = Self::encode_proto(&list);
+                log::debug!(
+                    "Replying to nodes query ({}) with {} nodes ({} bytes)",
+                    label,
+                    list.nodes.len(),
+                    bytes.len()
+                );
+                if let Err(e) = query.reply(query.key_expr(), bytes).await {
+                    log::warn!("Failed to reply to nodes query ({}): {}", label, e);
+                }
+            }
+            Err(e) => {
+                log::warn!("Nodes query receive error ({}): {}", label, e);
+            }
+        }
     }
 
     /// Handle an incoming query (command request)

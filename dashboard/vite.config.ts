@@ -95,12 +95,6 @@ export default defineConfig({
     host: true,
     // Proxy through Vite for cross-machine access
     proxy: {
-      // Daemon HTTP API proxy
-      '/daemon': {
-        target: 'http://127.0.0.1:8088',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/daemon/, ''),
-      },
       // Zenoh WebSocket proxy
       '/zenoh': {
         target: 'ws://127.0.0.1:10001',
