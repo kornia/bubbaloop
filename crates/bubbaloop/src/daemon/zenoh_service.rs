@@ -198,10 +198,7 @@ impl ZenohService {
             .session
             .declare_queryable(keys::NODES_LIST_LEGACY)
             .await?;
-        let nodes_queryable_new = self
-            .session
-            .declare_queryable(&nodes_list_key_new)
-            .await?;
+        let nodes_queryable_new = self.session.declare_queryable(&nodes_list_key_new).await?;
         log::info!("Declared nodes queryable on {}", keys::NODES_LIST_LEGACY);
         log::info!("Declared nodes queryable on {}", nodes_list_key_new);
 
@@ -253,38 +250,14 @@ impl ZenohService {
                     }
                 }
 
-                // Handle node list queries (GET on bubbaloop/daemon/nodes) - legacy
+                // Handle node list queries - legacy
                 nodes_query = nodes_queryable.recv_async() => {
-                    match nodes_query {
-                        Ok(query) => {
-                            let list = self.node_manager.get_node_list().await;
-                            let bytes = Self::encode_proto(&list);
-                            log::debug!("Replying to nodes query with {} nodes ({} bytes)", list.nodes.len(), bytes.len());
-                            if let Err(e) = query.reply(query.key_expr(), bytes).await {
-                                log::warn!("Failed to reply to nodes query (legacy): {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("Nodes query receive error (legacy): {}", e);
-                        }
-                    }
+                    self.handle_nodes_query(nodes_query, "legacy").await;
                 }
 
-                // Handle node list queries (GET on bubbaloop/{machine_id}/daemon/nodes) - new
+                // Handle node list queries - machine-scoped
                 nodes_query_new = nodes_queryable_new.recv_async() => {
-                    match nodes_query_new {
-                        Ok(query) => {
-                            let list = self.node_manager.get_node_list().await;
-                            let bytes = Self::encode_proto(&list);
-                            log::debug!("Replying to nodes query (new) with {} nodes ({} bytes)", list.nodes.len(), bytes.len());
-                            if let Err(e) = query.reply(query.key_expr(), bytes).await {
-                                log::warn!("Failed to reply to nodes query (new): {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("Nodes query receive error (new): {}", e);
-                        }
-                    }
+                    self.handle_nodes_query(nodes_query_new, "new").await;
                 }
 
                 // Handle incoming queries (commands) - legacy
@@ -358,6 +331,32 @@ impl ZenohService {
         }
 
         Ok(())
+    }
+
+    /// Handle a node list query (GET on nodes key)
+    async fn handle_nodes_query(
+        &self,
+        result: std::result::Result<zenoh::query::Query, zenoh::Error>,
+        label: &str,
+    ) {
+        match result {
+            Ok(query) => {
+                let list = self.node_manager.get_node_list().await;
+                let bytes = Self::encode_proto(&list);
+                log::debug!(
+                    "Replying to nodes query ({}) with {} nodes ({} bytes)",
+                    label,
+                    list.nodes.len(),
+                    bytes.len()
+                );
+                if let Err(e) = query.reply(query.key_expr(), bytes).await {
+                    log::warn!("Failed to reply to nodes query ({}): {}", label, e);
+                }
+            }
+            Err(e) => {
+                log::warn!("Nodes query receive error ({}): {}", label, e);
+            }
+        }
     }
 
     /// Handle an incoming query (command request)
