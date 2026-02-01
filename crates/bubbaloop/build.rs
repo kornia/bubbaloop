@@ -18,7 +18,7 @@ fn find_proto_files(dir: &str) -> Vec<String> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
-    let protos_dir = PathBuf::from("../../protos");
+    let protos_dir = PathBuf::from("../bubbaloop-schemas/protos");
 
     // Bubbaloop protobuf files
     let proto_files = find_proto_files(protos_dir.to_str().unwrap());

@@ -23,12 +23,19 @@ macro_rules! proto_module {
 proto_module!(header, "bubbaloop.header.v1.rs");
 proto_module!(camera, "bubbaloop.camera.v1.rs");
 proto_module!(weather, "bubbaloop.weather.v1.rs");
+proto_module!(daemon, "bubbaloop.daemon.v1.rs");
+proto_module!(machine, "bubbaloop.machine.v1.rs");
 proto_module!(system_telemetry, "bubbaloop.system_telemetry.v1.rs");
 proto_module!(network_monitor, "bubbaloop.network_monitor.v1.rs");
 
 // Re-export commonly used types
 pub use camera::v1::{CompressedImage, RawImage};
+pub use daemon::v1::{
+    CommandResult, CommandType, HealthStatus, NodeCommand, NodeEvent, NodeList,
+    NodeState as DaemonNodeState, NodeStatus,
+};
 pub use header::v1::Header;
+pub use machine::v1::{MachineHeartbeat, MachineInfo, MachineList};
 pub use network_monitor::v1::{
     CheckStatus, CheckType, HealthCheck, NetworkStatus, Summary,
 };

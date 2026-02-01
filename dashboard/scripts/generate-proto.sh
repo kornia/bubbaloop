@@ -1,19 +1,8 @@
 #!/bin/bash
 set -e
 
-# Create a temporary directory with the proto files
-TMP_DIR=$(mktemp -d)
-trap "rm -rf $TMP_DIR" EXIT
-
-# Copy proto files to temp directory
-cp ../protos/bubbaloop/header.proto "$TMP_DIR/"
-cp ../protos/bubbaloop/camera.proto "$TMP_DIR/"
-cp ../protos/bubbaloop/weather.proto "$TMP_DIR/"
-cp ../protos/bubbaloop/daemon.proto "$TMP_DIR/"
-
-# Fix the import path in the temp proto files
-sed -i 's|import "bubbaloop/header.proto";|import "header.proto";|' "$TMP_DIR/camera.proto"
-sed -i 's|import "bubbaloop/header.proto";|import "header.proto";|' "$TMP_DIR/weather.proto"
+# Proto source of truth: crates/bubbaloop-schemas/protos/
+PROTO_DIR="../crates/bubbaloop-schemas/protos"
 
 # Generate the proto files
 cd "$(dirname "$0")/.."
@@ -21,10 +10,10 @@ cd "$(dirname "$0")/.."
 # Generate ALL protos into a single file to avoid $root.bubbaloop being overwritten
 # Order: header first (dependency), then camera, then weather, then daemon
 npx pbjs -t static-module -w es6 -o src/proto/messages.pb.js \
-  "$TMP_DIR/header.proto" \
-  "$TMP_DIR/camera.proto" \
-  "$TMP_DIR/weather.proto" \
-  "$TMP_DIR/daemon.proto"
+  "$PROTO_DIR/header.proto" \
+  "$PROTO_DIR/camera.proto" \
+  "$PROTO_DIR/weather.proto" \
+  "$PROTO_DIR/daemon.proto"
 npx pbts -o src/proto/messages.pb.d.ts src/proto/messages.pb.js
 
 # Fix protobufjs 7.x bug that adds incorrect 'error' parameter to decode functions
