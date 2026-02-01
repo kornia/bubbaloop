@@ -22,6 +22,8 @@ const ZENOH_ENDPOINT = getZenohEndpoint();
 // ros-z key format: {domain_id}/{topic_with_%_encoding}/{type_info}
 // Topic paths in ros-z use % encoding: /camera/entrance/compressed -> camera%entrance%compressed
 // Use wildcard pattern to match the type_info suffix
+// Note: CameraView automatically adds a glob prefix (*) to match machine-specific prefixes
+// (e.g., bubbaloop%local%nvidia_orin00%camera%terrace%compressed)
 const DEFAULT_CAMERAS = [
   { name: 'entrance', topic: '0/camera%entrance%compressed/**' },
   { name: 'terrace', topic: '0/camera%terrace%compressed/**' },

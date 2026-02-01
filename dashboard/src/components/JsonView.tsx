@@ -93,6 +93,8 @@ function decodePayload(payload: Uint8Array, topic: string): { data: unknown; sch
             pubTime: msg.header.pubTime.toString(),
             sequence: msg.header.sequence,
             frameId: msg.header.frameId,
+            machineId: msg.header.machineId,
+            scope: msg.header.scope,
           };
           if (msg.header.acqTime > 0n && msg.header.pubTime > 0n) {
             const latencyNs = msg.header.pubTime - msg.header.acqTime;
