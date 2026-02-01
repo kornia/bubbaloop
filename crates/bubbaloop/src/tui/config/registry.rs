@@ -210,7 +210,9 @@ impl Registry {
                             name: node.name,
                             version: node.version,
                             node_type: node.node_type,
+                            description: node.description,
                             source: source.name.clone(),
+                            source_type: source.source_type.clone(),
                         });
                     }
                 }
@@ -240,7 +242,9 @@ impl Registry {
                     name: entry.name,
                     version: entry.version,
                     node_type: entry.node_type,
+                    description: entry.description,
                     source: OFFICIAL_SOURCE_NAME.to_string(),
+                    source_type: OFFICIAL_SOURCE_TYPE.to_string(),
                 }
             })
             .collect()
@@ -252,6 +256,7 @@ struct ScannedNode {
     name: String,
     version: String,
     node_type: String,
+    description: String,
 }
 
 fn scan_for_nodes(base_path: &str) -> Vec<ScannedNode> {
@@ -276,6 +281,7 @@ fn scan_for_nodes(base_path: &str) -> Vec<ScannedNode> {
                                 name: manifest.name,
                                 version: manifest.version,
                                 node_type: manifest.node_type,
+                                description: manifest.description,
                             });
                         }
                     }
@@ -363,6 +369,8 @@ nodes:
         assert_eq!(camera.version, "0.1.0");
         assert_eq!(camera.node_type, "rust");
         assert_eq!(camera.source, OFFICIAL_SOURCE_NAME);
+        assert_eq!(camera.source_type, OFFICIAL_SOURCE_TYPE);
+        assert_eq!(camera.description, "RTSP camera capture");
         assert_eq!(
             camera.path,
             "kornia/bubbaloop-nodes-official --subdir rtsp-camera"
@@ -370,6 +378,7 @@ nodes:
 
         let netmon = nodes.iter().find(|n| n.name == "network-monitor").unwrap();
         assert_eq!(netmon.node_type, "python");
+        assert_eq!(netmon.source_type, OFFICIAL_SOURCE_TYPE);
     }
 
     #[test]

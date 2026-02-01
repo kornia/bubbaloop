@@ -73,7 +73,9 @@ pub struct DiscoverableNode {
     pub name: String,
     pub version: String,
     pub node_type: String,
+    pub description: String,
     pub source: String,
+    pub source_type: String, // "builtin", "local", "git"
 }
 
 /// Marketplace source

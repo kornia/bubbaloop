@@ -280,6 +280,10 @@ fn render_info_panel(
                 "Build in progress...",
                 Style::default().fg(colors::DIMMED),
             )));
+            action_lines.push(Line::from(Span::styled(
+                "Safe to exit \u{2014} runs on daemon",
+                Style::default().fg(colors::SUCCESS),
+            )));
         }
 
         // Logs — always shown (works during builds)

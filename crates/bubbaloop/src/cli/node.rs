@@ -1225,18 +1225,19 @@ fn search_nodes(args: SearchArgs) -> Result<()> {
     }
 
     println!(
-        "{:<20} {:<10} {:<8} {:<12} DESCRIPTION",
-        "NAME", "VERSION", "TYPE", "CATEGORY"
+        "{:<20} {:<10} {:<8} {:<12} {:<30} REPO",
+        "NAME", "VERSION", "TYPE", "CATEGORY", "DESCRIPTION"
     );
-    println!("{}", "-".repeat(78));
+    println!("{}", "-".repeat(110));
     for node in &results {
         println!(
-            "{:<20} {:<10} {:<8} {:<12} {}",
+            "{:<20} {:<10} {:<8} {:<12} {:<30} {}",
             node.name,
             node.version,
             node.node_type,
             node.category,
-            truncate(&node.description, 30)
+            truncate(&node.description, 28),
+            node.repo
         );
     }
     println!();

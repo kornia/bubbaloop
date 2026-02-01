@@ -134,43 +134,17 @@ fn render_installed_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         return;
     }
 
+    let header_style = Style::default()
+        .fg(colors::PRIMARY)
+        .add_modifier(Modifier::BOLD);
+
     let header = Row::new(vec![
-        Span::styled(
-            "St",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Name",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Version",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Type",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Built",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Description",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("St", header_style),
+        Span::styled("Name", header_style),
+        Span::styled("Version", header_style),
+        Span::styled("Type", header_style),
+        Span::styled("Built", header_style),
+        Span::styled("Description", header_style),
     ])
     .height(1);
 
@@ -274,37 +248,16 @@ fn render_discover_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         return;
     }
 
+    let header_style = Style::default()
+        .fg(colors::PRIMARY)
+        .add_modifier(Modifier::BOLD);
+
     let header = Row::new(vec![
-        Span::styled(
-            "Name",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Version",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Type",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Source",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Path",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("Name", header_style),
+        Span::styled("Version", header_style),
+        Span::styled("Type", header_style),
+        Span::styled("Source", header_style),
+        Span::styled("Description", header_style),
     ])
     .height(1);
 
@@ -331,14 +284,22 @@ fn render_discover_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 colors::PYTHON_TYPE
             };
 
-            let path_display = truncate_path(&node.path, 35);
+            let source_color = match node.source_type.as_str() {
+                "builtin" => colors::PRIMARY,
+                "local" => colors::SUCCESS,
+                "git" => colors::WARNING,
+                _ => colors::DIMMED,
+            };
+            let source_label = format!("{} {}", source_type_label(&node.source_type), node.source);
+
+            let desc = node.description.chars().take(40).collect::<String>();
 
             Row::new(vec![
                 Span::styled(name_text, name_style),
                 Span::styled(node.version.clone(), Style::default().fg(colors::SUCCESS)),
                 Span::styled(node.node_type.clone(), Style::default().fg(type_color)),
-                Span::styled(node.source.clone(), Style::default().fg(colors::DIMMED)),
-                Span::styled(path_display, Style::default().fg(colors::DIMMED)),
+                Span::styled(source_label, Style::default().fg(source_color)),
+                Span::styled(desc, Style::default().fg(colors::DIMMED)),
             ])
         })
         .collect();
@@ -346,16 +307,35 @@ fn render_discover_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let table = Table::new(
         rows,
         [
+            Constraint::Percentage(20),
+            Constraint::Length(8),
+            Constraint::Length(8),
             Constraint::Percentage(25),
-            Constraint::Length(10),
-            Constraint::Length(10),
-            Constraint::Percentage(15),
             Constraint::Percentage(40),
         ],
     )
     .header(header);
 
     f.render_widget(table, inner);
+}
+
+/// Return a short label for the given source type.
+fn source_type_label(source_type: &str) -> &'static str {
+    match source_type {
+        "builtin" => "github",
+        "local" => "local",
+        "git" => "git",
+        _ => "unknown",
+    }
+}
+
+/// Build a human-readable origin string from a source entry.
+fn format_source_origin(source: &crate::tui::app::MarketplaceSource) -> String {
+    if source.source_type == "builtin" {
+        format!("https://github.com/{}", source.path)
+    } else {
+        source.path.clone()
+    }
 }
 
 fn render_marketplace_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -376,31 +356,16 @@ fn render_marketplace_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
         return;
     }
 
+    let header_style = Style::default()
+        .fg(colors::PRIMARY)
+        .add_modifier(Modifier::BOLD);
+
     let header = Row::new(vec![
-        Span::styled(
-            "On",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Name",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Type",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Path",
-            Style::default()
-                .fg(colors::PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("On", header_style),
+        Span::styled("Name", header_style),
+        Span::styled("Kind", header_style),
+        Span::styled("Nodes", header_style),
+        Span::styled("Origin", header_style),
     ])
     .height(1);
 
@@ -434,13 +399,37 @@ fn render_marketplace_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
                 _ => colors::SUCCESS,
             };
 
-            let path_display = truncate_path(&source.path, 50);
+            // Count discovered nodes from this source
+            let node_count = app
+                .discoverable_nodes
+                .iter()
+                .filter(|n| n.source == source.name)
+                .count();
+            // Also count installed nodes that came from builtin (by name match)
+            let installed_from_source = if source.source_type == "builtin" {
+                app.nodes.len()
+            } else {
+                0
+            };
+            let total = node_count + installed_from_source;
+            let count_text = if source.enabled {
+                format!("{}", total)
+            } else {
+                "-".to_string()
+            };
+
+            let origin = format_source_origin(source);
+            let origin_display = truncate_path(&origin, 60);
 
             Row::new(vec![
                 Span::styled(enabled_symbol, Style::default().fg(enabled_color)),
                 Span::styled(name_text, name_style),
-                Span::styled(source.source_type.clone(), Style::default().fg(type_color)),
-                Span::styled(path_display, Style::default().fg(colors::DIMMED)),
+                Span::styled(
+                    source_type_label(&source.source_type),
+                    Style::default().fg(type_color),
+                ),
+                Span::styled(count_text, Style::default().fg(colors::TEXT)),
+                Span::styled(origin_display, Style::default().fg(colors::DIMMED)),
             ])
         })
         .collect();
@@ -450,8 +439,9 @@ fn render_marketplace_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
         [
             Constraint::Length(3),
             Constraint::Percentage(20),
-            Constraint::Length(10),
-            Constraint::Percentage(67),
+            Constraint::Length(8),
+            Constraint::Length(6),
+            Constraint::Percentage(55),
         ],
     )
     .header(header);
@@ -855,5 +845,64 @@ mod tests {
         // Edge case: max_chars smaller than "..." length
         let result = truncate_path("/home/user/node", 3);
         assert_eq!(result, "...");
+    }
+
+    #[test]
+    fn test_source_type_label_builtin() {
+        assert_eq!(source_type_label("builtin"), "github");
+    }
+
+    #[test]
+    fn test_source_type_label_local() {
+        assert_eq!(source_type_label("local"), "local");
+    }
+
+    #[test]
+    fn test_source_type_label_git() {
+        assert_eq!(source_type_label("git"), "git");
+    }
+
+    #[test]
+    fn test_source_type_label_unknown() {
+        assert_eq!(source_type_label("something"), "unknown");
+    }
+
+    #[test]
+    fn test_format_source_origin_builtin() {
+        let source = crate::tui::app::MarketplaceSource {
+            name: "Official Nodes".into(),
+            path: "kornia/bubbaloop-nodes-official".into(),
+            source_type: "builtin".into(),
+            enabled: true,
+        };
+        assert_eq!(
+            format_source_origin(&source),
+            "https://github.com/kornia/bubbaloop-nodes-official"
+        );
+    }
+
+    #[test]
+    fn test_format_source_origin_local() {
+        let source = crate::tui::app::MarketplaceSource {
+            name: "My Local Nodes".into(),
+            path: "/home/user/nodes".into(),
+            source_type: "local".into(),
+            enabled: true,
+        };
+        assert_eq!(format_source_origin(&source), "/home/user/nodes");
+    }
+
+    #[test]
+    fn test_format_source_origin_git() {
+        let source = crate::tui::app::MarketplaceSource {
+            name: "My Fork".into(),
+            path: "https://github.com/user/nodes.git".into(),
+            source_type: "git".into(),
+            enabled: true,
+        };
+        assert_eq!(
+            format_source_origin(&source),
+            "https://github.com/user/nodes.git"
+        );
     }
 }
