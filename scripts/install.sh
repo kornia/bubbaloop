@@ -7,6 +7,7 @@
 # - Zenoh WebSocket bridge (zenoh-bridge-remote-api)
 # - Bubbaloop daemon
 # - Bubbaloop TUI
+# - Bubbaloop dashboard server
 # - Systemd user services for zenohd, zenoh-bridge, and bubbaloop-daemon
 
 set -euo pipefail
@@ -84,6 +85,15 @@ check_deps() {
 # Get latest release version
 get_latest_version() {
     curl -sS "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+}
+
+# Get latest dashboard release version (tags starting with dash-)
+get_latest_dash_version() {
+    curl -sS "https://api.github.com/repos/$REPO/releases" \
+        | grep '"tag_name":' \
+        | grep 'dash-' \
+        | head -1 \
+        | sed -E 's/.*"([^"]+)".*/\1/'
 }
 
 # Download file
@@ -173,6 +183,33 @@ install_bubbaloop() {
     info "Bubbaloop $version installed"
 }
 
+# Install Bubbaloop Dashboard server (from separate dash-* release)
+install_dashboard() {
+    local os="$1"
+    local arch="$2"
+
+    local dash_version
+    dash_version=$(get_latest_dash_version)
+
+    if [ -z "$dash_version" ]; then
+        warn "No dashboard release found, skipping bubbaloop-dash"
+        return 0
+    fi
+
+    step "Installing Bubbaloop Dashboard $dash_version..."
+
+    local base_url="https://github.com/$REPO/releases/download/$dash_version"
+
+    # Download bubbaloop-dash (embedded dashboard server)
+    if ! download "$base_url/bubbaloop-dash-$os-$arch" "$BIN_DIR/bubbaloop-dash" 2>/dev/null; then
+        warn "Dashboard binary not available for $os-$arch, skipping"
+        return 0
+    fi
+    chmod +x "$BIN_DIR/bubbaloop-dash"
+
+    info "Bubbaloop Dashboard $dash_version installed"
+}
+
 # Setup systemd services
 setup_systemd() {
     step "Setting up systemd services..."
@@ -241,6 +278,23 @@ RestartSec=5
 WantedBy=default.target
 EOF
 
+    # Bubbaloop dashboard service
+    cat > "$SERVICE_DIR/bubbaloop-dashboard.service" << EOF
+[Unit]
+Description=Bubbaloop Dashboard
+After=bubbaloop-bridge.service
+Requires=bubbaloop-bridge.service
+
+[Service]
+Type=simple
+ExecStart=$BIN_DIR/bubbaloop-dash --port 8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
     # Reload systemd
     systemctl --user daemon-reload
 
@@ -248,6 +302,7 @@ EOF
     systemctl --user enable bubbaloop-zenohd.service
     systemctl --user enable bubbaloop-bridge.service
     systemctl --user enable bubbaloop-daemon.service
+    systemctl --user enable bubbaloop-dashboard.service
 
     info "Systemd services configured"
 }
@@ -256,11 +311,13 @@ EOF
 stop_services() {
     if systemctl --user is-active --quiet bubbaloop-daemon.service 2>/dev/null || \
        systemctl --user is-active --quiet bubbaloop-bridge.service 2>/dev/null || \
-       systemctl --user is-active --quiet bubbaloop-zenohd.service 2>/dev/null; then
+       systemctl --user is-active --quiet bubbaloop-zenohd.service 2>/dev/null || \
+       systemctl --user is-active --quiet bubbaloop-dashboard.service 2>/dev/null; then
         step "Stopping existing services for upgrade..."
         systemctl --user stop bubbaloop-daemon.service 2>/dev/null || true
         systemctl --user stop bubbaloop-bridge.service 2>/dev/null || true
         systemctl --user stop bubbaloop-zenohd.service 2>/dev/null || true
+        systemctl --user stop bubbaloop-dashboard.service 2>/dev/null || true
     fi
     # Clean up legacy separate daemon binary
     rm -f "$BIN_DIR/bubbaloop-daemon" 2>/dev/null || true
@@ -299,6 +356,14 @@ start_services() {
         info "bubbaloop-daemon: running"
     else
         warn "bubbaloop-daemon: failed to start"
+    fi
+
+    systemctl --user start bubbaloop-dashboard.service
+
+    if systemctl --user is-active --quiet bubbaloop-dashboard.service; then
+        info "bubbaloop-dashboard: running (http://localhost:8080)"
+    else
+        warn "bubbaloop-dashboard: failed to start"
     fi
 }
 
@@ -374,6 +439,7 @@ main() {
     install_zenoh "$arch"
     install_bridge "$arch"
     install_bubbaloop "$version" "$os" "$short_arch"
+    install_dashboard "$os" "$short_arch"
     setup_systemd
     enable_linger
     start_services
@@ -399,6 +465,7 @@ main() {
     echo
     echo "  source $shell_rc   # Add bubbaloop to PATH (or open new terminal)"
     echo "  bubbaloop          # Launch the TUI"
+    echo "  Open http://localhost:8080 for the dashboard"
     echo
 }
 

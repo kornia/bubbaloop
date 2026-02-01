@@ -35,7 +35,7 @@ jobs:
           pixi-version: v0.39.0
 
       - name: Build bubbaloop
-        run: pixi run cargo build --release --package bubbaloop
+        run: pixi run cargo build --release --no-default-features --bin bubbaloop
 
       - name: Rename binaries
         run: |

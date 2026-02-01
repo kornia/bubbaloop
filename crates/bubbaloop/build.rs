@@ -35,5 +35,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("cargo:rerun-if-changed={}", protos_dir.to_string_lossy());
 
+    // Rebuild if any dashboard dist file changes (for rust-embed)
+    fn watch_dir(dir: &str) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    watch_dir(path.to_str().unwrap());
+                } else {
+                    println!("cargo:rerun-if-changed={}", path.display());
+                }
+            }
+        }
+    }
+    watch_dir("../../dashboard/dist");
+
     Ok(())
 }

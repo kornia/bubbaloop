@@ -25,6 +25,14 @@ jobs:
         with:
           cache-on-failure: true
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build dashboard
+        run: cd dashboard && npm ci && npm run proto && npm run build
+
       - name: Format
         run: pixi run fmt-check
 

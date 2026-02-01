@@ -1,0 +1,145 @@
+name: Release Dashboard
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., dash-v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build bubbaloop-dash (${{ matrix.target }})
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: bubbaloop-dash-linux-amd64
+            use_pixi: true
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: bubbaloop-dash-linux-arm64
+            use_pixi: true
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset: bubbaloop-dash-darwin-arm64
+            use_pixi: false
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: bubbaloop-dash-darwin-amd64
+            use_pixi: false
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux builds use pixi (provides Rust + protobuf compiler)
+      - name: Setup pixi
+        if: matrix.use_pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          pixi-version: v0.39.0
+
+      # macOS builds use rustup directly (no gstreamer/system deps needed)
+      - name: Setup Rust
+        if: ${{ !matrix.use_pixi }}
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup protoc
+        if: ${{ !matrix.use_pixi }}
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build dashboard
+        run: cd dashboard && npm ci && npm run proto && npm run build
+
+      - name: Build bubbaloop-dash (Linux)
+        if: matrix.use_pixi
+        run: pixi run cargo build --release --bin bubbaloop-dash
+
+      - name: Build bubbaloop-dash (macOS)
+        if: ${{ !matrix.use_pixi }}
+        run: cargo build --release --bin bubbaloop-dash
+
+      - name: Rename binary
+        run: mv target/release/bubbaloop-dash ${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    name: Publish Dashboard Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display downloaded artifacts
+        run: ls -la artifacts/*/
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          for dir in artifacts/*/; do
+            cp "$dir"/* release-assets/
+          done
+          ls -lh release-assets/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: Bubbaloop Dashboard ${{ github.event.inputs.version }}
+          draft: false
+          prerelease: ${{ contains(github.event.inputs.version, '-') }}
+          generate_release_notes: false
+          files: |
+            release-assets/bubbaloop-dash-linux-amd64
+            release-assets/bubbaloop-dash-linux-arm64
+            release-assets/bubbaloop-dash-darwin-amd64
+            release-assets/bubbaloop-dash-darwin-arm64
+          body: |
+            ## Bubbaloop Dashboard Server
+
+            Standalone binary that serves the React dashboard with embedded static files and proxies WebSocket connections to the zenoh bridge.
+
+            ### Install
+
+            ```bash
+            # Download for your platform
+            curl -sSL https://github.com/kornia/bubbaloop/releases/download/${{ github.event.inputs.version }}/bubbaloop-dash-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') -o bubbaloop-dash
+            chmod +x bubbaloop-dash
+            ```
+
+            ### Usage
+            ```bash
+            # Start with defaults (port 8080, bridge at ws://127.0.0.1:10001)
+            ./bubbaloop-dash
+
+            # Custom port and bridge URL
+            ./bubbaloop-dash --port 3000 --bridge ws://192.168.1.10:10001
+            ```
+
+            ### Assets
+            | Binary | Platform |
+            |--------|----------|
+            | `bubbaloop-dash-linux-amd64` | Linux x86_64 |
+            | `bubbaloop-dash-linux-arm64` | Linux ARM64 (Jetson, Raspberry Pi) |
+            | `bubbaloop-dash-darwin-arm64` | macOS Apple Silicon |
+            | `bubbaloop-dash-darwin-amd64` | macOS Intel |

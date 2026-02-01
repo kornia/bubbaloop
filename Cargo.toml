@@ -56,6 +56,16 @@ anyhow = "1"
 # Hex encoding
 hex = "0.4"
 
+# HTTP server (dashboard)
+axum = { version = "0.8", features = ["ws"] }
+
+# Embedded static files (dashboard)
+rust-embed = { version = "8", features = ["compression"] }
+mime_guess = "2"
+
+# WebSocket proxy (dashboard)
+tokio-tungstenite = "0.26"
+
 # internal dependencies
 bubbaloop = { path = "crates/bubbaloop" }
 
@@ -64,4 +74,3 @@ lto = true
 codegen-units = 1
 strip = "symbols"
 opt-level = "z"
-panic = "abort"
