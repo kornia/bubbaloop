@@ -51,27 +51,31 @@ impl Registry {
 
         // Load sources registry
         let sources_path = config_dir.join("sources.json");
-        let sources = if sources_path.exists() {
+        let mut sources: SourcesRegistry = if sources_path.exists() {
             fs::read_to_string(&sources_path)
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default()
         } else {
-            // Seed with official builtin source on first run
-            let seeded = SourcesRegistry {
-                sources: vec![SourceEntry {
-                    name: OFFICIAL_SOURCE_NAME.to_string(),
-                    path: OFFICIAL_SOURCE_PATH.to_string(),
-                    source_type: OFFICIAL_SOURCE_TYPE.to_string(),
-                    enabled: true,
-                }],
-            };
-            // Persist the seeded sources
-            if let Ok(json) = serde_json::to_string_pretty(&seeded) {
+            SourcesRegistry::default()
+        };
+
+        // Ensure the official builtin source exists (handles fresh installs and upgrades)
+        let has_builtin = sources
+            .sources
+            .iter()
+            .any(|s| s.source_type == OFFICIAL_SOURCE_TYPE);
+        if !has_builtin {
+            sources.sources.push(SourceEntry {
+                name: OFFICIAL_SOURCE_NAME.to_string(),
+                path: OFFICIAL_SOURCE_PATH.to_string(),
+                source_type: OFFICIAL_SOURCE_TYPE.to_string(),
+                enabled: true,
+            });
+            if let Ok(json) = serde_json::to_string_pretty(&sources) {
                 let _ = fs::write(&sources_path, json);
             }
-            seeded
-        };
+        }
 
         Self {
             config_dir,
@@ -375,38 +379,89 @@ nodes:
     }
 
     #[test]
-    fn test_official_source_seeded() {
+    fn test_official_source_seeded_on_fresh_install() {
         let dir = tempfile::tempdir().unwrap();
         let sources_path = dir.path().join("sources.json");
 
         assert!(!sources_path.exists());
 
+        // Simulate Registry::load() logic for a fresh install (no sources.json)
+        let mut sources = SourcesRegistry::default();
+        let has_builtin = sources
+            .sources
+            .iter()
+            .any(|s| s.source_type == OFFICIAL_SOURCE_TYPE);
+        assert!(!has_builtin);
+
+        sources.sources.push(SourceEntry {
+            name: OFFICIAL_SOURCE_NAME.to_string(),
+            path: OFFICIAL_SOURCE_PATH.to_string(),
+            source_type: OFFICIAL_SOURCE_TYPE.to_string(),
+            enabled: true,
+        });
+        let _ = fs::write(
+            &sources_path,
+            serde_json::to_string_pretty(&sources).unwrap(),
+        );
+
         let registry = Registry {
             config_dir: dir.path().to_path_buf(),
-            sources: {
-                let seeded = SourcesRegistry {
-                    sources: vec![SourceEntry {
-                        name: OFFICIAL_SOURCE_NAME.to_string(),
-                        path: OFFICIAL_SOURCE_PATH.to_string(),
-                        source_type: OFFICIAL_SOURCE_TYPE.to_string(),
-                        enabled: true,
-                    }],
-                };
-                if let Ok(json) = serde_json::to_string_pretty(&seeded) {
-                    let _ = fs::write(&sources_path, json);
-                }
-                seeded
-            },
+            sources,
         };
 
         assert!(sources_path.exists());
+        let result = registry.get_sources();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, OFFICIAL_SOURCE_NAME);
+        assert_eq!(result[0].source_type, OFFICIAL_SOURCE_TYPE);
+        assert!(result[0].enabled);
+    }
 
-        let sources = registry.get_sources();
-        assert_eq!(sources.len(), 1);
-        assert_eq!(sources[0].name, OFFICIAL_SOURCE_NAME);
-        assert_eq!(sources[0].path, OFFICIAL_SOURCE_PATH);
-        assert_eq!(sources[0].source_type, OFFICIAL_SOURCE_TYPE);
-        assert!(sources[0].enabled);
+    #[test]
+    fn test_official_source_added_on_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let sources_path = dir.path().join("sources.json");
+
+        // Simulate an existing sources.json without the builtin source (upgrade case)
+        let old_sources = SourcesRegistry {
+            sources: vec![SourceEntry {
+                name: "My Local Nodes".to_string(),
+                path: "/some/local/path".to_string(),
+                source_type: "local".to_string(),
+                enabled: true,
+            }],
+        };
+        let _ = fs::write(
+            &sources_path,
+            serde_json::to_string_pretty(&old_sources).unwrap(),
+        );
+
+        // Simulate Registry::load() logic
+        let mut sources: SourcesRegistry =
+            serde_json::from_str(&fs::read_to_string(&sources_path).unwrap()).unwrap();
+        let has_builtin = sources
+            .sources
+            .iter()
+            .any(|s| s.source_type == OFFICIAL_SOURCE_TYPE);
+        assert!(!has_builtin);
+
+        sources.sources.push(SourceEntry {
+            name: OFFICIAL_SOURCE_NAME.to_string(),
+            path: OFFICIAL_SOURCE_PATH.to_string(),
+            source_type: OFFICIAL_SOURCE_TYPE.to_string(),
+            enabled: true,
+        });
+
+        let registry = Registry {
+            config_dir: dir.path().to_path_buf(),
+            sources,
+        };
+
+        let result = registry.get_sources();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "My Local Nodes");
+        assert_eq!(result[1].name, OFFICIAL_SOURCE_NAME);
+        assert_eq!(result[1].source_type, OFFICIAL_SOURCE_TYPE);
     }
 
     #[test]
