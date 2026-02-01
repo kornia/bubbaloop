@@ -1,7 +1,9 @@
 import { useMemo } from 'react';
 import { useZenohSession, useZenohTopicDiscovery, ConnectionStatus } from './lib/zenoh';
 import { ZenohSubscriptionProvider } from './contexts/ZenohSubscriptionContext';
+import { FleetProvider } from './contexts/FleetContext';
 import { Dashboard } from './components/Dashboard';
+import { FleetBar } from './components/FleetBar';
 import { H264Decoder } from './lib/h264-decoder';
 
 // Zenoh endpoint - proxied through Vite on /zenoh path
@@ -210,9 +212,12 @@ export default function App() {
       )}
 
       {session ? (
-        <ZenohSubscriptionProvider session={session}>
-          <Dashboard cameras={DEFAULT_CAMERAS} availableTopics={availableTopics} />
-        </ZenohSubscriptionProvider>
+        <FleetProvider>
+          <ZenohSubscriptionProvider session={session}>
+            <FleetBar />
+            <Dashboard cameras={DEFAULT_CAMERAS} availableTopics={availableTopics} />
+          </ZenohSubscriptionProvider>
+        </FleetProvider>
       ) : (
         <div className="connecting-placeholder">
           <div className="placeholder-content">

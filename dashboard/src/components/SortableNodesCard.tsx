@@ -31,6 +31,7 @@ export function SortableNodesCard({
     minWidth: 0,
     overflow: 'hidden',
     display: isHidden ? 'none' : undefined,
+    gridColumn: '1 / -1',
   };
 
   return (

@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
+import { useFleetContext } from '../contexts/FleetContext';
 import { decodeNodeList } from '../proto/daemon';
 import { getSamplePayload } from '../lib/zenoh';
 import { Duration } from 'typed-duration';
@@ -19,6 +20,7 @@ interface NodeState {
   build_output: string[];
   machine_id?: string;
   machine_hostname?: string;
+  stale?: boolean;
 }
 
 // Drag handle props type
@@ -71,12 +73,22 @@ export function NodesViewPanel({
   // Track whether we've received data (avoids stale closure over nodes.length)
   const hasReceivedDataRef = useRef(false);
 
-  // Helper to process a NodeList payload
-  const processPayload = useCallback((payload: Uint8Array) => {
+  // Track last-seen timestamp per machine for stale detection
+  const machineLastSeenRef = useRef(new Map<string, number>());
+
+  // Keep last-known nodes per machine for stale detection
+  const prevNodesMapRef = useRef(new Map<string, NodeState[]>());
+
+  // 15 seconds = 5 poll cycles at 3s each
+  const STALE_THRESHOLD_MS = 15000;
+
+  // Helper to process a NodeList payload — returns machineId + nodes, does NOT call setNodes
+  const processPayload = useCallback((payload: Uint8Array): { machineId: string; nodes: NodeState[] } | null => {
     try {
       const nodeList = decodeNodeList(payload);
 
       if (nodeList && nodeList.nodes.length > 0) {
+        const listMachineId = nodeList.machineId || '';
         const mappedNodes: NodeState[] = nodeList.nodes.map(n => ({
           name: n.name,
           path: n.path,
@@ -88,19 +100,20 @@ export function NodesViewPanel({
           node_type: n.nodeType,
           is_built: n.isBuilt,
           build_output: n.buildOutput,
-          machine_id: n.machineId,
+          machine_id: n.machineId || listMachineId,
           machine_hostname: n.machineHostname,
         }));
-        setNodes(mappedNodes);
         setDaemonConnected(true);
         setError(null);
         setLoading(false);
         hasReceivedDataRef.current = true;
+        return { machineId: listMachineId, nodes: mappedNodes };
       }
     } catch (err) {
       console.error('[NodesView] Failed to decode NodeList:', err);
       console.error('[NodesView] Decode error:', err);
     }
+    return null;
   }, []);
 
   // Poll daemon for node list via Zenoh GET (queryable)
@@ -123,6 +136,8 @@ export function NodesViewPanel({
           timeout: Duration.milliseconds.of(5000),
         });
 
+        const allNodes = new Map<string, NodeState[]>();
+
         if (receiver && mounted) {
           for await (const replyItem of receiver) {
             if (!mounted) break;
@@ -130,8 +145,50 @@ export function NodesViewPanel({
               const replyResult = replyItem.result();
               if (replyResult instanceof ReplyError) continue;
               const payload = getSamplePayload(replyResult as Sample);
-              processPayload(payload);
+              const result = processPayload(payload);
+              if (result) {
+                allNodes.set(result.machineId, result.nodes);
+                machineLastSeenRef.current.set(result.machineId, Date.now());
+              }
             }
+          }
+        }
+
+        if (mounted) {
+          const now = Date.now();
+
+          // Update prevNodesMap with fresh replies
+          for (const [mid, machineNodes] of allNodes.entries()) {
+            prevNodesMapRef.current.set(mid, machineNodes);
+          }
+
+          // Build merged node list: fresh nodes + stale nodes from offline machines
+          const mergedNodes: NodeState[] = [];
+
+          // Add all fresh nodes (not stale)
+          for (const machineNodes of allNodes.values()) {
+            mergedNodes.push(...machineNodes);
+          }
+
+          // Check previously-known machines that did NOT reply this cycle
+          for (const [mid, lastSeen] of machineLastSeenRef.current.entries()) {
+            if (!allNodes.has(mid)) {
+              if (now - lastSeen <= STALE_THRESHOLD_MS) {
+                // Within grace period: inject last-known nodes as stale
+                const lastKnownNodes = prevNodesMapRef.current.get(mid);
+                if (lastKnownNodes) {
+                  mergedNodes.push(...lastKnownNodes.map(n => ({ ...n, stale: true })));
+                }
+              } else {
+                // Beyond grace period: remove from tracking
+                prevNodesMapRef.current.delete(mid);
+                machineLastSeenRef.current.delete(mid);
+              }
+            }
+          }
+
+          if (mergedNodes.length > 0) {
+            setNodes(mergedNodes);
           }
         }
       } catch (err) {
@@ -192,17 +249,24 @@ export function NodesViewPanel({
         'get_logs': CommandType.COMMAND_TYPE_GET_LOGS,
       };
 
+      // Look up target node to route command to correct machine
+      const targetNode = nodes.find(n => n.name === nodeName);
+      const commandKey = targetNode?.machine_id
+        ? `bubbaloop/${targetNode.machine_id}/daemon/command`
+        : 'bubbaloop/daemon/command';
+
       const cmd = NodeCommand.create({
         command: commandMap[command] ?? CommandType.COMMAND_TYPE_START,
         nodeName: nodeName,
         nodePath: '',
         requestId: crypto.randomUUID(),
+        targetMachine: targetNode?.machine_id || '',
       });
 
       const payload = NodeCommand.encode(cmd).finish();
 
       // Send query and wait for reply
-      const receiver = await session.get('bubbaloop/daemon/command', {
+      const receiver = await session.get(commandKey, {
         payload: payload,
         timeout: Duration.milliseconds.of(10000),
       });
@@ -254,7 +318,7 @@ export function NodesViewPanel({
       setActionLoading(null);
       setTimeout(() => setMessage(null), 4000);
     }
-  }, [getSession]);
+  }, [getSession, nodes]);
 
   // Fetch logs for a node via Zenoh query
   const fetchLogs = useCallback(async (nodeName: string): Promise<string> => {
@@ -267,16 +331,23 @@ export function NodesViewPanel({
     const NodeCommand = bubbaloop.daemon.v1.NodeCommand;
     const CommandType = bubbaloop.daemon.v1.CommandType;
 
+    // Look up target node to route logs request to correct machine
+    const targetNode = nodes.find(n => n.name === nodeName);
+    const commandKey = targetNode?.machine_id
+      ? `bubbaloop/${targetNode.machine_id}/daemon/command`
+      : 'bubbaloop/daemon/command';
+
     const cmd = NodeCommand.create({
       command: CommandType.COMMAND_TYPE_GET_LOGS,
       nodeName: nodeName,
       nodePath: '',
       requestId: crypto.randomUUID(),
+      targetMachine: targetNode?.machine_id || '',
     });
 
     const payload = NodeCommand.encode(cmd).finish();
 
-    const receiver = await session.get('bubbaloop/daemon/command', {
+    const receiver = await session.get(commandKey, {
       payload: payload,
       timeout: Duration.milliseconds.of(10000),
     });
@@ -309,7 +380,58 @@ export function NodesViewPanel({
     }
 
     throw new Error('No response from daemon');
-  }, [getSession]);
+  }, [getSession, nodes]);
+
+  // Group nodes by machine for multi-machine rendering
+  const machineGroups = useMemo(() => {
+    const groups = new Map<string, { hostname: string; machineId: string; nodes: NodeState[]; isOnline: boolean }>();
+    for (const node of nodes) {
+      const mid = node.machine_id || 'local';
+      if (!groups.has(mid)) {
+        groups.set(mid, { hostname: node.machine_hostname || 'local', machineId: mid, nodes: [], isOnline: !node.stale });
+      }
+      groups.get(mid)!.nodes.push(node);
+    }
+    return Array.from(groups.values());
+  }, [nodes]);
+
+  // Report machines to FleetContext for the FleetBar
+  const { reportMachines, selectedMachineId } = useFleetContext();
+
+  useEffect(() => {
+    reportMachines(machineGroups.map(g => ({
+      machineId: g.machineId,
+      hostname: g.hostname,
+      nodeCount: g.nodes.length,
+      runningCount: g.nodes.filter(n => n.status === 'running').length,
+      isOnline: g.isOnline,
+    })));
+  }, [machineGroups, reportMachines]);
+
+  // Filter by selected machine from FleetBar
+  const filteredMachineGroups = useMemo(() => {
+    if (!selectedMachineId) return machineGroups;
+    return machineGroups.filter(g => g.machineId === selectedMachineId);
+  }, [machineGroups, selectedMachineId]);
+
+  const filteredNodes = useMemo(() => {
+    if (!selectedMachineId) return nodes;
+    return nodes.filter(n => (n.machine_id || 'local') === selectedMachineId);
+  }, [nodes, selectedMachineId]);
+
+  const [collapsedMachines, setCollapsedMachines] = useState<Set<string>>(new Set());
+
+  const toggleMachineCollapse = useCallback((machineId: string) => {
+    setCollapsedMachines(prev => {
+      const next = new Set(prev);
+      if (next.has(machineId)) {
+        next.delete(machineId);
+      } else {
+        next.add(machineId);
+      }
+      return next;
+    });
+  }, []);
 
   const selectedNodeData = selectedNode ? nodes.find(n => n.name === selectedNode) : undefined;
 
@@ -372,17 +494,18 @@ export function NodesViewPanel({
                 <span className="col-version">Version</span>
                 <span className="col-type">Type</span>
               </div>
-              {nodes.length === 0 ? (
+              {filteredNodes.length === 0 ? (
                 <div className="no-nodes">No nodes registered</div>
-              ) : (
-                nodes.map(node => {
+              ) : filteredMachineGroups.length <= 1 ? (
+                /* Single machine — flat rendering (current behavior) */
+                filteredNodes.map(node => {
                   const statusCfg = STATUS_CONFIG[node.status] || STATUS_CONFIG.unknown;
                   const isSelected = selectedNode === node.name;
                   const isBuilding = node.status === 'building' || node.status === 'installing';
 
                   return (
                     <div
-                      key={node.name}
+                      key={`${node.machine_id}-${node.name}`}
                       className={`node-row ${isSelected ? 'selected' : ''}`}
                       onClick={() => setSelectedNode(isSelected ? null : node.name)}
                     >
@@ -393,6 +516,49 @@ export function NodesViewPanel({
                       <span className="col-machine">{node.machine_hostname || 'local'}</span>
                       <span className="col-version">{node.version}</span>
                       <span className={`col-type type-${node.node_type}`}>{node.node_type}</span>
+                    </div>
+                  );
+                })
+              ) : (
+                /* Multiple machines — grouped rendering with collapsible headers */
+                filteredMachineGroups.map(group => {
+                  const isCollapsed = collapsedMachines.has(group.machineId);
+                  const runningCount = group.nodes.filter(n => n.status === 'running').length;
+
+                  return (
+                    <div key={`machine-${group.machineId}`}>
+                      <div
+                        className="machine-group-header"
+                        onClick={() => toggleMachineCollapse(group.machineId)}
+                      >
+                        <span className={`collapse-arrow ${isCollapsed ? 'collapsed' : ''}`}>&#9660;</span>
+                        <span className={`machine-status-dot ${group.isOnline ? 'online' : 'offline'}`} />
+                        <span>{group.hostname}</span>
+                        <span className="machine-node-count">
+                          {runningCount}/{group.nodes.length} running
+                        </span>
+                      </div>
+                      {!isCollapsed && group.nodes.map(node => {
+                        const statusCfg = STATUS_CONFIG[node.status] || STATUS_CONFIG.unknown;
+                        const isSelected = selectedNode === node.name;
+                        const isBuilding = node.status === 'building' || node.status === 'installing';
+
+                        return (
+                          <div
+                            key={`${node.machine_id}-${node.name}`}
+                            className={`node-row ${isSelected ? 'selected' : ''}`}
+                            onClick={() => setSelectedNode(isSelected ? null : node.name)}
+                          >
+                            <span className="col-status" style={{ color: statusCfg.color }}>
+                              {isBuilding ? <span className="pulse">{statusCfg.icon}</span> : statusCfg.icon}
+                            </span>
+                            <span className="col-name">{node.name}</span>
+                            <span className="col-machine">{node.machine_hostname || 'local'}</span>
+                            <span className="col-version">{node.version}</span>
+                            <span className={`col-type type-${node.node_type}`}>{node.node_type}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   );
                 })
@@ -421,7 +587,6 @@ export function NodesViewPanel({
           display: flex;
           flex-direction: column;
           min-height: 400px;
-          max-height: 600px;
         }
 
         .panel-header {
@@ -615,6 +780,54 @@ export function NodesViewPanel({
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.5; }
+        }
+
+        .machine-group-header {
+          display: flex;
+          align-items: center;
+          padding: 8px 16px;
+          background: var(--bg-tertiary);
+          cursor: pointer;
+          user-select: none;
+          gap: 10px;
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text-secondary);
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .machine-group-header:hover {
+          background: rgba(61, 90, 254, 0.05);
+        }
+
+        .machine-status-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+        }
+
+        .machine-status-dot.online {
+          background: var(--success);
+        }
+
+        .machine-status-dot.offline {
+          background: var(--error);
+        }
+
+        .machine-node-count {
+          color: var(--text-muted);
+          font-weight: 400;
+          margin-left: auto;
+        }
+
+        .collapse-arrow {
+          transition: transform 0.15s;
+          color: var(--text-muted);
+          font-size: 10px;
+        }
+
+        .collapse-arrow.collapsed {
+          transform: rotate(-90deg);
         }
 
         @media (max-width: 768px) {
