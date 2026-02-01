@@ -1,8 +1,12 @@
-use argh::FromArgs;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use argh::FromArgs;
 use tokio::sync::watch;
 
 use bubbaloop_storage::config::StorageConfig;
+use bubbaloop_storage::lancedb_client::StorageClient;
+use bubbaloop_storage::recorder::Recorder;
 
 /// Bubbaloop storage service: records Zenoh messages to LanceDB.
 #[derive(FromArgs)]
@@ -59,14 +63,22 @@ async fn main() -> anyhow::Result<()> {
         let _ = shutdown_tx.send(());
     })?;
 
-    // TODO: Phase 2+ will add LanceDB client, recording logic, and Zenoh queryable API here.
-    log::info!("Storage node running. Waiting for shutdown...");
+    // LanceDB client
+    log::info!("Connecting to LanceDB at {}...", config.storage_uri);
+    let storage_client = StorageClient::connect(&config.storage_uri)
+        .await
+        .map_err(|e| anyhow::anyhow!("LanceDB connect failed: {e}"))?;
+    log::info!("LanceDB connected");
 
-    let mut rx = shutdown_rx;
-    let _ = rx.changed().await;
+    // Run recorder
+    let zenoh_session = Arc::new(session);
+    let mut recorder = Recorder::new(storage_client, config);
+
+    log::info!("Storage node recording. Press Ctrl+C to stop.");
+    recorder.run(zenoh_session.clone(), shutdown_rx).await?;
 
     log::info!("Storage node shutting down");
-    session
+    zenoh_session
         .close()
         .await
         .map_err(|e| anyhow::anyhow!("Zenoh close failed: {e}"))?;
