@@ -36,7 +36,9 @@ impl FixAction {
             FixAction::RestartDaemonService => "Restart bubbaloop-daemon service",
             FixAction::StartBridgeService => "Start zenoh-bridge service",
             FixAction::CreateZenohConfig => "Create Zenoh config file",
-            FixAction::CreateMarketplaceSources => "Create marketplace sources with official registry",
+            FixAction::CreateMarketplaceSources => {
+                "Create marketplace sources with official registry"
+            }
         }
     }
 
@@ -145,7 +147,10 @@ impl FixAction {
   ]
 }"#;
                 std::fs::write(&sources_path, sources_content)?;
-                Ok(format!("Created {} with official nodes registry", sources_path.display()))
+                Ok(format!(
+                    "Created {} with official nodes registry",
+                    sources_path.display()
+                ))
             }
         }
     }
