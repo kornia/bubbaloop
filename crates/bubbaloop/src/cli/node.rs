@@ -1277,6 +1277,182 @@ pub(crate) async fn send_command(name: &str, command: &str) -> Result<()> {
     Err(last_error.unwrap_or_else(|| NodeError::Zenoh("No response from daemon".into())))
 }
 
+/// Detect the current CPU architecture and return the GitHub release arch suffix.
+fn detect_arch() -> Result<&'static str> {
+    match std::env::consts::ARCH {
+        "x86_64" => Ok("amd64"),
+        "aarch64" => Ok("arm64"),
+        other => Err(NodeError::CommandFailed(format!(
+            "Unsupported architecture: {}",
+            other
+        ))),
+    }
+}
+
+/// Find curl in standard system paths to avoid PATH hijacking.
+fn find_curl() -> Option<PathBuf> {
+    for dir in &["/usr/bin", "/usr/local/bin", "/bin"] {
+        let path = Path::new(dir).join("curl");
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Download a file from a URL to a local path using curl.
+fn download_file(url: &str, dest: &Path) -> Result<()> {
+    let curl = find_curl()
+        .ok_or_else(|| NodeError::CommandFailed("curl not found in standard paths".into()))?;
+
+    let output = Command::new(curl)
+        .args([
+            "-sSfL",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "300",
+            "-o",
+            &dest.to_string_lossy(),
+            "--",
+            url,
+        ])
+        .output()?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(NodeError::CommandFailed(format!(
+            "Download failed: {}",
+            stderr
+        )))
+    }
+}
+
+/// Download a small text file (e.g., checksum) and return its contents.
+fn download_text(url: &str) -> Result<String> {
+    let curl = find_curl()
+        .ok_or_else(|| NodeError::CommandFailed("curl not found in standard paths".into()))?;
+
+    let output = Command::new(curl)
+        .args([
+            "-sSfL",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "30",
+            "--",
+            url,
+        ])
+        .output()?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(NodeError::CommandFailed(format!(
+            "Download failed: {}",
+            stderr
+        )))
+    }
+}
+
+/// Verify that a file matches an expected SHA256 checksum.
+///
+/// The `expected` string should be in the format output by `sha256sum`:
+/// `<hex_hash>  <filename>\n` or just `<hex_hash>`.
+fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
+    let output = Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .map_err(|e| NodeError::CommandFailed(format!("sha256sum not found: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(NodeError::CommandFailed("sha256sum failed".into()));
+    }
+
+    let actual_line = String::from_utf8_lossy(&output.stdout);
+    let actual_hash = actual_line.split_whitespace().next().unwrap_or("");
+    let expected_hash = expected.split_whitespace().next().unwrap_or("");
+
+    if actual_hash == expected_hash {
+        Ok(())
+    } else {
+        Err(NodeError::CommandFailed(format!(
+            "Checksum mismatch: expected {}, got {}",
+            expected_hash, actual_hash
+        )))
+    }
+}
+
+/// Set a file as executable (chmod 755).
+fn set_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = std::fs::Permissions::from_mode(0o755);
+    std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+/// Attempt to download a precompiled binary for a registry node.
+///
+/// Returns the node directory path on success. On failure, the caller should
+/// fall back to cloning and building from source.
+fn try_download_precompiled(entry: &registry::RegistryNode) -> Result<String> {
+    let binary_name = entry
+        .binary
+        .as_ref()
+        .ok_or_else(|| NodeError::CommandFailed("No binary field in registry entry".into()))?;
+
+    if entry.node_type != "rust" {
+        return Err(NodeError::CommandFailed("Not a Rust node".into()));
+    }
+
+    let arch = detect_arch()?;
+
+    let url = registry::precompiled_url(entry, arch)
+        .ok_or_else(|| NodeError::CommandFailed("Cannot construct download URL".into()))?;
+    let checksum_url = format!("{}.sha256", url);
+
+    // Create node directory: ~/.bubbaloop/nodes/<repo-name>/<subdir>/
+    let repo_name = entry
+        .repo
+        .rsplit('/')
+        .next()
+        .unwrap_or("bubbaloop-nodes-official");
+    let node_dir = crate::daemon::registry::get_bubbaloop_home()
+        .join("nodes")
+        .join(repo_name)
+        .join(&entry.subdir);
+    let binary_dir = node_dir.join("target").join("release");
+    std::fs::create_dir_all(&binary_dir)?;
+
+    // Write a minimal node.yaml so the daemon can read it
+    let node_yaml = format!(
+        "name: {}\nversion: {}\ntype: {}\ndescription: \"{}\"\ncommand: \"./target/release/{}\"\n",
+        entry.name, entry.version, entry.node_type, entry.description, binary_name
+    );
+    std::fs::write(node_dir.join("node.yaml"), node_yaml)?;
+
+    // Download checksum first (fast fail if release doesn't exist)
+    log::info!("Downloading checksum from {}", checksum_url);
+    let expected_checksum = download_text(&checksum_url)?;
+
+    // Download binary
+    let binary_path = binary_dir.join(binary_name);
+    log::info!("Downloading binary from {}", url);
+    println!("Downloading precompiled binary...");
+    download_file(&url, &binary_path)?;
+
+    // Verify checksum
+    verify_sha256(&binary_path, &expected_checksum)?;
+
+    // Make executable
+    set_executable(&binary_path)?;
+
+    Ok(node_dir.to_string_lossy().to_string())
+}
+
 /// Handle `node install`: if the node is already registered with the daemon,
 /// install it as a systemd service (existing behavior). Otherwise, look up the
 /// name in the marketplace registry, clone, register, build, and install.
@@ -1360,6 +1536,93 @@ async fn handle_install(args: InstallArgs) -> Result<()> {
     // Validate repo before constructing URL
     registry::validate_repo(&entry.repo)
         .map_err(|e| NodeError::InvalidUrl(format!("Invalid registry repo: {}", e)))?;
+
+    // Try precompiled binary first (fast path)
+    match try_download_precompiled(&entry) {
+        Ok(node_path) => {
+            println!("Downloaded precompiled binary for '{}'", args.name);
+
+            // Register with daemon
+            let session = get_zenoh_session().await?;
+            let payload = serde_json::to_string(&serde_json::json!({
+                "command": "add",
+                "node_path": node_path
+            }))?;
+
+            let mut registered_ok = false;
+            for attempt in 1..=3 {
+                let replies_result = session
+                    .get("bubbaloop/daemon/api/nodes/add")
+                    .payload(payload.clone())
+                    .target(QueryTarget::BestMatching)
+                    .timeout(std::time::Duration::from_secs(30))
+                    .await;
+
+                match replies_result {
+                    Ok(replies) => {
+                        for reply in replies {
+                            if let Ok(sample) = reply.into_result() {
+                                let data: CommandResponse =
+                                    serde_json::from_slice(&sample.payload().to_bytes())?;
+                                if data.success {
+                                    registered_ok = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if registered_ok {
+                            break;
+                        }
+                    }
+                    Err(_) if attempt < 3 => {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                    Err(e) => {
+                        session
+                            .close()
+                            .await
+                            .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+                        return Err(NodeError::Zenoh(e.to_string()));
+                    }
+                }
+            }
+
+            session
+                .close()
+                .await
+                .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+
+            if !registered_ok {
+                return Err(NodeError::CommandFailed(
+                    "Failed to register node with daemon".into(),
+                ));
+            }
+
+            println!("Registered node: {}", args.name);
+
+            // Install as systemd service
+            println!("Installing {} as systemd service...", args.name);
+            send_command(&args.name, "install").await?;
+
+            log::info!(
+                "node install: completed precompiled install of '{}' from {}",
+                args.name,
+                entry.repo
+            );
+            println!(
+                "\nInstalled '{}' from {} (precompiled)",
+                args.name, entry.repo
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            log::info!(
+                "Precompiled binary not available ({}), building from source",
+                e
+            );
+            println!("Precompiled binary not available, building from source...");
+        }
+    }
 
     // Clone from GitHub
     let url = format!("https://github.com/{}", entry.repo);
@@ -2284,5 +2547,134 @@ mod tests {
 
         let result = find_example_config(&configs_dir);
         assert!(result.is_err()); // Only .yaml/.yml files
+    }
+
+    // ==================== Precompiled binary tests ====================
+
+    #[test]
+    fn test_detect_arch() {
+        let arch = detect_arch();
+        assert!(arch.is_ok());
+        let arch = arch.unwrap();
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(arch, "amd64");
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(arch, "arm64");
+    }
+
+    #[test]
+    fn test_precompiled_url_construction() {
+        let entry = registry::RegistryNode {
+            name: "system-telemetry".into(),
+            version: "0.1.0".into(),
+            node_type: "rust".into(),
+            description: "System metrics".into(),
+            category: "monitoring".into(),
+            tags: vec![],
+            repo: "kornia/bubbaloop-nodes-official".into(),
+            subdir: "system-telemetry".into(),
+            binary: Some("system_telemetry_node".into()),
+        };
+
+        let url = registry::precompiled_url(&entry, "arm64");
+        assert_eq!(
+            url.as_deref(),
+            Some("https://github.com/kornia/bubbaloop-nodes-official/releases/latest/download/system-telemetry-linux-arm64")
+        );
+    }
+
+    #[test]
+    fn test_precompiled_url_python_returns_none() {
+        let entry = registry::RegistryNode {
+            name: "network-monitor".into(),
+            version: "0.1.0".into(),
+            node_type: "python".into(),
+            description: "Network monitor".into(),
+            category: "monitoring".into(),
+            tags: vec![],
+            repo: "kornia/bubbaloop-nodes-official".into(),
+            subdir: "network-monitor".into(),
+            binary: None,
+        };
+
+        assert!(registry::precompiled_url(&entry, "arm64").is_none());
+    }
+
+    #[test]
+    fn test_verify_sha256_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test_binary");
+        std::fs::write(&file_path, b"hello world\n").unwrap();
+
+        // Compute expected checksum
+        let output = Command::new("sha256sum").arg(&file_path).output().unwrap();
+        let expected = String::from_utf8_lossy(&output.stdout).to_string();
+
+        let result = verify_sha256(&file_path, &expected);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_sha256_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test_binary");
+        std::fs::write(&file_path, b"hello world\n").unwrap();
+
+        let wrong_checksum =
+            "0000000000000000000000000000000000000000000000000000000000000000  test_binary";
+        let result = verify_sha256(&file_path, wrong_checksum);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Checksum mismatch"));
+    }
+
+    #[test]
+    fn test_set_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test_bin");
+        std::fs::write(&file_path, b"#!/bin/sh\necho hi").unwrap();
+
+        set_executable(&file_path).unwrap();
+        let perms = std::fs::metadata(&file_path).unwrap().permissions();
+        assert_eq!(perms.mode() & 0o777, 0o755);
+    }
+
+    #[test]
+    fn test_try_download_precompiled_no_binary_field() {
+        let entry = registry::RegistryNode {
+            name: "test".into(),
+            version: "0.1.0".into(),
+            node_type: "rust".into(),
+            description: "test".into(),
+            category: "test".into(),
+            tags: vec![],
+            repo: "user/repo".into(),
+            subdir: "test".into(),
+            binary: None,
+        };
+        let result = try_download_precompiled(&entry);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No binary field"));
+    }
+
+    #[test]
+    fn test_try_download_precompiled_python_node() {
+        let entry = registry::RegistryNode {
+            name: "test".into(),
+            version: "0.1.0".into(),
+            node_type: "python".into(),
+            description: "test".into(),
+            category: "test".into(),
+            tags: vec![],
+            repo: "user/repo".into(),
+            subdir: "test".into(),
+            binary: Some("test_bin".into()),
+        };
+        let result = try_download_precompiled(&entry);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Not a Rust node"));
     }
 }
