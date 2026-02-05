@@ -38,6 +38,10 @@ struct NodeState {
     node_type: String,
     is_built: bool,
     build_output: Vec<String>,
+    #[serde(default)]
+    base_node: String,
+    #[serde(default)]
+    config_override: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -51,6 +55,10 @@ struct NodeListResponse {
 struct CommandRequest {
     command: String,
     node_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,6 +99,8 @@ fn decode_node_list(bytes: &[u8]) -> Result<Vec<NodeInfo>> {
             status: proto_status_to_string(n.status),
             is_built: n.is_built,
             build_output: n.build_output,
+            base_node: n.base_node,
+            config_override: n.config_override,
         })
         .collect())
 }
@@ -197,6 +207,8 @@ impl DaemonClient {
                 status: n.status,
                 is_built: n.is_built,
                 build_output: n.build_output,
+                base_node: n.base_node,
+                config_override: n.config_override,
             })
             .collect())
     }
@@ -206,6 +218,8 @@ impl DaemonClient {
         let payload = serde_json::to_string(&CommandRequest {
             command: command.to_string(),
             node_path: String::new(),
+            name: None,
+            config: None,
         })?;
 
         let response: CommandResponse = self.query(&key_expr, Some(&payload)).await?;
@@ -248,6 +262,8 @@ impl DaemonClient {
         let payload = serde_json::to_string(&CommandRequest {
             command: command.to_string(),
             node_path: String::new(),
+            name: None,
+            config: None,
         })?;
         self.fire_and_forget(&key_expr, &payload).await
     }
@@ -257,14 +273,46 @@ impl DaemonClient {
         let payload = serde_json::to_string(&CommandRequest {
             command: "add".to_string(),
             node_path: path.to_string(),
+            name: None,
+            config: None,
         })?;
         self.fire_and_forget(API_NODES_ADD, &payload).await
+    }
+
+    /// Send an add_node command for a new instance (with name and optional config overrides).
+    pub async fn send_add_node_instance(
+        &self,
+        path: &str,
+        name_override: Option<String>,
+        config_override: Option<String>,
+    ) -> Result<()> {
+        let payload = serde_json::to_string(&CommandRequest {
+            command: "add".to_string(),
+            node_path: path.to_string(),
+            name: name_override,
+            config: config_override,
+        })?;
+        self.fire_and_forget(API_NODES_ADD, &payload).await
+    }
+
+    /// Send an update-config command to change the config path for a running instance.
+    pub async fn send_update_config(&self, node_name: &str, config_path: &str) -> Result<()> {
+        let key_expr = format!("{}/{}/command", API_NODES, node_name);
+        let payload = serde_json::to_string(&CommandRequest {
+            command: "update-config".to_string(),
+            node_path: String::new(),
+            name: None,
+            config: Some(config_path.to_string()),
+        })?;
+        self.fire_and_forget(&key_expr, &payload).await
     }
 
     pub async fn add_node(&self, path: &str) -> Result<()> {
         let payload = serde_json::to_string(&CommandRequest {
             command: "add".to_string(),
             node_path: path.to_string(),
+            name: None,
+            config: None,
         })?;
 
         let response: CommandResponse = self.query(API_NODES_ADD, Some(&payload)).await?;
@@ -405,6 +453,8 @@ mod tests {
         let request = CommandRequest {
             command: "start".to_string(),
             node_path: "/path/to/node".to_string(),
+            name: None,
+            config: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -412,6 +462,9 @@ mod tests {
         assert!(json.contains("\"start\""));
         assert!(json.contains("\"node_path\""));
         assert!(json.contains("/path/to/node"));
+        // name and config should be absent when None
+        assert!(!json.contains("\"name\""));
+        assert!(!json.contains("\"config\""));
     }
 
     #[test]
@@ -422,6 +475,8 @@ mod tests {
             let request = CommandRequest {
                 command: cmd.to_string(),
                 node_path: "/test".to_string(),
+                name: None,
+                config: None,
             };
             let json = serde_json::to_string(&request).unwrap();
             assert!(json.contains(cmd));
@@ -482,6 +537,8 @@ mod tests {
             node_type: "python".to_string(),
             is_built: true,
             build_output: vec![],
+            base_node: "sensor-base".to_string(),
+            config_override: "/etc/sensor.yaml".to_string(),
         };
 
         let node_info = NodeInfo {
@@ -493,6 +550,8 @@ mod tests {
             status: node_state.status.clone(),
             is_built: node_state.is_built,
             build_output: node_state.build_output.clone(),
+            base_node: node_state.base_node.clone(),
+            config_override: node_state.config_override.clone(),
         };
 
         assert_eq!(node_info.name, "sensor");
@@ -500,5 +559,69 @@ mod tests {
         assert_eq!(node_info.status, "active");
         assert_eq!(node_info.node_type, "python");
         assert!(node_info.is_built);
+        assert_eq!(node_info.base_node, "sensor-base");
+    }
+
+    #[test]
+    fn test_command_request_with_name_and_config() {
+        let request = CommandRequest {
+            command: "add".to_string(),
+            node_path: "/path/to/node".to_string(),
+            name: Some("my-instance".to_string()),
+            config: Some("/path/to/config.yaml".to_string()),
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"name\""));
+        assert!(json.contains("my-instance"));
+        assert!(json.contains("\"config\""));
+        assert!(json.contains("/path/to/config.yaml"));
+    }
+
+    #[test]
+    fn test_command_request_skip_serializing_none_fields() {
+        let request = CommandRequest {
+            command: "start".to_string(),
+            node_path: "/test".to_string(),
+            name: None,
+            config: None,
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(!json.contains("\"name\""), "None name should be skipped");
+        assert!(
+            !json.contains("\"config\""),
+            "None config should be skipped"
+        );
+
+        // With only name set
+        let request = CommandRequest {
+            command: "add".to_string(),
+            node_path: "/test".to_string(),
+            name: Some("inst-1".to_string()),
+            config: None,
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"name\""));
+        assert!(!json.contains("\"config\""));
+    }
+
+    #[test]
+    fn test_command_request_round_trip_with_optional_fields() {
+        let original = CommandRequest {
+            command: "add".to_string(),
+            node_path: "/path".to_string(),
+            name: Some("instance-1".to_string()),
+            config: Some("/etc/config.yaml".to_string()),
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: CommandRequest = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.command, "add");
+        assert_eq!(deserialized.node_path, "/path");
+        assert_eq!(deserialized.name, Some("instance-1".to_string()));
+        assert_eq!(deserialized.config, Some("/etc/config.yaml".to_string()));
     }
 }

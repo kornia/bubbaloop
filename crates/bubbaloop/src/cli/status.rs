@@ -71,6 +71,9 @@ struct NodeState {
     is_built: bool,
     #[allow(dead_code)]
     build_output: Vec<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    base_node: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

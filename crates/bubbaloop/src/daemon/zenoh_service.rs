@@ -450,6 +450,8 @@ mod tests {
             machine_id: "test-machine".to_string(),
             machine_hostname: "test-hostname".to_string(),
             machine_ips: vec!["192.168.1.100".to_string()],
+            base_node: String::new(),
+            config_override: String::new(),
         };
 
         let bytes = ZenohService::encode_proto(&state);

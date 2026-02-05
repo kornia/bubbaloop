@@ -51,6 +51,7 @@ enum NodeAction {
     List(ListArgs),
     Add(AddArgs),
     Remove(RemoveArgs),
+    Instance(InstanceArgs),
     Install(InstallArgs),
     Uninstall(UninstallArgs),
     Start(StartArgs),
@@ -62,6 +63,7 @@ enum NodeAction {
     Enable(EnableArgs),
     Disable(DisableArgs),
     Search(SearchArgs),
+    Discover(DiscoverArgs),
 }
 
 /// Initialize a new node from template
@@ -105,6 +107,14 @@ struct ListArgs {
     /// output format: table, json (default: table)
     #[argh(option, short = 'f', default = "String::from(\"table\")")]
     format: String,
+
+    /// show only base nodes (excludes instances)
+    #[argh(switch)]
+    base: bool,
+
+    /// show only instances (excludes base nodes)
+    #[argh(switch)]
+    instances: bool,
 }
 
 /// Add a node from local path or GitHub URL
@@ -134,6 +144,14 @@ struct AddArgs {
     /// subdirectory within repo containing node.yaml (for multi-node repos)
     #[argh(option, short = 's')]
     subdir: Option<String>,
+
+    /// instance name (overrides node.yaml name for multi-instance nodes)
+    #[argh(option, short = 'n')]
+    name: Option<String>,
+
+    /// config file path for this instance (passed to binary via -c)
+    #[argh(option, short = 'c')]
+    config: Option<String>,
 }
 
 /// Remove a node from the registry
@@ -149,6 +167,44 @@ struct RemoveArgs {
     delete_files: bool,
 }
 
+/// Create an instance of a base node with specific config
+///
+/// Multi-instance nodes (like rtsp-camera) need different configs for each instance.
+/// This command creates a named instance from an already-registered base node.
+///
+/// Example:
+///   bubbaloop node instance rtsp-camera terrace --config ~/.bubbaloop/configs/rtsp-camera-terrace.yaml
+///
+/// This creates "rtsp-camera-terrace" instance that uses the rtsp-camera binary
+/// but with its own config file.
+#[derive(FromArgs)]
+#[argh(subcommand, name = "instance")]
+struct InstanceArgs {
+    /// base node name (must be already registered, e.g., "rtsp-camera")
+    #[argh(positional)]
+    base_node: String,
+
+    /// instance suffix (e.g., "terrace" creates "rtsp-camera-terrace")
+    #[argh(positional)]
+    suffix: String,
+
+    /// config file path for this instance (required for most multi-instance nodes)
+    #[argh(option, short = 'c')]
+    config: Option<String>,
+
+    /// copy example config from base node's configs/ directory
+    #[argh(switch)]
+    copy_config: bool,
+
+    /// install as systemd service after creating
+    #[argh(switch)]
+    install: bool,
+
+    /// start the instance after creating (implies --install)
+    #[argh(switch)]
+    start: bool,
+}
+
 /// Install a node as a systemd service (or from marketplace by name)
 #[derive(FromArgs)]
 #[argh(subcommand, name = "install")]
@@ -161,9 +217,9 @@ struct InstallArgs {
     #[argh(option, short = 'b', default = "String::from(\"main\")")]
     branch: String,
 
-    /// skip the build step (marketplace install only)
+    /// also build the node (marketplace install only)
     #[argh(switch)]
-    no_build: bool,
+    build: bool,
 }
 
 /// Uninstall a node's systemd service
@@ -272,6 +328,15 @@ struct SearchArgs {
     tag: Option<String>,
 }
 
+/// Discover available nodes from marketplace sources (with status from daemon)
+#[derive(FromArgs)]
+#[argh(subcommand, name = "discover")]
+struct DiscoverArgs {
+    /// output format: table, json (default: table)
+    #[argh(option, short = 'f', default = "String::from(\"table\")")]
+    format: String,
+}
+
 /// Response from daemon API
 #[derive(Deserialize)]
 struct CommandResponse {
@@ -292,6 +357,8 @@ struct NodeState {
     description: String,
     node_type: String,
     is_built: bool,
+    #[serde(default)]
+    base_node: String,
 }
 
 #[derive(Deserialize)]
@@ -319,6 +386,7 @@ impl NodeCommand {
             Some(NodeAction::List(args)) => list_nodes(args).await,
             Some(NodeAction::Add(args)) => add_node(args).await,
             Some(NodeAction::Remove(args)) => remove_node(args).await,
+            Some(NodeAction::Instance(args)) => create_instance(args).await,
             Some(NodeAction::Install(args)) => handle_install(args).await,
             Some(NodeAction::Uninstall(args)) => send_command(&args.name, "uninstall").await,
             Some(NodeAction::Start(args)) => send_command(&args.name, "start").await,
@@ -330,6 +398,7 @@ impl NodeCommand {
             Some(NodeAction::Enable(args)) => send_command(&args.name, "enable").await,
             Some(NodeAction::Disable(args)) => send_command(&args.name, "disable").await,
             Some(NodeAction::Search(args)) => search_nodes(args),
+            Some(NodeAction::Discover(args)) => discover_nodes(args).await,
         }
     }
 
@@ -342,7 +411,12 @@ impl NodeCommand {
         eprintln!("  list        List all registered nodes");
         eprintln!("  add         Add a node from local path or GitHub URL");
         eprintln!("  remove      Remove a node from the registry");
+        eprintln!("  instance    Create an instance of a multi-instance node");
+        eprintln!(
+            "              Example: bubbaloop node instance rtsp-camera terrace -c config.yaml"
+        );
         eprintln!("  search      Search the node marketplace");
+        eprintln!("  discover    Discover available nodes with status");
         eprintln!("  install     Install a node (or from marketplace by name)");
         eprintln!("  uninstall   Uninstall a node's systemd service");
         eprintln!("  start       Start a node service");
@@ -353,11 +427,12 @@ impl NodeCommand {
         eprintln!("  clean       Clean a node's build artifacts");
         eprintln!("  enable      Enable autostart for a node");
         eprintln!("  disable     Disable autostart for a node");
+        eprintln!("  (See also: bubbaloop launch  -- launch multi-instance YAML)");
         eprintln!("\nRun 'bubbaloop node <command> --help' for more information.");
     }
 }
 
-async fn get_zenoh_session() -> Result<zenoh::Session> {
+pub(crate) async fn get_zenoh_session() -> Result<zenoh::Session> {
     // Connect to local zenoh router, or custom endpoint via env var
     let mut config = zenoh::Config::default();
 
@@ -482,10 +557,15 @@ fn validate_node(args: ValidateArgs) -> Result<()> {
 }
 
 async fn list_nodes(args: ListArgs) -> Result<()> {
+    if args.base && args.instances {
+        return Err(NodeError::InvalidArgs(
+            "Cannot use --base and --instances together".into(),
+        ));
+    }
+
     let session = get_zenoh_session().await?;
 
     // Retry up to 3 times with 1 second delay between retries
-    let mut last_error = None;
     let mut best_data: Option<NodeListResponse> = None;
 
     for attempt in 1..=3 {
@@ -495,68 +575,88 @@ async fn list_nodes(args: ListArgs) -> Result<()> {
             .timeout(std::time::Duration::from_secs(30))
             .await;
 
-        match replies_result {
-            Ok(replies) => {
-                let replies: Vec<_> = replies.into_iter().collect();
-
-                // Find the first response with actual nodes, or use any response
-                for reply in replies {
-                    if let Ok(sample) = reply.into_result() {
-                        let payload = sample.payload().to_bytes();
-                        if let Ok(data) = serde_json::from_slice::<NodeListResponse>(&payload) {
-                            if !data.nodes.is_empty() {
-                                best_data = Some(data);
-                                break; // Found response with nodes, use it
-                            } else if best_data.is_none() {
-                                best_data = Some(data); // Keep first empty response as fallback
+        if let Ok(replies) = replies_result {
+            for reply in replies {
+                if let Ok(sample) = reply.into_result() {
+                    if let Ok(data) =
+                        serde_json::from_slice::<NodeListResponse>(&sample.payload().to_bytes())
+                    {
+                        if !data.nodes.is_empty() || best_data.is_none() {
+                            best_data = Some(data);
+                            if !best_data.as_ref().unwrap().nodes.is_empty() {
+                                break;
                             }
                         }
                     }
                 }
-
-                if best_data.is_some() {
-                    break; // Success, exit retry loop
-                }
-
-                // No valid response, retry
-                if attempt < 3 {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                }
             }
-            Err(e) => {
-                last_error = Some(NodeError::Zenoh(e.to_string()));
-                if attempt < 3 {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                }
+
+            if best_data.as_ref().is_some_and(|d| !d.nodes.is_empty()) {
+                break;
             }
+        }
+
+        if attempt < 3 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }
 
-    if let Some(data) = best_data {
+    if let Some(mut data) = best_data {
+        // Apply --base / --instances filter
+        if args.base {
+            data.nodes.retain(|n| n.base_node.is_empty());
+        } else if args.instances {
+            data.nodes.retain(|n| !n.base_node.is_empty());
+        }
+
         if args.format == "json" {
             println!("{}", serde_json::to_string_pretty(&data.nodes)?);
         } else if data.nodes.is_empty() {
             println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
         } else {
-            println!(
-                "{:<20} {:<10} {:<12} {:<8} DESCRIPTION",
-                "NAME", "STATUS", "TYPE", "BUILT"
-            );
-            println!("{}", "-".repeat(70));
-            for node in data.nodes {
-                let built = if node.is_built { "yes" } else { "no" };
+            let has_instances = data.nodes.iter().any(|n| !n.base_node.is_empty());
+            if has_instances {
                 println!(
-                    "{:<20} {:<10} {:<12} {:<8} {}",
-                    node.name,
-                    node.status,
-                    node.node_type,
-                    built,
-                    truncate(&node.description, 30)
+                    "{:<20} {:<10} {:<16} {:<12} {:<8} DESCRIPTION",
+                    "NAME", "STATUS", "BASE", "TYPE", "BUILT"
                 );
+                println!("{}", "-".repeat(86));
+                for node in data.nodes {
+                    let built = if node.is_built { "yes" } else { "no" };
+                    let base = if node.base_node.is_empty() {
+                        "-"
+                    } else {
+                        &node.base_node
+                    };
+                    println!(
+                        "{:<20} {:<10} {:<16} {:<12} {:<8} {}",
+                        node.name,
+                        node.status,
+                        base,
+                        node.node_type,
+                        built,
+                        truncate(&node.description, 30)
+                    );
+                }
+            } else {
+                println!(
+                    "{:<20} {:<10} {:<12} {:<8} DESCRIPTION",
+                    "NAME", "STATUS", "TYPE", "BUILT"
+                );
+                println!("{}", "-".repeat(70));
+                for node in data.nodes {
+                    let built = if node.is_built { "yes" } else { "no" };
+                    println!(
+                        "{:<20} {:<10} {:<12} {:<8} {}",
+                        node.name,
+                        node.status,
+                        node.node_type,
+                        built,
+                        truncate(&node.description, 30)
+                    );
+                }
             }
         }
-    } else if let Some(err) = last_error {
-        return Err(err);
     } else {
         println!("No response from daemon. Is it running?");
     }
@@ -689,68 +789,46 @@ async fn add_node(args: AddArgs) -> Result<()> {
 
     let payload = serde_json::to_string(&serde_json::json!({
         "command": "add",
-        "node_path": node_path
+        "node_path": node_path,
+        "name": args.name,
+        "config": args.config,
     }))?;
 
-    // Retry up to 3 times with 1 second delay between retries
     let mut node_name: Option<String> = None;
-    let mut last_error = None;
 
     for attempt in 1..=3 {
-        let replies_result = session
+        if let Ok(replies) = session
             .get("bubbaloop/daemon/api/nodes/add")
             .payload(payload.clone())
             .target(QueryTarget::BestMatching)
             .timeout(std::time::Duration::from_secs(30))
-            .await;
-
-        match replies_result {
-            Ok(replies) => {
-                let replies: Vec<_> = replies.into_iter().collect();
-                let mut success = false;
-
-                for reply in replies {
-                    if let Ok(sample) = reply.into_result() {
-                        let data: CommandResponse =
-                            serde_json::from_slice(&sample.payload().to_bytes())?;
-                        if data.success {
-                            println!("Added node from: {}", node_path);
-                            // Extract node name from path for build/install
-                            node_name = extract_node_name(&node_path).ok();
-                            success = true;
-                            break;
-                        } else {
-                            last_error = Some(NodeError::CommandFailed(data.message));
-                        }
+            .await
+        {
+            for reply in replies {
+                if let Ok(sample) = reply.into_result() {
+                    let data: CommandResponse =
+                        serde_json::from_slice(&sample.payload().to_bytes())?;
+                    if data.success {
+                        println!("Added node from: {}", node_path);
+                        node_name = extract_node_name(&node_path).ok();
+                        break;
+                    } else if attempt == 3 {
+                        session
+                            .close()
+                            .await
+                            .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+                        return Err(NodeError::CommandFailed(data.message));
                     }
                 }
-
-                if success {
-                    break; // Success, exit retry loop
-                }
-
-                // Failed, retry
-                if attempt < 3 {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                }
             }
-            Err(e) => {
-                last_error = Some(NodeError::Zenoh(e.to_string()));
-                if attempt < 3 {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                }
+
+            if node_name.is_some() {
+                break;
             }
         }
-    }
 
-    // Check if we failed after all retries
-    if node_name.is_none() {
-        if let Some(err) = last_error {
-            session
-                .close()
-                .await
-                .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-            return Err(err);
+        if attempt < 3 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }
 
@@ -775,6 +853,218 @@ async fn add_node(args: AddArgs) -> Result<()> {
         .await
         .map_err(|e| NodeError::Zenoh(e.to_string()))?;
     Ok(())
+}
+
+/// Create an instance of a multi-instance node (like rtsp-camera)
+///
+/// This command creates a named instance from an already-registered base node.
+/// The instance will use the base node's binary but with its own config file.
+///
+/// # Arguments
+/// * `args.base_node` - Name of the registered base node (e.g., "rtsp-camera")
+/// * `args.suffix` - Instance suffix (e.g., "terrace" creates "rtsp-camera-terrace")
+/// * `args.config` - Path to config file for this instance
+/// * `args.copy_config` - Copy example config from base node's configs/ directory
+/// * `args.install` - Install as systemd service after creating
+/// * `args.start` - Start the instance after creating (implies --install)
+///
+/// # Example
+/// ```bash
+/// bubbaloop node instance rtsp-camera terrace --config ~/.bubbaloop/configs/rtsp-camera-terrace.yaml
+/// ```
+async fn create_instance(args: InstanceArgs) -> Result<()> {
+    // Validate suffix (same rules as node names: alphanumeric, hyphens, underscores)
+    if args.suffix.is_empty() || args.suffix.len() > 64 {
+        return Err(NodeError::InvalidArgs(
+            "Instance suffix must be 1-64 characters".into(),
+        ));
+    }
+    if !args
+        .suffix
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(NodeError::InvalidArgs(
+            "Instance suffix can only contain alphanumeric characters, hyphens, and underscores"
+                .into(),
+        ));
+    }
+    if args.suffix.starts_with('-') || args.suffix.starts_with('_') {
+        return Err(NodeError::InvalidArgs(
+            "Instance suffix cannot start with hyphen or underscore".into(),
+        ));
+    }
+
+    // Build the full instance name: base-suffix
+    let instance_name = format!("{}-{}", args.base_node, args.suffix);
+
+    // First, find the base node to get its path
+    let session = get_zenoh_session().await?;
+
+    // Query the daemon for the base node's path
+    let query_payload = serde_json::to_string(&serde_json::json!({
+        "command": "get_node",
+        "name": args.base_node,
+    }))?;
+
+    let replies = session
+        .get("bubbaloop/daemon/api/nodes")
+        .payload(query_payload)
+        .target(QueryTarget::BestMatching)
+        .timeout(std::time::Duration::from_secs(10))
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+
+    let mut base_node_path: Option<String> = None;
+
+    for reply in replies {
+        if let Ok(sample) = reply.into_result() {
+            let data: NodeListResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
+            // Find the base node (must have empty base_node field, meaning it's not an instance)
+            for node in data.nodes {
+                if node.name == args.base_node && node.base_node.is_empty() {
+                    base_node_path = Some(node.path.clone());
+                    break;
+                }
+            }
+        }
+    }
+
+    let base_path = base_node_path.ok_or_else(|| {
+        NodeError::NotFound(format!(
+            "Base node '{}' not found. Add it first with: bubbaloop node add <path>",
+            args.base_node
+        ))
+    })?;
+
+    // Handle config file
+    let config_path = if args.copy_config {
+        // Copy example config from base node's configs/ directory
+        let configs_dir = Path::new(&base_path).join("configs");
+        if !configs_dir.exists() {
+            return Err(NodeError::NotFound(format!(
+                "No configs/ directory found in base node at {}",
+                base_path
+            )));
+        }
+
+        // Look for an example config
+        let example_config = find_example_config(&configs_dir)?;
+
+        // Create ~/.bubbaloop/configs/ if needed
+        let dest_dir = dirs::home_dir()
+            .ok_or_else(|| NodeError::Io(std::io::Error::other("HOME not set")))?
+            .join(".bubbaloop")
+            .join("configs");
+        std::fs::create_dir_all(&dest_dir)?;
+
+        // Copy to ~/.bubbaloop/configs/<instance-name>.yaml
+        let dest_path = dest_dir.join(format!("{}.yaml", instance_name));
+        std::fs::copy(&example_config, &dest_path)?;
+
+        println!("Copied example config to: {}", dest_path.display());
+        println!("Edit this file to configure your instance before starting.");
+
+        Some(dest_path.to_string_lossy().to_string())
+    } else if let Some(ref config) = args.config {
+        // Validate config path exists
+        let config_path = Path::new(config);
+        if !config_path.exists() {
+            return Err(NodeError::NotFound(format!(
+                "Config file not found: {}",
+                config
+            )));
+        }
+        Some(config_path.canonicalize()?.to_string_lossy().to_string())
+    } else {
+        None
+    };
+
+    // Register the instance with the daemon
+    let add_payload = serde_json::to_string(&serde_json::json!({
+        "command": "add",
+        "node_path": base_path,
+        "name": instance_name,
+        "config": config_path,
+    }))?;
+
+    let replies = session
+        .get("bubbaloop/daemon/api/nodes/add")
+        .payload(add_payload)
+        .target(QueryTarget::BestMatching)
+        .timeout(std::time::Duration::from_secs(30))
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+
+    let mut success = false;
+    for reply in replies {
+        if let Ok(sample) = reply.into_result() {
+            let data: CommandResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
+            if data.success {
+                println!(
+                    "Created instance '{}' from base node '{}'",
+                    instance_name, args.base_node
+                );
+                success = true;
+            } else {
+                session
+                    .close()
+                    .await
+                    .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+                return Err(NodeError::CommandFailed(data.message));
+            }
+        }
+    }
+
+    if !success {
+        session
+            .close()
+            .await
+            .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+        return Err(NodeError::Zenoh("No response from daemon".into()));
+    }
+
+    // Close the session before send_command (which opens its own)
+    session
+        .close()
+        .await
+        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+
+    // Optional: install and/or start
+    if args.start || args.install {
+        println!("Installing instance as systemd service...");
+        send_command(&instance_name, "install").await?;
+    }
+
+    if args.start {
+        println!("Starting instance...");
+        send_command(&instance_name, "start").await?;
+    }
+
+    Ok(())
+}
+
+/// Find an example config file in the configs/ directory
+fn find_example_config(configs_dir: &Path) -> Result<PathBuf> {
+    let entries: Vec<_> = std::fs::read_dir(configs_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "yaml" || ext == "yml")
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if entries.is_empty() {
+        return Err(NodeError::NotFound(format!(
+            "No .yaml config files found in {}",
+            configs_dir.display()
+        )));
+    }
+
+    // Return the first one found
+    Ok(entries[0].path())
 }
 
 fn normalize_git_url(source: &str) -> String {
@@ -940,63 +1230,43 @@ async fn remove_node(args: RemoveArgs) -> Result<()> {
     Ok(())
 }
 
-async fn send_command(name: &str, command: &str) -> Result<()> {
+pub(crate) async fn send_command(name: &str, command: &str) -> Result<()> {
     let session = get_zenoh_session().await?;
-
-    let payload = serde_json::to_string(&serde_json::json!({
-        "command": command
-    }))?;
-
+    let payload = serde_json::to_string(&serde_json::json!({"command": command}))?;
     let key = format!("bubbaloop/daemon/api/nodes/{}/command", name);
 
-    // Retry up to 3 times with 1 second delay between retries
     let mut last_error = None;
-    let mut success = false;
 
     for attempt in 1..=3 {
-        let replies_result = session
+        if let Ok(replies) = session
             .get(&key)
             .payload(payload.clone())
             .target(QueryTarget::BestMatching)
             .timeout(std::time::Duration::from_secs(30))
-            .await;
-
-        match replies_result {
-            Ok(replies) => {
-                let replies: Vec<_> = replies.into_iter().collect();
-
-                for reply in replies {
-                    if let Ok(sample) = reply.into_result() {
-                        let data: CommandResponse =
-                            serde_json::from_slice(&sample.payload().to_bytes())?;
-                        if data.success {
-                            println!("{}", data.message);
-                            if !data.output.is_empty() {
-                                println!("{}", data.output);
-                            }
-                            success = true;
-                            break;
-                        } else {
-                            last_error = Some(NodeError::CommandFailed(data.message));
+            .await
+        {
+            for reply in replies {
+                if let Ok(sample) = reply.into_result() {
+                    let data: CommandResponse =
+                        serde_json::from_slice(&sample.payload().to_bytes())?;
+                    if data.success {
+                        println!("{}", data.message);
+                        if !data.output.is_empty() {
+                            println!("{}", data.output);
                         }
+                        session
+                            .close()
+                            .await
+                            .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+                        return Ok(());
                     }
-                }
-
-                if success {
-                    break; // Success, exit retry loop
-                }
-
-                // Failed, retry
-                if attempt < 3 {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    last_error = Some(NodeError::CommandFailed(data.message));
                 }
             }
-            Err(e) => {
-                last_error = Some(NodeError::Zenoh(e.to_string()));
-                if attempt < 3 {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                }
-            }
+        }
+
+        if attempt < 3 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }
 
@@ -1004,14 +1274,7 @@ async fn send_command(name: &str, command: &str) -> Result<()> {
         .close()
         .await
         .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-
-    if !success {
-        if let Some(err) = last_error {
-            return Err(err);
-        }
-    }
-
-    Ok(())
+    Err(last_error.unwrap_or_else(|| NodeError::Zenoh("No response from daemon".into())))
 }
 
 /// Handle `node install`: if the node is already registered with the daemon,
@@ -1166,8 +1429,8 @@ async fn handle_install(args: InstallArgs) -> Result<()> {
         ));
     }
 
-    // Build (unless --no-build)
-    if !args.no_build {
+    // Build only if --build is passed
+    if args.build {
         println!("Building {}...", args.name);
         send_command(&args.name, "build").await?;
     }
@@ -1239,6 +1502,120 @@ fn search_nodes(args: SearchArgs) -> Result<()> {
     }
     println!();
     println!("Install with: bubbaloop node install <name>");
+
+    Ok(())
+}
+
+async fn discover_nodes(args: DiscoverArgs) -> Result<()> {
+    // Refresh marketplace cache
+    if let Err(e) = registry::refresh_cache() {
+        log::warn!("registry refresh failed: {}", e);
+        eprintln!("Warning: could not refresh registry (using cache): {}", e);
+    }
+    let all_marketplace = registry::load_cached_registry();
+
+    // Query daemon for registered nodes
+    let registered: Vec<NodeState> = match get_zenoh_session().await {
+        Ok(session) => {
+            let result = session
+                .get("bubbaloop/daemon/api/nodes")
+                .target(QueryTarget::BestMatching)
+                .timeout(std::time::Duration::from_secs(5))
+                .await;
+            let mut nodes = Vec::new();
+            if let Ok(replies) = result {
+                for reply in replies {
+                    if let Ok(sample) = reply.into_result() {
+                        if let Ok(data) =
+                            serde_json::from_slice::<NodeListResponse>(&sample.payload().to_bytes())
+                        {
+                            nodes = data.nodes;
+                            break;
+                        }
+                    }
+                }
+            }
+            let _ = session.close().await;
+            nodes
+        }
+        Err(_) => Vec::new(),
+    };
+
+    if all_marketplace.is_empty() {
+        println!(
+            "No nodes found in marketplace. The registry cache may not have been fetched yet."
+        );
+        return Ok(());
+    }
+
+    #[derive(serde::Serialize)]
+    struct DiscoverEntry {
+        name: String,
+        version: String,
+        node_type: String,
+        is_added: bool,
+        is_built: bool,
+        instance_count: usize,
+        repo: String,
+        description: String,
+    }
+
+    let entries: Vec<DiscoverEntry> = all_marketplace
+        .iter()
+        .map(|node| {
+            let reg = registered
+                .iter()
+                .find(|r| r.name == node.name && r.base_node.is_empty());
+            let is_added = reg.is_some();
+            let is_built = reg.map(|r| r.is_built).unwrap_or(false);
+            let instance_count = registered
+                .iter()
+                .filter(|r| r.base_node == node.name)
+                .count();
+            DiscoverEntry {
+                name: node.name.clone(),
+                version: node.version.clone(),
+                node_type: node.node_type.clone(),
+                is_added,
+                is_built,
+                instance_count,
+                repo: node.repo.clone(),
+                description: truncate(&node.description, 28),
+            }
+        })
+        .collect();
+
+    if args.format == "json" {
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+    } else {
+        println!(
+            "{:<20} {:<10} {:<8} {:<6} {:<6} {:<5} {:<30} DESCRIPTION",
+            "NAME", "VERSION", "TYPE", "ADDED", "BUILT", "INST", "REPO"
+        );
+        println!("{}", "-".repeat(115));
+        for e in &entries {
+            let added = if e.is_added { "yes" } else { "-" };
+            let built = if e.is_added && e.is_built {
+                "yes"
+            } else if e.is_added {
+                "no"
+            } else {
+                "-"
+            };
+            let inst = if e.instance_count > 0 {
+                format!("{}", e.instance_count)
+            } else {
+                "-".to_string()
+            };
+            println!(
+                "{:<20} {:<10} {:<8} {:<6} {:<6} {:<5} {:<30} {}",
+                e.name, e.version, e.node_type, added, built, inst, e.repo, e.description
+            );
+        }
+        println!();
+        println!("Add with: bubbaloop node add <name>");
+        println!("Create instance: bubbaloop node add <path> --name <instance-name>");
+    }
 
     Ok(())
 }
@@ -1464,6 +1841,7 @@ mod tests {
             description: "Test node".to_string(),
             node_type: "rust".to_string(),
             is_built: true,
+            base_node: String::new(),
         };
 
         let json = serde_json::to_string(&node).unwrap();
@@ -1700,6 +2078,95 @@ mod tests {
     }
 
     #[test]
+    fn test_node_state_base_node_deserialization() {
+        let json = r#"{"name": "rtsp-camera-terrace", "path": "/path", "status": "running",
+                     "installed": true, "autostart_enabled": false, "version": "1.0.0",
+                     "description": "Test", "node_type": "rust", "is_built": true,
+                     "base_node": "rtsp-camera"}"#;
+        let node: NodeState = serde_json::from_str(json).unwrap();
+        assert_eq!(node.base_node, "rtsp-camera");
+    }
+
+    #[test]
+    fn test_node_state_base_node_defaults_empty() {
+        let json = r#"{"name": "openmeteo", "path": "/path", "status": "stopped",
+                     "installed": true, "autostart_enabled": false, "version": "1.0.0",
+                     "description": "Weather", "node_type": "rust", "is_built": true}"#;
+        let node: NodeState = serde_json::from_str(json).unwrap();
+        assert_eq!(node.base_node, "");
+    }
+
+    #[test]
+    fn test_list_filter_base_only() {
+        let nodes = [
+            NodeState {
+                name: "rtsp-camera".to_string(),
+                path: "/path".to_string(),
+                status: "running".to_string(),
+                installed: true,
+                autostart_enabled: false,
+                version: "1.0.0".to_string(),
+                description: "Camera".to_string(),
+                node_type: "rust".to_string(),
+                is_built: true,
+                base_node: String::new(),
+            },
+            NodeState {
+                name: "rtsp-camera-terrace".to_string(),
+                path: "/path".to_string(),
+                status: "running".to_string(),
+                installed: true,
+                autostart_enabled: false,
+                version: "1.0.0".to_string(),
+                description: "Terrace cam".to_string(),
+                node_type: "rust".to_string(),
+                is_built: true,
+                base_node: "rtsp-camera".to_string(),
+            },
+            NodeState {
+                name: "openmeteo".to_string(),
+                path: "/path2".to_string(),
+                status: "stopped".to_string(),
+                installed: true,
+                autostart_enabled: false,
+                version: "1.0.0".to_string(),
+                description: "Weather".to_string(),
+                node_type: "rust".to_string(),
+                is_built: false,
+                base_node: String::new(),
+            },
+        ];
+
+        // --base filter: only base nodes (base_node is empty)
+        let base_only: Vec<_> = nodes.iter().filter(|n| n.base_node.is_empty()).collect();
+        assert_eq!(base_only.len(), 2);
+        assert_eq!(base_only[0].name, "rtsp-camera");
+        assert_eq!(base_only[1].name, "openmeteo");
+
+        // --instances filter: only instances (base_node is non-empty)
+        let instances_only: Vec<_> = nodes.iter().filter(|n| !n.base_node.is_empty()).collect();
+        assert_eq!(instances_only.len(), 1);
+        assert_eq!(instances_only[0].name, "rtsp-camera-terrace");
+        assert_eq!(instances_only[0].base_node, "rtsp-camera");
+    }
+
+    #[test]
+    fn test_instance_name_validation() {
+        // Valid instance names
+        assert!(is_valid_node_name("rtsp-camera-terrace"));
+        assert!(is_valid_node_name("rtsp-camera_1"));
+        assert!(is_valid_node_name("cam01"));
+
+        // Invalid: empty, starts with dash, special chars
+        assert!(!is_valid_node_name(""));
+        assert!(!is_valid_node_name("-starts-with-dash"));
+        assert!(!is_valid_node_name("has space"));
+        assert!(!is_valid_node_name("has;semicolon"));
+        assert!(!is_valid_node_name("../traversal"));
+        assert!(!is_valid_node_name(".hidden"));
+    }
+
+    #[test]
     fn test_discover_nodes_ignores_files() {
         let dir = tempfile::tempdir().unwrap();
         // Create a file named "node.yaml" at root (not a subdir)
@@ -1709,5 +2176,113 @@ mod tests {
 
         let nodes = discover_nodes_in_subdirs(dir.path());
         assert_eq!(nodes.len(), 0); // Only scans directories, not root
+    }
+
+    // ==================== Instance command tests ====================
+
+    /// Test that instance suffix validation rejects invalid characters
+    #[test]
+    fn test_instance_suffix_validation_valid() {
+        // Valid suffixes that should work
+        let valid_suffixes = ["terrace", "entrance", "cam01", "garden_1", "my-camera"];
+        for suffix in valid_suffixes {
+            assert!(
+                suffix
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_'),
+                "Expected '{}' to be valid",
+                suffix
+            );
+            assert!(
+                !suffix.starts_with('-') && !suffix.starts_with('_'),
+                "Expected '{}' to not start with - or _",
+                suffix
+            );
+        }
+    }
+
+    #[test]
+    fn test_instance_suffix_validation_invalid() {
+        // Invalid suffixes that should be rejected
+        let invalid_suffixes = [
+            "",              // empty
+            "-terrace",      // starts with dash
+            "_terrace",      // starts with underscore
+            "terrace space", // contains space
+            "terrace/path",  // contains slash
+            "../traversal",  // path traversal
+            "terrace;cmd",   // shell metacharacter
+        ];
+        for suffix in invalid_suffixes {
+            let is_valid = !suffix.is_empty()
+                && suffix.len() <= 64
+                && suffix
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                && !suffix.starts_with('-')
+                && !suffix.starts_with('_');
+            assert!(!is_valid, "Expected '{}' to be invalid", suffix);
+        }
+    }
+
+    /// Test that instance name is constructed correctly: base-suffix
+    #[test]
+    fn test_instance_name_construction() {
+        let base = "rtsp-camera";
+        let suffix = "terrace";
+        let instance_name = format!("{}-{}", base, suffix);
+        assert_eq!(instance_name, "rtsp-camera-terrace");
+
+        let base2 = "weather-node";
+        let suffix2 = "station_1";
+        let instance_name2 = format!("{}-{}", base2, suffix2);
+        assert_eq!(instance_name2, "weather-node-station_1");
+    }
+
+    /// Test find_example_config function
+    #[test]
+    fn test_find_example_config_finds_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let configs_dir = dir.path().join("configs");
+        std::fs::create_dir(&configs_dir).unwrap();
+        std::fs::write(configs_dir.join("example.yaml"), "name: test").unwrap();
+
+        let result = find_example_config(&configs_dir);
+        assert!(result.is_ok());
+        assert!(result.unwrap().to_string_lossy().contains("example.yaml"));
+    }
+
+    #[test]
+    fn test_find_example_config_finds_yml() {
+        let dir = tempfile::tempdir().unwrap();
+        let configs_dir = dir.path().join("configs");
+        std::fs::create_dir(&configs_dir).unwrap();
+        std::fs::write(configs_dir.join("example.yml"), "name: test").unwrap();
+
+        let result = find_example_config(&configs_dir);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_find_example_config_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let configs_dir = dir.path().join("configs");
+        std::fs::create_dir(&configs_dir).unwrap();
+
+        let result = find_example_config(&configs_dir);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No .yaml config"));
+    }
+
+    #[test]
+    fn test_find_example_config_ignores_non_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let configs_dir = dir.path().join("configs");
+        std::fs::create_dir(&configs_dir).unwrap();
+        std::fs::write(configs_dir.join("readme.txt"), "not a config").unwrap();
+        std::fs::write(configs_dir.join("config.json"), "{}").unwrap();
+
+        let result = find_example_config(&configs_dir);
+        assert!(result.is_err()); // Only .yaml/.yml files
     }
 }

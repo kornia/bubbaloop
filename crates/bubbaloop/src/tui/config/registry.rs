@@ -172,24 +172,30 @@ impl Registry {
 
     pub fn scan_discoverable_nodes(&self, registered_nodes: &[NodeInfo]) -> Vec<DiscoverableNode> {
         let mut discovered = Vec::new();
-        // Use name-based dedup so installed nodes don't re-appear from builtin sources
-        let registered_names: HashSet<_> =
-            registered_nodes.iter().map(|n| n.name.as_str()).collect();
-        let registered_paths: HashSet<_> = registered_nodes
-            .iter()
-            .map(|n| normalize_path(&n.path))
-            .collect();
         let mut discovered_names: HashSet<String> = HashSet::new();
         let mut discovered_paths: HashSet<String> = HashSet::new();
 
-        // Scan enabled sources (first, so configured sources win over local dev)
+        // Build lookup maps from registered nodes for status computation
+        let registered_by_name: std::collections::HashMap<&str, &NodeInfo> = registered_nodes
+            .iter()
+            .filter(|n| n.base_node.is_empty()) // Only base nodes
+            .map(|n| (n.name.as_str(), n))
+            .collect();
+
+        // Scan enabled sources — always return all marketplace nodes (no dedup filtering)
         for source in self.get_enabled_sources() {
             if source.source_type == OFFICIAL_SOURCE_TYPE {
-                // Parse official nodes from cached YAML (fetched from GitHub)
-                for node in self.load_builtin_nodes() {
-                    if !registered_names.contains(node.name.as_str())
-                        && !discovered_names.contains(&node.name)
-                    {
+                for mut node in self.load_builtin_nodes() {
+                    if !discovered_names.contains(&node.name) {
+                        // Compute status from registered nodes
+                        if let Some(reg) = registered_by_name.get(node.name.as_str()) {
+                            node.is_added = true;
+                            node.is_built = reg.is_built;
+                        }
+                        node.instance_count = registered_nodes
+                            .iter()
+                            .filter(|n| n.base_node == node.name)
+                            .count();
                         discovered_names.insert(node.name.clone());
                         discovered.push(node);
                     }
@@ -198,11 +204,18 @@ impl Registry {
                 let found = scan_for_nodes(&source.path);
                 for node in found {
                     let normalized = normalize_path(&node.path);
-                    if !registered_paths.contains(&normalized)
-                        && !discovered_paths.contains(&normalized)
-                        && !registered_names.contains(node.name.as_str())
+                    if !discovered_paths.contains(&normalized)
                         && !discovered_names.contains(&node.name)
                     {
+                        let is_added = registered_by_name.contains_key(node.name.as_str());
+                        let is_built = registered_by_name
+                            .get(node.name.as_str())
+                            .map(|n| n.is_built)
+                            .unwrap_or(false);
+                        let instance_count = registered_nodes
+                            .iter()
+                            .filter(|n| n.base_node == node.name)
+                            .count();
                         discovered_paths.insert(normalized);
                         discovered_names.insert(node.name.clone());
                         discovered.push(DiscoverableNode {
@@ -213,6 +226,9 @@ impl Registry {
                             description: node.description,
                             source: source.name.clone(),
                             source_type: source.source_type.clone(),
+                            is_added,
+                            is_built,
+                            instance_count,
                         });
                     }
                 }
@@ -245,6 +261,9 @@ impl Registry {
                     description: entry.description,
                     source: OFFICIAL_SOURCE_NAME.to_string(),
                     source_type: OFFICIAL_SOURCE_TYPE.to_string(),
+                    is_added: false,
+                    is_built: false,
+                    instance_count: 0,
                 }
             })
             .collect()
@@ -471,7 +490,7 @@ nodes:
     }
 
     #[test]
-    fn test_builtin_dedup_with_registered_nodes() {
+    fn test_scan_returns_all_nodes_with_status() {
         let dir = tempfile::tempdir().unwrap();
 
         // Write a cached nodes.yaml
@@ -494,6 +513,86 @@ nodes:
             },
         };
 
+        // rtsp-camera is registered (base node, built)
+        let registered = vec![
+            NodeInfo {
+                name: "rtsp-camera".to_string(),
+                path: "/some/local/path".to_string(),
+                version: "0.1.0".to_string(),
+                node_type: "rust".to_string(),
+                description: String::new(),
+                status: "stopped".to_string(),
+                is_built: true,
+                build_output: Vec::new(),
+                base_node: String::new(),
+                config_override: String::new(),
+            },
+            // An instance of rtsp-camera
+            NodeInfo {
+                name: "rtsp-camera-terrace".to_string(),
+                path: "/some/local/path".to_string(),
+                version: "0.1.0".to_string(),
+                node_type: "rust".to_string(),
+                description: String::new(),
+                status: "running".to_string(),
+                is_built: true,
+                build_output: Vec::new(),
+                base_node: "rtsp-camera".to_string(),
+                config_override: String::new(),
+            },
+        ];
+
+        let discovered = registry.scan_discoverable_nodes(&registered);
+
+        // All 3 marketplace nodes should be returned (no dedup filtering)
+        assert_eq!(discovered.len(), 3);
+
+        // rtsp-camera should be marked as added and built
+        let camera = discovered.iter().find(|n| n.name == "rtsp-camera").unwrap();
+        assert!(camera.is_added);
+        assert!(camera.is_built);
+        assert_eq!(camera.instance_count, 1); // one instance exists
+
+        // openmeteo should NOT be marked as added
+        let meteo = discovered.iter().find(|n| n.name == "openmeteo").unwrap();
+        assert!(!meteo.is_added);
+        assert!(!meteo.is_built);
+        assert_eq!(meteo.instance_count, 0);
+
+        // network-monitor should NOT be marked as added
+        let netmon = discovered
+            .iter()
+            .find(|n| n.name == "network-monitor")
+            .unwrap();
+        assert!(!netmon.is_added);
+        assert!(!netmon.is_built);
+        assert_eq!(netmon.instance_count, 0);
+    }
+
+    #[test]
+    fn test_scan_not_built_node() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let cache_dir = dir.path().join("cache");
+        let _ = fs::create_dir_all(&cache_dir);
+        let _ = fs::write(
+            cache_dir.join(shared_registry::OFFICIAL_NODES_CACHE),
+            TEST_NODES_YAML,
+        );
+
+        let registry = Registry {
+            config_dir: dir.path().to_path_buf(),
+            sources: SourcesRegistry {
+                sources: vec![SourceEntry {
+                    name: OFFICIAL_SOURCE_NAME.to_string(),
+                    path: OFFICIAL_SOURCE_PATH.to_string(),
+                    source_type: OFFICIAL_SOURCE_TYPE.to_string(),
+                    enabled: true,
+                }],
+            },
+        };
+
+        // rtsp-camera is registered but NOT built
         let registered = vec![NodeInfo {
             name: "rtsp-camera".to_string(),
             path: "/some/local/path".to_string(),
@@ -503,17 +602,74 @@ nodes:
             status: "stopped".to_string(),
             is_built: false,
             build_output: Vec::new(),
+            base_node: String::new(),
+            config_override: String::new(),
         }];
 
         let discovered = registry.scan_discoverable_nodes(&registered);
-        assert!(
-            !discovered.iter().any(|n| n.name == "rtsp-camera"),
-            "rtsp-camera should be deduplicated"
+        let camera = discovered.iter().find(|n| n.name == "rtsp-camera").unwrap();
+        assert!(camera.is_added);
+        assert!(!camera.is_built); // Added but not built
+        assert_eq!(camera.instance_count, 0);
+    }
+
+    #[test]
+    fn test_scan_multiple_instances_counted() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let cache_dir = dir.path().join("cache");
+        let _ = fs::create_dir_all(&cache_dir);
+        let _ = fs::write(
+            cache_dir.join(shared_registry::OFFICIAL_NODES_CACHE),
+            TEST_NODES_YAML,
         );
-        assert!(
-            discovered.iter().any(|n| n.name == "openmeteo"),
-            "openmeteo should still be discoverable"
-        );
+
+        let registry = Registry {
+            config_dir: dir.path().to_path_buf(),
+            sources: SourcesRegistry {
+                sources: vec![SourceEntry {
+                    name: OFFICIAL_SOURCE_NAME.to_string(),
+                    path: OFFICIAL_SOURCE_PATH.to_string(),
+                    source_type: OFFICIAL_SOURCE_TYPE.to_string(),
+                    enabled: true,
+                }],
+            },
+        };
+
+        let make_instance = |name: &str, base: &str| NodeInfo {
+            name: name.to_string(),
+            path: "/path".to_string(),
+            version: "0.1.0".to_string(),
+            node_type: "rust".to_string(),
+            description: String::new(),
+            status: "running".to_string(),
+            is_built: true,
+            build_output: Vec::new(),
+            base_node: base.to_string(),
+            config_override: String::new(),
+        };
+
+        let registered = vec![
+            NodeInfo {
+                name: "rtsp-camera".to_string(),
+                path: "/path".to_string(),
+                version: "0.1.0".to_string(),
+                node_type: "rust".to_string(),
+                description: String::new(),
+                status: "stopped".to_string(),
+                is_built: true,
+                build_output: Vec::new(),
+                base_node: String::new(),
+                config_override: String::new(),
+            },
+            make_instance("rtsp-camera-terrace", "rtsp-camera"),
+            make_instance("rtsp-camera-garage", "rtsp-camera"),
+            make_instance("rtsp-camera-front", "rtsp-camera"),
+        ];
+
+        let discovered = registry.scan_discoverable_nodes(&registered);
+        let camera = discovered.iter().find(|n| n.name == "rtsp-camera").unwrap();
+        assert_eq!(camera.instance_count, 3);
     }
 
     #[test]

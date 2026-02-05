@@ -29,6 +29,16 @@ pub fn render_list(f: &mut Frame, app: &App) {
         return;
     }
 
+    if app.input_mode == InputMode::CreateInstance {
+        render_create_instance_form(f, app);
+        return;
+    }
+
+    if app.input_mode == InputMode::EditConfig {
+        render_edit_config_form(f, app);
+        return;
+    }
+
     if app.input_mode == InputMode::EditSource {
         render_edit_source_form(f, app);
         return;
@@ -38,7 +48,7 @@ pub fn render_list(f: &mut Frame, app: &App) {
 
     let current_tab = match &app.view {
         View::Nodes(tab) => tab.clone(),
-        _ => NodesTab::Installed,
+        _ => NodesTab::Nodes,
     };
 
     let chunks = Layout::default()
@@ -55,8 +65,8 @@ pub fn render_list(f: &mut Frame, app: &App) {
     render_header(f, chunks[0], &current_tab);
 
     match current_tab {
-        NodesTab::Installed => render_installed_tab(f, app, chunks[1]),
-        NodesTab::Discover => render_discover_tab(f, app, chunks[1]),
+        NodesTab::Nodes => render_nodes_tab(f, app, chunks[1]),
+        NodesTab::Instances => render_instances_tab(f, app, chunks[1]),
         NodesTab::Marketplace => render_marketplace_tab(f, app, chunks[1]),
     }
 
@@ -74,8 +84,8 @@ pub fn render_list(f: &mut Frame, app: &App) {
 
 fn render_header(f: &mut Frame, area: ratatui::layout::Rect, current_tab: &NodesTab) {
     let tabs = [
-        ("1", "Installed", NodesTab::Installed),
-        ("2", "Discover", NodesTab::Discover),
+        ("1", "Nodes", NodesTab::Nodes),
+        ("2", "Instances", NodesTab::Instances),
         ("3", "Marketplace", NodesTab::Marketplace),
     ];
 
@@ -116,115 +126,7 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, current_tab: &Nodes
     f.render_widget(Paragraph::new(tabs_line), inner);
 }
 
-fn render_installed_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(colors::BORDER));
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if app.nodes.is_empty() {
-        let text = Paragraph::new(Line::from(Span::styled(
-            "No nodes registered.",
-            Style::default().fg(colors::DIMMED),
-        )));
-        f.render_widget(text, inner);
-        return;
-    }
-
-    let header_style = Style::default()
-        .fg(colors::PRIMARY)
-        .add_modifier(Modifier::BOLD);
-
-    let header = Row::new(vec![
-        Span::styled("St", header_style),
-        Span::styled("Name", header_style),
-        Span::styled("Version", header_style),
-        Span::styled("Type", header_style),
-        Span::styled("Built", header_style),
-        Span::styled("Description", header_style),
-    ])
-    .height(1);
-
-    let rows: Vec<Row> = app
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, node)| {
-            let selected = i == app.node_index;
-            let is_building = node.status == "building";
-
-            let status_span = if is_building {
-                flower_spinner(app.spinner_frame)
-            } else {
-                let (symbol, color) = match node.status.as_str() {
-                    "running" => ("●", colors::SUCCESS),
-                    "stopped" => ("○", colors::DIMMED),
-                    "failed" => ("✗", colors::ERROR),
-                    "not-installed" => ("-", colors::DIMMED),
-                    _ => ("?", colors::DIMMED),
-                };
-                Span::styled(symbol, Style::default().fg(color))
-            };
-
-            let name_style = if selected {
-                Style::default().fg(colors::PRIMARY)
-            } else {
-                Style::default().fg(colors::TEXT)
-            };
-            let name_text = if selected {
-                format!("❯ {}", node.name)
-            } else {
-                format!("  {}", node.name)
-            };
-
-            let type_color = if node.node_type == "rust" {
-                colors::RUST_TYPE
-            } else {
-                colors::PYTHON_TYPE
-            };
-
-            let built_span = if is_building {
-                Span::styled("...", Style::default().fg(colors::WARNING))
-            } else if node.is_built {
-                Span::styled("yes", Style::default().fg(colors::SUCCESS))
-            } else {
-                Span::styled("no", Style::default().fg(colors::ERROR))
-            };
-
-            Row::new(vec![
-                status_span,
-                Span::styled(name_text, name_style),
-                Span::styled(node.version.clone(), Style::default().fg(colors::SUCCESS)),
-                Span::styled(node.node_type.clone(), Style::default().fg(type_color)),
-                built_span,
-                Span::styled(
-                    node.description.chars().take(40).collect::<String>(),
-                    Style::default().fg(colors::DIMMED),
-                ),
-            ])
-        })
-        .collect();
-
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(3),
-            Constraint::Percentage(20),
-            Constraint::Length(8),
-            Constraint::Length(8),
-            Constraint::Length(6),
-            Constraint::Percentage(50),
-        ],
-    )
-    .header(header);
-
-    f.render_widget(table, inner);
-}
-
-fn render_discover_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+fn render_nodes_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
@@ -236,7 +138,7 @@ fn render_discover_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     if app.discoverable_nodes.is_empty() {
         let lines = vec![
             Line::from(Span::styled(
-                "No discoverable nodes found.",
+                "No nodes found.",
                 Style::default().fg(colors::DIMMED),
             )),
             Line::from(Span::styled(
@@ -253,9 +155,12 @@ fn render_discover_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .add_modifier(Modifier::BOLD);
 
     let header = Row::new(vec![
+        Span::styled("St", header_style),
         Span::styled("Name", header_style),
         Span::styled("Version", header_style),
         Span::styled("Type", header_style),
+        Span::styled("Built", header_style),
+        Span::styled("Inst", header_style),
         Span::styled("Source", header_style),
         Span::styled("Description", header_style),
     ])
@@ -267,6 +172,31 @@ fn render_discover_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .enumerate()
         .map(|(i, node)| {
             let selected = i == app.discover_index;
+
+            // Status: show live status for added nodes, dash for unregistered
+            let status_span = if node.is_added {
+                // Find the base node for live status
+                if let Some(base) = app.base_nodes.iter().find(|n| n.name == node.name) {
+                    let is_building = app.is_node_busy(base);
+                    if is_building {
+                        flower_spinner(app.spinner_frame)
+                    } else {
+                        let (symbol, color) = match base.status.as_str() {
+                            "running" => ("●", colors::SUCCESS),
+                            "stopped" => ("○", colors::DIMMED),
+                            "failed" => ("✗", colors::ERROR),
+                            "not-installed" => ("○", colors::DIMMED),
+                            _ => ("?", colors::DIMMED),
+                        };
+                        Span::styled(symbol, Style::default().fg(color))
+                    }
+                } else {
+                    Span::styled("○", Style::default().fg(colors::DIMMED))
+                }
+            } else {
+                Span::styled("-", Style::default().fg(colors::DIMMED))
+            };
+
             let name_style = if selected {
                 Style::default().fg(colors::PRIMARY)
             } else {
@@ -284,6 +214,36 @@ fn render_discover_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 colors::PYTHON_TYPE
             };
 
+            // Built column: show status for added nodes
+            let built_span = if node.is_added {
+                if let Some(base) = app.base_nodes.iter().find(|n| n.name == node.name) {
+                    if app.is_node_busy(base) {
+                        Span::styled("...", Style::default().fg(colors::WARNING))
+                    } else if node.is_built {
+                        Span::styled("✓", Style::default().fg(colors::SUCCESS))
+                    } else {
+                        Span::styled("no", Style::default().fg(colors::ERROR))
+                    }
+                } else if node.is_built {
+                    Span::styled("✓", Style::default().fg(colors::SUCCESS))
+                } else {
+                    Span::styled("no", Style::default().fg(colors::ERROR))
+                }
+            } else {
+                Span::styled("-", Style::default().fg(colors::DIMMED))
+            };
+
+            let inst_text = if node.instance_count > 0 {
+                format!("{}", node.instance_count)
+            } else {
+                "-".to_string()
+            };
+            let inst_color = if node.instance_count > 0 {
+                colors::SUCCESS
+            } else {
+                colors::DIMMED
+            };
+
             let source_color = match node.source_type.as_str() {
                 "builtin" => colors::PRIMARY,
                 "local" => colors::SUCCESS,
@@ -292,12 +252,15 @@ fn render_discover_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             };
             let source_label = format!("{} {}", source_type_label(&node.source_type), node.source);
 
-            let desc = node.description.chars().take(40).collect::<String>();
+            let desc = node.description.chars().take(30).collect::<String>();
 
             Row::new(vec![
+                status_span,
                 Span::styled(name_text, name_style),
                 Span::styled(node.version.clone(), Style::default().fg(colors::SUCCESS)),
                 Span::styled(node.node_type.clone(), Style::default().fg(type_color)),
+                built_span,
+                Span::styled(inst_text, Style::default().fg(inst_color)),
                 Span::styled(source_label, Style::default().fg(source_color)),
                 Span::styled(desc, Style::default().fg(colors::DIMMED)),
             ])
@@ -307,10 +270,108 @@ fn render_discover_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let table = Table::new(
         rows,
         [
+            Constraint::Length(3),
+            Constraint::Percentage(15),
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Length(6),
+            Constraint::Length(5),
             Constraint::Percentage(20),
+            Constraint::Percentage(30),
+        ],
+    )
+    .header(header);
+
+    f.render_widget(table, inner);
+}
+
+fn render_instances_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(colors::BORDER));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if app.instances.is_empty() {
+        let lines = vec![Line::from(Span::styled(
+            "No instances. Create one from [1] Nodes tab with [i].",
+            Style::default().fg(colors::DIMMED),
+        ))];
+        f.render_widget(Paragraph::new(lines), inner);
+        return;
+    }
+
+    let header_style = Style::default()
+        .fg(colors::PRIMARY)
+        .add_modifier(Modifier::BOLD);
+
+    let header = Row::new(vec![
+        Span::styled("St", header_style),
+        Span::styled("Name", header_style),
+        Span::styled("Base", header_style),
+        Span::styled("Version", header_style),
+        Span::styled("Type", header_style),
+        Span::styled("Description", header_style),
+    ])
+    .height(1);
+
+    let rows: Vec<Row> = app
+        .instances
+        .iter()
+        .enumerate()
+        .map(|(i, node)| {
+            let selected = i == app.instance_index;
+
+            let (symbol, color) = match node.status.as_str() {
+                "running" => ("●", colors::SUCCESS),
+                "stopped" => ("○", colors::DIMMED),
+                "failed" => ("✗", colors::ERROR),
+                "not-installed" => ("-", colors::DIMMED),
+                _ => ("?", colors::DIMMED),
+            };
+            let status_span = Span::styled(symbol, Style::default().fg(color));
+
+            let name_style = if selected {
+                Style::default().fg(colors::PRIMARY)
+            } else {
+                Style::default().fg(colors::TEXT)
+            };
+            let name_text = if selected {
+                format!("❯ {}", node.name)
+            } else {
+                format!("  {}", node.name)
+            };
+
+            let type_color = if node.node_type == "rust" {
+                colors::RUST_TYPE
+            } else {
+                colors::PYTHON_TYPE
+            };
+
+            Row::new(vec![
+                status_span,
+                Span::styled(name_text, name_style),
+                Span::styled(node.base_node.clone(), Style::default().fg(colors::DIMMED)),
+                Span::styled(node.version.clone(), Style::default().fg(colors::SUCCESS)),
+                Span::styled(node.node_type.clone(), Style::default().fg(type_color)),
+                Span::styled(
+                    node.description.chars().take(40).collect::<String>(),
+                    Style::default().fg(colors::DIMMED),
+                ),
+            ])
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(3),
+            Constraint::Percentage(20),
+            Constraint::Percentage(15),
             Constraint::Length(8),
             Constraint::Length(8),
-            Constraint::Percentage(25),
             Constraint::Percentage(40),
         ],
     )
@@ -451,8 +512,8 @@ fn render_marketplace_tab(f: &mut Frame, app: &App, area: ratatui::layout::Rect)
 
 fn render_hints(f: &mut Frame, app: &App, area: ratatui::layout::Rect, current_tab: &NodesTab) {
     let hints = match current_tab {
-        NodesTab::Installed => {
-            if app.nodes.is_empty() {
+        NodesTab::Nodes => {
+            if app.discoverable_nodes.is_empty() {
                 Line::from(vec![
                     Span::styled("tab", Style::default().fg(colors::PRIMARY)),
                     Span::styled(" switch tabs • ", Style::default().fg(colors::DIMMED)),
@@ -461,33 +522,95 @@ fn render_hints(f: &mut Frame, app: &App, area: ratatui::layout::Rect, current_t
                 ])
             } else if app.confirm_uninstall {
                 let suffix = app
-                    .nodes
-                    .get(app.node_index)
+                    .discoverable_nodes
+                    .get(app.discover_index)
                     .map(|n| format!(" {}", n.name))
                     .unwrap_or_default();
                 Line::from(Span::styled(
                     format!("Press [u] again to UNINSTALL{}", suffix),
                     Style::default().fg(colors::ERROR),
                 ))
+            } else if app.confirm_clean {
+                let suffix = app
+                    .discoverable_nodes
+                    .get(app.discover_index)
+                    .map(|n| format!(" {}", n.name))
+                    .unwrap_or_default();
+                Line::from(Span::styled(
+                    format!("Press [c] again to CLEAN{}", suffix),
+                    Style::default().fg(colors::ERROR),
+                ))
+            } else {
+                // Build hints based on selected node state
+                let mut spans = Vec::new();
+                if let Some(node) = app.discoverable_nodes.get(app.discover_index) {
+                    if node.is_added {
+                        spans.extend(vec![
+                            Span::styled("s", Style::default().fg(colors::PRIMARY)),
+                            Span::styled(" start/stop • ", Style::default().fg(colors::DIMMED)),
+                            Span::styled("b", Style::default().fg(colors::PRIMARY)),
+                            Span::styled("uild • ", Style::default().fg(colors::DIMMED)),
+                            Span::styled("c", Style::default().fg(colors::PRIMARY)),
+                            Span::styled("lean • ", Style::default().fg(colors::DIMMED)),
+                            Span::styled("u", Style::default().fg(colors::PRIMARY)),
+                            Span::styled("ninstall • ", Style::default().fg(colors::DIMMED)),
+                        ]);
+                        if node.is_built {
+                            spans.extend(vec![
+                                Span::styled("i", Style::default().fg(colors::PRIMARY)),
+                                Span::styled("nstance • ", Style::default().fg(colors::DIMMED)),
+                            ]);
+                        }
+                        spans.extend(vec![
+                            Span::styled("l", Style::default().fg(colors::PRIMARY)),
+                            Span::styled("ogs • ", Style::default().fg(colors::DIMMED)),
+                            Span::styled("enter", Style::default().fg(colors::PRIMARY)),
+                            Span::styled(" detail", Style::default().fg(colors::DIMMED)),
+                        ]);
+                    } else {
+                        spans.extend(vec![
+                            Span::styled("a", Style::default().fg(colors::PRIMARY)),
+                            Span::styled("dd • ", Style::default().fg(colors::DIMMED)),
+                            Span::styled("enter", Style::default().fg(colors::PRIMARY)),
+                            Span::styled(" add", Style::default().fg(colors::DIMMED)),
+                        ]);
+                    }
+                }
+                spans.extend(vec![
+                    Span::styled(" • ", Style::default().fg(colors::DIMMED)),
+                    Span::styled("n", Style::default().fg(colors::PRIMARY)),
+                    Span::styled("ew node", Style::default().fg(colors::DIMMED)),
+                ]);
+                Line::from(spans)
+            }
+        }
+        NodesTab::Instances => {
+            if app.instances.is_empty() {
+                Line::from(vec![
+                    Span::styled("tab", Style::default().fg(colors::PRIMARY)),
+                    Span::styled(" switch tabs • ", Style::default().fg(colors::DIMMED)),
+                    Span::styled("esc/q", Style::default().fg(colors::PRIMARY)),
+                    Span::styled(" back", Style::default().fg(colors::DIMMED)),
+                ])
             } else {
                 Line::from(vec![
                     Span::styled("s", Style::default().fg(colors::PRIMARY)),
                     Span::styled(" start/stop • ", Style::default().fg(colors::DIMMED)),
-                    Span::styled("u", Style::default().fg(colors::PRIMARY)),
-                    Span::styled(" uninstall • ", Style::default().fg(colors::DIMMED)),
+                    Span::styled("e", Style::default().fg(colors::PRIMARY)),
+                    Span::styled("nable • ", Style::default().fg(colors::DIMMED)),
+                    Span::styled("d", Style::default().fg(colors::PRIMARY)),
+                    Span::styled("isable • ", Style::default().fg(colors::DIMMED)),
+                    Span::styled("c", Style::default().fg(colors::PRIMARY)),
+                    Span::styled("onfig • ", Style::default().fg(colors::DIMMED)),
+                    Span::styled("l", Style::default().fg(colors::PRIMARY)),
+                    Span::styled("ogs • ", Style::default().fg(colors::DIMMED)),
+                    Span::styled("r", Style::default().fg(colors::PRIMARY)),
+                    Span::styled("emove • ", Style::default().fg(colors::DIMMED)),
                     Span::styled("enter", Style::default().fg(colors::PRIMARY)),
-                    Span::styled(" details • ", Style::default().fg(colors::DIMMED)),
-                    Span::styled("↑↓", Style::default().fg(colors::PRIMARY)),
-                    Span::styled(" select", Style::default().fg(colors::DIMMED)),
+                    Span::styled(" details", Style::default().fg(colors::DIMMED)),
                 ])
             }
         }
-        NodesTab::Discover => Line::from(vec![
-            Span::styled("[enter/a]", Style::default().fg(colors::PRIMARY)),
-            Span::styled(" add selected • ", Style::default().fg(colors::DIMMED)),
-            Span::styled("[n]", Style::default().fg(colors::PRIMARY)),
-            Span::styled(" new node", Style::default().fg(colors::DIMMED)),
-        ]),
         NodesTab::Marketplace => {
             let mut spans = vec![
                 Span::styled("[a]", Style::default().fg(colors::PRIMARY)),
@@ -802,6 +925,156 @@ fn render_create_node_form(f: &mut Frame, app: &App) {
             Style::default().fg(colors::ERROR),
         ));
         f.render_widget(Paragraph::new(warning), chunks[6]);
+    }
+}
+
+fn render_create_instance_form(f: &mut Frame, app: &App) {
+    let area = f.area();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header
+            Constraint::Length(3), // Name
+            Constraint::Length(3), // Config
+            Constraint::Length(3), // Help
+            Constraint::Min(1),    // Spacer
+            Constraint::Length(1), // Messages
+            Constraint::Length(1), // Exit warning
+        ])
+        .split(area);
+
+    let header_block = Block::default()
+        .title(Span::styled(
+            format!(" Create Instance of {} ", app.instance_base_node),
+            Style::default()
+                .fg(colors::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(colors::PRIMARY));
+
+    let header_inner = header_block.inner(chunks[0]);
+    f.render_widget(header_block, chunks[0]);
+
+    let hints = Line::from(vec![
+        Span::styled("[tab]", Style::default().fg(colors::PRIMARY)),
+        Span::styled(" switch field  ", Style::default().fg(colors::DIMMED)),
+        Span::styled("[enter]", Style::default().fg(colors::PRIMARY)),
+        Span::styled(" create  ", Style::default().fg(colors::DIMMED)),
+        Span::styled("[esc]", Style::default().fg(colors::PRIMARY)),
+        Span::styled(" cancel", Style::default().fg(colors::DIMMED)),
+    ]);
+    f.render_widget(Paragraph::new(hints), header_inner);
+
+    render_text_field(
+        f,
+        chunks[1],
+        "Instance Name",
+        &app.instance_name,
+        &format!("{}-<suffix>", app.instance_base_node),
+        app.instance_active_field == 0,
+    );
+
+    render_text_field(
+        f,
+        chunks[2],
+        "Config File",
+        &app.instance_config_path,
+        "(optional, e.g. ~/.bubbaloop/configs/cam1.yaml)",
+        app.instance_active_field == 1,
+    );
+
+    let help_lines = vec![
+        Line::from(Span::styled(
+            "Instances share the base node's binary but run with separate configs.",
+            Style::default().fg(colors::DIMMED),
+        )),
+        Line::from(Span::styled(
+            "Leave config empty to use the base node's default config.",
+            Style::default().fg(colors::DIMMED),
+        )),
+    ];
+    f.render_widget(Paragraph::new(help_lines), chunks[3]);
+
+    render_messages(f, app, chunks[5]);
+
+    if app.exit_warning {
+        let warning = Line::from(Span::styled(
+            "Press Ctrl+C again to exit",
+            Style::default().fg(colors::ERROR),
+        ));
+        f.render_widget(Paragraph::new(warning), chunks[6]);
+    }
+}
+
+fn render_edit_config_form(f: &mut Frame, app: &App) {
+    let area = f.area();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header
+            Constraint::Length(3), // Config path
+            Constraint::Length(3), // Help
+            Constraint::Min(1),    // Spacer
+            Constraint::Length(1), // Messages
+            Constraint::Length(1), // Exit warning
+        ])
+        .split(area);
+
+    let header_block = Block::default()
+        .title(Span::styled(
+            format!(" Edit Config for {} ", app.edit_config_node),
+            Style::default()
+                .fg(colors::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(colors::PRIMARY));
+
+    let header_inner = header_block.inner(chunks[0]);
+    f.render_widget(header_block, chunks[0]);
+
+    let hints = Line::from(vec![
+        Span::styled("[enter]", Style::default().fg(colors::PRIMARY)),
+        Span::styled(" save  ", Style::default().fg(colors::DIMMED)),
+        Span::styled("[esc]", Style::default().fg(colors::PRIMARY)),
+        Span::styled(" cancel", Style::default().fg(colors::DIMMED)),
+    ]);
+    f.render_widget(Paragraph::new(hints), header_inner);
+
+    render_text_field(
+        f,
+        chunks[1],
+        "Config File Path",
+        &app.edit_config_path,
+        "(e.g. ~/.bubbaloop/configs/cam1.yaml)",
+        true,
+    );
+
+    let help_lines = vec![
+        Line::from(Span::styled(
+            "Enter the path to a YAML config file for this instance.",
+            Style::default().fg(colors::DIMMED),
+        )),
+        Line::from(Span::styled(
+            "The instance will be restarted with the new config.",
+            Style::default().fg(colors::DIMMED),
+        )),
+    ];
+    f.render_widget(Paragraph::new(help_lines), chunks[2]);
+
+    render_messages(f, app, chunks[4]);
+
+    if app.exit_warning {
+        let warning = Line::from(Span::styled(
+            "Press Ctrl+C again to exit",
+            Style::default().fg(colors::ERROR),
+        ));
+        f.render_widget(Paragraph::new(warning), chunks[5]);
     }
 }
 
