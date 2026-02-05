@@ -210,22 +210,66 @@ install_dashboard() {
     info "Bubbaloop Dashboard $dash_version installed"
 }
 
+# Setup zenoh configuration
+setup_zenoh_config() {
+    step "Setting up Zenoh configuration..."
+
+    mkdir -p "$INSTALL_DIR/zenoh"
+    mkdir -p "$INSTALL_DIR/configs"
+    mkdir -p "$INSTALL_DIR/nodes"
+
+    # Create Zenoh router config (secure defaults: localhost only, no multicast)
+    cat > "$INSTALL_DIR/zenoh/zenohd.json5" << 'CONFIG'
+{
+  mode: "router",
+  listen: {
+    endpoints: ["tcp/127.0.0.1:7447"]
+  },
+  scouting: {
+    multicast: {
+      enabled: false
+    },
+    gossip: {
+      enabled: false
+    }
+  }
+}
+CONFIG
+
+    # Also create at legacy location for backwards compatibility
+    cp "$INSTALL_DIR/zenoh/zenohd.json5" "$INSTALL_DIR/zenoh.json5"
+
+    info "Zenoh config created at $INSTALL_DIR/zenoh/zenohd.json5"
+}
+
+# Setup marketplace with official source
+setup_marketplace() {
+    step "Setting up marketplace..."
+
+    local sources_file="$INSTALL_DIR/sources.json"
+
+    # Create sources.json with official nodes registry
+    cat > "$sources_file" << 'EOF'
+{
+  "sources": [
+    {
+      "name": "Official Nodes",
+      "path": "kornia/bubbaloop-nodes-official",
+      "source_type": "builtin",
+      "enabled": true
+    }
+  ]
+}
+EOF
+
+    info "Marketplace configured with official nodes registry"
+}
+
 # Setup systemd services
 setup_systemd() {
     step "Setting up systemd services..."
 
     mkdir -p "$SERVICE_DIR"
-    mkdir -p "$INSTALL_DIR/configs"
-
-    # Create Zenoh config (compatible with Zenoh 1.6.x and 1.7.x)
-    cat > "$INSTALL_DIR/zenoh.json5" << 'CONFIG'
-{
-  mode: "router",
-  listen: {
-    endpoints: ["tcp/0.0.0.0:7447"]
-  }
-}
-CONFIG
 
     # Zenoh router service
     cat > "$SERVICE_DIR/bubbaloop-zenohd.service" << EOF
@@ -235,7 +279,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=$BIN_DIR/zenohd -c $INSTALL_DIR/zenoh.json5
+ExecStart=$BIN_DIR/zenohd -c $INSTALL_DIR/zenoh/zenohd.json5
 Restart=on-failure
 RestartSec=5
 
@@ -439,7 +483,9 @@ main() {
     install_zenoh "$arch"
     install_bridge "$arch"
     install_bubbaloop "$version" "$os" "$short_arch"
-    install_dashboard "$os" "$short_arch"
+    install_dashboard "$os" "$short_arch" || true  # Dashboard is optional
+    setup_zenoh_config
+    setup_marketplace
     setup_systemd
     enable_linger
     start_services

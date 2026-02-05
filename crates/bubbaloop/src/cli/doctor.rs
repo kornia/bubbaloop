@@ -24,6 +24,8 @@ pub enum FixAction {
     StartDaemonService,
     RestartDaemonService,
     StartBridgeService,
+    CreateZenohConfig,
+    CreateMarketplaceSources,
 }
 
 impl FixAction {
@@ -33,6 +35,8 @@ impl FixAction {
             FixAction::StartDaemonService => "Start bubbaloop-daemon service",
             FixAction::RestartDaemonService => "Restart bubbaloop-daemon service",
             FixAction::StartBridgeService => "Start zenoh-bridge service",
+            FixAction::CreateZenohConfig => "Create Zenoh config file",
+            FixAction::CreateMarketplaceSources => "Create marketplace sources with official registry",
         }
     }
 
@@ -102,6 +106,46 @@ impl FixAction {
                         String::from_utf8_lossy(&output.stderr)
                     ))
                 }
+            }
+            FixAction::CreateZenohConfig => {
+                let home = dirs::home_dir().ok_or_else(|| anyhow!("HOME not set"))?;
+                let zenoh_dir = home.join(".bubbaloop/zenoh");
+                std::fs::create_dir_all(&zenoh_dir)?;
+
+                let config_path = zenoh_dir.join("zenohd.json5");
+                let config_content = r#"{
+  mode: "router",
+  listen: {
+    endpoints: ["tcp/127.0.0.1:7447"]
+  },
+  scouting: {
+    multicast: {
+      enabled: false
+    },
+    gossip: {
+      enabled: false
+    }
+  }
+}"#;
+                std::fs::write(&config_path, config_content)?;
+                Ok(format!("Created {}", config_path.display()))
+            }
+            FixAction::CreateMarketplaceSources => {
+                let home = dirs::home_dir().ok_or_else(|| anyhow!("HOME not set"))?;
+                let sources_path = home.join(".bubbaloop/sources.json");
+
+                let sources_content = r#"{
+  "sources": [
+    {
+      "name": "Official Nodes",
+      "path": "kornia/bubbaloop-nodes-official",
+      "source_type": "builtin",
+      "enabled": true
+    }
+  ]
+}"#;
+                std::fs::write(&sources_path, sources_content)?;
+                Ok(format!("Created {} with official nodes registry", sources_path.display()))
             }
         }
     }
@@ -237,11 +281,28 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
     let mut fixes_applied = 0;
 
     // Determine which checks to run
+    let run_config = check_type == "all" || check_type == "config";
     let run_services = check_type == "all" || check_type == "zenoh";
     let run_zenoh = check_type == "all" || check_type == "zenoh";
     let run_daemon = check_type == "all" || check_type == "daemon";
 
     let mut session: Option<Session> = None;
+
+    // 0. Check configuration files
+    if run_config {
+        if !json {
+            println!("[0/4] Checking configuration...");
+        }
+        results.extend(check_configuration().await);
+
+        // Apply fixes for configuration if --fix flag is set
+        if fix && !json {
+            fixes_applied += apply_fixes(&mut results).await;
+        }
+        if !json {
+            println!();
+        }
+    }
 
     // 1. Check system services
     if run_services {
@@ -459,6 +520,111 @@ async fn apply_fixes(results: &mut [DiagnosticResult]) -> usize {
     }
 
     fixes_applied
+}
+
+/// Check configuration files exist
+async fn check_configuration() -> Vec<DiagnosticResult> {
+    let mut results = Vec::new();
+
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => {
+            results.push(DiagnosticResult::fail(
+                "Home directory",
+                "HOME not set",
+                "Set HOME environment variable",
+            ));
+            return results;
+        }
+    };
+
+    let bubbaloop_dir = home.join(".bubbaloop");
+
+    // Check zenoh config exists
+    let zenoh_config = bubbaloop_dir.join("zenoh/zenohd.json5");
+    if zenoh_config.exists() {
+        results.push(DiagnosticResult::pass(
+            "Zenoh config",
+            &format!("exists at {}", zenoh_config.display()),
+        ));
+    } else {
+        // Also check legacy location
+        let legacy_config = bubbaloop_dir.join("zenoh.json5");
+        if legacy_config.exists() {
+            results.push(DiagnosticResult::pass(
+                "Zenoh config",
+                &format!("exists at {} (legacy location)", legacy_config.display()),
+            ));
+        } else {
+            results.push(DiagnosticResult::fail_with_action(
+                "Zenoh config",
+                "not found",
+                "Run: bubbaloop doctor --fix",
+                FixAction::CreateZenohConfig,
+            ));
+        }
+    }
+
+    // Check marketplace sources exist
+    let sources_file = bubbaloop_dir.join("sources.json");
+    if sources_file.exists() {
+        // Check if it has at least one source
+        if let Ok(content) = std::fs::read_to_string(&sources_file) {
+            if content.contains("Official Nodes") || content.contains("bubbaloop-nodes-official") {
+                results.push(DiagnosticResult::pass(
+                    "Marketplace sources",
+                    "configured with official registry",
+                ));
+            } else {
+                results.push(DiagnosticResult::fail_with_action(
+                    "Marketplace sources",
+                    "exists but missing official registry",
+                    "Run: bubbaloop marketplace add official kornia/bubbaloop-nodes-official",
+                    FixAction::CreateMarketplaceSources,
+                ));
+            }
+        } else {
+            results.push(DiagnosticResult::fail_with_action(
+                "Marketplace sources",
+                "file exists but unreadable",
+                "Run: bubbaloop doctor --fix",
+                FixAction::CreateMarketplaceSources,
+            ));
+        }
+    } else {
+        results.push(DiagnosticResult::fail_with_action(
+            "Marketplace sources",
+            "not configured",
+            "Run: bubbaloop doctor --fix",
+            FixAction::CreateMarketplaceSources,
+        ));
+    }
+
+    // Check bin directory
+    let bin_dir = bubbaloop_dir.join("bin");
+    if bin_dir.exists() {
+        let bubbaloop_bin = bin_dir.join("bubbaloop");
+        if bubbaloop_bin.exists() {
+            results.push(DiagnosticResult::pass(
+                "Bubbaloop binary",
+                &format!("installed at {}", bubbaloop_bin.display()),
+            ));
+        } else {
+            results.push(DiagnosticResult::fail(
+                "Bubbaloop binary",
+                "not found in ~/.bubbaloop/bin/",
+                "Re-run the install script",
+            ));
+        }
+    } else {
+        results.push(DiagnosticResult::fail(
+            "Bubbaloop installation",
+            "~/.bubbaloop/bin/ not found",
+            "Run: curl -fsSL https://raw.githubusercontent.com/kornia/bubbaloop/main/scripts/install.sh | bash",
+        ));
+    }
+
+    results
 }
 
 async fn check_system_services() -> Vec<DiagnosticResult> {
