@@ -29,6 +29,8 @@ pub struct RegistryNode {
     pub tags: Vec<String>,
     pub repo: String,
     pub subdir: String,
+    #[serde(default)]
+    pub binary: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,6 +158,21 @@ pub fn search_registry(
         })
         .cloned()
         .collect()
+}
+
+/// Construct a URL for downloading a precompiled binary from GitHub Releases.
+///
+/// Returns `None` if the node has no `binary` field or is not a Rust node.
+/// The URL points to the latest release asset named `{node-name}-linux-{arch}`.
+pub fn precompiled_url(node: &RegistryNode, arch: &str) -> Option<String> {
+    node.binary.as_ref()?;
+    if node.node_type != "rust" {
+        return None;
+    }
+    Some(format!(
+        "https://github.com/{}/releases/latest/download/{}-linux-{}",
+        node.repo, node.name, arch
+    ))
 }
 
 /// Look up a single node by exact name.
@@ -388,5 +405,70 @@ nodes:
         assert!(validate_repo("user/repo&cmd").is_err());
         assert!(validate_repo("user/repo$(cmd)").is_err());
         assert!(validate_repo("user/repo`cmd`").is_err());
+    }
+
+    #[test]
+    fn test_parse_binary_field() {
+        let nodes = parse_nodes_yaml(TEST_NODES_YAML);
+        let camera = nodes.iter().find(|n| n.name == "rtsp-camera").unwrap();
+        assert_eq!(camera.binary.as_deref(), Some("cameras_node"));
+
+        let openmeteo = nodes.iter().find(|n| n.name == "openmeteo").unwrap();
+        assert_eq!(openmeteo.binary.as_deref(), Some("openmeteo_node"));
+
+        let inference = nodes.iter().find(|n| n.name == "inference").unwrap();
+        assert_eq!(inference.binary.as_deref(), Some("inference_node"));
+
+        let telemetry = nodes.iter().find(|n| n.name == "system-telemetry").unwrap();
+        assert_eq!(telemetry.binary.as_deref(), Some("system_telemetry_node"));
+
+        // Python node has no binary field
+        let netmon = nodes.iter().find(|n| n.name == "network-monitor").unwrap();
+        assert!(netmon.binary.is_none());
+    }
+
+    #[test]
+    fn test_precompiled_url() {
+        let nodes = parse_nodes_yaml(TEST_NODES_YAML);
+        let camera = nodes.iter().find(|n| n.name == "rtsp-camera").unwrap();
+        let url = precompiled_url(camera, "arm64");
+        assert_eq!(
+            url.as_deref(),
+            Some("https://github.com/kornia/bubbaloop-nodes-official/releases/latest/download/rtsp-camera-linux-arm64")
+        );
+
+        let url_amd64 = precompiled_url(camera, "amd64");
+        assert_eq!(
+            url_amd64.as_deref(),
+            Some("https://github.com/kornia/bubbaloop-nodes-official/releases/latest/download/rtsp-camera-linux-amd64")
+        );
+    }
+
+    #[test]
+    fn test_precompiled_url_no_binary() {
+        let nodes = parse_nodes_yaml(TEST_NODES_YAML);
+        let netmon = nodes.iter().find(|n| n.name == "network-monitor").unwrap();
+        assert!(precompiled_url(netmon, "arm64").is_none());
+    }
+
+    #[test]
+    fn test_precompiled_url_python_returns_none() {
+        // Even if we manually set binary on a Python node, precompiled_url should return None
+        let mut node = RegistryNode {
+            name: "test-py".into(),
+            version: "0.1.0".into(),
+            node_type: "python".into(),
+            description: "test".into(),
+            category: "test".into(),
+            tags: vec![],
+            repo: "user/repo".into(),
+            subdir: "test".into(),
+            binary: Some("test_bin".into()),
+        };
+        assert!(precompiled_url(&node, "arm64").is_none());
+
+        // Rust node with binary should return Some
+        node.node_type = "rust".into();
+        assert!(precompiled_url(&node, "arm64").is_some());
     }
 }
