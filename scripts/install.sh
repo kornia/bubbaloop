@@ -255,7 +255,7 @@ setup_marketplace() {
     {
       "name": "Official Nodes",
       "path": "kornia/bubbaloop-nodes-official",
-      "source_type": "builtin",
+      "type": "builtin",
       "enabled": true
     }
   ]
