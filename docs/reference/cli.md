@@ -1,318 +1,392 @@
 # CLI Commands
 
-Reference for Bubbaloop command-line tools and pixi tasks.
+Reference for the Bubbaloop command-line interface.
+
+## bubbaloop Binary
+
+The `bubbaloop` binary is a single 7MB Rust executable that includes CLI, TUI, and daemon.
+
+### Core Commands
+
+| Command | Description |
+|---------|-------------|
+| `bubbaloop` | Show help |
+| `bubbaloop tui` | Launch interactive TUI |
+| `bubbaloop status` | Show service and node status |
+| `bubbaloop doctor` | Run system diagnostics |
+| `bubbaloop daemon` | Run the daemon (node manager) |
+
+### Node Commands
+
+```bash
+bubbaloop node <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `init <name>` | Create a new node from template |
+| `validate [path]` | Validate node.yaml manifest |
+| `list` | List all registered nodes |
+| `add <source>` | Add node from path, GitHub URL, or shorthand |
+| `instance <base> <suffix>` | Create instance of multi-instance node |
+| `remove <name>` | Unregister node from daemon |
+| `build <name>` | Build the node |
+| `clean <name>` | Clean build artifacts |
+| `install <name>` | Install as systemd service |
+| `uninstall <name>` | Remove systemd service |
+| `start <name>` | Start node service |
+| `stop <name>` | Stop node service |
+| `restart <name>` | Restart node service |
+| `logs <name>` | View node logs |
+| `enable <name>` | Enable autostart |
+| `disable <name>` | Disable autostart |
+| `search <query>` | Search marketplace |
+| `discover` | Discover nodes on network |
+
+### Marketplace Commands
+
+```bash
+bubbaloop marketplace <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | List node registry sources |
+| `add <name> <path>` | Add a source (GitHub repo path) |
+| `remove <name>` | Remove a source |
+| `enable <name>` | Enable a source |
+| `disable <name>` | Disable a source |
+
+**Note**: Marketplace manages *sources* (registries), not nodes. Use `node` commands for node management.
+
+### Debug Commands
+
+```bash
+bubbaloop debug <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `info` | Show Zenoh connection info |
+| `topics` | List active Zenoh topics |
+| `subscribe <key>` | Subscribe to Zenoh topic |
+| `query <key>` | Query Zenoh endpoint |
+
+---
+
+## Command Details
+
+### bubbaloop status
+
+Show current system and node status.
+
+```bash
+bubbaloop status [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-f, --format <format>` | Output format: `table` (default), `json`, `yaml` |
+
+**Examples:**
+```bash
+bubbaloop status           # Table output
+bubbaloop status -f json   # JSON output for scripting
+```
+
+### bubbaloop doctor
+
+Run system diagnostics and optionally auto-fix issues.
+
+```bash
+bubbaloop doctor [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-c, --check <check>` | Run specific check only: `zenoh`, `daemon`, `services`, `config` |
+| `--json` | Output as JSON |
+| `--fix` | Auto-fix common issues |
+
+**Examples:**
+```bash
+bubbaloop doctor           # Run all checks
+bubbaloop doctor -c zenoh  # Check Zenoh only
+bubbaloop doctor --fix     # Auto-fix issues
+bubbaloop doctor --json    # JSON for parsing
+```
+
+**Auto-Fix Actions:**
+- Start zenohd if not running
+- Start/restart daemon service
+- Start bridge service
+- Create missing zenoh config
+- Create missing sources.json
+
+### bubbaloop daemon
+
+Run the node manager daemon.
+
+```bash
+bubbaloop daemon [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-z, --zenoh <endpoint>` | Zenoh endpoint (default: tcp/127.0.0.1:7447) |
+| `--strict` | Exit if another daemon is running |
+
+**Examples:**
+```bash
+bubbaloop daemon                        # Default
+bubbaloop daemon -z tcp/192.168.1.50:7447  # Remote Zenoh
+bubbaloop daemon --strict               # Fail if duplicate
+```
+
+### bubbaloop node init
+
+Create a new node from template.
+
+```bash
+bubbaloop node init <name> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-t, --node-type <type>` | Node type: `rust` (default), `python` |
+| `-o, --output <path>` | Output directory (default: ./<name>) |
+| `-d, --description <desc>` | Node description |
+| `--author <name>` | Author name |
+
+**Examples:**
+```bash
+bubbaloop node init my-sensor                       # Rust node
+bubbaloop node init my-sensor --node-type python    # Python node
+bubbaloop node init my-sensor -o /path/to/output    # Custom location
+```
+
+### bubbaloop node add
+
+Register a node with the daemon.
+
+```bash
+bubbaloop node add <source> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output <path>` | Target directory for Git clones |
+| `-b, --branch <branch>` | Git branch (default: main) |
+| `-s, --subdir <path>` | Subdirectory containing node.yaml |
+| `-n, --name <name>` | Instance name override |
+| `-c, --config <path>` | Config file path |
+| `--build` | Build after adding |
+| `--install` | Install as service after adding |
+
+**Source Formats:**
+- Local path: `/path/to/node` or `.`
+- GitHub URL: `https://github.com/user/repo`
+- GitHub shorthand: `user/repo`
+
+**Examples:**
+```bash
+bubbaloop node add .                                # Current directory
+bubbaloop node add /path/to/my-node                 # Local path
+bubbaloop node add user/awesome-node                # GitHub shorthand
+bubbaloop node add user/repo --subdir nodes/camera  # Subdirectory
+bubbaloop node add user/repo --build --install      # Full setup
+```
+
+### bubbaloop node instance
+
+Create an instance of a multi-instance node.
+
+```bash
+bubbaloop node instance <base> <suffix> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-c, --config <path>` | Config file for this instance |
+| `--copy-config` | Copy example config from base node |
+| `--install` | Install as systemd service |
+| `--start` | Start after creating (implies --install) |
+
+**Examples:**
+```bash
+# Create camera instance with custom config
+bubbaloop node instance rtsp-camera terrace --config ~/.bubbaloop/configs/terrace.yaml
+
+# Copy example config from base node
+bubbaloop node instance rtsp-camera garden --copy-config
+
+# Full setup: create, install, and start
+bubbaloop node instance rtsp-camera entrance --config config.yaml --start
+```
+
+### bubbaloop node list
+
+List all registered nodes.
+
+```bash
+bubbaloop node list [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-f, --format <format>` | Output format: `table` (default), `json` |
+| `--base` | Show only base nodes (no instances) |
+| `--instances` | Show only instances |
+
+**Examples:**
+```bash
+bubbaloop node list              # All nodes
+bubbaloop node list --base       # Base nodes only
+bubbaloop node list --instances  # Instances only
+bubbaloop node list -f json      # JSON output
+```
+
+### bubbaloop node logs
+
+View node logs.
+
+```bash
+bubbaloop node logs <name> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-f, --follow` | Follow logs in real-time |
+| `-n, --lines <n>` | Number of lines to show (default: 50) |
+
+**Examples:**
+```bash
+bubbaloop node logs my-node       # Last 50 lines
+bubbaloop node logs my-node -f    # Follow logs
+bubbaloop node logs my-node -n 100  # Last 100 lines
+```
+
+---
 
 ## Pixi Tasks
 
-### Main Commands
-
-| Command | Description |
-|---------|-------------|
-| `pixi run up` | Start all services (bridge, cameras, dashboard) |
-| `pixi run build` | Build all Rust binaries |
-| `pixi run docs` | Serve documentation locally |
-
-### Service Commands
-
-| Command | Description |
-|---------|-------------|
-| `pixi run bridge` | Start Zenoh WebSocket bridge |
-| `pixi run cameras` | Start RTSP camera capture |
-| `pixi run weather` | Start OpenMeteo weather service |
-| `pixi run dashboard` | Start React dashboard |
-| `pixi run bubbaloop` | Start TUI application |
-
-### Development Commands
-
-| Command | Description |
-|---------|-------------|
-| `pixi run zenohd` | Start Zenoh router (server mode) |
-| `pixi run zenohd-client` | Start Zenoh router (client mode) |
-
-## Camera Node CLI
-
-### Usage
+For development, use pixi tasks:
 
 ```bash
-pixi run cameras [OPTIONS]
+# Build
+pixi run build               # cargo build --release
+
+# Run Services
+pixi run daemon              # bubbaloop daemon
+pixi run tui                 # bubbaloop tui
+pixi run dashboard           # React dashboard dev server
+
+# Development
+pixi run check               # cargo check
+pixi run test                # cargo test
+pixi run fmt                 # cargo fmt --all
+pixi run clippy              # cargo clippy (enforced warnings)
+pixi run lint                # fmt-check + clippy
+
+# Documentation
+pixi run docs                # mkdocs serve
+pixi run docs-build          # Build static docs
+
+# Orchestration
+pixi run up                  # Start all services via process-compose
 ```
 
-### Options
+---
 
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--config` | `-c` | Path to configuration file | `config.yaml` |
-| `--zenoh-endpoint` | `-z` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
+## Environment Variables
 
-### Examples
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
+| `BUBBALOOP_MACHINE_ID` | Machine identifier | hostname |
+| `RUST_LOG` | Log level | `info` |
+
+**Examples:**
+```bash
+# Remote Zenoh
+export BUBBALOOP_ZENOH_ENDPOINT=tcp/192.168.1.50:7447
+
+# Debug logging
+RUST_LOG=debug bubbaloop status
+
+# Trace for specific module
+RUST_LOG=bubbaloop::daemon=trace bubbaloop daemon
+```
+
+---
+
+## JSON Output
+
+All commands support JSON output for scripting and LLM integration:
 
 ```bash
-# Default configuration
-pixi run cameras
+# System status
+bubbaloop status -f json
 
-# Custom config file
-pixi run cameras -- -c /path/to/cameras.yaml
+# Diagnostics
+bubbaloop doctor --json
 
-# Connect to remote Zenoh
-pixi run cameras -- -z tcp/192.168.1.100:7447
+# Node list
+bubbaloop node list -f json
 ```
 
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `ZENOH_ENDPOINT` | Override Zenoh endpoint |
-| `RUST_LOG` | Logging level (info, debug, trace) |
-
+**Parse with jq:**
 ```bash
-RUST_LOG=debug pixi run cameras
+# Check if system is healthy
+bubbaloop doctor --json | jq '.summary.failed == 0'
+
+# Get running nodes
+bubbaloop node list -f json | jq '.[] | select(.status == "running") | .name'
+
+# Get failed checks
+bubbaloop doctor --json | jq '.checks[] | select(.passed == false)'
 ```
 
-## Weather Node CLI
-
-### Usage
-
-```bash
-pixi run weather [OPTIONS]
-```
-
-### Options
-
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--config` | `-c` | Path to configuration file | Auto-discovery |
-| `--zenoh-endpoint` | `-z` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
-
-### Examples
-
-```bash
-# Auto-discover location
-pixi run weather
-
-# Explicit configuration
-pixi run weather -- -c crates/openmeteo/configs/config.yaml
-
-# Connect to remote Zenoh
-pixi run weather -- -z tcp/192.168.1.100:7447
-```
-
-## TUI Application
-
-### Usage
-
-```bash
-pixi run bubbaloop
-```
-
-### TUI Commands
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show help message |
-| `/connect` | Connect to Zenoh WebSocket |
-| `/disconnect` | Disconnect from Zenoh |
-| `/topics` | List active topics with statistics |
-| `/server` | Configure remote server endpoint |
-| `/quit` | Exit the application |
-
-### Server Configuration
-
-The `/server` command configures the Zenoh endpoint for remote access:
-
-```
-/server
-> tcp/192.168.1.100:7447
-```
-
-This generates `~/.bubbaloop/zenoh.cli.json5` automatically.
-
-### Topic Monitoring
-
-The `/topics` command shows:
-
-- Topic name
-- Message frequency (Hz)
-- Message count
-- Last message time
-
-```
-/topics
-/camera/front_door/compressed  25.0 Hz  1234 msgs
-/weather/current                0.03 Hz   42 msgs
-```
-
-## Zenoh Router
-
-### Server Mode
-
-```bash
-pixi run zenohd
-# or: zenohd -c zenoh.json5
-```
-
-Configuration (`zenoh.json5`):
-
-```json5
-{
-  mode: "router",
-  listen: {
-    endpoints: ["tcp/0.0.0.0:7447"],
-  },
-  plugins: {
-    remote_api: {
-      websocket_port: 10000,
-    },
-  },
-}
-```
-
-### Client Mode
-
-```bash
-pixi run zenohd-client
-# or: zenohd -c ~/.bubbaloop/zenoh.cli.json5
-```
-
-Connects to a remote Zenoh router and provides local WebSocket access.
-
-## Process Compose
-
-The `pixi run up` command uses process-compose to manage services.
-
-### Process Compose UI
-
-When running `pixi run up`, you can:
-
-| Key | Action |
-|-----|--------|
-| `↑/↓` | Navigate processes |
-| `Enter` | View process logs |
-| `q` | Quit (stops all services) |
-| `r` | Restart selected process |
-
-### Configuration
-
-Process definitions are in `process-compose.yaml`:
-
-```yaml
-processes:
-  bridge:
-    command: pixi run bridge
-    readiness_probe:
-      http_get:
-        port: 10000
-
-  cameras:
-    command: pixi run cameras
-    depends_on:
-      bridge:
-        condition: process_healthy
-
-  dashboard:
-    command: pixi run dashboard
-```
-
-## Dashboard Development
-
-### Start Development Server
-
-```bash
-pixi run dashboard
-# or
-cd dashboard && npm run dev
-```
-
-### Build for Production
-
-```bash
-cd dashboard
-npm run build
-```
-
-### Regenerate Protobuf
-
-```bash
-cd dashboard
-npm run proto
-```
-
-## Logging
-
-### Log Levels
-
-Set via `RUST_LOG` environment variable:
-
-| Level | Description |
-|-------|-------------|
-| `error` | Errors only |
-| `warn` | Warnings and errors |
-| `info` | General information (default) |
-| `debug` | Detailed debugging |
-| `trace` | Very verbose tracing |
-
-### Examples
-
-```bash
-# Debug logging for camera node
-RUST_LOG=debug pixi run cameras
-
-# Trace logging for specific module
-RUST_LOG=bubbaloop::h264_capture=trace pixi run cameras
-
-# Multiple modules
-RUST_LOG=info,zenoh=debug pixi run cameras
-```
+---
 
 ## Common Workflows
 
-### Local Development
+### Fresh Install Verification
 
 ```bash
-# Start all services
-pixi run up
+bubbaloop doctor --fix       # Auto-fix any issues
+bubbaloop status             # Verify services running
 ```
 
-### Distributed Setup
-
-**Server (robot):**
+### Add and Run a Node
 
 ```bash
-# Terminal 1: Zenoh router
-zenohd -c zenoh.json5
-
-# Terminal 2: Services
-pixi run cameras
-pixi run weather
+bubbaloop node add user/my-node --build --install
+bubbaloop node start my-node
+bubbaloop node logs my-node -f
 ```
 
-**Client (laptop):**
+### Create Multi-Instance Setup
 
 ```bash
-# Terminal 1: Configure and start local router
-pixi run bubbaloop  # Use /server to set robot IP
-pixi run zenohd-client
-
-# Terminal 2: Dashboard
-pixi run dashboard
+bubbaloop node add ~/.bubbaloop/nodes/rtsp-camera
+bubbaloop node instance rtsp-camera cam1 --config cam1.yaml --start
+bubbaloop node instance rtsp-camera cam2 --config cam2.yaml --start
+bubbaloop node list --instances
 ```
 
-### Debugging
+### Debug Connection Issues
 
 ```bash
-# Check topic activity
-pixi run bubbaloop
-# Then: /connect → /topics
-
-# Verbose camera logging
-RUST_LOG=debug pixi run cameras
-
-# Check Zenoh connectivity
-pixi run bubbaloop
-# Then: /connect → check status
+bubbaloop doctor -c zenoh    # Check Zenoh specifically
+bubbaloop debug info         # Show Zenoh connection info
+bubbaloop debug topics       # List active topics
 ```
 
-## Next Steps
+---
 
-- [Configuration](../getting-started/configuration.md) — Configuration file reference
+## See Also
+
 - [Troubleshooting](troubleshooting.md) — Common issues and solutions
-- [Architecture](../concepts/architecture.md) — System design
+- [Configuration](../getting-started/configuration.md) — Config file reference
+- [Node Marketplace](../guides/node-marketplace.md) — Marketplace guide

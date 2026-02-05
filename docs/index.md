@@ -1,6 +1,6 @@
 # Bubbaloop
 
-**Orchestration system for Physical AI** — Build intelligent robotic systems by composing sensors, actuators, and services through a unified messaging layer.
+**AI-native orchestration for Physical AI** — Build intelligent robotic systems by composing sensors, actuators, and services through a unified messaging layer.
 
 ## What is Bubbaloop?
 
@@ -15,35 +15,62 @@ Bubbaloop is an orchestration framework for building physical AI systems. The na
 
 All components communicate via [Zenoh](https://zenoh.io/)/ROS-Z messaging for low-latency, distributed operation.
 
-## Component Architecture
+## Quick Install
+
+```bash
+# One-line install (Linux x86_64/ARM64)
+curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
+source ~/.bashrc
+
+# Verify installation
+bubbaloop doctor --fix
+bubbaloop status
+```
+
+This installs:
+- **zenohd** — Pub/sub router on port 7447
+- **zenoh-bridge-remote-api** — WebSocket bridge on port 10001
+- **bubbaloop** — Single 7MB binary (CLI + TUI + daemon)
+- **Dashboard** — Web UI at http://localhost:8080
+
+All run as systemd user services with autostart enabled.
+
+## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph Sensors
-        cam[RTSP Camera]
-        imu[IMU - Future]
+    subgraph Clients
+        tui[TUI - ratatui]
+        dash[Dashboard - React]
+        cli[CLI]
     end
 
-    subgraph Services
-        weather[OpenMeteo Weather]
-        ml[ML Inference - Future]
+    subgraph Messaging
+        bridge[zenoh-bridge-remote-api]
+        zenohd((zenohd))
     end
 
-    subgraph Core["Zenoh Message Bus (Loop)"]
-        zenoh((Zenoh))
+    subgraph Daemon
+        nm[Node Manager]
+        reg[Registry]
+        sysd[systemd D-Bus]
     end
 
-    subgraph Dashboard
-        viz[Visualization]
-        stats[Metrics & Analytics]
+    subgraph Nodes
+        cam[rtsp-camera]
+        weather[openmeteo]
+        custom[custom nodes...]
     end
 
-    cam --> zenoh
-    imu -.-> zenoh
-    weather --> zenoh
-    ml -.-> zenoh
-    zenoh --> viz
-    zenoh --> stats
+    tui --> zenohd
+    cli --> zenohd
+    dash --> bridge --> zenohd
+    zenohd <--> nm
+    nm --> reg
+    nm --> sysd
+    zenohd <--> cam
+    zenohd <--> weather
+    zenohd <--> custom
 ```
 
 ## Features
@@ -54,41 +81,29 @@ flowchart TB
 | Multi-camera support | Stream from multiple RTSP cameras simultaneously |
 | Zenoh/ROS-Z integration | Publish/subscribe with ROS-compatible topics |
 | React Dashboard | Real-time browser visualization with WebCodecs |
-| Weather integration | OpenMeteo weather data as a service |
-| Remote access | HTTPS with self-signed cert, single-port deployment |
-| Simple YAML config | Easy component configuration |
+| Multi-instance nodes | Run same node with different configs |
+| System diagnostics | `bubbaloop doctor --fix` for auto-repair |
+| Fleet management | Multi-machine orchestration |
 
-## Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| Language | Rust |
-| Video Capture | GStreamer |
-| Messaging | Zenoh / ROS-Z |
-| Dashboard | React + WebCodecs |
-| Package Manager | Pixi |
-
-## Quick Start
-
-### 1. Install Backend
+## Basic Usage
 
 ```bash
-curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
-```
-
-### 2. Install TUI
-
-```bash
-npm install -g @kornia-ai/bubbaloop
-```
-
-### 3. Run
-
-```bash
+# Launch interactive TUI
 bubbaloop
+
+# Non-interactive status (for scripts/agents)
+bubbaloop status
+
+# System diagnostics with auto-fix
+bubbaloop doctor --fix
+
+# Node lifecycle
+bubbaloop node add user/my-node --build --install
+bubbaloop node start my-node
+bubbaloop node logs my-node -f
 ```
 
-### Development
+## Development Setup
 
 For building from source:
 
@@ -96,23 +111,32 @@ For building from source:
 git clone https://github.com/kornia/bubbaloop.git
 cd bubbaloop
 pixi install
-pixi run up
+pixi run up    # Start all services
 ```
 
-Open http://localhost:5173 in Chrome, Edge, or Safari.
-
-See [Quickstart](getting-started/quickstart.md) for detailed setup instructions.
+Dashboard: http://localhost:5173
 
 ## Available Commands
 
 | Command | Description |
 |---------|-------------|
-| `pixi run up` | Start all services (recommended) |
-| `pixi run cameras` | Start camera capture and Zenoh publishing |
-| `pixi run weather` | Start weather data service |
-| `pixi run dashboard` | Start React dashboard |
-| `pixi run build` | Build Rust binaries |
-| `pixi run docs` | Serve documentation locally |
+| `bubbaloop status` | Show system and node status |
+| `bubbaloop doctor` | Run diagnostics (--fix for auto-repair) |
+| `bubbaloop node list` | List all nodes |
+| `bubbaloop node add` | Add node from path or GitHub |
+| `bubbaloop node instance` | Create multi-instance node |
+| `bubbaloop marketplace list` | List node sources |
+
+See [CLI Reference](reference/cli.md) for complete command documentation.
+
+## Documentation
+
+- [Quickstart](getting-started/quickstart.md) — Detailed setup instructions
+- [Configuration](getting-started/configuration.md) — Config file reference
+- [CLI Reference](reference/cli.md) — Command documentation
+- [Troubleshooting](reference/troubleshooting.md) — Common issues and solutions
+- [Architecture](concepts/architecture.md) — System design
+- [Create Your First Node](guides/create-your-first-node.md) — Node development guide
 
 ## Community
 

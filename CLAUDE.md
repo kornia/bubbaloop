@@ -836,6 +836,228 @@ The daemon (`bubbaloop daemon`) manages node lifecycle via systemd D-Bus (zbus):
 - **Security hardening**: Generated systemd units include `NoNewPrivileges=true`, `ProtectSystem=strict`, etc.
 - **Build validation**: Allowlisted prefixes (`cargo`, `pixi`, `npm`, `make`, `python`, `pip`), rejects shell metacharacters and newlines
 
+### Daemon Zenoh API Endpoints
+
+The daemon exposes a REST-like API over Zenoh queryables. All endpoints are machine-scoped:
+
+| Endpoint | Method | Description | Payload |
+|----------|--------|-------------|---------|
+| `bubbaloop/{machine_id}/daemon/api/health` | GET | Health check | None |
+| `bubbaloop/{machine_id}/daemon/api/nodes` | GET | List all nodes | None |
+| `bubbaloop/{machine_id}/daemon/api/nodes/add` | POST | Add a node | `{"node_path": "...", "name": "...", "config": "..."}` |
+| `bubbaloop/{machine_id}/daemon/api/nodes/{name}` | GET | Get single node | None |
+| `bubbaloop/{machine_id}/daemon/api/nodes/{name}/logs` | GET | Get node logs | None |
+| `bubbaloop/{machine_id}/daemon/api/nodes/{name}/command` | POST | Execute command | `{"command": "start\|stop\|restart\|build\|install\|uninstall"}` |
+| `bubbaloop/{machine_id}/daemon/api/refresh` | POST | Refresh all nodes | None |
+
+Legacy endpoints (backward compatibility): `bubbaloop/daemon/api/**`
+
+### NodeStatus Values
+
+| Value | Int | Description |
+|-------|-----|-------------|
+| `Unknown` | 0 | Status not yet determined |
+| `Stopped` | 1 | Service not running |
+| `Running` | 2 | Service active |
+| `Failed` | 3 | Service failed |
+| `Installing` | 4 | Currently installing |
+| `Building` | 5 | Currently building |
+| `NotInstalled` | 6 | Not installed as service |
+
+### CommandType Values
+
+| Command | Int | Description |
+|---------|-----|-------------|
+| `Start` | 0 | Start node service |
+| `Stop` | 1 | Stop node service |
+| `Restart` | 2 | Restart node service |
+| `Install` | 3 | Install as systemd service |
+| `Uninstall` | 4 | Remove systemd service |
+| `Build` | 5 | Build the node |
+| `Clean` | 6 | Clean build artifacts |
+| `EnableAutostart` | 7 | Enable autostart |
+| `DisableAutostart` | 8 | Disable autostart |
+| `AddNode` | 9 | Add node to registry |
+| `RemoveNode` | 10 | Remove from registry |
+| `Refresh` | 11 | Refresh node state |
+
+### Error Types Reference
+
+| Error Type | File | Description |
+|------------|------|-------------|
+| `NodeManagerError` | `daemon/node_manager.rs` | Registry, Systemd, NotFound, Build errors |
+| `NodeError` | `cli/node.rs` | Zenoh, NotFound, CommandFailed, Git, InvalidArgs |
+| `RegistryError` | `daemon/registry.rs` | IO, YAML parsing, manifest validation |
+| `SystemdError` | `daemon/systemd.rs` | D-Bus, unit file, service control |
+| `DiagnosticError` | `cli/doctor.rs` | Check failures with fix actions |
+
+### Security Validation Rules
+
+**Node Names** (`cli/node.rs:is_valid_node_name`):
+- Pattern: `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`
+- No path traversal (`..`, `/`, `\`)
+- Must start with alphanumeric
+
+**Build Commands** (`daemon/node_manager.rs:validate_build_command`):
+- Allowlisted prefixes: `cargo`, `pixi`, `npm`, `make`, `python`, `pip`, `./`
+- Rejected: shell metacharacters (`;`, `|`, `&`, `$`, `` ` ``, `>`, `<`), newlines
+- Empty commands rejected
+
+**Git Clone** (`cli/node.rs:clone_repo`):
+- Uses `--` separator to prevent argument injection
+- Validates URL format before cloning
+- Sanitizes branch names
+
+### Data Flow: Node Registration
+
+```
+CLI: bubbaloop node add /path/to/node
+    │
+    ├─> Read node.yaml manifest
+    ├─> Validate name, type, version
+    │
+    └─> Zenoh query: bubbaloop/{machine}/daemon/api/nodes/add
+            │
+            └─> Daemon NodeManager:
+                    ├─> registry.register_node()  → ~/.bubbaloop/nodes.json
+                    ├─> Create CachedNode in HashMap
+                    ├─> Broadcast NodeEvent
+                    └─> Return CommandResult
+```
+
+### Data Flow: Node Build
+
+```
+CLI: bubbaloop node build my-node
+    │
+    └─> Zenoh query: .../nodes/my-node/command  {command: "build"}
+            │
+            └─> Daemon NodeManager:
+                    ├─> Check building_nodes mutex (prevent concurrent)
+                    ├─> Validate build command (allowlist check)
+                    ├─> tokio::spawn build process
+                    │       ├─> Stream stdout/stderr to build_output
+                    │       ├─> 10-minute timeout
+                    │       └─> kill_on_drop(true)
+                    ├─> Update CachedNode.is_built
+                    └─> Broadcast NodeEvent (Building → Stopped)
+```
+
+### Data Flow: Node Start
+
+```
+CLI: bubbaloop node start my-node
+    │
+    └─> Zenoh query: .../nodes/my-node/command  {command: "start"}
+            │
+            └─> Daemon NodeManager:
+                    ├─> SystemdClient.start_service("bubbaloop-my-node")
+                    │       └─> D-Bus: org.freedesktop.systemd1.Manager.StartUnit
+                    ├─> Wait for JobRemoved signal
+                    ├─> Update CachedNode.status = Running
+                    └─> Broadcast NodeEvent
+```
+
+### Key Data Structures
+
+**CachedNode** (`daemon/node_manager.rs`):
+```rust
+struct CachedNode {
+    path: String,                    // Absolute path to node directory
+    manifest: Option<NodeManifest>,  // Parsed node.yaml
+    status: NodeStatus,              // Current service status
+    installed: bool,                 // Has systemd service file
+    autostart_enabled: bool,         // Service enabled for boot
+    is_built: bool,                  // Build completed successfully
+    build_state: BuildState,         // Building/Idle/Cleaning + output
+    last_updated_ms: i64,            // Last state change timestamp
+    health_status: HealthStatus,     // OK/Unknown/Unhealthy
+    last_health_check_ms: i64,       // Last heartbeat received
+    name_override: Option<String>,   // Instance name (multi-instance)
+    config_override: Option<String>, // Config path (multi-instance)
+}
+```
+
+**NodeManifest** (`daemon/registry.rs`):
+```rust
+struct NodeManifest {
+    name: String,           // Node identifier
+    version: String,        // Semantic version
+    description: String,    // Human-readable description
+    node_type: String,      // "rust" or "python"
+    build: Option<String>,  // Build command (e.g., "pixi run build")
+    command: Option<String>,// Run command (e.g., "./target/release/node")
+    depends_on: Vec<String>,// Service dependencies
+}
+```
+
+**NodeEntry** (`daemon/registry.rs`):
+```rust
+struct NodeEntry {
+    path: String,                    // Path to node directory
+    added_at: String,                // ISO timestamp
+    name_override: Option<String>,   // Instance name
+    config_override: Option<String>, // Config file path
+}
+```
+
+### File Locations Reference
+
+| File | Purpose |
+|------|---------|
+| `~/.bubbaloop/nodes.json` | Node registry (path → NodeEntry) |
+| `~/.bubbaloop/nodes/` | Cloned node repositories |
+| `~/.bubbaloop/configs/` | Instance config files |
+| `~/.bubbaloop/sources.json` | Marketplace source registry |
+| `~/.bubbaloop/bin/` | Installed binaries |
+| `~/.bubbaloop/zenoh/zenohd.json5` | Zenoh router config |
+| `~/.config/systemd/user/bubbaloop-*.service` | Generated systemd units |
+
+### Testing Patterns
+
+**Unit Tests** (co-located `#[cfg(test)] mod tests`):
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_node_name() {
+        assert!(is_valid_node_name("my-node"));
+        assert!(!is_valid_node_name("../escape"));
+    }
+}
+```
+
+**Filesystem Tests** (use `tempfile`):
+```rust
+#[test]
+fn test_registry_operations() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let registry_path = temp_dir.path().join("nodes.json");
+    // ... test registry operations
+}
+```
+
+**Key Test Files**:
+- `cli/node.rs` — argument injection, name validation, git safety
+- `daemon/node_manager.rs` — build validation, health extraction
+- `tui/ui/nodes/list.rs` — path truncation
+- `cli/doctor.rs` — diagnostic checks
+
+### Doctor Auto-Fix Actions
+
+The `bubbaloop doctor --fix` command can automatically fix:
+
+| Issue | Fix Action |
+|-------|------------|
+| Zenoh not running | Start `bubbaloop-zenohd.service` |
+| Daemon not running | Start `bubbaloop-daemon.service` |
+| Daemon stale | Restart daemon service |
+| Bridge not running | Start `bubbaloop-bridge.service` |
+| Missing zenoh config | Create `~/.bubbaloop/zenoh/zenohd.json5` |
+| Missing sources.json | Create `~/.bubbaloop/sources.json` |
+
 ## Git Hygiene & Artifacts
 
 ### Files that should NOT be committed
