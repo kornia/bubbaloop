@@ -23,8 +23,8 @@ pub enum View {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum NodesTab {
     #[default]
-    Installed,
-    Discover,
+    Nodes,
+    Instances,
     Marketplace,
 }
 
@@ -65,6 +65,7 @@ pub struct NodeInfo {
     pub is_built: bool,
     pub build_output: Vec<String>,
     pub base_node: String,
+    pub config_override: String,
 }
 
 /// Discoverable node
@@ -77,6 +78,9 @@ pub struct DiscoverableNode {
     pub description: String,
     pub source: String,
     pub source_type: String, // "builtin", "local", "git"
+    pub is_added: bool,
+    pub is_built: bool,
+    pub instance_count: usize,
 }
 
 /// Marketplace source
@@ -92,9 +96,11 @@ pub struct MarketplaceSource {
 #[derive(Debug, Clone, PartialEq)]
 pub enum InputMode {
     Normal,
-    Command,    // Typing a /command
-    EditSource, // Editing marketplace source
-    CreateNode, // Creating a new node form
+    Command,        // Typing a /command
+    EditSource,     // Editing marketplace source
+    CreateNode,     // Creating a new node form
+    CreateInstance, // Creating a new instance from discover tab
+    EditConfig,     // Editing config path for an instance
 }
 
 /// Application state
@@ -128,6 +134,11 @@ pub struct App {
     /// Nodes
     pub nodes: Vec<NodeInfo>,
     pub node_index: usize,
+    /// Base nodes (base_node field is empty) — derived from `nodes` via `split_nodes()`
+    pub base_nodes: Vec<NodeInfo>,
+    /// Instance nodes (base_node field is non-empty) — derived from `nodes` via `split_nodes()`
+    pub instances: Vec<NodeInfo>,
+    pub instance_index: usize,
     pub discoverable_nodes: Vec<DiscoverableNode>,
     pub discover_index: usize,
     pub sources: Vec<MarketplaceSource>,
@@ -190,6 +201,17 @@ pub struct App {
 
     /// Pending node path for async daemon registration
     pub pending_node_path: Option<String>,
+
+    /// Create instance form state
+    pub instance_base_node: String,
+    pub instance_base_path: String,
+    pub instance_name: String,
+    pub instance_config_path: String,
+    pub instance_active_field: usize, // 0 = name, 1 = config
+
+    /// Edit config form state
+    pub edit_config_node: String,
+    pub edit_config_path: String,
 
     /// Channel for background tasks to send messages back to the UI
     message_tx: mpsc::UnboundedSender<(String, MessageType)>,
@@ -261,7 +283,7 @@ impl App {
         let now = Instant::now();
         let (message_tx, message_rx) = mpsc::unbounded_channel();
 
-        Self {
+        let mut app = Self {
             view: View::Home,
             should_exit: false,
             exit_warning: false,
@@ -292,6 +314,9 @@ impl App {
             service_index: 0,
             nodes: initial_nodes,
             node_index: 0,
+            base_nodes: Vec::new(),
+            instances: Vec::new(),
+            instance_index: 0,
             discoverable_nodes: Vec::new(),
             discover_index: 0,
             sources: Vec::new(),
@@ -325,9 +350,18 @@ impl App {
             create_node_description: String::new(),
             create_node_active_field: 0,
             pending_node_path: None,
+            instance_base_node: String::new(),
+            instance_base_path: String::new(),
+            instance_name: String::new(),
+            instance_config_path: String::new(),
+            instance_active_field: 0,
+            edit_config_node: String::new(),
+            edit_config_path: String::new(),
             message_tx,
             message_rx,
-        }
+        };
+        app.split_nodes();
+        app
     }
 
     /// Handle exit request (Ctrl+C)
@@ -476,8 +510,16 @@ impl App {
             return self.handle_create_node_key(key);
         }
 
+        if self.input_mode == InputMode::CreateInstance {
+            return self.handle_create_instance_key(key);
+        }
+
         if self.input_mode == InputMode::EditSource {
             return self.handle_edit_source_key(key);
+        }
+
+        if self.input_mode == InputMode::EditConfig {
+            return self.handle_edit_config_key(key);
         }
 
         let current_tab = if let View::Nodes(tab) = &self.view {
@@ -494,9 +536,9 @@ impl App {
             }
             KeyCode::Tab => {
                 let next = match current_tab {
-                    NodesTab::Installed => NodesTab::Discover,
-                    NodesTab::Discover => NodesTab::Marketplace,
-                    NodesTab::Marketplace => NodesTab::Installed,
+                    NodesTab::Nodes => NodesTab::Instances,
+                    NodesTab::Instances => NodesTab::Marketplace,
+                    NodesTab::Marketplace => NodesTab::Nodes,
                 };
                 self.view = View::Nodes(next.clone());
                 self.refresh_tab_data(&next);
@@ -504,21 +546,22 @@ impl App {
             }
             KeyCode::BackTab => {
                 let prev = match current_tab {
-                    NodesTab::Installed => NodesTab::Marketplace,
-                    NodesTab::Discover => NodesTab::Installed,
-                    NodesTab::Marketplace => NodesTab::Discover,
+                    NodesTab::Nodes => NodesTab::Marketplace,
+                    NodesTab::Instances => NodesTab::Nodes,
+                    NodesTab::Marketplace => NodesTab::Instances,
                 };
                 self.view = View::Nodes(prev.clone());
                 self.refresh_tab_data(&prev);
                 self.reset_confirmations();
             }
             KeyCode::Char('1') => {
-                self.view = View::Nodes(NodesTab::Installed);
+                self.view = View::Nodes(NodesTab::Nodes);
+                self.refresh_tab_data(&NodesTab::Nodes);
                 self.reset_confirmations();
             }
             KeyCode::Char('2') => {
-                self.view = View::Nodes(NodesTab::Discover);
-                self.refresh_tab_data(&NodesTab::Discover);
+                self.view = View::Nodes(NodesTab::Instances);
+                self.refresh_tab_data(&NodesTab::Instances);
                 self.reset_confirmations();
             }
             KeyCode::Char('3') => {
@@ -527,68 +570,166 @@ impl App {
                 self.reset_confirmations();
             }
             _ => match current_tab {
-                NodesTab::Installed => self.handle_installed_tab_key(key).await,
-                NodesTab::Discover => self.handle_discover_tab_key(key).await,
+                NodesTab::Nodes => self.handle_nodes_tab_key(key).await,
+                NodesTab::Instances => self.handle_instances_tab_key(key).await,
                 NodesTab::Marketplace => self.handle_marketplace_tab_key(key).await,
             },
         }
         false
     }
 
-    async fn handle_installed_tab_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.node_index > 0 {
-                    self.node_index -= 1;
-                }
-                self.confirm_uninstall = false;
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.node_index < self.nodes.len().saturating_sub(1) {
-                    self.node_index += 1;
-                }
-                self.confirm_uninstall = false;
-            }
-            KeyCode::Enter => {
-                if let Some(node) = self.nodes.get(self.node_index) {
-                    let node_name = node.name.clone();
-                    self.view = View::NodeDetail(node_name.clone());
-                    self.fetch_service_status(&node_name).await;
-                }
-            }
-            KeyCode::Char('s') | KeyCode::Char(' ') => {
-                self.toggle_node();
-            }
-            KeyCode::Char('u') => {
-                if self.confirm_uninstall {
-                    self.uninstall_selected_node();
-                    self.confirm_uninstall = false;
-                } else {
-                    self.confirm_uninstall = true;
-                    self.add_message(
-                        "Press [u] again to confirm uninstall".into(),
-                        MessageType::Warning,
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
-
-    async fn handle_discover_tab_key(&mut self, key: KeyEvent) {
+    async fn handle_nodes_tab_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.discover_index > 0 {
                     self.discover_index -= 1;
                 }
+                self.confirm_uninstall = false;
+                self.confirm_clean = false;
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.discover_index < self.discoverable_nodes.len().saturating_sub(1) {
                     self.discover_index += 1;
                 }
+                self.confirm_uninstall = false;
+                self.confirm_clean = false;
             }
-            KeyCode::Enter | KeyCode::Char('a') => {
-                self.add_discovered_node();
+            KeyCode::Enter => {
+                if let Some(node) = self.discoverable_nodes.get(self.discover_index) {
+                    if node.is_added && node.is_built {
+                        // Open create instance form
+                        self.input_mode = InputMode::CreateInstance;
+                        self.instance_base_node = node.name.clone();
+                        self.instance_base_path = node.path.clone();
+                        self.instance_name = format!("{}-", node.name);
+                        self.instance_config_path.clear();
+                        self.instance_active_field = 0;
+                    } else if node.is_added && !node.is_built {
+                        self.add_message(
+                            "Build node first (press [b])".into(),
+                            MessageType::Warning,
+                        );
+                    } else {
+                        // Add the node
+                        self.add_discovered_node();
+                    }
+                }
+            }
+            KeyCode::Char('a') => {
+                // Add node (only if not already added)
+                if let Some(node) = self.discoverable_nodes.get(self.discover_index) {
+                    if !node.is_added {
+                        self.add_discovered_node();
+                    }
+                }
+            }
+            KeyCode::Char('s') | KeyCode::Char(' ') => {
+                // Start/stop (only for added nodes)
+                if let Some(node) = self.discoverable_nodes.get(self.discover_index) {
+                    if node.is_added {
+                        if let Some(base) = self.base_nodes.iter().find(|n| n.name == node.name) {
+                            let name = base.name.clone();
+                            let status = base.status.clone();
+                            let is_built = base.is_built;
+                            if status == "running" {
+                                self.stop_node(&name);
+                            } else if is_built {
+                                self.start_node(&name);
+                            } else {
+                                self.add_message(
+                                    "Build first (press [b])".into(),
+                                    MessageType::Warning,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('b') => {
+                // Build (only for added nodes)
+                if let Some(node) = self.discoverable_nodes.get(self.discover_index) {
+                    if node.is_added {
+                        if let Some(base) = self.base_nodes.iter().find(|n| n.name == node.name) {
+                            if !self.is_node_busy(base) {
+                                let name = base.name.clone();
+                                self.start_build_activity_for(
+                                    &name,
+                                    BuildActivity::Building,
+                                    "build",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('c') => {
+                // Clean (only for added nodes)
+                if let Some(node) = self.discoverable_nodes.get(self.discover_index) {
+                    if node.is_added {
+                        if let Some(base) = self.base_nodes.iter().find(|n| n.name == node.name) {
+                            if !self.is_node_busy(base) {
+                                if self.confirm_clean {
+                                    let name = base.name.clone();
+                                    self.start_build_activity_for(
+                                        &name,
+                                        BuildActivity::Cleaning,
+                                        "clean",
+                                    );
+                                    self.confirm_clean = false;
+                                } else {
+                                    self.confirm_clean = true;
+                                    self.add_message(
+                                        "Press [c] again to confirm clean".into(),
+                                        MessageType::Warning,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('u') => {
+                // Uninstall (only for added nodes)
+                if let Some(node) = self.discoverable_nodes.get(self.discover_index) {
+                    if node.is_added {
+                        if self.confirm_uninstall {
+                            // Find the base node index for uninstall
+                            if let Some(idx) =
+                                self.base_nodes.iter().position(|n| n.name == node.name)
+                            {
+                                self.node_index = idx;
+                                self.uninstall_selected_node();
+                            }
+                            self.confirm_uninstall = false;
+                        } else {
+                            self.confirm_uninstall = true;
+                            self.add_message(
+                                "Press [u] again to confirm uninstall".into(),
+                                MessageType::Warning,
+                            );
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('i') => {
+                // Create instance — only when node is added AND built
+                if let Some(node) = self.discoverable_nodes.get(self.discover_index) {
+                    if node.is_added && node.is_built {
+                        self.input_mode = InputMode::CreateInstance;
+                        self.instance_base_node = node.name.clone();
+                        self.instance_base_path = node.path.clone();
+                        self.instance_name = format!("{}-", node.name);
+                        self.instance_config_path.clear();
+                        self.instance_active_field = 0;
+                    } else if node.is_added && !node.is_built {
+                        self.add_message(
+                            "Build node first (press [b])".into(),
+                            MessageType::Warning,
+                        );
+                    } else {
+                        self.add_message("Add node first (press [a])".into(), MessageType::Warning);
+                    }
+                }
             }
             KeyCode::Char('n') => {
                 // Enter create node form
@@ -597,6 +738,98 @@ impl App {
                 self.create_node_type = 0;
                 self.create_node_description.clear();
                 self.create_node_active_field = 0;
+            }
+            KeyCode::Char('l') => {
+                // View logs (only for added nodes)
+                if let Some(node) = self.discoverable_nodes.get(self.discover_index) {
+                    if node.is_added {
+                        if let Some(idx) = self.base_nodes.iter().position(|n| n.name == node.name)
+                        {
+                            self.node_index = idx;
+                            let name = node.name.clone();
+                            self.view = View::NodeLogs(name.clone());
+                            self.fetch_node_logs(&name).await;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    async fn handle_instances_tab_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.instance_index > 0 {
+                    self.instance_index -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.instance_index < self.instances.len().saturating_sub(1) {
+                    self.instance_index += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(node) = self.instances.get(self.instance_index) {
+                    let node_name = node.name.clone();
+                    self.view = View::NodeDetail(node_name.clone());
+                    self.fetch_service_status(&node_name).await;
+                }
+            }
+            KeyCode::Char('s') | KeyCode::Char(' ') => {
+                self.toggle_instance_node();
+            }
+            KeyCode::Char('e') => {
+                if let Some(node) = self.instances.get(self.instance_index) {
+                    let name = node.name.clone();
+                    self.send_node_command(&name, "install", "stopped");
+                    self.add_message(format!("Installing {}...", name), MessageType::Info);
+                }
+            }
+            KeyCode::Char('d') => {
+                if let Some(node) = self.instances.get(self.instance_index) {
+                    let name = node.name.clone();
+                    self.send_node_command(&name, "uninstall", "not-installed");
+                    self.add_message(format!("Disabling {}...", name), MessageType::Info);
+                }
+            }
+            KeyCode::Char('l') => {
+                if let Some(node) = self.instances.get(self.instance_index) {
+                    let name = node.name.clone();
+                    self.view = View::NodeLogs(name.clone());
+                    self.fetch_node_logs(&name).await;
+                }
+            }
+            KeyCode::Char('r') => {
+                // Remove instance (uninstall + remove)
+                if let Some(node) = self.instances.get(self.instance_index) {
+                    if let Some(client) = &self.daemon_client {
+                        let client = client.clone();
+                        let name = node.name.clone();
+                        let tx = self.message_tx.clone();
+                        self.add_message(
+                            format!("Removing instance {}...", name),
+                            MessageType::Info,
+                        );
+                        tokio::spawn(async move {
+                            if let Err(e) = client.send_command(&name, "uninstall").await {
+                                let _ = tx.send((format!("Error: {}", e), MessageType::Error));
+                                return;
+                            }
+                            if let Err(e) = client.send_command(&name, "remove").await {
+                                let _ = tx.send((format!("Error: {}", e), MessageType::Error));
+                            }
+                        });
+                    }
+                }
+            }
+            KeyCode::Char('c') => {
+                // Edit config path for selected instance
+                if let Some(node) = self.instances.get(self.instance_index) {
+                    self.edit_config_node = node.name.clone();
+                    self.edit_config_path = node.config_override.clone();
+                    self.input_mode = InputMode::EditConfig;
+                }
             }
             _ => {}
         }
@@ -658,7 +891,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.reset_confirmations();
-                self.view = View::Nodes(NodesTab::Installed);
+                self.view = View::Nodes(NodesTab::Nodes);
             }
             KeyCode::Tab => {
                 self.reset_confirmations();
@@ -682,21 +915,6 @@ impl App {
             }
             KeyCode::Char('s') if !self.current_node_busy() => {
                 self.toggle_current_node();
-            }
-            KeyCode::Char('b') if !self.current_node_busy() => {
-                self.build_current_node();
-            }
-            KeyCode::Char('c') if !self.current_node_busy() => {
-                if self.confirm_clean {
-                    self.clean_current_node();
-                    self.confirm_clean = false;
-                } else {
-                    self.confirm_clean = true;
-                    self.add_message(
-                        "Press [c] again to confirm clean".into(),
-                        MessageType::Warning,
-                    );
-                }
             }
             KeyCode::Char('e') if !self.current_node_busy() => {
                 self.send_current_node_daemon_command("install", "Installing");
@@ -759,7 +977,8 @@ impl App {
                 return;
             }
             "/nodes" => {
-                self.view = View::Nodes(NodesTab::Installed);
+                self.view = View::Nodes(NodesTab::Nodes);
+                self.refresh_tab_data(&NodesTab::Nodes);
             }
             "/services" => {
                 self.view = View::Services;
@@ -866,17 +1085,13 @@ impl App {
         // Get nodes from subscription (non-blocking read)
         // Subscription data OVERRIDES initial query data
         let mut nodes_updated = false;
-        if let Some(ref sub) = self.daemon_subscription {
+        if let Some(sub) = self.daemon_subscription.clone() {
             let mut sub_nodes = sub.get_nodes().await;
             if !sub_nodes.is_empty() {
                 sub_nodes.sort_by(|a, b| a.name.cmp(&b.name));
                 nodes_updated = true;
                 self.nodes = sub_nodes;
-                if !self.nodes.is_empty() {
-                    self.node_index = self.node_index.min(self.nodes.len() - 1);
-                } else {
-                    self.node_index = 0;
-                }
+                self.split_nodes();
             }
             self.daemon_available = sub.is_connected().await;
         }
@@ -996,11 +1211,10 @@ impl App {
         }
 
         // View-specific refreshes (local operations)
-        if let View::Nodes(NodesTab::Discover) = self.view {
-            self.refresh_discoverable_nodes();
-        }
-        if let View::Nodes(NodesTab::Marketplace) = self.view {
-            self.refresh_sources();
+        match self.view {
+            View::Nodes(NodesTab::Nodes) => self.refresh_discoverable_nodes(),
+            View::Nodes(NodesTab::Marketplace) => self.refresh_sources(),
+            _ => {}
         }
 
         if let View::NodeLogs(ref node_name) = self.view {
@@ -1093,9 +1307,9 @@ impl App {
     /// Immediately refresh data for the given tab (avoids waiting for tick)
     fn refresh_tab_data(&mut self, tab: &NodesTab) {
         match tab {
-            NodesTab::Discover => self.refresh_discoverable_nodes(),
+            NodesTab::Nodes => self.refresh_discoverable_nodes(),
             NodesTab::Marketplace => self.refresh_sources(),
-            NodesTab::Installed => {}
+            NodesTab::Instances => {}
         }
     }
 
@@ -1151,10 +1365,36 @@ impl App {
         }
     }
 
-    fn toggle_node(&mut self) {
-        let node_data = self
+    /// Split `self.nodes` into `base_nodes` (base_node is empty) and `instances` (non-empty).
+    pub fn split_nodes(&mut self) {
+        self.base_nodes = self
             .nodes
-            .get(self.node_index)
+            .iter()
+            .filter(|n| n.base_node.is_empty())
+            .cloned()
+            .collect();
+        self.instances = self
+            .nodes
+            .iter()
+            .filter(|n| !n.base_node.is_empty())
+            .cloned()
+            .collect();
+        if !self.base_nodes.is_empty() {
+            self.node_index = self.node_index.min(self.base_nodes.len() - 1);
+        } else {
+            self.node_index = 0;
+        }
+        if !self.instances.is_empty() {
+            self.instance_index = self.instance_index.min(self.instances.len() - 1);
+        } else {
+            self.instance_index = 0;
+        }
+    }
+
+    fn toggle_instance_node(&mut self) {
+        let node_data = self
+            .instances
+            .get(self.instance_index)
             .map(|n| (n.name.clone(), n.status.clone(), n.is_built));
 
         if let Some((name, status, is_built)) = node_data {
@@ -1163,10 +1403,7 @@ impl App {
             } else if is_built {
                 self.start_node(&name);
             } else {
-                self.add_message(
-                    "Build first (press enter for details)".into(),
-                    MessageType::Warning,
-                );
+                self.add_message("Build the base node first".into(), MessageType::Warning);
             }
         }
     }
@@ -1217,54 +1454,43 @@ impl App {
         }
     }
 
-    /// Kick off a build or clean for the currently viewed node.
-    /// `activity` selects Building vs Cleaning; `command` is the daemon command name.
-    fn start_build_activity(&mut self, activity: BuildActivity, command: &str) {
-        if let View::NodeDetail(name) = &self.view {
-            if let Some(client) = &self.daemon_client {
-                let client = client.clone();
-                let name = name.clone();
-                let tx = self.message_tx.clone();
+    /// Kick off a build or clean for a given node by name.
+    fn start_build_activity_for(&mut self, name: &str, activity: BuildActivity, command: &str) {
+        if let Some(client) = &self.daemon_client {
+            let client = client.clone();
+            let name = name.to_string();
+            let tx = self.message_tx.clone();
 
-                let label = if command == "build" {
-                    "building"
-                } else {
-                    "cleaning"
-                };
-                let is_running = self
-                    .nodes
-                    .iter()
-                    .find(|n| n.name == *name)
-                    .map(|n| n.status == "running")
-                    .unwrap_or(false);
-                let msg = if is_running {
-                    format!("Stopping & {} {}...", label, name)
-                } else {
-                    format!("{}  {}...", capitalize(label), name)
-                };
-                self.add_message(msg, MessageType::Info);
-                self.build_activity = activity;
-                self.build_activity_node = name.clone();
-                self.build_started_at = Instant::now();
-                self.build_confirmed = false;
-                self.build_output.clear();
+            let label = if command == "build" {
+                "building"
+            } else {
+                "cleaning"
+            };
+            let is_running = self
+                .nodes
+                .iter()
+                .find(|n| n.name == *name)
+                .map(|n| n.status == "running")
+                .unwrap_or(false);
+            let msg = if is_running {
+                format!("Stopping & {} {}...", label, name)
+            } else {
+                format!("{}  {}...", capitalize(label), name)
+            };
+            self.add_message(msg, MessageType::Info);
+            self.build_activity = activity;
+            self.build_activity_node = name.clone();
+            self.build_started_at = Instant::now();
+            self.build_confirmed = false;
+            self.build_output.clear();
 
-                let cmd = command.to_string();
-                tokio::spawn(async move {
-                    if let Err(e) = client.send_command(&name, &cmd).await {
-                        let _ = tx.send((format!("Error: {}", e), MessageType::Error));
-                    }
-                });
-            }
+            let cmd = command.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = client.send_command(&name, &cmd).await {
+                    let _ = tx.send((format!("Error: {}", e), MessageType::Error));
+                }
+            });
         }
-    }
-
-    fn build_current_node(&mut self) {
-        self.start_build_activity(BuildActivity::Building, "build");
-    }
-
-    fn clean_current_node(&mut self) {
-        self.start_build_activity(BuildActivity::Cleaning, "clean");
     }
 
     /// Send a daemon command for the node currently shown in detail view.
@@ -1285,7 +1511,7 @@ impl App {
     }
 
     fn uninstall_selected_node(&mut self) {
-        if let Some(node) = self.nodes.get(self.node_index) {
+        if let Some(node) = self.base_nodes.get(self.node_index) {
             if let Some(client) = &self.daemon_client {
                 let client = client.clone();
                 let name = node.name.clone();
@@ -1293,10 +1519,8 @@ impl App {
                 self.add_message(format!("Uninstalling {}...", name), MessageType::Info);
 
                 // Optimistic removal
-                self.nodes.remove(self.node_index);
-                if self.node_index >= self.nodes.len() && self.node_index > 0 {
-                    self.node_index -= 1;
-                }
+                self.nodes.retain(|n| n.name != name);
+                self.split_nodes();
                 self.refresh_discoverable_nodes();
 
                 tokio::spawn(async move {
@@ -1345,16 +1569,13 @@ impl App {
                 is_built: false,
                 build_output: Vec::new(),
                 base_node: String::new(),
+                config_override: String::new(),
             };
             self.nodes.push(new_node);
             self.nodes.sort_by(|a, b| a.name.cmp(&b.name));
-            self.discoverable_nodes.retain(|n| n.path != path);
-            self.view = View::Nodes(NodesTab::Installed);
-            self.node_index = self
-                .nodes
-                .iter()
-                .position(|n| n.name == node.name)
-                .unwrap_or(0);
+            self.split_nodes();
+            self.refresh_discoverable_nodes();
+            // Stay on Nodes tab (discover_index already points at this node)
 
             let tx = self.message_tx.clone();
             let node_name = node.name.clone();
@@ -1453,6 +1674,271 @@ impl App {
             }
             self.refresh_sources();
         }
+    }
+
+    fn handle_create_instance_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.input_mode = InputMode::Normal;
+                self.instance_name.clear();
+                self.instance_config_path.clear();
+                self.instance_active_field = 0;
+            }
+            KeyCode::Tab => {
+                self.instance_active_field = if self.instance_active_field == 0 {
+                    1
+                } else {
+                    0
+                };
+            }
+            KeyCode::BackTab => {
+                self.instance_active_field = if self.instance_active_field == 0 {
+                    1
+                } else {
+                    0
+                };
+            }
+            KeyCode::Enter => {
+                self.submit_create_instance_form();
+            }
+            KeyCode::Backspace => {
+                if self.instance_active_field == 0 {
+                    self.instance_name.pop();
+                } else {
+                    self.instance_config_path.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if self.instance_active_field == 0 {
+                    self.instance_name.push(c);
+                } else {
+                    self.instance_config_path.push(c);
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
+    fn handle_edit_config_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.input_mode = InputMode::Normal;
+                self.edit_config_node.clear();
+                self.edit_config_path.clear();
+            }
+            KeyCode::Enter => {
+                self.submit_edit_config_form();
+            }
+            KeyCode::Backspace => {
+                self.edit_config_path.pop();
+            }
+            KeyCode::Char(c) => {
+                self.edit_config_path.push(c);
+            }
+            _ => {}
+        }
+        false
+    }
+
+    fn submit_edit_config_form(&mut self) {
+        let config_path = self.edit_config_path.trim().to_string();
+        let node_name = self.edit_config_node.clone();
+
+        if config_path.is_empty() {
+            self.add_message(
+                "Error: Config path cannot be empty".into(),
+                MessageType::Error,
+            );
+            return;
+        }
+
+        // Expand ~ in config path
+        let expanded = if config_path.starts_with('~') {
+            if let Some(home) = dirs::home_dir() {
+                config_path.replacen('~', &home.to_string_lossy(), 1)
+            } else {
+                config_path.clone()
+            }
+        } else {
+            config_path.clone()
+        };
+
+        // Verify file exists (warn, don't block)
+        if !std::path::Path::new(&expanded).exists() {
+            self.add_message(
+                format!(
+                    "Warning: '{}' does not exist yet, setting anyway",
+                    config_path
+                ),
+                MessageType::Warning,
+            );
+        }
+
+        // Send update-config command to daemon
+        if let Some(client) = &self.daemon_client {
+            let client = client.clone();
+            let tx = self.message_tx.clone();
+            let name = node_name.clone();
+            let config = expanded;
+            tokio::spawn(async move {
+                if let Err(e) = client.send_update_config(&name, &config).await {
+                    let _ = tx.send((
+                        format!("Error updating config for {}: {}", name, e),
+                        MessageType::Error,
+                    ));
+                }
+            });
+        }
+
+        self.add_message(
+            format!("Updating config for {}...", node_name),
+            MessageType::Info,
+        );
+
+        self.input_mode = InputMode::Normal;
+        self.edit_config_node.clear();
+        self.edit_config_path.clear();
+    }
+
+    fn submit_create_instance_form(&mut self) {
+        let name = self.instance_name.trim().to_string();
+        if name.is_empty() {
+            self.add_message("Error: Name cannot be empty".into(), MessageType::Error);
+            return;
+        }
+
+        // Validate instance name
+        if !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            self.add_message(
+                "Error: Name may only contain alphanumeric characters, hyphens, and underscores"
+                    .into(),
+                MessageType::Error,
+            );
+            return;
+        }
+        if name.starts_with('-') || name.starts_with('.') {
+            self.add_message(
+                "Error: Name must not start with '-' or '.'".into(),
+                MessageType::Error,
+            );
+            return;
+        }
+
+        // Check for duplicates
+        if self.nodes.iter().any(|n| n.name == name) {
+            self.add_message(
+                format!("Error: Node '{}' already exists", name),
+                MessageType::Error,
+            );
+            return;
+        }
+
+        // Resolve the base node's path from registered nodes
+        let base_path = self
+            .nodes
+            .iter()
+            .find(|n| n.name == self.instance_base_node && n.base_node.is_empty())
+            .map(|n| n.path.clone());
+
+        let base_path = match base_path {
+            Some(p) => p,
+            None => {
+                self.add_message(
+                    format!(
+                        "Error: Base node '{}' not found in registered nodes",
+                        self.instance_base_node
+                    ),
+                    MessageType::Error,
+                );
+                return;
+            }
+        };
+
+        // Expand ~ in config path
+        let config = if self.instance_config_path.trim().is_empty() {
+            None
+        } else {
+            let p = self.instance_config_path.trim().to_string();
+            let expanded = if p.starts_with('~') {
+                if let Some(home) = dirs::home_dir() {
+                    p.replacen('~', &home.to_string_lossy(), 1)
+                } else {
+                    p
+                }
+            } else {
+                p
+            };
+            Some(expanded)
+        };
+
+        self.add_message(format!("Creating instance {}...", name), MessageType::Info);
+
+        // Optimistic local state update
+        let new_node = NodeInfo {
+            name: name.clone(),
+            path: base_path.clone(),
+            version: self
+                .nodes
+                .iter()
+                .find(|n| n.name == self.instance_base_node)
+                .map(|n| n.version.clone())
+                .unwrap_or_else(|| "0.1.0".to_string()),
+            node_type: self
+                .nodes
+                .iter()
+                .find(|n| n.name == self.instance_base_node)
+                .map(|n| n.node_type.clone())
+                .unwrap_or_else(|| "rust".to_string()),
+            description: format!("Instance of {}", self.instance_base_node),
+            status: "stopped".to_string(),
+            is_built: true, // Instances share the base binary
+            build_output: Vec::new(),
+            base_node: self.instance_base_node.clone(),
+            config_override: config.clone().unwrap_or_default(),
+        };
+        self.nodes.push(new_node);
+        self.nodes.sort_by(|a, b| a.name.cmp(&b.name));
+        self.split_nodes();
+        self.refresh_discoverable_nodes();
+
+        // Switch to Instances tab
+        self.view = View::Nodes(NodesTab::Instances);
+        self.input_mode = InputMode::Normal;
+        self.instance_index = self
+            .instances
+            .iter()
+            .position(|n| n.name == name)
+            .unwrap_or(0);
+
+        // Send to daemon
+        if let Some(client) = &self.daemon_client {
+            let client = client.clone();
+            let tx = self.message_tx.clone();
+            let instance_name = name.clone();
+            let path = base_path;
+            let name_override = Some(name);
+            let config_override = config;
+            tokio::spawn(async move {
+                if let Err(e) = client
+                    .send_add_node_instance(&path, name_override, config_override)
+                    .await
+                {
+                    let _ = tx.send((
+                        format!("Error creating instance {}: {}", instance_name, e),
+                        MessageType::Error,
+                    ));
+                }
+            });
+        }
+
+        // Clear form state
+        self.instance_name.clear();
+        self.instance_config_path.clear();
+        self.instance_active_field = 0;
     }
 
     fn handle_edit_source_key(&mut self, key: KeyEvent) -> bool {
@@ -1665,16 +2151,18 @@ impl App {
                     is_built: false,
                     build_output: Vec::new(),
                     base_node: String::new(),
+                    config_override: String::new(),
                 };
                 self.nodes.push(new_node);
                 self.nodes.sort_by(|a, b| a.name.cmp(&b.name));
+                self.split_nodes();
 
-                // Switch to installed tab
-                self.view = View::Nodes(NodesTab::Installed);
+                // Switch to Nodes tab
+                self.view = View::Nodes(NodesTab::Nodes);
+                self.refresh_discoverable_nodes();
                 self.input_mode = InputMode::Normal;
                 self.create_node_name.clear();
                 self.create_node_description.clear();
-                self.node_index = self.nodes.iter().position(|n| n.name == name).unwrap_or(0);
 
                 // Store pending path for async daemon registration
                 self.pending_node_path = Some(created_path.to_string_lossy().to_string());

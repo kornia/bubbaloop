@@ -81,10 +81,11 @@ nodes:
 - Test that `pixi run build` succeeds from a clean checkout
 - Pin dependency versions for reproducible builds (commit `Cargo.lock`)
 
-## Future: Node Search
+## Node Search
+
+Search for nodes by name, category, or tag:
 
 ```bash
-# Coming soon
 bubbaloop node search camera
 bubbaloop node search --category weather
 bubbaloop node search --tag gstreamer

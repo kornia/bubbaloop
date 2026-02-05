@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::app::{App, BuildActivity, MessageType, NodeInfo};
+use crate::tui::app::{App, MessageType, NodeInfo};
 use crate::tui::ui::components::{colors, flower_spinner};
 
 pub fn render_detail(f: &mut Frame, app: &App, node_name: &str) {
@@ -100,7 +100,7 @@ pub fn render_detail(f: &mut Frame, app: &App, node_name: &str) {
 fn render_info_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui::layout::Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(10)])
+        .constraints([Constraint::Min(8), Constraint::Length(8)])
         .split(area);
 
     let info_block = Block::default()
@@ -128,7 +128,7 @@ fn render_info_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui::l
 
     let is_busy = app.is_node_busy(node);
 
-    let info_lines = vec![
+    let mut info_lines = vec![
         Line::from(vec![
             Span::styled("Version:     ", Style::default().fg(colors::DIMMED)),
             Span::styled(&node.version, Style::default().fg(colors::SUCCESS)),
@@ -141,6 +141,17 @@ fn render_info_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui::l
             Span::styled("Description: ", Style::default().fg(colors::DIMMED)),
             Span::styled(&node.description, Style::default().fg(colors::TEXT)),
         ]),
+    ];
+
+    // Show base node if this is an instance
+    if !node.base_node.is_empty() {
+        info_lines.push(Line::from(vec![
+            Span::styled("Base node:   ", Style::default().fg(colors::DIMMED)),
+            Span::styled(&node.base_node, Style::default().fg(colors::PRIMARY)),
+        ]));
+    }
+
+    info_lines.extend(vec![
         Line::from(Span::styled("Path:", Style::default().fg(colors::DIMMED))),
         Line::from(Span::styled(
             format!("  {}", node.path),
@@ -183,7 +194,7 @@ fn render_info_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui::l
                 )
             },
         ]),
-    ];
+    ]);
 
     f.render_widget(Paragraph::new(info_lines), info_inner);
 
@@ -219,7 +230,6 @@ fn render_info_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui::l
 
     if node.status != "not-installed" && node.status != "unknown" {
         if !is_busy {
-            // Start/stop actions (only when idle)
             if node.status == "running" {
                 action_lines.push(Line::from(vec![
                     Span::styled("[s]", Style::default().fg(colors::PRIMARY)),
@@ -236,52 +246,8 @@ fn render_info_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui::l
                     Span::styled("(build first)", Style::default().fg(colors::ERROR)),
                 ]));
             }
-
-            // Build/clean actions (only when idle)
-            if node.is_built {
-                if app.confirm_clean {
-                    action_lines.push(Line::from(Span::styled(
-                        "Press [c] again to CLEAN",
-                        Style::default()
-                            .fg(colors::ERROR)
-                            .add_modifier(Modifier::BOLD),
-                    )));
-                } else if node.status == "running" {
-                    action_lines.push(Line::from(vec![
-                        Span::styled("[c]", Style::default().fg(colors::PRIMARY)),
-                        Span::styled("lean ", Style::default().fg(colors::DIMMED)),
-                        Span::styled("(will stop)", Style::default().fg(colors::WARNING)),
-                    ]));
-                } else {
-                    action_lines.push(Line::from(vec![
-                        Span::styled("[c]", Style::default().fg(colors::PRIMARY)),
-                        Span::styled("lean", Style::default().fg(colors::DIMMED)),
-                    ]));
-                }
-            } else if node.status == "running" {
-                action_lines.push(Line::from(vec![
-                    Span::styled("[b]", Style::default().fg(colors::PRIMARY)),
-                    Span::styled("uild ", Style::default().fg(colors::DIMMED)),
-                    Span::styled("(will stop)", Style::default().fg(colors::WARNING)),
-                ]));
-            } else {
-                action_lines.push(Line::from(vec![
-                    Span::styled("[b]", Style::default().fg(colors::PRIMARY)),
-                    Span::styled("uild", Style::default().fg(colors::DIMMED)),
-                ]));
-            }
-        } else {
-            action_lines.push(Line::from(Span::styled(
-                "Build in progress...",
-                Style::default().fg(colors::DIMMED),
-            )));
-            action_lines.push(Line::from(Span::styled(
-                "Safe to exit \u{2014} runs on daemon",
-                Style::default().fg(colors::SUCCESS),
-            )));
         }
 
-        // Logs — always shown (works during builds)
         action_lines.push(Line::from(vec![
             Span::styled("[l]", Style::default().fg(colors::PRIMARY)),
             Span::styled("ogs", Style::default().fg(colors::DIMMED)),
@@ -291,16 +257,8 @@ fn render_info_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui::l
     f.render_widget(Paragraph::new(action_lines), actions_inner);
 }
 
-fn render_status_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui::layout::Rect) {
-    let is_busy = app.is_node_busy(node);
-
-    // Split into two vertical sections
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
-
-    // --- Top: Systemd Status (always visible) ---
+fn render_status_panel(f: &mut Frame, app: &App, _node: &NodeInfo, area: ratatui::layout::Rect) {
+    // Full-height systemd status panel (build output removed — use [1] Installed tab for builds)
     let systemd_block = Block::default()
         .title(Span::styled(
             " Systemd Status ",
@@ -310,8 +268,8 @@ fn render_status_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui:
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(colors::BORDER));
 
-    let systemd_inner = systemd_block.inner(chunks[0]);
-    f.render_widget(systemd_block, chunks[0]);
+    let systemd_inner = systemd_block.inner(area);
+    f.render_widget(systemd_block, area);
 
     let systemd_content: Vec<Line> = if !app.service_status_text.is_empty() {
         app.service_status_text
@@ -331,62 +289,4 @@ fn render_status_panel(f: &mut Frame, app: &App, node: &NodeInfo, area: ratatui:
     };
 
     f.render_widget(Paragraph::new(systemd_content), systemd_inner);
-
-    // --- Bottom: Terminal Status (per-node build output) ---
-    let node_output = &node.build_output;
-
-    let terminal_title = if is_busy {
-        let activity_label = if app.build_activity == BuildActivity::Cleaning
-            && app.build_activity_node == node.name
-        {
-            format!(" Cleaning {}... ", node.name)
-        } else {
-            format!(" Building {}... ", node.name)
-        };
-        Line::from(vec![
-            flower_spinner(app.spinner_frame),
-            Span::styled(activity_label, Style::default().fg(colors::WARNING)),
-        ])
-    } else {
-        Line::from(Span::styled(
-            " Terminal Status ",
-            Style::default().fg(colors::PRIMARY),
-        ))
-    };
-
-    let terminal_block = Block::default()
-        .title(terminal_title)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(colors::BORDER));
-
-    let terminal_inner = terminal_block.inner(chunks[1]);
-    f.render_widget(terminal_block, chunks[1]);
-
-    let max_lines = terminal_inner.height as usize;
-    let terminal_content: Vec<Line> = if !node_output.is_empty() {
-        let skip = node_output.len().saturating_sub(max_lines);
-        node_output
-            .iter()
-            .skip(skip)
-            .map(|line| {
-                Line::from(Span::styled(
-                    line.clone(),
-                    Style::default().fg(colors::DIMMED),
-                ))
-            })
-            .collect()
-    } else if is_busy {
-        vec![Line::from(Span::styled(
-            "Waiting for output...",
-            Style::default().fg(colors::DIMMED),
-        ))]
-    } else {
-        vec![Line::from(Span::styled(
-            "No build output",
-            Style::default().fg(colors::DIMMED),
-        ))]
-    };
-
-    f.render_widget(Paragraph::new(terminal_content), terminal_inner);
 }

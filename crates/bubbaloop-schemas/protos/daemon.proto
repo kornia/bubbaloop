@@ -56,6 +56,8 @@ message NodeState {
   repeated string machine_ips = 16;
   // Base node template name (non-empty only for instances with name_override)
   string base_node = 17;
+  // Config file path override (for instances)
+  string config_override = 18;
 }
 
 // List of all nodes (published periodically)

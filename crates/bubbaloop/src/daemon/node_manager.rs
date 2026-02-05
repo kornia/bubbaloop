@@ -153,6 +153,7 @@ impl CachedNode {
             } else {
                 String::new()
             },
+            config_override: self.config_override.clone().unwrap_or_default(),
         }
     }
 }
@@ -297,18 +298,19 @@ impl NodeManager {
         let (node_name, event_type) = match event {
             SystemdSignalEvent::JobRemoved {
                 node_name, result, ..
-            } => (
-                node_name.clone(),
-                match result.as_str() {
+            } => {
+                let event_type = match result.as_str() {
                     "done" => "state_changed",
                     "failed" => "failed",
                     "canceled" => "stopped",
                     _ => "state_changed",
-                },
-            ),
+                };
+                (node_name.clone(), event_type)
+            }
             SystemdSignalEvent::UnitNew { node_name, .. } => (node_name.clone(), "installed"),
             SystemdSignalEvent::UnitRemoved { node_name, .. } => (node_name.clone(), "uninstalled"),
         };
+
         if let Some(name) = node_name {
             batch.push((name, event_type.to_string()));
         }
@@ -348,12 +350,14 @@ impl NodeManager {
         for node in nodes.values_mut() {
             if node.effective_name() == name {
                 // Preserve build state status override
-                let final_status = match node.build_state.status {
-                    BuildStatus::Building | BuildStatus::Cleaning => NodeStatus::Building,
-                    BuildStatus::Idle => status,
+                node.status = if matches!(
+                    node.build_state.status,
+                    BuildStatus::Building | BuildStatus::Cleaning
+                ) {
+                    NodeStatus::Building
+                } else {
+                    status
                 };
-
-                node.status = final_status;
                 node.installed = installed;
                 node.autostart_enabled = autostart_enabled;
                 node.last_updated_ms = Self::now_ms();
@@ -549,10 +553,13 @@ impl NodeManager {
                 .unwrap_or((BuildState::default(), HealthStatus::Unknown, 0));
 
             // If building/cleaning, override status
-            let status = match build_state.status {
-                BuildStatus::Building => NodeStatus::Building,
-                BuildStatus::Cleaning => NodeStatus::Building,
-                BuildStatus::Idle => status,
+            let status = if matches!(
+                build_state.status,
+                BuildStatus::Building | BuildStatus::Cleaning
+            ) {
+                NodeStatus::Building
+            } else {
+                status
             };
 
             let cached = CachedNode {
@@ -842,21 +849,19 @@ impl NodeManager {
         let path = self.find_node_path(name).await?;
         self.stop_if_running(name).await;
 
-        {
-            let mut building = self.building_nodes.lock().await;
-            if !building.insert(name.to_string()) {
-                return Err(NodeManagerError::AlreadyBuilding(name.to_string()));
-            }
+        let mut building = self.building_nodes.lock().await;
+        if !building.insert(name.to_string()) {
+            return Err(NodeManagerError::AlreadyBuilding(name.to_string()));
         }
+        drop(building);
 
-        {
-            let mut nodes = self.nodes.write().await;
-            if let Some(node) = nodes.get_mut(&path) {
-                node.build_state.status = status;
-                node.build_state.output.clear();
-                node.status = NodeStatus::Building;
-            }
+        let mut nodes = self.nodes.write().await;
+        if let Some(node) = nodes.get_mut(&path) {
+            node.build_state.status = status;
+            node.build_state.output.clear();
+            node.status = NodeStatus::Building;
         }
+        drop(nodes);
 
         self.emit_event(start_event, name).await;
         Ok(path)
@@ -1041,10 +1046,7 @@ async fn finish_build_activity(
     result: &Result<()>,
     label: &str,
 ) {
-    {
-        let mut building = manager.building_nodes.lock().await;
-        building.remove(name);
-    }
+    manager.building_nodes.lock().await.remove(name);
 
     let mut nodes = manager.nodes.write().await;
     if let Some(node) = nodes.get_mut(path) {

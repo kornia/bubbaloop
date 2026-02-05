@@ -87,6 +87,8 @@ pub struct NodeStateResponse {
     pub is_built: bool,
     pub build_output: Vec<String>,
     pub base_node: String,
+    #[serde(default)]
+    pub config_override: String,
 }
 
 /// JSON response for node list
@@ -167,6 +169,7 @@ fn node_state_to_response(state: &crate::schemas::daemon::v1::NodeState) -> Node
         is_built: state.is_built,
         build_output: state.build_output.clone(),
         base_node: state.base_node.clone(),
+        config_override: state.config_override.clone(),
     }
 }
 

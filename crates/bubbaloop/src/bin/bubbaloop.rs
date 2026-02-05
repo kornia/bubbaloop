@@ -20,7 +20,7 @@
 
 use argh::FromArgs;
 use bubbaloop::cli::launch::LaunchCommand;
-use bubbaloop::cli::{DebugCommand, NodeCommand};
+use bubbaloop::cli::{DebugCommand, MarketplaceCommand, NodeCommand};
 
 /// Bubbaloop - AI-native orchestration for Physical AI
 #[derive(FromArgs)]
@@ -42,6 +42,7 @@ enum Command {
     Daemon(DaemonArgs),
     Node(NodeCommand),
     Launch(LaunchCommand),
+    Marketplace(MarketplaceCommand),
     Debug(DebugCommand),
 }
 
@@ -123,6 +124,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              logs, build");
             eprintln!("  launch    Launch node instances from a YAML file");
             eprintln!("              (default: ~/.bubbaloop/launch.yaml)");
+            eprintln!("  marketplace  Manage marketplace sources:");
+            eprintln!("              list, add, remove, enable, disable");
             eprintln!("  debug     Debug Zenoh connectivity:");
             eprintln!("              info, topics, query, subscribe");
             eprintln!("\nRun 'bubbaloop <command> --help' for more information.");
@@ -151,6 +154,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         }
         Some(Command::Launch(cmd)) => {
+            cmd.run()
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        }
+        Some(Command::Marketplace(cmd)) => {
             cmd.run()
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;

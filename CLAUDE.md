@@ -75,8 +75,7 @@ docs/                    # MkDocs documentation site
 
 **Note:** Official nodes (rtsp-camera, openmeteo, inference, system-telemetry, network-monitor) live in the
 separate [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official) repo.
-They depend on `bubbaloop-schemas` via git dependency. External nodes should also depend on
-`bubbaloop-schemas` (not the full `bubbaloop` crate).
+Each node is self-contained with its own protobuf definitions (see [Self-Contained Node Proto Pattern](#self-contained-node-proto-pattern)).
 
 ### Single Binary Architecture
 
@@ -106,7 +105,10 @@ bubbaloop daemon -z <endpoint>  # Connect to specific Zenoh endpoint
 bubbaloop daemon --strict     # Exit if another daemon already running
 bubbaloop node init <name>    # Scaffold a new node
 bubbaloop node add <path|url> # Register node with daemon
+bubbaloop node instance <base> <suffix>  # Create instance of multi-instance node
 bubbaloop node list           # List registered nodes
+bubbaloop node list --base    # List only base nodes (no instances)
+bubbaloop node list --instances # List only instances
 bubbaloop node validate <path>  # Validate node.yaml
 bubbaloop node build <name>   # Build a node
 bubbaloop node install <name> # Install as systemd service
@@ -121,7 +123,17 @@ bubbaloop debug info          # Show Zenoh connection info
 bubbaloop debug topics        # List active Zenoh topics
 bubbaloop debug subscribe <key> # Subscribe to Zenoh topic
 bubbaloop debug query <key>   # Query Zenoh endpoint
+bubbaloop marketplace list    # List node registry sources
+bubbaloop marketplace add <name> <path>  # Add a node source
+bubbaloop marketplace remove <name>      # Remove a source
+bubbaloop marketplace enable <name>      # Enable a source
+bubbaloop marketplace disable <name>     # Disable a source
 ```
+
+**Note**: `marketplace` manages *sources* (registries where nodes come from), not nodes themselves.
+Use `node` commands to manage actual nodes. Pattern follows Claude Code's plugin architecture:
+- `marketplace` = where to find nodes (sources)
+- `node` = actual node management (add, instance, install, start, etc.)
 
 ### Source Code Map (`crates/bubbaloop/src/`)
 
@@ -134,9 +146,10 @@ config.rs                   # Topic configuration and path helpers
 templates.rs                # Rust/Python node scaffolding templates
 
 cli/                        # CLI command implementations
-  mod.rs                    # Re-exports NodeCommand, DebugCommand
+  mod.rs                    # Re-exports NodeCommand, DebugCommand, MarketplaceCommand
   doctor.rs                 # System diagnostics: zenoh, daemon, services health checks
-  node.rs                   # Node CRUD: init, add, build, start, stop, logs, etc.
+  node.rs                   # Node CRUD: init, add, instance, build, start, stop, logs
+  marketplace.rs            # Marketplace source management (list, add, remove, enable, disable)
   status.rs                 # Non-interactive status display (table/json/yaml)
   debug.rs                  # Low-level Zenoh debugging (topics, subscribe, query, info)
 
@@ -193,9 +206,10 @@ Official nodes live in the [bubbaloop-nodes-official](https://github.com/kornia/
 | `system-telemetry` | `system_telemetry_node` | System metrics (CPU, memory, disk, network, load) |
 | `network-monitor` | (python) | Network connectivity monitor (HTTP, DNS, ping) |
 
-Nodes depend on `bubbaloop-schemas` via git (not the full `bubbaloop` crate). Install with:
+Nodes are self-contained with their own protos. Install from marketplace with:
 ```bash
-bubbaloop node add kornia/bubbaloop-nodes-official --subdir rtsp-camera
+bubbaloop node install rtsp-camera  # Install from marketplace
+bubbaloop node add kornia/bubbaloop-nodes-official --subdir rtsp-camera  # Or from GitHub
 ```
 
 ### Protobuf Schema Workflow
@@ -360,6 +374,193 @@ The `depends_on` field specifies other nodes that must be running before this no
 - `After=network.target bubbaloop-rtsp-camera.service bubbaloop-openmeteo.service`
 - `Requires=bubbaloop-rtsp-camera.service bubbaloop-openmeteo.service`
 
+### Self-Contained Node Proto Pattern
+
+Nodes are fully self-contained with their own protobuf definitions. This ensures:
+- No external proto dependencies at build time
+- Vendors control their own message schemas
+- Nodes work independently without needing `bubbaloop-schemas` crate
+
+**Important**: Always use the official bubbaloop `Header` schema for message headers. Copy it from
+`crates/bubbaloop-schemas/protos/header.proto` to your node's `protos/` directory.
+
+#### Python Node Directory Structure (with protos)
+
+```
+{name}/
+├── node.yaml            # Node manifest with build command
+├── pixi.toml            # Dependencies (grpcio-tools, protobuf)
+├── build_proto.py       # Compiles protos to src/
+├── main.py              # Node entry point
+├── config.yaml          # Runtime configuration
+├── protos/
+│   ├── header.proto     # Official bubbaloop Header (copy from bubbaloop-schemas)
+│   └── {name}.proto     # Node-specific messages (imports header.proto)
+└── src/
+    ├── __init__.py      # Generated by build_proto.py
+    ├── header_pb2.py    # Generated from header.proto
+    └── {name}_pb2.py    # Generated from {name}.proto
+```
+
+#### Step 1: Copy Official Header Proto
+
+```bash
+cp /path/to/bubbaloop/crates/bubbaloop-schemas/protos/header.proto protos/
+```
+
+The official Header schema (`bubbaloop.header.v1.Header`) contains:
+- `acq_time` / `pub_time`: Timestamps in nanoseconds
+- `sequence`: Message sequence number
+- `frame_id`: Source identifier
+- `machine_id`: Hostname
+- `scope`: Deployment scope (from `BUBBALOOP_SCOPE` env var)
+
+#### Step 2: Create Node Proto (importing Header)
+
+```protobuf
+// protos/my_node.proto
+syntax = "proto3";
+package mynode.v1;
+
+import "header.proto";
+
+message MyNodeData {
+  bubbaloop.header.v1.Header header = 1;
+  // Your fields here
+  float value = 2;
+}
+```
+
+#### Step 3: node.yaml with Build Command
+
+```yaml
+name: my-node
+version: "0.1.0"
+type: python
+description: My custom node with protobuf
+build: "pixi run build"
+command: "pixi run run"
+```
+
+#### Step 4: pixi.toml with Proto Dependencies
+
+```toml
+[workspace]
+name = "my-node"
+version = "0.1.0"
+channels = ["conda-forge"]
+platforms = ["linux-64", "linux-aarch64"]
+
+[tasks]
+build = "python build_proto.py"
+run = "python main.py -c config.yaml"
+
+[dependencies]
+python = ">=3.10"
+pyyaml = ">=6.0"
+
+[pypi-dependencies]
+eclipse-zenoh = ">=1.7.0"
+grpcio-tools = ">=1.60.0"
+protobuf = ">=4.25.0"
+```
+
+#### Step 5: build_proto.py Script
+
+```python
+#!/usr/bin/env python3
+"""Build protobuf Python bindings from local protos/ directory."""
+import subprocess
+import sys
+from pathlib import Path
+
+def main():
+    script_dir = Path(__file__).parent.resolve()
+    proto_dir = script_dir / "protos"
+    out_dir = script_dir / "src"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "__init__.py").write_text("# Generated protobuf modules\n")
+
+    for proto_file in proto_dir.glob("*.proto"):
+        print(f"Compiling {proto_file.name}...")
+        result = subprocess.run([
+            sys.executable, "-m", "grpc_tools.protoc",
+            f"-I{proto_dir}", f"--python_out={out_dir}", str(proto_file)
+        ], capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Error: {result.stderr}")
+            return result.returncode
+    print(f"Generated Python bindings in {out_dir}")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+#### Step 6: Import in main.py
+
+```python
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+from header_pb2 import Header
+from my_node_pb2 import MyNodeData
+```
+
+#### Rust Nodes
+
+Use `prost-build` in `build.rs` to compile from local `./protos/`:
+
+```rust
+// build.rs
+fn main() {
+    prost_build::Config::new()
+        .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
+        .compile_protos(&["protos/my_node.proto", "protos/header.proto"], &["protos/"])
+        .expect("Failed to compile protos");
+}
+```
+
+#### Full Node Lifecycle
+
+```bash
+# 1. Initialize (creates scaffold)
+bubbaloop node init my-node --node-type python -d "My node"
+
+# 2. Add protos (copy header.proto, create your proto)
+cp /path/to/bubbaloop/crates/bubbaloop-schemas/protos/header.proto my-node/protos/
+
+# 3. Add build_proto.py and update pixi.toml (see above)
+
+# 4. Register with daemon
+bubbaloop node add /path/to/my-node
+
+# 5. Build (compiles protos)
+bubbaloop node build my-node
+# Or directly: cd my-node && pixi run build
+
+# 6. Install and start
+bubbaloop node install my-node
+bubbaloop node start my-node
+
+# 7. Verify
+bubbaloop node logs my-node
+bubbaloop debug subscribe "my-node/output"
+
+# 8. Cleanup
+bubbaloop node stop my-node
+bubbaloop node uninstall my-node
+bubbaloop node remove my-node
+```
+
+#### Proto Guidelines
+
+- **Always use official Header**: Copy `header.proto` from bubbaloop-schemas for interoperability
+- **Version your packages**: Use `package mynode.v1;` for future compatibility
+- **One proto file per node**: Keep it simple with `{node_name}.proto` + `header.proto`
+- **Zenoh topic convention**: Publish to `{node-name}/data` or similar namespaced topics
+
 ### Building a node
 
 ```bash
@@ -373,7 +574,7 @@ cargo build --release
 
 ```bash
 # Initialize a new Rust node (creates in current directory)
-bubbaloop node init my-sensor --type rust -d "My custom sensor"
+bubbaloop node init my-sensor --node-type rust -d "My custom sensor"
 cd my-sensor
 
 # Edit your logic in src/node.rs
@@ -391,7 +592,7 @@ bubbaloop node logs my-sensor -f
 
 ```bash
 # Initialize a new Python node
-bubbaloop node init my-sensor --type python -d "My custom sensor"
+bubbaloop node init my-sensor --node-type python -d "My custom sensor"
 cd my-sensor
 
 # Edit your logic in main.py
@@ -444,6 +645,85 @@ bubbaloop node add user/awesome-node --build
 # Add, build, and install as service
 bubbaloop node add user/awesome-node --build --install
 ```
+
+### Multi-Instance Nodes
+
+Generic nodes like `rtsp-camera` can run multiple instances with different configurations. Each instance:
+- Shares the same binary/code (base node)
+- Has its own config file in `~/.bubbaloop/configs/`
+- Runs as a separate systemd service
+
+#### Creating Instances with `node instance`
+
+The `bubbaloop node instance` command creates instances from a registered base node:
+
+```bash
+# 1. Add the base node first (only once)
+bubbaloop node add ~/.bubbaloop/nodes/bubbaloop-nodes-official/rtsp-camera
+
+# 2. Create instance with config file
+bubbaloop node instance rtsp-camera terrace --config ~/.bubbaloop/configs/rtsp-camera-terrace.yaml
+
+# Or copy example config from base node and edit later
+bubbaloop node instance rtsp-camera garden --copy-config
+
+# Or create, install, and start in one command
+bubbaloop node instance rtsp-camera entrance --config config.yaml --install --start
+```
+
+**Command syntax**: `bubbaloop node instance <base-node> <suffix> [options]`
+
+| Option | Description |
+|--------|-------------|
+| `-c, --config <path>` | Config file for this instance (required for most nodes) |
+| `--copy-config` | Copy example from base node's `configs/` directory |
+| `--install` | Install as systemd service after creating |
+| `--start` | Start after creating (implies `--install`) |
+
+**Instance naming**: The suffix is appended to the base node name:
+- Base: `rtsp-camera`, Suffix: `terrace` → Instance: `rtsp-camera-terrace`
+
+#### Listing Instances
+
+```bash
+bubbaloop node list              # Shows all nodes with BASE column
+bubbaloop node list --base       # Show only base nodes (no instances)
+bubbaloop node list --instances  # Show only instances
+```
+
+Output shows the relationship:
+```
+NAME                 STATUS     BASE             TYPE   BUILT
+rtsp-camera          not-installed -            rust   yes
+rtsp-camera-terrace  running    rtsp-camera     rust   yes
+rtsp-camera-entrance running    rtsp-camera     rust   yes
+```
+
+#### Config File Location
+
+Instance configs are stored in `~/.bubbaloop/configs/`:
+```
+~/.bubbaloop/configs/
+├── rtsp-camera-terrace.yaml
+├── rtsp-camera-entrance.yaml
+└── rtsp-camera-garden.yaml
+```
+
+The config path is passed to the binary via `-c <path>` when the service starts.
+
+#### Base Node Example Config
+
+Base nodes should include example configs in their `configs/` directory:
+```
+rtsp-camera/
+├── node.yaml
+├── configs/
+│   ├── terrace.yaml      # Example config for terrace camera
+│   └── entrance.yaml     # Example config for entrance camera
+└── ...
+```
+
+These are used by `--copy-config` to bootstrap new instances.
 
 ### Node Lifecycle
 
@@ -587,6 +867,116 @@ Before committing, always run:
 pixi run fmt       # Format Rust code
 pixi run clippy    # Lint Rust code
 ```
+
+## Node System Architecture (For Agents)
+
+This section documents the internal architecture of the node management system for future agents working on this codebase.
+
+### Node Types and Roles
+
+| Role | Description | Can Install/Start | Example |
+|------|-------------|-------------------|---------|
+| **Standalone** | Single-purpose node, runs one instance | Yes | `openmeteo`, `network-monitor` |
+| **Base (Template)** | Multi-instance node, provides code but needs config | Yes (but usually shouldn't) | `rtsp-camera` |
+| **Instance** | Configured instance of a base node | Yes | `rtsp-camera-terrace` |
+
+### Key Data Structures
+
+**Registry Entry** (`daemon/registry.rs:NodeEntry`):
+```rust
+struct NodeEntry {
+    path: String,              // Path to node directory
+    added_at: String,          // Timestamp
+    name_override: Option<String>,   // Instance name (e.g., "rtsp-camera-terrace")
+    config_override: Option<String>, // Config path for this instance
+}
+```
+
+**Cached Node** (`daemon/node_manager.rs:CachedNode`):
+```rust
+struct CachedNode {
+    path: String,
+    manifest: Option<NodeManifest>,
+    status: NodeStatus,
+    name_override: Option<String>,
+    config_override: Option<String>,
+    // ... health, build state, etc.
+}
+```
+
+### Instance Creation Flow
+
+```
+1. User runs: bubbaloop node instance rtsp-camera terrace --config path/to/config.yaml
+
+2. CLI (node.rs:create_instance):
+   - Validates suffix (alphanumeric, hyphens, underscores only)
+   - Constructs instance name: "rtsp-camera-terrace"
+   - Queries daemon for base node path
+   - Sends "add" command with name_override and config_override
+
+3. Daemon (node_manager.rs):
+   - Registers in nodes.json with name_override="rtsp-camera-terrace"
+   - Creates CachedNode with overrides
+
+4. Install/Start:
+   - Systemd service: bubbaloop-rtsp-camera-terrace.service
+   - Command includes: -c /path/to/config.yaml
+```
+
+### File Locations
+
+| Type | Location |
+|------|----------|
+| Registry | `~/.bubbaloop/nodes.json` |
+| Instance configs | `~/.bubbaloop/configs/{instance-name}.yaml` |
+| Systemd services | `~/.config/systemd/user/bubbaloop-{name}.service` |
+| Node code | `~/.bubbaloop/nodes/{repo-name}/{node-name}/` |
+
+### Code Locations
+
+| Feature | File | Key Functions |
+|---------|------|---------------|
+| Instance CLI | `cli/node.rs` | `create_instance()`, `InstanceArgs` |
+| Registry | `daemon/registry.rs` | `register_node()`, `effective_name()` |
+| Node Manager | `daemon/node_manager.rs` | `CachedNode`, `to_proto()` |
+| Systemd | `daemon/systemd.rs` | `install_service()`, `start_service()` |
+
+### Testing Multi-Instance Nodes
+
+```bash
+# Full cycle test
+bubbaloop node add ~/.bubbaloop/nodes/bubbaloop-nodes-official/rtsp-camera
+bubbaloop node instance rtsp-camera test1 --copy-config
+bubbaloop node instance rtsp-camera test2 --copy-config
+bubbaloop node list --instances   # Should show test1, test2
+bubbaloop node install rtsp-camera-test1
+bubbaloop node start rtsp-camera-test1
+bubbaloop node logs rtsp-camera-test1
+bubbaloop node stop rtsp-camera-test1
+bubbaloop node remove rtsp-camera-test1
+bubbaloop node remove rtsp-camera-test2
+```
+
+### Proto Pattern for Nodes
+
+Nodes should be self-contained with their own protos:
+
+```
+my-node/
+├── node.yaml         # build: "pixi run build"
+├── pixi.toml         # [workspace], grpcio-tools, protobuf
+├── build_proto.py    # Compiles protos/*.proto → src/*_pb2.py
+├── main.py           # from header_pb2 import Header
+├── protos/
+│   ├── header.proto  # Copy from bubbaloop-schemas (official Header)
+│   └── my_node.proto # import "header.proto"
+└── src/
+    ├── header_pb2.py # Generated
+    └── my_node_pb2.py
+```
+
+Always use the official `bubbaloop.header.v1.Header` for message headers (copy `header.proto` from `crates/bubbaloop-schemas/protos/`).
 
 ## Agent Guidelines
 
