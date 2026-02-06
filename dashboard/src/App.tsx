@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useZenohSession, useZenohTopicDiscovery, ConnectionStatus } from './lib/zenoh';
 import { ZenohSubscriptionProvider } from './contexts/ZenohSubscriptionContext';
 import { FleetProvider } from './contexts/FleetContext';
+import { SchemaRegistryProvider } from './contexts/SchemaRegistryContext';
 import { Dashboard } from './components/Dashboard';
 import { FleetBar } from './components/FleetBar';
 import { MeshView } from './components/MeshView';
@@ -9,9 +10,14 @@ import { H264Decoder } from './lib/h264-decoder';
 
 type AppView = 'dashboard' | 'loop';
 
-// Zenoh endpoint - proxied through Vite on /zenoh path
-// This allows single-port HTTPS access (WebSocket tunneled through same connection)
+// Zenoh endpoint resolution:
+// 1. ?zenoh=ws://host:port URL parameter override
+// 2. /zenoh proxy path (works with both Vite dev server and serve.mjs)
 function getZenohEndpoint(): string {
+  const params = new URLSearchParams(window.location.search);
+  const override = params.get('zenoh');
+  if (override) return override;
+
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
   return `${protocol}://${window.location.host}/zenoh`;
 }
@@ -19,14 +25,15 @@ function getZenohEndpoint(): string {
 const ZENOH_ENDPOINT = getZenohEndpoint();
 
 // Default camera configuration - modify these to match your setup
-// ros-z key format: {domain_id}/{topic_with_%_encoding}/{type_info}
-// Topic paths in ros-z use % encoding: /camera/entrance/compressed -> camera%entrance%compressed
-// Use wildcard pattern to match the type_info suffix
-// Note: CameraView automatically adds a glob prefix (*) to match machine-specific prefixes
-// (e.g., bubbaloop%local%nvidia_orin00%camera%terrace%compressed)
+// ros-z key format: {domain_id}/{scoped_topic_with_%_encoding}/{type_info}
+// Topic paths in ros-z use % encoding and include the scope prefix:
+//   bubbaloop/{scope}/{machine}/camera/{name}/compressed
+//   -> bubbaloop%{scope}%{machine}%camera%{name}%compressed
+// CameraView auto-detects the correct scoped topic from discovered topics,
+// but the initial pattern must match the actual Zenoh key expression.
+// Adjust scope (default: "local") and machine_id to match your deployment.
 const DEFAULT_CAMERAS = [
-  { name: 'entrance', topic: '0/camera%entrance%compressed/**' },
-  { name: 'terrace', topic: '0/camera%terrace%compressed/**' },
+  { name: 'entrance', topic: '0/bubbaloop%local%nvidia_orin00%camera%entrance%compressed/**' },
 ];
 
 function StatusIndicator({ status, endpoint, onReconnect }: { status: ConnectionStatus; endpoint: string; onReconnect: () => void }) {
@@ -248,16 +255,18 @@ export default function App() {
       )}
 
       {session ? (
-        <FleetProvider>
-          <ZenohSubscriptionProvider session={session}>
-            <FleetBar />
-            {currentView === 'dashboard' ? (
-              <Dashboard cameras={DEFAULT_CAMERAS} availableTopics={availableTopics} />
-            ) : (
-              <MeshView availableTopics={availableTopics} zenohEndpoint={ZENOH_ENDPOINT} connectionStatus={status} />
-            )}
-          </ZenohSubscriptionProvider>
-        </FleetProvider>
+        <SchemaRegistryProvider session={session}>
+          <FleetProvider>
+            <ZenohSubscriptionProvider session={session}>
+              <FleetBar />
+              {currentView === 'dashboard' ? (
+                <Dashboard cameras={DEFAULT_CAMERAS} availableTopics={availableTopics} />
+              ) : (
+                <MeshView availableTopics={availableTopics} zenohEndpoint={ZENOH_ENDPOINT} connectionStatus={status} />
+              )}
+            </ZenohSubscriptionProvider>
+          </FleetProvider>
+        </SchemaRegistryProvider>
       ) : (
         <div className="connecting-placeholder">
           <div className="placeholder-content">

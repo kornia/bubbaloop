@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Build protobuf Python bindings and descriptor set from local protos/ directory."""
+
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main():
+    script_dir = Path(__file__).parent.resolve()
+    proto_dir = script_dir / "protos"
+    out_dir = script_dir / "src"
+
+    if not proto_dir.exists():
+        print("No protos/ directory found, skipping proto build")
+        return 0
+
+    proto_files = list(proto_dir.glob("*.proto"))
+    if not proto_files:
+        print("No .proto files found in protos/, skipping")
+        return 0
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "__init__.py").write_text("# Generated protobuf modules\n")
+
+    # Compile each proto file to Python bindings
+    for proto_file in proto_files:
+        print(f"Compiling {proto_file.name}...")
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "grpc_tools.protoc",
+                f"-I{proto_dir}",
+                f"--python_out={out_dir}",
+                str(proto_file),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"Error: {result.stderr}")
+            return result.returncode
+
+    # Generate FileDescriptorSet (binary descriptor) for schema queryable
+    descriptor_path = out_dir / "descriptor.bin"
+    proto_paths = [str(p) for p in proto_files]
+    print(f"Generating descriptor set: {descriptor_path}")
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "grpc_tools.protoc",
+            f"-I{proto_dir}",
+            f"--descriptor_set_out={descriptor_path}",
+            "--include_imports",
+            *proto_paths,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"Error generating descriptor: {result.stderr}")
+        return result.returncode
+
+    print(f"Generated Python bindings and descriptor set in {out_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -22,6 +22,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _load_descriptor_set() -> bytes | None:
+    """Load the protobuf FileDescriptorSet if available."""
+    descriptor_path = Path(__file__).parent / "src" / "descriptor.bin"
+    if descriptor_path.exists():
+        return descriptor_path.read_bytes()
+    return None
+
+
 class {{node_name_pascal}}Node:
     """{{description}}"""
 
@@ -50,6 +58,17 @@ class {{node_name_pascal}}Node:
         self.publisher = self.session.declare_publisher(self.config["publish_topic"])
         logger.info(f"Publishing to: {self.config['publish_topic']}")
 
+        # Declare schema queryable so the dashboard can fetch our protobuf schemas
+        self._descriptor_bytes = _load_descriptor_set()
+        self._schema_queryable = None
+        if self._descriptor_bytes:
+            self._schema_queryable = self.session.declare_queryable(
+                "{{node_name}}/schema",
+                self._on_schema_query,
+                complete=True,
+            )
+            logger.info("Schema queryable declared on {{node_name}}/schema")
+
         # Setup subscriber (optional)
         self.subscriber = None
         if self.config.get("subscribe_topic"):
@@ -61,6 +80,12 @@ class {{node_name_pascal}}Node:
 
         self.running = True
         self.sequence = 0
+
+    def _on_schema_query(self, query: zenoh.Query):
+        """Respond to schema queries with our FileDescriptorSet."""
+        logger.debug("Schema query received")
+        if self._descriptor_bytes:
+            query.reply(query.key_expr, self._descriptor_bytes)
 
     def _on_message(self, sample: zenoh.Sample):
         """Handle incoming messages."""
@@ -99,6 +124,8 @@ class {{node_name_pascal}}Node:
 
     def close(self):
         """Clean up resources."""
+        if self._schema_queryable:
+            self._schema_queryable.undeclare()
         if self.subscriber:
             self.subscriber.undeclare()
         self.publisher.undeclare()

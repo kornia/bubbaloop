@@ -849,6 +849,7 @@ The daemon exposes a REST-like API over Zenoh queryables. All endpoints are mach
 | `bubbaloop/{machine_id}/daemon/api/nodes/{name}/logs` | GET | Get node logs | None |
 | `bubbaloop/{machine_id}/daemon/api/nodes/{name}/command` | POST | Execute command | `{"command": "start\|stop\|restart\|build\|install\|uninstall"}` |
 | `bubbaloop/{machine_id}/daemon/api/refresh` | POST | Refresh all nodes | None |
+| `bubbaloop/{machine_id}/daemon/api/schemas` | GET | Get protobuf FileDescriptorSet (binary) | None |
 
 Legacy endpoints (backward compatibility): `bubbaloop/daemon/api/**`
 

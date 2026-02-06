@@ -42,4 +42,11 @@ ctrlc = "3.4"
 # Time utilities
 chrono = { version = "0.4", features = ["serde"] }
 
+[build-dependencies]
+prost-build = "0.14"
+
+[features]
+# Enable proto feature when protos/ directory has .proto files and build.rs is configured
+proto = []
+
 [workspace]

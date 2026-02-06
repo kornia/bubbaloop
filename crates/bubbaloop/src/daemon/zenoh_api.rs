@@ -14,6 +14,7 @@
 //! | `bubbaloop/{machine_id}/daemon/api/nodes/{name}/logs` | Get node logs | None |
 //! | `bubbaloop/{machine_id}/daemon/api/nodes/{name}/command` | Execute command | JSON: `{"command": "start"}` |
 //! | `bubbaloop/{machine_id}/daemon/api/refresh` | Refresh all nodes | None |
+//! | `bubbaloop/{machine_id}/daemon/api/schemas` | Get protobuf FileDescriptorSet | None |
 
 use crate::daemon::node_manager::NodeManager;
 use crate::schemas::daemon::v1::{CommandType, NodeCommand};
@@ -305,6 +306,12 @@ impl ZenohApiService {
         };
 
         // Route to appropriate handler
+        // The "schemas" endpoint returns raw bytes (FileDescriptorSet), not JSON
+        if path == "schemas" {
+            self.handle_schemas(query).await;
+            return;
+        }
+
         let response = match path {
             "health" => self.handle_health().await,
             "nodes" => self.handle_list_nodes().await,
@@ -332,6 +339,19 @@ impl ZenohApiService {
         {
             Ok(_) => log::debug!("Reply sent for {}", key_expr),
             Err(e) => log::error!("Failed to send reply for {}: {}", key_expr, e),
+        }
+    }
+
+    /// Handle GET /schemas — returns raw FileDescriptorSet bytes
+    async fn handle_schemas(&self, query: &zenoh::query::Query) {
+        let key_expr = query.key_expr().as_str();
+        let descriptor_bytes = crate::DESCRIPTOR;
+        match query
+            .reply(query.key_expr(), ZBytes::from(descriptor_bytes.to_vec()))
+            .await
+        {
+            Ok(_) => log::debug!("Schemas reply sent for {}", key_expr),
+            Err(e) => log::error!("Failed to send schemas reply for {}: {}", key_expr, e),
         }
     }
 

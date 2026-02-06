@@ -4,10 +4,12 @@ import { getSamplePayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 import { useFleetContext } from '../contexts/FleetContext';
+import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
 import { decodeCompressedImage } from '../proto/camera';
 import { decodeCurrentWeather, decodeHourlyForecast, decodeDailyForecast } from '../proto/weather';
 import { decodeNodeList, decodeNodeEvent } from '../proto/daemon';
+import { SchemaRegistry } from '../lib/schema-registry';
 import { Duration } from 'typed-duration';
 import JsonView from 'react18-json-view';
 import 'react18-json-view/src/style.css';
@@ -45,15 +47,18 @@ function bigIntToString(obj: unknown): unknown {
   return obj;
 }
 
+// Schema source for display badges
+export type SchemaSourceType = 'builtin' | 'dynamic' | 'raw';
+
 // Try to decode payload in various formats, using schema hint from topic
-function decodePayload(payload: Uint8Array, topic: string): { data: unknown; schema: string; error?: string } {
+function decodePayload(payload: Uint8Array, topic: string, registry?: SchemaRegistry): { data: unknown; schema: string; schemaSource: SchemaSourceType; error?: string } {
   const schemaFromTopic = extractSchemaFromTopic(topic);
   const text = new TextDecoder().decode(payload);
 
   // 1. Try JSON first
   try {
     const parsed = JSON.parse(text);
-    return { data: parsed, schema: 'JSON' };
+    return { data: parsed, schema: 'JSON', schemaSource: 'builtin' };
   } catch {
     // Not JSON, continue
   }
@@ -64,19 +69,19 @@ function decodePayload(payload: Uint8Array, topic: string): { data: unknown; sch
     if (schemaFromTopic.includes('CurrentWeather')) {
       const msg = decodeCurrentWeather(payload);
       if (msg) {
-        return { data: bigIntToString(msg), schema: schemaFromTopic };
+        return { data: bigIntToString(msg), schema: schemaFromTopic, schemaSource: 'builtin' };
       }
     }
     if (schemaFromTopic.includes('HourlyForecast')) {
       const msg = decodeHourlyForecast(payload);
       if (msg) {
-        return { data: bigIntToString(msg), schema: schemaFromTopic };
+        return { data: bigIntToString(msg), schema: schemaFromTopic, schemaSource: 'builtin' };
       }
     }
     if (schemaFromTopic.includes('DailyForecast')) {
       const msg = decodeDailyForecast(payload);
       if (msg) {
-        return { data: bigIntToString(msg), schema: schemaFromTopic };
+        return { data: bigIntToString(msg), schema: schemaFromTopic, schemaSource: 'builtin' };
       }
     }
     // Camera types
@@ -104,7 +109,15 @@ function decodePayload(payload: Uint8Array, topic: string): { data: unknown; sch
             }
           }
         }
-        return { data: jsonData, schema: schemaFromTopic };
+        return { data: jsonData, schema: schemaFromTopic, schemaSource: 'builtin' };
+      }
+    }
+
+    // 2b. Try dynamic SchemaRegistry with schema hint
+    if (registry) {
+      const result = registry.decode(schemaFromTopic, payload);
+      if (result) {
+        return { data: result.data, schema: result.typeName, schemaSource: 'dynamic' };
       }
     }
   }
@@ -113,13 +126,13 @@ function decodePayload(payload: Uint8Array, topic: string): { data: unknown; sch
   if (topic.includes('bubbaloop/daemon/nodes')) {
     const msg = decodeNodeList(payload);
     if (msg) {
-      return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeList' };
+      return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeList', schemaSource: 'builtin' };
     }
   }
   if (topic.includes('bubbaloop/daemon/events')) {
     const msg = decodeNodeEvent(payload);
     if (msg) {
-      return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeEvent' };
+      return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeEvent', schemaSource: 'builtin' };
     }
   }
 
@@ -147,7 +160,7 @@ function decodePayload(payload: Uint8Array, topic: string): { data: unknown; sch
           }
         }
       }
-      return { data: jsonData, schema: 'bubbaloop.camera.v1.CompressedImage' };
+      return { data: jsonData, schema: 'bubbaloop.camera.v1.CompressedImage', schemaSource: 'builtin' };
     }
   } catch {
     // Not a valid CompressedImage
@@ -157,13 +170,13 @@ function decodePayload(payload: Uint8Array, topic: string): { data: unknown; sch
   try {
     const msg = decodeCurrentWeather(payload);
     if (msg && msg.timezone) {
-      return { data: bigIntToString(msg), schema: 'bubbaloop.weather.v1.CurrentWeather' };
+      return { data: bigIntToString(msg), schema: 'bubbaloop.weather.v1.CurrentWeather', schemaSource: 'builtin' };
     }
   } catch {
     // Not a valid CurrentWeather
   }
 
-  // 4. Show raw data preview
+  // 5. Show raw data preview
   const preview = payload.slice(0, 100);
   const hex = Array.from(preview).map(b => b.toString(16).padStart(2, '0')).join(' ');
   return {
@@ -173,6 +186,7 @@ function decodePayload(payload: Uint8Array, topic: string): { data: unknown; sch
       _hexPreview: hex + (payload.length > 100 ? '...' : ''),
     },
     schema: 'Binary',
+    schemaSource: 'raw' as SchemaSourceType,
     error: 'Unknown binary format - showing hex preview',
   };
 }
@@ -197,8 +211,10 @@ export function RawDataViewPanel({
   dragHandleProps,
 }: RawDataViewPanelProps) {
   const { machines } = useFleetContext();
+  const { registry, refresh: refreshSchemas, discoverForTopic } = useSchemaRegistry();
   const [jsonData, setJsonData] = useState<unknown>(null);
   const [schemaName, setSchemaName] = useState<string | null>(null);
+  const [schemaSource, setSchemaSource] = useState<SchemaSourceType>('raw');
   const [parseError, setParseError] = useState<string | null>(null);
   // Track the actual topic the data came from (for debugging/display purposes)
   const [, setCurrentTopic] = useState<string>('');
@@ -215,10 +231,11 @@ export function RawDataViewPanel({
         return;
       }
 
-      const result = decodePayload(payload, sampleTopic);
+      const result = decodePayload(payload, sampleTopic, registry);
 
       setJsonData(result.data);
       setSchemaName(result.schema);
+      setSchemaSource(result.schemaSource);
       setParseError(result.error || null);
       setCurrentTopic(sampleTopic);
 
@@ -227,10 +244,17 @@ export function RawDataViewPanel({
       console.error('[RawDataView] Failed to process sample:', e);
       setParseError(e instanceof Error ? e.message : 'Failed to process sample');
     }
-  }, []);
+  }, [registry]);
 
   // Subscribe to topic (works for non-daemon topics)
   useZenohSubscription(topic, handleSample);
+
+  // Auto-discover schemas for new topics
+  useEffect(() => {
+    if (topic) {
+      discoverForTopic(topic);
+    }
+  }, [topic, discoverForTopic]);
 
   // For daemon topics, also poll via GET since the bridge drops larger
   // subscription payloads but GET queries work reliably
@@ -258,9 +282,10 @@ export function RawDataViewPanel({
               const replyResult = replyItem.result();
               if (replyResult instanceof ReplyError) continue;
               const payload = getSamplePayload(replyResult as Sample);
-              const result = decodePayload(payload, topic);
+              const result = decodePayload(payload, topic, registry);
               setJsonData(result.data);
               setSchemaName(result.schema);
+              setSchemaSource(result.schemaSource);
               setParseError(result.error || null);
             }
           }
@@ -273,7 +298,7 @@ export function RawDataViewPanel({
 
     poll();
     return () => { mounted = false; if (timer) clearTimeout(timer); };
-  }, [topic, getSession]);
+  }, [topic, getSession, registry]);
 
   // Handle topic change from dropdown
   const handleTopicSelect = (newTopic: string) => {
@@ -299,9 +324,20 @@ export function RawDataViewPanel({
             </button>
           )}
           <span className="panel-type-badge">{schemaName || 'RAW DATA'}</span>
+          {schemaName && schemaName !== 'Binary' && (
+            <span className={`schema-source-badge schema-source-${schemaSource}`}>
+              {schemaSource === 'dynamic' ? 'dynamic' : schemaSource === 'builtin' ? 'built-in' : 'raw'}
+            </span>
+          )}
           <MachineBadge machines={machines} />
         </div>
         <div className="panel-stats">
+          <button className="icon-btn" onClick={refreshSchemas} title="Refresh schemas">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M1 4v6h6M23 20v-6h-6" />
+              <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
+            </svg>
+          </button>
           {onRemove && (
             <button className="icon-btn danger" onClick={onRemove} title="Remove panel">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -444,6 +480,31 @@ export function RawDataViewPanel({
           color: var(--accent-secondary);
           text-transform: uppercase;
           white-space: nowrap;
+        }
+
+        .schema-source-badge {
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-size: 9px;
+          font-weight: 600;
+          letter-spacing: 0.5px;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .schema-source-builtin {
+          background: rgba(76, 175, 80, 0.15);
+          color: #66bb6a;
+        }
+
+        .schema-source-dynamic {
+          background: rgba(156, 39, 176, 0.15);
+          color: #ba68c8;
+        }
+
+        .schema-source-raw {
+          background: rgba(255, 152, 0, 0.15);
+          color: #ffa726;
         }
 
         .panel-machine-badge {
