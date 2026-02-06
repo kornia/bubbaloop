@@ -29,6 +29,10 @@ safety:
     - "/tmp/bubbaloop/"
   protected_nodes:
     - bubbaloop-agent
+  # Directories where the agent can create/modify node files
+  allowed_node_paths:
+    - "~/.bubbaloop/nodes/"
+    - "/tmp/bubbaloop/nodes/"
 
 # Zenoh
 zenoh:

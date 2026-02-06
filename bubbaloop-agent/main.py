@@ -110,6 +110,7 @@ async def main_async(config: dict, endpoint: str | None):
     # 8. Register all tools
     from src.tools.zenoh_tools import register_zenoh_tools
     from src.tools.node_tools import register_node_tools
+    from src.tools.node_creation_tools import register_node_creation_tools
     from src.tools.watcher_tools import register_watcher_tools
     from src.tools.data_tools import register_data_tools
     from src.tools.memory_tools import register_memory_tools
@@ -117,6 +118,7 @@ async def main_async(config: dict, endpoint: str | None):
 
     register_zenoh_tools(tool_registry, zenoh_bridge)
     register_node_tools(tool_registry, zenoh_bridge, world_model, config)
+    register_node_creation_tools(tool_registry, zenoh_bridge, world_model, config)
     register_watcher_tools(tool_registry, watcher_engine)
     register_data_tools(tool_registry, data_router)
     register_memory_tools(tool_registry, memory)

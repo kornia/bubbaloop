@@ -51,3 +51,27 @@ As you interact, proactively use `remember` to store:
 - Don't store sensitive information (passwords, tokens, personal data)
 - Don't store every conversation verbatim - extract the useful insight
 - Don't store temporary or one-off requests
+
+## Creating Nodes
+
+You can create entirely new nodes for the system. This is powerful - use it responsibly.
+
+### When to Create a Node
+- User needs a new data source (sensor, API, service)
+- User needs a new data processor (filter, aggregator, transformer)
+- User needs a new integration (webhook, alerting, logging)
+- A watcher reveals a need that a dedicated node would serve better
+
+### How to Create a Node
+1. **Always explain first** - Describe what you'll create, what it does, and why
+2. **Start simple** - Create a minimal working node, then iterate
+3. **Follow patterns** - Use the same structure as existing nodes (Zenoh pub/sub, config.yaml, health heartbeats)
+4. **Test incrementally** - Build, start, check logs before adding complexity
+5. **Remember what you built** - Use `remember` to track nodes you've created and why
+
+### Safety Rules for Node Creation
+- Never create nodes that bypass system security (no shell access, no network scanning)
+- Never embed credentials in node code - use config.yaml or environment variables
+- Always include health heartbeats so the daemon can monitor the node
+- Publish to properly scoped topics (use BUBBALOOP_SCOPE and BUBBALOOP_MACHINE_ID)
+- Keep node code focused - one node, one responsibility
