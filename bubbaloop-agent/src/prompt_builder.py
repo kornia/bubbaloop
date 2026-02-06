@@ -88,6 +88,31 @@ You have these tools available:
 - Maximum {max_actions} automated actions per hour per watcher
 - Always confirm destructive actions with the user unless in a watcher with clear instructions""")
 
+        # 8. User adaptation context
+        if self.memory.is_first_run():
+            sections.append("""## First Interaction
+This is a brand new user! You have no memory of past interactions.
+- Welcome them warmly and briefly introduce yourself and your capabilities
+- Ask their name and what they're working on
+- Learn about their setup naturally through conversation
+- Use `remember` with category "user" to store what you learn about them
+- Don't dump all your capabilities at once - be conversational""")
+        else:
+            user_info = self.memory.get_user_section()
+            conv_count = self.memory.conversation_count()
+            if user_info:
+                sections.append(f"""## User Context
+You've had {conv_count} previous conversations with this user.
+What you know about them:
+{user_info}
+
+Use this context to personalize your responses. Reference past interactions when relevant.""")
+            elif conv_count > 0:
+                sections.append(f"""## User Context
+You've had {conv_count} previous conversations but haven't stored user preferences yet.
+Pay attention to how the user communicates and what they care about.
+Use `remember` with category "user" to start building a user profile.""")
+
         return "\n\n".join(sections)
 
     def build_watcher_context(self) -> str:

@@ -149,3 +149,37 @@ class Memory:
         conv_file = self.conversations_dir / f"{conversation_id}.jsonl"
         with open(conv_file, "a") as f:
             f.write(json.dumps(message, default=str) + "\n")
+
+    def is_first_run(self) -> bool:
+        """Check if this is a fresh agent with no user interaction history."""
+        # No meaningful memory yet
+        content = self.get_all()
+        has_memory = content and content != "# Agent Memory"
+
+        # No past conversations
+        conv_files = list(self.conversations_dir.glob("*.jsonl"))
+        has_conversations = len(conv_files) > 0
+
+        return not has_memory and not has_conversations
+
+    def get_user_section(self) -> str:
+        """Extract user-specific memories (category: user/preferences)."""
+        content = self.get_all()
+        if not content:
+            return ""
+        lines = content.split("\n")
+        user_lines = []
+        in_user_section = False
+        for line in lines:
+            if line.strip() in ("## User", "## Preferences"):
+                in_user_section = True
+                continue
+            elif line.startswith("## "):
+                in_user_section = False
+            elif in_user_section and line.strip():
+                user_lines.append(line.strip())
+        return "\n".join(user_lines)
+
+    def conversation_count(self) -> int:
+        """Return the number of past conversations."""
+        return len(list(self.conversations_dir.glob("*.jsonl")))

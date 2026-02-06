@@ -1,5 +1,6 @@
 """Agent loop - the core reasoning engine. Message → LLM → tools → loop."""
 
+import asyncio
 import logging
 import uuid
 from typing import AsyncIterator
@@ -108,4 +109,66 @@ class BubbalooAgent:
         result_parts = []
         async for part in self.handle_message(message, conversation_id):
             result_parts.append(part)
-        return result_parts[-1] if result_parts else "(No response)"
+        final = result_parts[-1] if result_parts else "(No response)"
+
+        # Trigger background reflection (don't block the response)
+        asyncio.create_task(self._reflect(message, final))
+
+        return final
+
+    async def _reflect(self, user_message: str, agent_response: str):
+        """Post-conversation reflection: let the LLM decide what to remember.
+
+        Runs in background after each conversation. Uses a short LLM call
+        to extract any learnings worth persisting to memory.
+        """
+        try:
+            # Skip reflection for very short exchanges
+            if len(user_message) < 10 and len(agent_response) < 50:
+                return
+
+            existing_memory = self.memory.get_all()
+            reflection_prompt = f"""Review this interaction and decide if anything is worth remembering for future conversations.
+
+USER: {user_message}
+
+YOUR RESPONSE: {agent_response[:500]}
+
+EXISTING MEMORY:
+{existing_memory[:500] if existing_memory else "(empty)"}
+
+If you learn something new and useful about the user (their name, preferences, expertise level, what they care about, their communication style) or about the system (a pattern, a recurring issue, a fix that worked), call the `remember` tool.
+
+Categories: "user" for user info, "patterns" for system patterns, "preferences" for user workflow preferences, "issues" for problems/fixes.
+
+If nothing new or useful was revealed, just respond with "Nothing to remember." and do NOT call any tools."""
+
+            # Short reflection - max 3 turns, just enough to call remember if needed
+            messages = [
+                {"role": "system", "content": "You are reflecting on a conversation to extract learnings. Be selective - only remember genuinely useful insights, not trivial details."},
+                {"role": "user", "content": reflection_prompt},
+            ]
+
+            # Only give it the remember tool
+            remember_tool = None
+            for td in self.tools.all_definitions():
+                if td["function"]["name"] == "remember":
+                    remember_tool = [td]
+                    break
+
+            for _ in range(3):
+                response = await self.llm.chat(messages, tools=remember_tool)
+                if not response.has_tool_calls:
+                    break
+                messages.append(response.raw_message)
+                for tc in response.tool_calls:
+                    result = await self.tools.execute(tc.name, tc.arguments)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": str(result),
+                    })
+                    logger.info(f"Reflection remembered: {tc.arguments}")
+
+        except Exception as e:
+            logger.debug(f"Reflection failed (non-critical): {e}")
