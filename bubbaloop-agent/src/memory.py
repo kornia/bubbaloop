@@ -12,11 +12,37 @@ logger = logging.getLogger(__name__)
 class Memory:
     """Persistent memory via MEMORY.md and conversation JSONL files."""
 
+    # Patterns that indicate an attempt to inject safety overrides into memory.
+    # These are checked case-insensitively against remember() content.
+    BLOCKED_PATTERNS = [
+        r"ignore\s+(all\s+)?(safety|rules|instructions|boundaries|constraints)",
+        r"override\s+(safety|rules|config|protected)",
+        r"disregard\s+(previous|safety|rules|all)",
+        r"you\s+(can|should|must)\s+(now\s+)?(ignore|bypass|skip|override)",
+        r"new\s+(rule|instruction|policy)\s*:",
+        r"forget\s+(all\s+)?(safety|rules|boundaries)",
+        r"protected.?nodes?\s*[:=]",
+        r"allowed.?paths?\s*[:=]",
+        r"max.?actions?\s*[:=]",
+        r"system\s*prompt",
+        r"you\s+are\s+now\s+",
+        r"from\s+now\s+on\s+you",
+    ]
+
+    # Max total memory size (characters). Prevents prompt flooding.
+    MAX_MEMORY_SIZE = 5000
+
+    # Max entries per category
+    MAX_ENTRIES_PER_CATEGORY = 20
+
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
         self.memory_file = data_dir / "MEMORY.md"
         self.conversations_dir = data_dir / "conversations"
         self.conversations_dir.mkdir(parents=True, exist_ok=True)
+
+        # Compile blocked patterns once
+        self._blocked_re = [re.compile(p, re.IGNORECASE) for p in self.BLOCKED_PATTERNS]
 
         # Ensure MEMORY.md exists
         if not self.memory_file.exists():
@@ -31,9 +57,54 @@ class Memory:
             return content
         return ""
 
+    def _is_blocked_content(self, content: str) -> str | None:
+        """Check if content attempts to inject safety overrides.
+
+        Returns the matched pattern description or None if clean.
+        """
+        for pattern in self._blocked_re:
+            if pattern.search(content):
+                logger.warning(f"Blocked memory write (safety override attempt): {content[:80]}...")
+                return pattern.pattern
+        return None
+
+    def _count_category_entries(self, text: str, category: str) -> int:
+        """Count how many entries exist in a category."""
+        category_header = f"## {category.title()}"
+        lines = text.split("\n")
+        count = 0
+        in_section = False
+        for line in lines:
+            if line.strip() == category_header:
+                in_section = True
+            elif line.startswith("## "):
+                in_section = False
+            elif in_section and line.strip().startswith("- "):
+                count += 1
+        return count
+
     def remember(self, content: str, category: str = "general") -> str:
         """Add a memory entry to MEMORY.md under the given category."""
+
+        # Safety: block content that tries to override rules
+        blocked = self._is_blocked_content(content)
+        if blocked:
+            return "Cannot store this memory: content appears to modify safety rules or system instructions."
+
+        # Safety: block attempts to use categories that sound like system override
+        blocked_categories = {"safety", "rules", "system", "config", "prompt", "instructions"}
+        if category.lower() in blocked_categories:
+            return f"Cannot use reserved category '{category}'. Use: user, preferences, patterns, issues, or general."
+
         current = self.memory_file.read_text() if self.memory_file.exists() else "# Agent Memory\n\n"
+
+        # Safety: check total memory size
+        if len(current) >= self.MAX_MEMORY_SIZE:
+            return f"Memory is full ({len(current)} chars, max {self.MAX_MEMORY_SIZE}). Use `forget` to remove old entries first."
+
+        # Safety: check entries per category
+        if self._count_category_entries(current, category) >= self.MAX_ENTRIES_PER_CATEGORY:
+            return f"Category '{category}' has {self.MAX_ENTRIES_PER_CATEGORY} entries (max). Use `forget` to remove old entries first."
 
         # Find or create the category section
         category_header = f"## {category.title()}"
