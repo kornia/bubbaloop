@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package bubbaloop.header.v1;
+
+message Header {
+    uint64 acq_time = 1;
+    uint64 pub_time = 2;
+    uint32 sequence = 3;
+    string frame_id = 4;
+    string machine_id = 5;
+    string scope = 6;
+}

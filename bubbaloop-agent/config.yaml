@@ -1,0 +1,46 @@
+# Bubbaloop Agent Configuration
+
+# LLM provider (OpenAI-compatible API)
+llm:
+  base_url: "http://localhost:11434/v1"
+  api_key_env: ""
+  model: "qwen3:1.7b"
+  max_tokens: 4096
+  temperature: 0.1
+
+# Watcher evaluation (cheaper model for routine checks)
+watchers:
+  eval_model: "qwen3:1.7b"
+  eval_base_url: "http://localhost:11434/v1"
+  default_sample_interval_sec: 30
+  max_evaluations_per_minute: 10
+  max_actions_per_hour: 30
+
+# HTTP Chat API
+http:
+  host: "127.0.0.1"
+  port: 8080
+
+# Safety
+safety:
+  max_agent_turns: 20
+  allowed_data_paths:
+    - "/data/"
+    - "/tmp/bubbaloop/"
+  protected_nodes:
+    - bubbaloop-agent
+
+# Zenoh
+zenoh:
+  endpoint: "tcp/127.0.0.1:7447"
+
+# Health heartbeat
+publish_topic: "bubbaloop-agent/events"
+rate_hz: 0.1
+
+# Known topic -> proto mappings
+topics:
+  "system-telemetry/metrics": "SystemMetrics"
+  "weather/current": "CurrentWeather"
+  "weather/hourly": "HourlyForecast"
+  "network-monitor/status": "NetworkStatus"

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Generated protobuf
+*_pb2.py
+*_pb2_grpc.py
+
+# Pixi
+.pixi/
+pixi.lock
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
+
+# Data
+conversations/
+*.jsonl

@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package bubbaloop.agent.v1;
+
+import "header.proto";
+
+message AgentEvent {
+    bubbaloop.header.v1.Header header = 1;
+    EventType event_type = 2;
+    string conversation_id = 3;
+    string summary = 4;
+    string details = 5;
+}
+
+enum EventType {
+    EVENT_TYPE_CHAT = 0;
+    EVENT_TYPE_WATCHER_CREATED = 1;
+    EVENT_TYPE_WATCHER_TRIGGERED = 2;
+    EVENT_TYPE_WATCHER_REMOVED = 3;
+    EVENT_TYPE_NODE_ACTION = 4;
+    EVENT_TYPE_DATA_CAPTURE_STARTED = 5;
+    EVENT_TYPE_DATA_CAPTURE_STOPPED = 6;
+    EVENT_TYPE_MEMORY_UPDATED = 7;
+    EVENT_TYPE_ERROR = 8;
+}

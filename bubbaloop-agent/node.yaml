@@ -1,0 +1,7 @@
+name: bubbaloop-agent
+version: "0.1.0"
+type: python
+description: "LLM-first autonomous agent - the brain of your Physical AI system"
+author: bubbaloop
+build: "pixi run build"
+command: "pixi run run"
