@@ -19,6 +19,8 @@ import { SortableJsonCard } from './SortableJsonCard';
 import { SortableWeatherCard } from './SortableWeatherCard';
 import { SortableStatsCard } from './SortableStatsCard';
 import { SortableNodesCard } from './SortableNodesCard';
+import { SortableSystemTelemetryCard } from './SortableSystemTelemetryCard';
+import { SortableNetworkMonitorCard } from './SortableNetworkMonitorCard';
 import {
   PanelConfig,
   PanelType,
@@ -180,6 +182,22 @@ export function Dashboard({ cameras: initialCameras, availableTopics = [] }: Das
           type: 'nodes',
         };
         break;
+      case 'telemetry':
+        newPanel = {
+          id: newId,
+          name: `Telemetry ${count}`,
+          topic: '0/system-telemetry%metrics/**',
+          type: 'telemetry',
+        };
+        break;
+      case 'network':
+        newPanel = {
+          id: newId,
+          name: `Network ${count}`,
+          topic: '0/network-monitor%status/**',
+          type: 'network',
+        };
+        break;
       default:
         return;
     }
@@ -254,6 +272,20 @@ export function Dashboard({ cameras: initialCameras, availableTopics = [] }: Das
                   <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
                 </svg>
                 Nodes Panel
+              </button>
+              <button className="add-panel-option" onClick={() => addPanel('telemetry')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                  <path d="M8 21h8M12 17v4" />
+                </svg>
+                Telemetry Panel
+              </button>
+              <button className="add-panel-option" onClick={() => addPanel('network')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+                Network Panel
               </button>
             </div>
           )}
@@ -336,6 +368,26 @@ export function Dashboard({ cameras: initialCameras, availableTopics = [] }: Das
                         onRemove={() => removePanel(panel.id)}
                       />
                     );
+                  case 'telemetry':
+                    return (
+                      <SortableSystemTelemetryCard
+                        key={panel.id}
+                        id={panel.id}
+                        panelName={panel.name}
+                        isHidden={isHidden}
+                        onRemove={() => removePanel(panel.id)}
+                      />
+                    );
+                  case 'network':
+                    return (
+                      <SortableNetworkMonitorCard
+                        key={panel.id}
+                        id={panel.id}
+                        panelName={panel.name}
+                        isHidden={isHidden}
+                        onRemove={() => removePanel(panel.id)}
+                      />
+                    );
                   default:
                     return null;
                 }
@@ -383,6 +435,20 @@ export function Dashboard({ cameras: initialCameras, availableTopics = [] }: Das
                   <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
                 </svg>
                 Add Nodes
+              </button>
+              <button className="add-panel-btn large" onClick={() => addPanel('telemetry')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                  <path d="M8 21h8M12 17v4" />
+                </svg>
+                Add Telemetry
+              </button>
+              <button className="add-panel-btn large" onClick={() => addPanel('network')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+                Add Network
               </button>
             </div>
           </div>

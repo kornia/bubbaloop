@@ -2,15 +2,19 @@
  * localStorage utilities for persisting dashboard state
  */
 
+// Bump this version to force-clear stale panel configs (e.g., when topic format changes)
+const PANEL_FORMAT_VERSION = 3;
+
 const STORAGE_KEYS = {
   PANELS: 'bubbaloop-panels',
   PANEL_ORDER: 'bubbaloop-panel-order',
+  PANEL_VERSION: 'bubbaloop-panel-version',
   // Legacy keys for migration
   CAMERAS: 'bubbaloop-cameras',
   CAMERA_ORDER: 'bubbaloop-camera-order',
 } as const;
 
-export type PanelType = 'camera' | 'json' | 'rawdata' | 'weather' | 'stats' | 'nodes';
+export type PanelType = 'camera' | 'json' | 'rawdata' | 'weather' | 'stats' | 'nodes' | 'telemetry' | 'network';
 
 export interface BasePanelConfig {
   id: string;
@@ -43,7 +47,15 @@ export interface NodesPanelConfig extends BasePanelConfig {
   type: 'nodes';
 }
 
-export type PanelConfig = CameraPanelConfig | JsonPanelConfig | RawDataPanelConfig | WeatherPanelConfig | StatsPanelConfig | NodesPanelConfig;
+export interface TelemetryPanelConfig extends BasePanelConfig {
+  type: 'telemetry';
+}
+
+export interface NetworkPanelConfig extends BasePanelConfig {
+  type: 'network';
+}
+
+export type PanelConfig = CameraPanelConfig | JsonPanelConfig | RawDataPanelConfig | WeatherPanelConfig | StatsPanelConfig | NodesPanelConfig | TelemetryPanelConfig | NetworkPanelConfig;
 
 // Legacy type for migration
 export interface LegacyCameraConfig {
@@ -87,6 +99,19 @@ function migrateLegacyCameras(): PanelConfig[] | null {
  */
 export function loadPanels(): PanelConfig[] | null {
   try {
+    // Check panel format version - if outdated, clear and return null to use fresh defaults
+    const storedVersion = localStorage.getItem(STORAGE_KEYS.PANEL_VERSION);
+    const currentVersion = String(PANEL_FORMAT_VERSION);
+    if (storedVersion !== currentVersion) {
+      console.log(`[Storage] Panel format version changed (${storedVersion} -> ${currentVersion}), clearing stale panels`);
+      localStorage.removeItem(STORAGE_KEYS.PANELS);
+      localStorage.removeItem(STORAGE_KEYS.PANEL_ORDER);
+      localStorage.removeItem(STORAGE_KEYS.CAMERAS);
+      localStorage.removeItem(STORAGE_KEYS.CAMERA_ORDER);
+      localStorage.setItem(STORAGE_KEYS.PANEL_VERSION, currentVersion);
+      return null;
+    }
+
     const stored = localStorage.getItem(STORAGE_KEYS.PANELS);
     if (stored) {
       return JSON.parse(stored);
@@ -105,6 +130,7 @@ export function loadPanels(): PanelConfig[] | null {
 export function savePanels(panels: PanelConfig[]): void {
   try {
     localStorage.setItem(STORAGE_KEYS.PANELS, JSON.stringify(panels));
+    localStorage.setItem(STORAGE_KEYS.PANEL_VERSION, String(PANEL_FORMAT_VERSION));
   } catch (e) {
     console.warn('[Storage] Failed to save panels:', e);
   }
@@ -155,6 +181,8 @@ export function generatePanelId(type: PanelType): string {
     weather: 'weather',
     stats: 'stats',
     nodes: 'nodes',
+    telemetry: 'telemetry',
+    network: 'network',
   };
   const prefix = prefixes[type];
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;

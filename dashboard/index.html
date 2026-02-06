@@ -10,7 +10,24 @@
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="loading-fallback" style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0a0f;color:#9090a0;font-family:sans-serif;flex-direction:column;gap:12px">
+        <div style="width:32px;height:32px;border:3px solid #2a2a3a;border-top-color:#3d5afe;border-radius:50%;animation:s 1s linear infinite"></div>
+        <div>Loading Bubbaloop...</div>
+        <style>@keyframes s{to{transform:rotate(360deg)}}</style>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Catch fatal module loading errors (WASM, browser compat)
+      window.addEventListener('error', function(e) {
+        var f = document.getElementById('loading-fallback');
+        if (f) { f.innerHTML = '<div style="text-align:center;padding:20px"><div style="font-size:24px;margin-bottom:12px;color:#ff1744">Failed to load</div><div style="color:#9090a0;font-size:14px;max-width:400px">' + (e.message || 'Unknown error') + '</div><div style="margin-top:16px;color:#606070;font-size:12px">Try Chrome or Safari 15+ on desktop</div></div>'; }
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        var f = document.getElementById('loading-fallback');
+        if (f) { f.innerHTML = '<div style="text-align:center;padding:20px"><div style="font-size:24px;margin-bottom:12px;color:#ff1744">Connection Error</div><div style="color:#9090a0;font-size:14px;max-width:400px">' + (e.reason?.message || e.reason || 'Module failed to load') + '</div><div style="margin-top:16px;color:#606070;font-size:12px">Check console for details (F12)</div></div>'; }
+      });
+    </script>
   </body>
 </html>

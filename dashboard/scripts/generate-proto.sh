@@ -13,7 +13,9 @@ npx pbjs -t static-module -w es6 -o src/proto/messages.pb.js \
   "$PROTO_DIR/header.proto" \
   "$PROTO_DIR/camera.proto" \
   "$PROTO_DIR/weather.proto" \
-  "$PROTO_DIR/daemon.proto"
+  "$PROTO_DIR/daemon.proto" \
+  "$PROTO_DIR/system_telemetry.proto" \
+  "$PROTO_DIR/network_monitor.proto"
 npx pbts -o src/proto/messages.pb.d.ts src/proto/messages.pb.js
 
 # Fix protobufjs 7.x bug that adds incorrect 'error' parameter to decode functions
