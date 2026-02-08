@@ -24,13 +24,15 @@ use tokio::sync::watch;
 use zenoh::bytes::ZBytes;
 use zenoh::Session;
 
-/// Get machine ID from environment or hostname
+/// Get machine ID from environment or hostname.
+/// Sanitizes hyphens to underscores for Zenoh topic compatibility (matching node convention).
 fn get_machine_id() -> String {
     std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
         hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "unknown".to_string())
     })
+    .replace('-', "_")
 }
 
 /// Key expressions for API endpoints
@@ -224,14 +226,15 @@ impl ZenohApiService {
     pub async fn run(self, mut shutdown: watch::Receiver<()>) -> Result<(), zenoh::Error> {
         log::info!("Starting Zenoh API service...");
 
-        // Declare queryables on both legacy and new paths for backward compatibility
-        // The .complete(true) hint tells Zenoh this queryable is authoritative for this key expression
+        // Declare queryables on both legacy and new paths for backward compatibility.
+        // NOTE: We intentionally do NOT use .complete(true) here. That flag tells Zenoh
+        // this queryable is authoritative for the key expression, which would block
+        // wildcard queries (e.g., "bubbaloop/**/schema") from reaching node queryables.
 
         // Legacy path
         let queryable_legacy = self
             .session
             .declare_queryable(api_keys::API_WILDCARD_LEGACY)
-            .complete(true)
             .await?;
 
         log::info!(
@@ -244,7 +247,6 @@ impl ZenohApiService {
         let queryable_new = self
             .session
             .declare_queryable(&new_wildcard)
-            .complete(true)
             .await?;
 
         log::info!(

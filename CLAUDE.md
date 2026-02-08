@@ -103,19 +103,25 @@ bubbaloop/{scope}/{machine}/weather/current|hourly|daily             # Weather d
 
 ## Protobuf Schemas
 
-Source of truth: `crates/bubbaloop-schemas/protos/`. Key types:
+Core schemas in `crates/bubbaloop-schemas/protos/`:
 
 | Proto | Key Types |
 |-------|-----------|
 | `header.proto` | `Header` (timestamps, frame_id, seq, machine_id, scope) |
-| `camera.proto` | `CompressedImage`, `RawImage` |
-| `weather.proto` | `CurrentWeather`, `HourlyForecast`, `DailyForecast` |
-| `daemon.proto` | `NodeState`, `NodeStatus`, `NodeCommand` |
-| `system_telemetry.proto` | `SystemMetrics`, `CpuMetrics`, etc. |
-| `network_monitor.proto` | `NetworkStatus`, `HealthCheck` |
+| `daemon.proto` | `NodeState`, `NodeStatus`, `NodeCommand`, `NodeList`, `NodeEvent` |
+| `machine.proto` | `MachineInfo`, `MachineList`, `MachineHeartbeat` |
 
-`bubbaloop-schemas` is standalone (not in workspace). Both the main crate and nodes depend on it.
-Nodes also carry local copies of their protos in `protos/` for `descriptor.bin` generation.
+Node-specific schemas (served at runtime by each node via `{node-name}/schema`):
+
+| Node | Key Types |
+|------|-----------|
+| rtsp-camera | `CompressedImage`, `RawImage` |
+| openmeteo | `CurrentWeather`, `HourlyForecast`, `DailyForecast`, `LocationConfig` |
+| system-telemetry | `SystemMetrics`, `CpuMetrics`, etc. |
+| network-monitor | `NetworkStatus`, `HealthCheck` |
+
+`bubbaloop-schemas` is standalone (not in workspace). The daemon serves core schemas at `*/daemon/api/schemas`.
+Node schemas are discovered dynamically by the dashboard via `bubbaloop/**/schema` wildcard queries.
 
 ## Key Dependencies
 

@@ -218,6 +218,10 @@ export class SchemaRegistry {
   /**
    * Proactively discover all node schemas by querying wildcard schema endpoints.
    * Called at startup to ensure all node types are available for decoding.
+   *
+   * This wildcard query works because the daemon's queryable for node schemas
+   * no longer uses `.complete(true)`, allowing multiple nodes to respond to the
+   * same wildcard pattern. Each running node with a schema queryable will reply.
    */
   async discoverAllNodeSchemas(session: Session, _machineIds?: string[]): Promise<number> {
     // Always use broad wildcard to avoid machine ID format mismatches
@@ -266,6 +270,20 @@ export class SchemaRegistry {
   /**
    * Try to discover schemas for a new topic prefix.
    * Called when the dashboard encounters a topic it hasn't seen before.
+   *
+   * Strategy:
+   * 1. Extract topic prefix (first 4 segments) and try direct query to {prefix}/schema.
+   *    This works when the 4th segment is the node name (e.g., "bubbaloop/local/m1/system-telemetry/metrics").
+   *
+   * 2. If that fails, fall back to wildcard discovery (bubbaloop/** /schema).
+   *    This is necessary because topic resource names often differ from node names:
+   *      - camera/* topics are published by the "rtsp-camera" node
+   *      - weather/* topics are published by the "openmeteo" node
+   *      - The 4th segment in these cases is the topic resource ("camera", "weather"),
+   *        not the node name, so the prefix-based query would fail.
+   *
+   *    The wildcard query now works correctly since the daemon's schema queryable
+   *    no longer uses `.complete(true)`, allowing all nodes to respond.
    *
    * @param session - Active Zenoh session
    * @param topic - The full topic string
@@ -515,6 +533,18 @@ function collectTypeNames(ns: protobuf.NamespaceBase, prefix: string, out: strin
 
 /**
  * Extract a scoped topic prefix that might correspond to a node's schema endpoint.
+ *
+ * Attempts to extract the first 4 segments (bubbaloop/{scope}/{machine}/{node-or-resource})
+ * from a topic. This works when the 4th segment is the actual node name, but may fail when
+ * the 4th segment is a topic resource name instead:
+ *   - "bubbaloop/local/m1/camera/my-cam/compressed" → prefix is "bubbaloop/local/m1/camera"
+ *     but the schema is actually at "bubbaloop/local/m1/rtsp-camera/schema"
+ *   - "bubbaloop/local/m1/weather/current" → prefix is "bubbaloop/local/m1/weather"
+ *     but the schema is actually at "bubbaloop/local/m1/openmeteo/schema"
+ *
+ * This is a best-effort heuristic. Callers should fall back to wildcard discovery when
+ * this prefix-based approach fails.
+ *
  * For scoped topics like "bubbaloop/local/m1/system-telemetry/metrics", returns
  * "bubbaloop/local/m1/system-telemetry" so we can query "{prefix}/schema".
  * For ros-z topics like "0/bubbaloop%local%m1%node%res/Type/Hash", decodes the

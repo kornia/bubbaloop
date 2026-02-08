@@ -182,12 +182,14 @@ impl NodeManager {
         let systemd = SystemdClient::new().await?;
         let (event_tx, _) = broadcast::channel(100);
 
-        // Get machine ID from environment or hostname
+        // Get machine ID from environment or hostname.
+        // Sanitize hyphens to underscores for Zenoh topic compatibility (matching node convention).
         let machine_id = std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
             hostname::get()
                 .map(|h| h.to_string_lossy().to_string())
                 .unwrap_or_else(|_| "unknown".to_string())
-        });
+        })
+        .replace('-', "_");
 
         // Get machine hostname
         let machine_hostname = hostname::get()
@@ -1399,7 +1401,7 @@ mod tests {
 
             assert_eq!(node.effective_name(), *expected_name);
 
-            let proto = node.to_proto("jetson-1", "jetson-1.local", &["10.0.0.42".to_string()]);
+            let proto = node.to_proto("jetson_1", "jetson-1.local", &["10.0.0.42".to_string()]);
             protos.push(proto);
         }
 
@@ -1413,7 +1415,7 @@ mod tests {
                 i
             );
             assert_eq!(proto.version, "0.2.0");
-            assert_eq!(proto.machine_id, "jetson-1");
+            assert_eq!(proto.machine_id, "jetson_1");
         }
 
         // Now verify a plain node (no override) has empty base_node
@@ -1441,7 +1443,7 @@ mod tests {
             config_override: None,
         };
 
-        let plain_proto = plain_node.to_proto("jetson-1", "jetson-1.local", &[]);
+        let plain_proto = plain_node.to_proto("jetson_1", "jetson-1.local", &[]);
         assert_eq!(plain_proto.name, "openmeteo");
         assert_eq!(plain_proto.base_node, "");
 
@@ -1453,7 +1455,7 @@ mod tests {
                 v
             },
             timestamp_ms: 1700000000000,
-            machine_id: "jetson-1".to_string(),
+            machine_id: "jetson_1".to_string(),
         };
 
         assert_eq!(node_list.nodes.len(), 4);

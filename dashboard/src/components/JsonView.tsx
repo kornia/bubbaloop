@@ -61,11 +61,6 @@ function decodePayload(payload: Uint8Array, topic: string, registry?: SchemaRegi
     // Not JSON, continue
   }
 
-  // 1b. Plain text messages (health heartbeats, simple string payloads)
-  if (payload.length < 200 && /^[\x20-\x7e]+$/.test(text)) {
-    return { data: { message: text }, schema: 'Text', schemaSource: 'builtin' };
-  }
-
   // 2. Dynamic SchemaRegistry — consolidated decode chain
   if (registry) {
     const result = registry.tryDecodeForTopic(topic, payload);
@@ -90,7 +85,13 @@ function decodePayload(payload: Uint8Array, topic: string, registry?: SchemaRegi
     }
   }
 
-  // 4. Show raw data preview
+  // 4. Plain text messages (health heartbeats, simple string payloads)
+  // Try this as last resort before hex fallback
+  if (payload.length < 200 && /^[\x20-\x7e]+$/.test(text)) {
+    return { data: { message: text }, schema: 'Text', schemaSource: 'builtin' };
+  }
+
+  // 5. Show raw data preview
   const preview = payload.slice(0, 100);
   const hex = Array.from(preview).map(b => b.toString(16).padStart(2, '0')).join(' ');
   return {
