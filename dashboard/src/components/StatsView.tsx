@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 import { useFleetContext } from '../contexts/FleetContext';
 import { MachineBadge } from './MachineBadge';
+import { extractMachineId } from '../lib/zenoh';
 
 interface DragHandleProps {
   [key: string]: unknown;
@@ -14,6 +15,7 @@ interface StatsViewProps {
 
 interface DisplayStats {
   topic: string;
+  machineId: string | null;
   messageCount: number;
   hz: number;
   hasActiveListeners: boolean;
@@ -57,6 +59,7 @@ export function StatsViewPanel({
       allStats.forEach((stat, topic) => {
         displayStats.push({
           topic,
+          machineId: extractMachineId(topic),
           messageCount: stat.messageCount,
           hz: stat.fps,
           hasActiveListeners: stat.hasActiveListeners,
@@ -64,8 +67,17 @@ export function StatsViewPanel({
         });
       });
 
-      // Sort by topic name alphabetically
-      displayStats.sort((a, b) => a.topic.localeCompare(b.topic));
+      // Sort by machine ID first (nulls last), then by topic name
+      displayStats.sort((a, b) => {
+        // Legacy topics (null machine) sort after machine-scoped ones
+        if (a.machineId === null && b.machineId !== null) return 1;
+        if (a.machineId !== null && b.machineId === null) return -1;
+        if (a.machineId !== null && b.machineId !== null) {
+          const machineCompare = a.machineId.localeCompare(b.machineId);
+          if (machineCompare !== 0) return machineCompare;
+        }
+        return a.topic.localeCompare(b.topic);
+      });
       setStats(displayStats);
     }, 1000);
 
@@ -116,6 +128,7 @@ export function StatsViewPanel({
       <div className="stats-content">
         <div className="stats-table">
           <div className="stats-table-header">
+            <span className="col-machine">Machine</span>
             <span className="col-topic">Topic</span>
             <span className="col-hz">Hz</span>
             <span className="col-msgs">Msgs</span>
@@ -128,6 +141,9 @@ export function StatsViewPanel({
             ) : (
               stats.map((stat) => (
                 <div key={stat.topic} className={`stats-row ${stat.hasActiveListeners ? 'has-listeners' : ''}`}>
+                  <span className="col-machine" title={stat.machineId || 'legacy'}>
+                    {stat.machineId || '—'}
+                  </span>
                   <span className="col-topic" title={stat.topic}>
                     {stat.hasActiveListeners && <span className="listener-indicator">●</span>}
                     {shortenTopic(stat.topic)}
@@ -262,7 +278,7 @@ export function StatsViewPanel({
 
         .stats-table-header {
           display: grid;
-          grid-template-columns: 1fr 60px 80px;
+          grid-template-columns: 120px 1fr 60px 80px;
           gap: 8px;
           padding: 8px 16px;
           background: var(--bg-tertiary);
@@ -281,7 +297,7 @@ export function StatsViewPanel({
 
         .stats-row {
           display: grid;
-          grid-template-columns: 1fr 60px 80px;
+          grid-template-columns: 120px 1fr 60px 80px;
           gap: 8px;
           padding: 6px 16px;
           font-size: 12px;
@@ -304,6 +320,14 @@ export function StatsViewPanel({
           color: var(--accent-primary);
           margin-right: 6px;
           font-size: 10px;
+        }
+
+        .col-machine {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: var(--text-muted);
+          font-size: 11px;
         }
 
         .col-topic {
@@ -372,8 +396,12 @@ export function StatsViewPanel({
 
           .stats-table-header,
           .stats-row {
-            grid-template-columns: 1fr 50px 70px;
+            grid-template-columns: 90px 1fr 50px 70px;
             font-size: 11px;
+          }
+
+          .col-machine {
+            font-size: 10px;
           }
         }
       `}</style>

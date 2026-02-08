@@ -21,31 +21,16 @@ macro_rules! proto_module {
 }
 
 proto_module!(header, "bubbaloop.header.v1.rs");
-proto_module!(camera, "bubbaloop.camera.v1.rs");
-proto_module!(weather, "bubbaloop.weather.v1.rs");
 proto_module!(daemon, "bubbaloop.daemon.v1.rs");
 proto_module!(machine, "bubbaloop.machine.v1.rs");
-proto_module!(system_telemetry, "bubbaloop.system_telemetry.v1.rs");
-proto_module!(network_monitor, "bubbaloop.network_monitor.v1.rs");
 
 // Re-export commonly used types
-pub use camera::v1::{CompressedImage, RawImage};
 pub use daemon::v1::{
     CommandResult, CommandType, HealthStatus, NodeCommand, NodeEvent, NodeList,
     NodeState as DaemonNodeState, NodeStatus,
 };
 pub use header::v1::Header;
 pub use machine::v1::{MachineHeartbeat, MachineInfo, MachineList};
-pub use network_monitor::v1::{
-    CheckStatus, CheckType, HealthCheck, NetworkStatus, Summary,
-};
-pub use system_telemetry::v1::{
-    CpuMetrics, DiskMetrics, LoadMetrics, MemoryMetrics, NetworkMetrics, SystemMetrics,
-};
-pub use weather::v1::{
-    CurrentWeather, DailyForecast, DailyForecastEntry, HourlyForecast, HourlyForecastEntry,
-    LocationConfig,
-};
 
 // TopicsConfig (behind "config" feature)
 #[cfg(feature = "config")]
@@ -180,14 +165,6 @@ mod rosz_impls {
 
     impl_type_info! {
         crate::Header => "bubbaloop.header.v1.Header",
-        crate::CompressedImage => "bubbaloop.camera.v1.CompressedImage",
-        crate::RawImage => "bubbaloop.camera.v1.RawImage",
-        crate::CurrentWeather => "bubbaloop.weather.v1.CurrentWeather",
-        crate::HourlyForecast => "bubbaloop.weather.v1.HourlyForecast",
-        crate::DailyForecast => "bubbaloop.weather.v1.DailyForecast",
-        crate::LocationConfig => "bubbaloop.weather.v1.LocationConfig",
-        crate::SystemMetrics => "bubbaloop.system_telemetry.v1.SystemMetrics",
-        crate::NetworkStatus => "bubbaloop.network_monitor.v1.NetworkStatus",
     }
 }
 
@@ -213,54 +190,6 @@ mod tests {
         assert_eq!(decoded.scope, "default");
     }
 
-    #[test]
-    fn test_compressed_image_roundtrip() {
-        let img = CompressedImage {
-            header: Some(Header {
-                sequence: 1,
-                frame_id: "cam0".into(),
-                ..Default::default()
-            }),
-            format: "h264".into(),
-            data: vec![0xDE, 0xAD],
-        };
-        let bytes = img.encode_to_vec();
-        let decoded = CompressedImage::decode(bytes.as_slice()).unwrap();
-        assert_eq!(decoded.format, "h264");
-        assert_eq!(decoded.data, vec![0xDE, 0xAD]);
-        assert_eq!(decoded.header.unwrap().sequence, 1);
-    }
-
-    #[test]
-    fn test_raw_image_roundtrip() {
-        let img = RawImage {
-            header: Some(Header::default()),
-            width: 1920,
-            height: 1080,
-            encoding: "rgb8".into(),
-            step: 5760,
-            data: vec![0; 16],
-        };
-        let bytes = img.encode_to_vec();
-        let decoded = RawImage::decode(bytes.as_slice()).unwrap();
-        assert_eq!(decoded.width, 1920);
-        assert_eq!(decoded.height, 1080);
-        assert_eq!(decoded.encoding, "rgb8");
-    }
-
-    #[test]
-    fn test_current_weather_roundtrip() {
-        let weather = CurrentWeather {
-            temperature_2m: 22.5,
-            relative_humidity_2m: 65.0,
-            wind_speed_10m: 10.0,
-            ..Default::default()
-        };
-        let bytes = weather.encode_to_vec();
-        let decoded = CurrentWeather::decode(bytes.as_slice()).unwrap();
-        assert!((decoded.temperature_2m - 22.5).abs() < f64::EPSILON);
-        assert!((decoded.relative_humidity_2m - 65.0).abs() < f64::EPSILON);
-    }
 
     #[test]
     fn test_header_default_has_empty_scope() {
@@ -282,17 +211,4 @@ mod tests {
         assert_eq!(decoded.frame_id, "test");
     }
 
-    #[test]
-    fn test_system_metrics_default() {
-        let m = SystemMetrics::default();
-        assert!(m.cpu.is_none());
-        assert!(m.memory.is_none());
-    }
-
-    #[test]
-    fn test_network_status_default() {
-        let s = NetworkStatus::default();
-        assert!(s.summary.is_none());
-        assert!(s.checks.is_empty());
-    }
 }

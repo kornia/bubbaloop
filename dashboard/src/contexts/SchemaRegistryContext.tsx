@@ -5,9 +5,10 @@
  * and exposes a hook for components to decode messages dynamically.
  */
 
-import { createContext, useContext, useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo, type ReactNode } from 'react';
 import { Session } from '@eclipse-zenoh/zenoh-ts';
 import { SchemaRegistry, DecodeResult } from '../lib/schema-registry';
+import { useFleetContext } from './FleetContext';
 
 interface SchemaRegistryContextValue {
   /** The underlying SchemaRegistry instance */
@@ -38,8 +39,12 @@ interface SchemaRegistryProviderProps {
 export function SchemaRegistryProvider({ session, children }: SchemaRegistryProviderProps) {
   const registryRef = useRef<SchemaRegistry>(new SchemaRegistry());
   const sessionRef = useRef<Session | null>(null);
+  const { machines } = useFleetContext();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Stable machine ID list — only changes when actual IDs change, not on every status update
+  const machineIdKey = useMemo(() => machines.map(m => m.machineId).sort().join(','), [machines]);
 
   // Keep session ref updated
   sessionRef.current = session;
@@ -52,16 +57,25 @@ export function SchemaRegistryProvider({ session, children }: SchemaRegistryProv
     setError(null);
 
     try {
-      const success = await registryRef.current.fetchCoreSchemas(currentSession);
+      const machineIds = machineIdKey ? machineIdKey.split(',').filter(Boolean) : undefined;
+      const success = await registryRef.current.fetchCoreSchemas(currentSession, machineIds);
       if (!success) {
         setError('No schemas returned from daemon');
       }
+      // Proactively discover all node schemas (non-blocking — don't fail if no nodes respond)
+      registryRef.current.discoverAllNodeSchemas(currentSession, machineIds).then(count => {
+        if (count > 0) {
+          console.log(`[SchemaRegistry] Discovered ${count} node schema(s)`);
+        }
+      }).catch(e => {
+        console.warn('[SchemaRegistry] Node schema discovery failed:', e);
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to fetch schemas');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [machineIdKey]);
 
   // Auto-fetch when session connects
   useEffect(() => {

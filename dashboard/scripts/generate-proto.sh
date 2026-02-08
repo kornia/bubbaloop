@@ -1,21 +1,19 @@
 #!/bin/bash
 set -e
 
-# Proto source of truth: crates/bubbaloop-schemas/protos/
-PROTO_DIR="../crates/bubbaloop-schemas/protos"
+# Core protos from bubbaloop-schemas (header + daemon only)
+# Node-specific protos (camera, weather, system_telemetry, network_monitor)
+# are decoded dynamically via SchemaRegistry at runtime.
+CORE_PROTO_DIR="../crates/bubbaloop-schemas/protos"
 
-# Generate the proto files
 cd "$(dirname "$0")/.."
 
-# Generate ALL protos into a single file to avoid $root.bubbaloop being overwritten
-# Order: header first (dependency), then camera, then weather, then daemon
-npx pbjs -t static-module -w es6 -o src/proto/messages.pb.js \
-  "$PROTO_DIR/header.proto" \
-  "$PROTO_DIR/camera.proto" \
-  "$PROTO_DIR/weather.proto" \
-  "$PROTO_DIR/daemon.proto" \
-  "$PROTO_DIR/system_telemetry.proto" \
-  "$PROTO_DIR/network_monitor.proto"
+# Generate core proto types (header + daemon) into static module
+npx pbjs -t static-module -w es6 \
+  -p "$CORE_PROTO_DIR" \
+  -o src/proto/messages.pb.js \
+  "$CORE_PROTO_DIR/header.proto" \
+  "$CORE_PROTO_DIR/daemon.proto"
 npx pbts -o src/proto/messages.pb.d.ts src/proto/messages.pb.js
 
 # Fix protobufjs 7.x bug that adds incorrect 'error' parameter to decode functions

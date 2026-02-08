@@ -33,7 +33,7 @@ import {
 
 interface DashboardProps {
   cameras: Array<{ name: string; topic: string }>;
-  availableTopics?: string[];
+  availableTopics?: Array<{ display: string; raw: string }>;
 }
 
 export function Dashboard({ cameras: initialCameras, availableTopics = [] }: DashboardProps) {

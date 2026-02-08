@@ -200,30 +200,116 @@ export function getSamplePayload(sample: Sample): Uint8Array {
   return new Uint8Array(0);
 }
 
+/** A discovered topic entry */
+export interface DiscoveredTopic {
+  /** Human-readable name (ros-z decoded, type/hash stripped) */
+  display: string;
+  /** Raw Zenoh key expression (for subscribing) */
+  raw: string;
+}
+
 export interface UseTopicDiscoveryResult {
-  topics: string[];
+  /** Deduplicated discovered topics with display names and raw keys */
+  topics: DiscoveredTopic[];
   isDiscovering: boolean;
   refresh: () => void;
 }
+/**
+ * Normalize a raw Zenoh key expression to a human-readable form.
+ *
+ * For ros-z topics: decodes the %-encoded portion and strips domain ID + type/hash.
+ * For vanilla topics: strips the leading "bubbaloop/" prefix only.
+ * Does NOT strip machine/scope segments — they're needed to distinguish topics.
+ *
+ * Examples:
+ *   ros-z:   "0/bubbaloop%local%m1%camera%entrance%compressed/Type/RIHS..." → "local/m1/camera/entrance/compressed"
+ *   vanilla: "bubbaloop/nvidia-orin00/daemon/nodes"                         → "nvidia-orin00/daemon/nodes"
+ *   vanilla: "bubbaloop/local/nvidia_orin00/health/system-telemetry"        → "local/nvidia_orin00/health/system-telemetry"
+ *   legacy:  "bubbaloop/daemon/nodes"                                       → "daemon/nodes"
+ */
+function normalizeKeyExpr(keyExpr: string): { display: string; raw: string } {
+  const parts = keyExpr.split('/');
+
+  // ros-z format: starts with domain ID (digit), has %‐encoded topic, then type/hash
+  if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
+    const decoded = parts[1].replace(/%/g, '/');
+    const segments = decoded.split('/');
+    // Strip "bubbaloop/" prefix only
+    if (segments.length >= 2 && segments[0] === 'bubbaloop') {
+      return { display: segments.slice(1).join('/'), raw: keyExpr };
+    }
+    return { display: decoded, raw: keyExpr };
+  }
+
+  // Vanilla zenoh: strip "bubbaloop/" prefix only
+  if (parts[0] === 'bubbaloop' && parts.length >= 2) {
+    return { display: parts.slice(1).join('/'), raw: keyExpr };
+  }
+
+  return { display: keyExpr, raw: keyExpr };
+}
 
 /**
- * React hook for discovering available Zenoh topics
- * Subscribes to a broad pattern and collects unique key expressions
+ * Extract machine ID from a Zenoh key expression.
+ *
+ * Handles two formats:
+ * - ros-z encoded: "0/bubbaloop%local%nvidia_orin00%camera%entrance/..."
+ * - vanilla zenoh: "bubbaloop/local/nvidia_orin00/health/system-telemetry"
+ *                  "bubbaloop/nvidia-orin00/daemon/nodes" (machine-scoped daemon)
+ *
+ * Returns null for legacy paths like "bubbaloop/daemon/nodes" or "bubbaloop/fleet/..."
  */
+export function extractMachineId(keyExpr: string): string | null {
+  const parts = keyExpr.split('/');
+
+  // ros-z format: starts with domain ID (digit), second segment is %-encoded
+  if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
+    const decoded = parts[1].replace(/%/g, '/');
+    const segments = decoded.split('/');
+    // bubbaloop/{scope}/{machine}/... → return segments[2]
+    if (segments.length >= 3 && segments[0] === 'bubbaloop') {
+      return segments[2];
+    }
+    return null;
+  }
+
+  // Vanilla zenoh: "bubbaloop/..."
+  if (parts[0] === 'bubbaloop') {
+    // Legacy paths: "bubbaloop/daemon/..." or "bubbaloop/fleet/..."
+    const knownNamespaces = ['daemon', 'fleet'];
+    if (parts.length >= 2 && knownNamespaces.includes(parts[1])) {
+      return null;
+    }
+
+    // Machine-scoped daemon: "bubbaloop/{machine}/daemon/..." → return parts[1]
+    if (parts.length >= 3 && parts[2] === 'daemon') {
+      return parts[1];
+    }
+
+    // Full-scoped: "bubbaloop/{scope}/{machine}/{resource}/..." → return parts[2]
+    if (parts.length >= 4) {
+      return parts[2];
+    }
+  }
+
+  return null;
+}
+
 export function useZenohTopicDiscovery(
   session: Session | null,
   pattern: string = '**'
 ): UseTopicDiscoveryResult {
-  const [topics, setTopics] = useState<string[]>([]);
+  const [topics, setTopics] = useState<DiscoveredTopic[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
-  const topicsSetRef = useRef<Set<string>>(new Set());
+  // Map from raw key expression → display name (deduplicate by raw key)
+  const topicMapRef = useRef<Map<string, string>>(new Map());
   const subscriberRef = useRef<Subscriber | null>(null);
 
   const discover = useCallback(async () => {
     if (!session) return;
 
     setIsDiscovering(true);
-    topicsSetRef.current.clear();
+    topicMapRef.current.clear();
     setTopics([]);
 
     try {
@@ -237,10 +323,14 @@ export function useZenohTopicDiscovery(
       const subscriber = await session.declareSubscriber(pattern, {
         handler: (sample: Sample) => {
           const keyExpr = sample.keyexpr().toString();
-          // Collect all topics
-          if (!topicsSetRef.current.has(keyExpr)) {
-            topicsSetRef.current.add(keyExpr);
-            setTopics(Array.from(topicsSetRef.current).sort());
+          const { display, raw } = normalizeKeyExpr(keyExpr);
+
+          if (!topicMapRef.current.has(raw)) {
+            topicMapRef.current.set(raw, display);
+            const sorted = Array.from(topicMapRef.current.entries())
+              .sort(([, a], [, b]) => a.localeCompare(b))
+              .map(([r, d]) => ({ display: d, raw: r }));
+            setTopics(sorted);
           }
         },
       });

@@ -1,14 +1,35 @@
-import { useCallback, useState, useRef } from 'react';
+import { useCallback, useState } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload } from '../lib/zenoh';
+import { getSamplePayload, extractMachineId } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useFleetContext } from '../contexts/FleetContext';
+import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
-import {
-  decodeNetworkStatus,
-  NetworkStatus,
-  HealthCheck,
-} from '../proto/network_monitor';
+
+// Local interfaces for decoded network status (SchemaRegistry returns enums as strings)
+interface HealthCheck {
+  name: string;
+  type: number;
+  typeName: string;
+  target: string;
+  status: number;
+  statusName: string;
+  latencyMs: number;
+  statusCode: number;
+  resolved: string;
+  error: string;
+}
+
+interface Summary {
+  total: number;
+  healthy: number;
+  unhealthy: number;
+}
+
+interface NetworkStatus {
+  checks: HealthCheck[];
+  summary?: Summary;
+}
 
 interface DragHandleProps {
   [key: string]: unknown;
@@ -17,6 +38,11 @@ interface DragHandleProps {
 interface NetworkMonitorViewPanelProps {
   onRemove?: () => void;
   dragHandleProps?: DragHandleProps;
+}
+
+interface MachineNetworkStatus {
+  status: NetworkStatus;
+  lastUpdate: number;
 }
 
 function StatusDot({ status }: { status: string }) {
@@ -53,35 +79,109 @@ function CheckRow({ check }: { check: HealthCheck }) {
   );
 }
 
+// Map CheckType enum string/number to display name
+function checkTypeToString(typeStr: string | number): string {
+  if (typeof typeStr === 'string') {
+    // SchemaRegistry returns full enum name (e.g., "CHECK_TYPE_HTTP") — strip prefix
+    const stripped = typeStr.replace(/^CHECK_TYPE_/, '');
+    return stripped || typeStr;
+  }
+  switch (typeStr) {
+    case 0: return 'HTTP';
+    case 1: return 'DNS';
+    case 2: return 'PING';
+    default: return 'UNKNOWN';
+  }
+}
+
+// Map CheckStatus enum string/number to display name
+function checkStatusToString(statusStr: string | number): string {
+  if (typeof statusStr === 'string') {
+    // SchemaRegistry returns full enum name (e.g., "CHECK_STATUS_OK") — strip prefix
+    const stripped = statusStr.replace(/^CHECK_STATUS_/, '');
+    return stripped || statusStr;
+  }
+  switch (statusStr) {
+    case 0: return 'OK';
+    case 1: return 'FAILED';
+    case 2: return 'TIMEOUT';
+    default: return 'UNKNOWN';
+  }
+}
+
+// Convert raw decoded check into typed HealthCheck
+// Note: protobufjs toObject() uses snake_case field names (latency_ms, status_code)
+function toHealthCheck(raw: Record<string, unknown>): HealthCheck {
+  return {
+    name: (raw.name as string) ?? '',
+    type: typeof raw.type === 'number' ? raw.type : 0,
+    typeName: checkTypeToString(raw.type as string | number ?? 0),
+    target: (raw.target as string) ?? '',
+    status: typeof raw.status === 'number' ? raw.status : 0,
+    statusName: checkStatusToString(raw.status as string | number ?? 0),
+    latencyMs: (raw.latencyMs as number) ?? 0,
+    statusCode: (raw.statusCode as number) ?? 0,
+    resolved: (raw.resolved as string) ?? '',
+    error: (raw.error as string) ?? '',
+  };
+}
+
 export function NetworkMonitorViewPanel({
   onRemove,
   dragHandleProps,
 }: NetworkMonitorViewPanelProps) {
-  const { machines } = useFleetContext();
-  const [status, setStatus] = useState<NetworkStatus | null>(null);
-  const lastUpdateRef = useRef<number>(0);
+  const { machines, selectedMachineId } = useFleetContext();
+  const { registry } = useSchemaRegistry();
+  const [statusMap, setStatusMap] = useState<Map<string, MachineNetworkStatus>>(new Map());
 
-  const networkTopic = '0/network-monitor%status/**';
+  // Match any machine/scope via ** (network-monitor uses vanilla zenoh, not ros-z)
+  const networkTopic = '**/network-monitor/status';
 
   const handleSample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
-      const data = decodeNetworkStatus(payload);
-      if (data) {
-        setStatus(data);
-        lastUpdateRef.current = Date.now();
+      const machineId = extractMachineId(sample.keyexpr().toString()) ?? 'unknown';
+
+      // Try SchemaRegistry first, then tryDecodeAny for vanilla zenoh topics
+      let result = registry.decode('bubbaloop.network_monitor.v1.NetworkStatus', payload);
+      if (!result) {
+        result = registry.tryDecodeAny(payload);
+      }
+      if (result) {
+        const raw = result.data;
+        const checks = ((raw.checks as Record<string, unknown>[]) ?? []).map(toHealthCheck);
+        const summary = raw.summary as Summary | undefined;
+        const status: NetworkStatus = { checks, summary };
+        setStatusMap(prev => {
+          const next = new Map(prev);
+          next.set(machineId, { status, lastUpdate: Date.now() });
+          return next;
+        });
       }
     } catch (e) {
       console.error('[NetworkMonitor] Failed to decode:', e);
     }
-  }, []);
+  }, [registry]);
 
   const { messageCount } = useZenohSubscription(networkTopic, handleSample);
 
-  const healthyCount = status?.summary?.healthy ?? 0;
-  const unhealthyCount = status?.summary?.unhealthy ?? 0;
-  const totalCount = status?.summary?.total ?? 0;
-  const allHealthy = totalCount > 0 && unhealthyCount === 0;
+  // Filter entries by selectedMachineId if set
+  const visibleEntries = Array.from(statusMap.entries()).filter(([machineId]) =>
+    !selectedMachineId || machineId === selectedMachineId
+  );
+
+  // Aggregate summary counts across all visible machines
+  const aggregateSummary = visibleEntries.reduce(
+    (acc, [, { status }]) => ({
+      healthy: acc.healthy + (status.summary?.healthy ?? 0),
+      unhealthy: acc.unhealthy + (status.summary?.unhealthy ?? 0),
+      total: acc.total + (status.summary?.total ?? 0),
+    }),
+    { healthy: 0, unhealthy: 0, total: 0 }
+  );
+
+  const allHealthy = aggregateSummary.total > 0 && aggregateSummary.unhealthy === 0;
+  const hasData = visibleEntries.length > 0;
 
   return (
     <div className="network-panel">
@@ -118,14 +218,14 @@ export function NetworkMonitorViewPanel({
       </div>
 
       <div className="network-content-container">
-        {!status ? (
+        {!hasData ? (
           <div className="network-waiting">
             <div className="spinner" />
             <span>Waiting for network status...</span>
           </div>
         ) : (
           <div className="network-content">
-            {/* Summary */}
+            {/* Aggregate Summary */}
             <div className={`summary-bar ${allHealthy ? 'all-ok' : 'has-issues'}`}>
               <div className="summary-icon">
                 {allHealthy ? (
@@ -142,20 +242,34 @@ export function NetworkMonitorViewPanel({
               </div>
               <div className="summary-text">
                 <span className="summary-status">
-                  {allHealthy ? 'All Systems Operational' : `${unhealthyCount} Check${unhealthyCount !== 1 ? 's' : ''} Failing`}
+                  {allHealthy ? 'All Systems Operational' : `${aggregateSummary.unhealthy} Check${aggregateSummary.unhealthy !== 1 ? 's' : ''} Failing`}
                 </span>
                 <span className="summary-counts">
-                  {healthyCount}/{totalCount} healthy
+                  {aggregateSummary.healthy}/{aggregateSummary.total} healthy across {visibleEntries.length} machine{visibleEntries.length !== 1 ? 's' : ''}
                 </span>
               </div>
             </div>
 
-            {/* Checks List */}
-            <div className="checks-list">
-              {status.checks.map((check, i) => (
-                <CheckRow key={`${check.name}-${i}`} check={check} />
-              ))}
-            </div>
+            {/* Per-Machine Sections */}
+            {visibleEntries.map(([machineId, { status, lastUpdate }]) => {
+              const isStale = Date.now() - lastUpdate > 15000;
+              const machine = machines.find(m => m.machineId === machineId);
+              const displayName = machine?.hostname || machineId;
+
+              return (
+                <div key={machineId} className="machine-section">
+                  <div className="machine-header">
+                    <span className="machine-name">{displayName}</span>
+                    {isStale && <span className="stale-badge">stale</span>}
+                  </div>
+                  <div className="checks-list">
+                    {status.checks.map((check, i) => (
+                      <CheckRow key={`${machineId}-${check.name}-${i}`} check={check} />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -373,6 +487,40 @@ export function NetworkMonitorViewPanel({
         .summary-counts {
           font-size: 11px;
           color: var(--text-muted);
+        }
+
+        .machine-section {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          margin-top: 8px;
+        }
+
+        .machine-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 6px 0;
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .machine-name {
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text-primary);
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        .stale-badge {
+          font-size: 9px;
+          font-weight: 600;
+          padding: 2px 6px;
+          border-radius: 3px;
+          background: rgba(255, 167, 38, 0.15);
+          color: #ffa726;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
         }
 
         .checks-list {

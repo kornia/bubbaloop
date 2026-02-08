@@ -10,7 +10,7 @@ interface SortableJsonCardProps {
   isHidden?: boolean;
   onTopicChange: (topic: string) => void;
   onRemove: () => void;
-  availableTopics: string[];
+  availableTopics: Array<{ display: string; raw: string }>;
 }
 
 export function SortableJsonCard({

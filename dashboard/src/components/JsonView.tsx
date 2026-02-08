@@ -6,8 +6,6 @@ import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContex
 import { useFleetContext } from '../contexts/FleetContext';
 import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
-import { decodeCompressedImage } from '../proto/camera';
-import { decodeCurrentWeather, decodeHourlyForecast, decodeDailyForecast } from '../proto/weather';
 import { decodeNodeList, decodeNodeEvent } from '../proto/daemon';
 import { SchemaRegistry } from '../lib/schema-registry';
 import { Duration } from 'typed-duration';
@@ -50,7 +48,23 @@ function bigIntToString(obj: unknown): unknown {
 // Schema source for display badges
 export type SchemaSourceType = 'builtin' | 'dynamic' | 'raw';
 
-// Try to decode payload in various formats, using schema hint from topic
+// Post-process decoded data: replace large byte fields with size summaries
+function summarizeLargeFields(data: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (typeof value === 'string' && value.length > 1000) {
+      // Large base64 encoded bytes — show size instead
+      result[key + 'Size'] = Math.round(value.length * 0.75); // approx decoded size
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      result[key] = summarizeLargeFields(value as Record<string, unknown>);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+// Try to decode payload using schema registry first, then built-in decoders as fallback
 function decodePayload(payload: Uint8Array, topic: string, registry?: SchemaRegistry): { data: unknown; schema: string; schemaSource: SchemaSourceType; error?: string } {
   const schemaFromTopic = extractSchemaFromTopic(topic);
   const text = new TextDecoder().decode(payload);
@@ -63,120 +77,56 @@ function decodePayload(payload: Uint8Array, topic: string, registry?: SchemaRegi
     // Not JSON, continue
   }
 
-  // 2. Try decoding based on schema hint from topic
-  if (schemaFromTopic) {
-    // Weather types
-    if (schemaFromTopic.includes('CurrentWeather')) {
-      const msg = decodeCurrentWeather(payload);
-      if (msg) {
-        return { data: bigIntToString(msg), schema: schemaFromTopic, schemaSource: 'builtin' };
-      }
-    }
-    if (schemaFromTopic.includes('HourlyForecast')) {
-      const msg = decodeHourlyForecast(payload);
-      if (msg) {
-        return { data: bigIntToString(msg), schema: schemaFromTopic, schemaSource: 'builtin' };
-      }
-    }
-    if (schemaFromTopic.includes('DailyForecast')) {
-      const msg = decodeDailyForecast(payload);
-      if (msg) {
-        return { data: bigIntToString(msg), schema: schemaFromTopic, schemaSource: 'builtin' };
-      }
-    }
-    // Camera types
-    if (schemaFromTopic.includes('CompressedImage')) {
-      const msg = decodeCompressedImage(payload);
-      if (msg.format || msg.header) {
-        const jsonData: Record<string, unknown> = {
-          format: msg.format,
-          dataSize: msg.data.length,
-        };
-        if (msg.header) {
-          jsonData.header = {
-            acqTime: msg.header.acqTime.toString(),
-            pubTime: msg.header.pubTime.toString(),
-            sequence: msg.header.sequence,
-            frameId: msg.header.frameId,
-            machineId: msg.header.machineId,
-            scope: msg.header.scope,
-          };
-          if (msg.header.acqTime > 0n && msg.header.pubTime > 0n) {
-            const latencyNs = msg.header.pubTime - msg.header.acqTime;
-            const latencyMs = Number(latencyNs) / 1_000_000;
-            if (latencyMs > 0 && latencyMs < 10000) {
-              jsonData.latencyMs = latencyMs.toFixed(2);
-            }
-          }
-        }
-        return { data: jsonData, schema: schemaFromTopic, schemaSource: 'builtin' };
+  // 1b. Plain text messages (health heartbeats, simple string payloads)
+  if (payload.length < 200 && /^[\x20-\x7e]+$/.test(text)) {
+    return { data: { message: text }, schema: 'Text', schemaSource: 'builtin' };
+  }
+
+  // 2. Dynamic SchemaRegistry — decode using schemas fetched from daemon/nodes
+  if (registry) {
+    // 2a. If we have a schema hint from the topic (ros-z embeds type name), use it directly
+    if (schemaFromTopic) {
+      const result = registry.decode(schemaFromTopic, payload);
+      if (result) {
+        const data = summarizeLargeFields(result.data);
+        return { data, schema: result.typeName, schemaSource: 'dynamic' };
       }
     }
 
-    // 2b. Try dynamic SchemaRegistry with schema hint
-    if (registry) {
-      const result = registry.decode(schemaFromTopic, payload);
-      if (result) {
-        return { data: result.data, schema: result.typeName, schemaSource: 'dynamic' };
+    // 2b. Infer type from topic path (e.g., "network-monitor" → NetworkStatus)
+    const guessedType = registry.guessTypeForTopic(topic);
+    if (guessedType) {
+      const guessResult = registry.decode(guessedType, payload);
+      if (guessResult) {
+        const data = summarizeLargeFields(guessResult.data);
+        return { data, schema: guessResult.typeName, schemaSource: 'dynamic' };
       }
+    }
+
+    // 2c. Last resort: try all known types (ambiguous — may pick wrong type)
+    const result = registry.tryDecodeAny(payload);
+    if (result) {
+      const data = summarizeLargeFields(result.data);
+      return { data, schema: result.typeName, schemaSource: 'dynamic' };
     }
   }
 
-  // 3. Try daemon topics (they use key expressions, not ros-z schema format)
-  if (topic.includes('bubbaloop/daemon/nodes')) {
+  // 3. Built-in decoders as fallback (when SchemaRegistry is not yet loaded)
+  // Daemon topics (vanilla zenoh, no ros-z schema hint)
+  if (topic.includes('daemon/nodes')) {
     const msg = decodeNodeList(payload);
     if (msg) {
       return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeList', schemaSource: 'builtin' };
     }
   }
-  if (topic.includes('bubbaloop/daemon/events')) {
+  if (topic.includes('daemon/events')) {
     const msg = decodeNodeEvent(payload);
     if (msg) {
       return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeEvent', schemaSource: 'builtin' };
     }
   }
 
-  // 4. Fallback: try all known protobuf decoders
-  // Try CompressedImage
-  try {
-    const msg = decodeCompressedImage(payload);
-    if (msg.format || msg.header) {
-      const jsonData: Record<string, unknown> = {
-        format: msg.format,
-        dataSize: msg.data.length,
-      };
-      if (msg.header) {
-        jsonData.header = {
-          acqTime: msg.header.acqTime.toString(),
-          pubTime: msg.header.pubTime.toString(),
-          sequence: msg.header.sequence,
-          frameId: msg.header.frameId,
-        };
-        if (msg.header.acqTime > 0n && msg.header.pubTime > 0n) {
-          const latencyNs = msg.header.pubTime - msg.header.acqTime;
-          const latencyMs = Number(latencyNs) / 1_000_000;
-          if (latencyMs > 0 && latencyMs < 10000) {
-            jsonData.latencyMs = latencyMs.toFixed(2);
-          }
-        }
-      }
-      return { data: jsonData, schema: 'bubbaloop.camera.v1.CompressedImage', schemaSource: 'builtin' };
-    }
-  } catch {
-    // Not a valid CompressedImage
-  }
-
-  // Try CurrentWeather
-  try {
-    const msg = decodeCurrentWeather(payload);
-    if (msg && msg.timezone) {
-      return { data: bigIntToString(msg), schema: 'bubbaloop.weather.v1.CurrentWeather', schemaSource: 'builtin' };
-    }
-  } catch {
-    // Not a valid CurrentWeather
-  }
-
-  // 5. Show raw data preview
+  // 4. Show raw data preview
   const preview = payload.slice(0, 100);
   const hex = Array.from(preview).map(b => b.toString(16).padStart(2, '0')).join(' ');
   return {
@@ -199,7 +149,7 @@ interface RawDataViewPanelProps {
   topic: string;
   onTopicChange?: (topic: string) => void;
   onRemove?: () => void;
-  availableTopics?: string[];
+  availableTopics?: Array<{ display: string; raw: string }>;
   dragHandleProps?: DragHandleProps;
 }
 
@@ -391,7 +341,7 @@ export function RawDataViewPanel({
           >
             <option value="">-- Select topic --</option>
             {availableTopics.map((t) => (
-              <option key={t} value={t}>{t}</option>
+              <option key={t.raw} value={t.raw}>{t.display}</option>
             ))}
           </select>
         ) : (
