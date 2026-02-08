@@ -122,7 +122,8 @@ export function CameraView({
   }, [cameraName, handleFrame]);
 
   // Get SchemaRegistry for dynamic decoding
-  const { registry } = useSchemaRegistry();
+  const { registry, discoverForTopic, schemaVersion } = useSchemaRegistry();
+  const lastCameraPayloadRef = useRef<{ payload: Uint8Array; topic: string } | null>(null);
 
   // Handle incoming samples from Zenoh
   const handleSample = useCallback((sample: Sample) => {
@@ -131,13 +132,16 @@ export function CameraView({
 
     try {
       const payload = getSamplePayload(sample);
+      const sampleTopic = sample.keyexpr().toString();
 
       // Use SchemaRegistry to look up CompressedImage type and decode directly.
       // This preserves raw bytes (no base64 roundtrip) for H264 decoding.
       const msgType = registry.lookupType('bubbaloop.camera.v1.CompressedImage');
       if (!msgType) {
-        // Fallback: assume raw H264 data (no proto wrapping)
-        decoder.decode(payload, Date.now() * 1000).catch(console.error);
+        // Buffer payload for retry when schemas arrive
+        lastCameraPayloadRef.current = { payload, topic: sampleTopic };
+        discoverForTopic(sampleTopic);
+        // Don't try raw H264 decode — data is protobuf-wrapped, not raw H264
         return;
       }
 
@@ -173,7 +177,36 @@ export function CameraView({
     } catch (e) {
       console.error('[CameraView] Failed to process sample:', e);
     }
-  }, [registry]);
+  }, [registry, discoverForTopic]);
+
+  // Re-decode buffered frame when new schemas arrive
+  useEffect(() => {
+    if (schemaVersion === 0 || !lastCameraPayloadRef.current) return;
+    const msgType = registry.lookupType('bubbaloop.camera.v1.CompressedImage');
+    if (msgType && decoderRef.current) {
+      const { payload } = lastCameraPayloadRef.current;
+      lastCameraPayloadRef.current = null;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const msg = msgType.decode(payload) as any;
+        const format: string = msg.format ?? '';
+        const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data ?? []);
+        if (!format || format === 'h264') {
+          const header = msg.header ? {
+            acqTime: toLongBigInt(msg.header.acqTime),
+            pubTime: toLongBigInt(msg.header.pubTime),
+            sequence: msg.header.sequence ?? 0,
+            frameId: msg.header.frameId ?? '',
+          } : undefined;
+          lastMetaRef.current = { header, format, dataSize: data.length };
+          const timestamp = header ? Number(header.pubTime / 1000n) : Date.now() * 1000;
+          decoderRef.current.decode(data, timestamp).catch(console.error);
+        }
+      } catch (e) {
+        console.error('[CameraView] Failed to re-decode buffered frame:', e);
+      }
+    }
+  }, [schemaVersion, registry]);
 
   // Auto-detect correct topic from discovered topics using the camera name.
   // Scans availableTopics for a display name matching "camera/{cameraName}/compressed"

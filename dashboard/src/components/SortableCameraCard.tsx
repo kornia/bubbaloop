@@ -15,7 +15,7 @@ interface SortableCameraCardProps {
   availableTopics: Array<{ display: string; raw: string }>;
 }
 
-export function SortableCameraCard({
+export const SortableCameraCard = React.memo(function SortableCameraCard({
   id,
   cameraName,
   topic,
@@ -59,4 +59,4 @@ export function SortableCameraCard({
       />
     </div>
   );
-}
+});

@@ -10,7 +10,7 @@ interface SortableSystemTelemetryCardProps {
   onRemove: () => void;
 }
 
-export function SortableSystemTelemetryCard({
+export const SortableSystemTelemetryCard = React.memo(function SortableSystemTelemetryCard({
   id,
   isHidden = false,
   onRemove,
@@ -41,4 +41,4 @@ export function SortableSystemTelemetryCard({
       />
     </div>
   );
-}
+});

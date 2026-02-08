@@ -175,4 +175,3 @@ pub fn get_descriptor_for_message<T: MessageTypeInfo>(
     let descriptor_bytes = extract_message_descriptor(type_name)?;
     Ok(MessageDescriptor::new(descriptor_bytes, type_name))
 }
-

@@ -104,12 +104,10 @@ export function loadPanels(): PanelConfig[] | null {
     const currentVersion = String(PANEL_FORMAT_VERSION);
     if (storedVersion !== currentVersion) {
       console.log(`[Storage] Panel format version changed (${storedVersion} -> ${currentVersion}), clearing stale panels`);
+      // Clear new-format data only; preserve legacy keys so migration can still run
       localStorage.removeItem(STORAGE_KEYS.PANELS);
       localStorage.removeItem(STORAGE_KEYS.PANEL_ORDER);
-      localStorage.removeItem(STORAGE_KEYS.CAMERAS);
-      localStorage.removeItem(STORAGE_KEYS.CAMERA_ORDER);
       localStorage.setItem(STORAGE_KEYS.PANEL_VERSION, currentVersion);
-      return null;
     }
 
     const stored = localStorage.getItem(STORAGE_KEYS.PANELS);

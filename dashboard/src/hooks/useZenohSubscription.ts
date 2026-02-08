@@ -65,7 +65,7 @@ export function useZenohSubscription(
       if (topicStats) {
         setStats(topicStats);
       }
-    }, 1000);
+    }, 2000);
 
     // Cleanup: unsubscribe when component unmounts or topic changes
     // This triggers auto-cleanup in the manager if this was the last listener

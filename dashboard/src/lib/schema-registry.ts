@@ -33,6 +33,21 @@ export interface DecodeResult {
 }
 
 /**
+ * Extract schema name from ros-z topic format: <domain_id>/<topic>/<schema>/<hash>
+ * e.g., "0/weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_..."
+ */
+export function extractSchemaFromTopic(topic: string): string | null {
+  const parts = topic.split('/');
+  for (let i = parts.length - 2; i >= 1; i--) {
+    const part = parts[i];
+    if (part.includes('.') && !part.startsWith('RIHS')) {
+      return part;
+    }
+  }
+  return null;
+}
+
+/**
  * Load a FileDescriptorSet from raw bytes into a protobufjs Root.
  * Uses the descriptor extension which adds Root.fromDescriptor() at runtime.
  */
@@ -64,8 +79,12 @@ function rootFromDescriptorBytes(bytes: Uint8Array): protobuf.Root {
 export class SchemaRegistry {
   /** Map from source key to loaded schema */
   private schemas = new Map<string, SchemaSource>();
-  /** Set of node prefixes we've already queried for schemas */
-  private queriedPrefixes = new Set<string>();
+  /** Node prefixes whose schemas loaded successfully — never re-query */
+  private succeededPrefixes = new Set<string>();
+  /** Node prefixes that failed — prefix -> last attempt timestamp */
+  private failedPrefixes = new Map<string, number>();
+  /** Cooldown (ms) before retrying a failed prefix */
+  private static readonly RETRY_COOLDOWN_MS = 10_000;
   /** Whether core schemas have been fetched */
   private coreLoaded = false;
   /** Cached type names array, invalidated when schemas change */
@@ -152,8 +171,14 @@ export class SchemaRegistry {
    * @returns true if schemas were fetched successfully
    */
   async fetchNodeSchema(session: Session, prefix: string): Promise<boolean> {
-    if (this.queriedPrefixes.has(prefix)) return false;
-    this.queriedPrefixes.add(prefix);
+    // Already loaded successfully — skip
+    if (this.succeededPrefixes.has(prefix)) return false;
+
+    // Failed before — only retry after cooldown
+    const lastFailed = this.failedPrefixes.get(prefix);
+    if (lastFailed !== undefined) {
+      if (Date.now() - lastFailed < SchemaRegistry.RETRY_COOLDOWN_MS) return false;
+    }
 
     try {
       const receiver = await session.get(`${prefix}/schema`, {
@@ -176,9 +201,16 @@ export class SchemaRegistry {
         }
       }
 
+      if (loaded) {
+        this.succeededPrefixes.add(prefix);
+        this.failedPrefixes.delete(prefix);
+      } else {
+        this.failedPrefixes.set(prefix, Date.now());
+      }
+
       return loaded;
     } catch {
-      // Not all nodes have schema queryables — this is expected
+      this.failedPrefixes.set(prefix, Date.now());
       return false;
     }
   }
@@ -187,51 +219,45 @@ export class SchemaRegistry {
    * Proactively discover all node schemas by querying wildcard schema endpoints.
    * Called at startup to ensure all node types are available for decoding.
    */
-  async discoverAllNodeSchemas(session: Session, machineIds?: string[]): Promise<number> {
-    const patterns: string[] = [];
-    if (machineIds && machineIds.length > 0) {
-      for (const mid of machineIds) {
-        patterns.push(`bubbaloop/${mid}/**/schema`);
-      }
-    } else {
-      patterns.push('**/schema');
-    }
+  async discoverAllNodeSchemas(session: Session, _machineIds?: string[]): Promise<number> {
+    // Always use broad wildcard to avoid machine ID format mismatches
+    // (e.g., nvidia_orin00 vs nvidia-orin00)
+    const pattern = 'bubbaloop/**/schema';
 
     let discovered = 0;
-    for (const pattern of patterns) {
-      try {
-        const receiver = await session.get(pattern, {
-          timeout: Duration.milliseconds.of(5000),
-        });
+    try {
+      const receiver = await session.get(pattern, {
+        timeout: Duration.milliseconds.of(5000),
+      });
 
-        if (receiver) {
-          for await (const replyItem of receiver) {
-            if (replyItem instanceof Reply) {
-              const replyResult = replyItem.result();
-              if (replyResult instanceof ReplyError) continue;
-              const payload = getSamplePayload(replyResult as Sample);
-              if (payload.length > 0) {
-                const keyExpr = (replyResult as Sample).keyexpr().toString();
-                // Skip core daemon schemas (already loaded by fetchCoreSchemas)
-                if (keyExpr.includes('/daemon/api/schemas')) continue;
-                // Extract node name from key expression (last segment before /schema)
-                const segments = keyExpr.split('/');
-                const schemaIdx = segments.lastIndexOf('schema');
-                const nodeName = schemaIdx > 0 ? segments[schemaIdx - 1] : keyExpr;
-                // Store prefix (without /schema) to match discoverSchemaForTopic's key format
-                const prefix = segments.slice(0, schemaIdx).join('/');
-                const sourceKey = `node:${prefix}`;
-                if (!this.queriedPrefixes.has(prefix) && this.loadDescriptorSet(payload, sourceKey, nodeName)) {
-                  this.queriedPrefixes.add(prefix);
-                  discovered++;
-                }
+      if (receiver) {
+        for await (const replyItem of receiver) {
+          if (replyItem instanceof Reply) {
+            const replyResult = replyItem.result();
+            if (replyResult instanceof ReplyError) continue;
+            const payload = getSamplePayload(replyResult as Sample);
+            if (payload.length > 0) {
+              const keyExpr = (replyResult as Sample).keyexpr().toString();
+              // Skip core daemon schemas (already loaded by fetchCoreSchemas)
+              if (keyExpr.includes('/daemon/api/schemas')) continue;
+              // Extract node name from key expression (last segment before /schema)
+              const segments = keyExpr.split('/');
+              const schemaIdx = segments.lastIndexOf('schema');
+              const nodeName = schemaIdx > 0 ? segments[schemaIdx - 1] : keyExpr;
+              // Store prefix (without /schema) to match discoverSchemaForTopic's key format
+              const prefix = segments.slice(0, schemaIdx).join('/');
+              // Only skip if already succeeded — failed prefixes should be retried
+              if (!this.succeededPrefixes.has(prefix) && this.loadDescriptorSet(payload, `node:${prefix}`, nodeName)) {
+                this.succeededPrefixes.add(prefix);
+                this.failedPrefixes.delete(prefix);
+                discovered++;
               }
             }
           }
         }
-      } catch (e) {
-        console.error(`[SchemaRegistry] Failed to discover node schemas with pattern ${pattern}:`, e);
       }
+    } catch (e) {
+      console.error(`[SchemaRegistry] Failed to discover node schemas with pattern ${pattern}:`, e);
     }
 
     return discovered;
@@ -244,11 +270,17 @@ export class SchemaRegistry {
    * @param session - Active Zenoh session
    * @param topic - The full topic string
    */
-  async discoverSchemaForTopic(session: Session, topic: string): Promise<void> {
+  async discoverSchemaForTopic(session: Session, topic: string): Promise<boolean> {
     const prefix = extractTopicPrefix(topic);
-    if (prefix && !this.queriedPrefixes.has(prefix)) {
-      await this.fetchNodeSchema(session, prefix);
+    if (prefix && !this.succeededPrefixes.has(prefix)) {
+      const found = await this.fetchNodeSchema(session, prefix);
+      if (found) return true;
     }
+    // Prefix-based query failed — topic path may not match node name
+    // (e.g., camera/* topics vs rtsp-camera/schema, weather/* vs openmeteo/schema).
+    // Fall back to wildcard discovery which finds all node schemas.
+    const count = await this.discoverAllNodeSchemas(session);
+    return count > 0;
   }
 
   /**
@@ -326,6 +358,33 @@ export class SchemaRegistry {
       }
     }
     return null;
+  }
+
+  /**
+   * Consolidated decode chain for a given topic and payload.
+   * Tries: ros-z type hint -> topic-based guess -> brute force.
+   *
+   * @param topic - The full Zenoh topic string
+   * @param data - Raw protobuf bytes
+   * @returns Decoded result or null if no type matches
+   */
+  tryDecodeForTopic(topic: string, data: Uint8Array): DecodeResult | null {
+    // 1. Try ros-z type hint embedded in topic
+    const schemaHint = extractSchemaFromTopic(topic);
+    if (schemaHint) {
+      const result = this.decode(schemaHint, data);
+      if (result) return result;
+    }
+
+    // 2. Infer type from topic path segments
+    const guessedType = this.guessTypeForTopic(topic);
+    if (guessedType) {
+      const result = this.decode(guessedType, data);
+      if (result) return result;
+    }
+
+    // 3. Brute force: try all known types
+    return this.tryDecodeAny(data);
   }
 
   /**
@@ -413,7 +472,8 @@ export class SchemaRegistry {
   /** Clear all loaded schemas and reset state. */
   clear(): void {
     this.schemas.clear();
-    this.queriedPrefixes.clear();
+    this.succeededPrefixes.clear();
+    this.failedPrefixes.clear();
     this.coreLoaded = false;
     this.typeNamesCache = null;
     this.topicGuessCache.clear();

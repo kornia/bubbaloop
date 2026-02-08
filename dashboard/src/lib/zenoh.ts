@@ -2,7 +2,7 @@ import { Session, Config, Subscriber, Sample } from '@eclipse-zenoh/zenoh-ts';
 import { useEffect, useRef, useState, useCallback } from 'react';
 
 export interface ZenohConfig {
-  endpoint: string; // e.g., 'ws://127.0.0.1:10000'
+  endpoint: string; // e.g., 'ws://127.0.0.1:10001'
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -227,7 +227,7 @@ export interface UseTopicDiscoveryResult {
  *   vanilla: "bubbaloop/local/nvidia_orin00/health/system-telemetry"        → "local/nvidia_orin00/health/system-telemetry"
  *   legacy:  "bubbaloop/daemon/nodes"                                       → "daemon/nodes"
  */
-function normalizeKeyExpr(keyExpr: string): { display: string; raw: string } {
+export function normalizeKeyExpr(keyExpr: string): { display: string; raw: string } {
   const parts = keyExpr.split('/');
 
   // ros-z format: starts with domain ID (digit), has %‐encoded topic, then type/hash

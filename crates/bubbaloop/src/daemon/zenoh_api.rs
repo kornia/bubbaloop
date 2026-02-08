@@ -608,3 +608,218 @@ pub async fn run_zenoh_api_server(
     let service = ZenohApiService::new(session, node_manager);
     service.run(shutdown).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schemas::daemon::v1::{CommandType, NodeState, NodeStatus};
+
+    // status_to_string tests
+    #[test]
+    fn test_status_to_string_all_known() {
+        assert_eq!(status_to_string(0), "unknown");
+        assert_eq!(status_to_string(1), "stopped");
+        assert_eq!(status_to_string(2), "running");
+        assert_eq!(status_to_string(3), "failed");
+        assert_eq!(status_to_string(4), "installing");
+        assert_eq!(status_to_string(5), "building");
+        assert_eq!(status_to_string(6), "not-installed");
+    }
+
+    #[test]
+    fn test_status_to_string_unknown_values() {
+        assert_eq!(status_to_string(7), "unknown");
+        assert_eq!(status_to_string(-1), "unknown");
+        assert_eq!(status_to_string(100), "unknown");
+    }
+
+    // parse_command tests
+    #[test]
+    fn test_parse_command_basic() {
+        assert_eq!(parse_command("start") as i32, CommandType::Start as i32);
+        assert_eq!(parse_command("stop") as i32, CommandType::Stop as i32);
+        assert_eq!(parse_command("restart") as i32, CommandType::Restart as i32);
+        assert_eq!(parse_command("install") as i32, CommandType::Install as i32);
+        assert_eq!(
+            parse_command("uninstall") as i32,
+            CommandType::Uninstall as i32
+        );
+        assert_eq!(parse_command("build") as i32, CommandType::Build as i32);
+        assert_eq!(parse_command("clean") as i32, CommandType::Clean as i32);
+        assert_eq!(parse_command("refresh") as i32, CommandType::Refresh as i32);
+    }
+
+    #[test]
+    fn test_parse_command_case_insensitive() {
+        assert_eq!(parse_command("START") as i32, CommandType::Start as i32);
+        assert_eq!(parse_command("Start") as i32, CommandType::Start as i32);
+        assert_eq!(parse_command("sTaRt") as i32, CommandType::Start as i32);
+        assert_eq!(parse_command("STOP") as i32, CommandType::Stop as i32);
+        assert_eq!(parse_command("ReStArT") as i32, CommandType::Restart as i32);
+    }
+
+    #[test]
+    fn test_parse_command_aliases() {
+        // Enable autostart aliases
+        assert_eq!(
+            parse_command("enable") as i32,
+            CommandType::EnableAutostart as i32
+        );
+        assert_eq!(
+            parse_command("enable_autostart") as i32,
+            CommandType::EnableAutostart as i32
+        );
+        assert_eq!(
+            parse_command("enable-autostart") as i32,
+            CommandType::EnableAutostart as i32
+        );
+        // Disable aliases
+        assert_eq!(
+            parse_command("disable") as i32,
+            CommandType::DisableAutostart as i32
+        );
+        assert_eq!(
+            parse_command("disable_autostart") as i32,
+            CommandType::DisableAutostart as i32
+        );
+        assert_eq!(
+            parse_command("disable-autostart") as i32,
+            CommandType::DisableAutostart as i32
+        );
+        // Add/Remove aliases
+        assert_eq!(parse_command("add") as i32, CommandType::AddNode as i32);
+        assert_eq!(
+            parse_command("add_node") as i32,
+            CommandType::AddNode as i32
+        );
+        assert_eq!(
+            parse_command("remove") as i32,
+            CommandType::RemoveNode as i32
+        );
+        assert_eq!(
+            parse_command("remove_node") as i32,
+            CommandType::RemoveNode as i32
+        );
+    }
+
+    #[test]
+    fn test_parse_command_unknown_defaults_to_refresh() {
+        assert_eq!(
+            parse_command("unknown_command") as i32,
+            CommandType::Refresh as i32
+        );
+        assert_eq!(parse_command("foo") as i32, CommandType::Refresh as i32);
+        assert_eq!(parse_command("") as i32, CommandType::Refresh as i32);
+        assert_eq!(
+            parse_command("arbitrary-string") as i32,
+            CommandType::Refresh as i32
+        );
+    }
+
+    // node_state_to_response tests
+    #[test]
+    fn test_node_state_to_response_maps_fields() {
+        let state = NodeState {
+            name: "test-node".to_string(),
+            path: "/path/to/node".to_string(),
+            status: NodeStatus::Running as i32,
+            installed: true,
+            autostart_enabled: true,
+            version: "1.0.0".to_string(),
+            description: "A test node".to_string(),
+            node_type: "rust".to_string(),
+            is_built: true,
+            build_output: vec!["line1".to_string()],
+            base_node: "base".to_string(),
+            config_override: "/etc/config.yaml".to_string(),
+            ..Default::default()
+        };
+        let resp = node_state_to_response(&state);
+        assert_eq!(resp.name, "test-node");
+        assert_eq!(resp.path, "/path/to/node");
+        assert_eq!(resp.status, "running");
+        assert!(resp.installed);
+        assert!(resp.autostart_enabled);
+        assert_eq!(resp.version, "1.0.0");
+        assert_eq!(resp.description, "A test node");
+        assert_eq!(resp.node_type, "rust");
+        assert!(resp.is_built);
+        assert_eq!(resp.build_output, vec!["line1"]);
+        assert_eq!(resp.base_node, "base");
+        assert_eq!(resp.config_override, "/etc/config.yaml");
+    }
+
+    #[test]
+    fn test_node_state_to_response_default_status() {
+        let state = NodeState::default();
+        let resp = node_state_to_response(&state);
+        assert_eq!(resp.status, "unknown"); // status 0 = unknown
+    }
+
+    // api_keys module tests
+    #[test]
+    fn test_api_keys_legacy_constants() {
+        assert_eq!(api_keys::API_PREFIX_LEGACY, "bubbaloop/daemon/api");
+        assert_eq!(api_keys::API_WILDCARD_LEGACY, "bubbaloop/daemon/api/**");
+    }
+
+    #[test]
+    fn test_api_keys_machine_scoped() {
+        let machine_id = "my-machine";
+
+        assert_eq!(
+            api_keys::api_prefix(machine_id),
+            "bubbaloop/my-machine/daemon/api"
+        );
+        assert_eq!(
+            api_keys::api_wildcard(machine_id),
+            "bubbaloop/my-machine/daemon/api/**"
+        );
+        assert_eq!(
+            api_keys::health_key(machine_id),
+            "bubbaloop/my-machine/daemon/api/health"
+        );
+        assert_eq!(
+            api_keys::nodes_key(machine_id),
+            "bubbaloop/my-machine/daemon/api/nodes"
+        );
+        assert_eq!(
+            api_keys::nodes_add_key(machine_id),
+            "bubbaloop/my-machine/daemon/api/nodes/add"
+        );
+        assert_eq!(
+            api_keys::refresh_key(machine_id),
+            "bubbaloop/my-machine/daemon/api/refresh"
+        );
+    }
+
+    #[test]
+    fn test_api_keys_special_machine_id() {
+        let machine_id = "jetson_01-v2";
+
+        assert_eq!(
+            api_keys::api_prefix(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api"
+        );
+        assert_eq!(
+            api_keys::api_wildcard(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api/**"
+        );
+        assert_eq!(
+            api_keys::health_key(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api/health"
+        );
+        assert_eq!(
+            api_keys::nodes_key(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api/nodes"
+        );
+        assert_eq!(
+            api_keys::nodes_add_key(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api/nodes/add"
+        );
+        assert_eq!(
+            api_keys::refresh_key(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api/refresh"
+        );
+    }
+}

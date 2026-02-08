@@ -62,7 +62,7 @@ bubbaloop-legacy = { cmd = "cd bubbaloop-tui && npm run dev", depends-on = ["bub
 # Zenoh bridge (for dashboard WebSocket connection)
 bridge-clone = "test -d zenoh-ts || git clone https://github.com/eclipse-zenoh/zenoh-ts.git"
 bridge-build = { cmd = "cd zenoh-ts/zenoh-bridge-remote-api && cargo build --release", depends-on = ["bridge-clone"] }
-bridge = { cmd = "zenoh-ts/target/release/zenoh-bridge-remote-api --listen tcp/0.0.0.0:7447 --ws-port 10000", depends-on = ["bridge-build"] }
+bridge = { cmd = "zenoh-ts/target/release/zenoh-bridge-remote-api --listen tcp/0.0.0.0:7447 --ws-port 10001", depends-on = ["bridge-build"] }
 
 # Zenoh client router (connects to remote server, uses config from TUI)
 # Run `/server` in TUI first to configure the server endpoint

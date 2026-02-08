@@ -60,7 +60,7 @@
   plugins: {
     // Remote API for dashboard WebSocket connections
     remote_api: {
-      websocket_port: 10000,
+      websocket_port: 10001,
     },
   },
 }

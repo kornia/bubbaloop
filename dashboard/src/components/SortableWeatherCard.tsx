@@ -11,7 +11,7 @@ interface SortableWeatherCardProps {
   onRemove: () => void;
 }
 
-export function SortableWeatherCard({
+export const SortableWeatherCard = React.memo(function SortableWeatherCard({
   id,
   isHidden = false,
   onRemove,
@@ -42,4 +42,4 @@ export function SortableWeatherCard({
       />
     </div>
   );
-}
+});

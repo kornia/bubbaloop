@@ -396,14 +396,19 @@ impl NodeManager {
         // Spawn heartbeat receiver task (merges both subscriber streams)
         let manager_heartbeat = manager.clone();
         tokio::spawn(async move {
+            let mut error_count: u32 = 0;
             loop {
                 let sample = tokio::select! {
                     result = legacy_subscriber.recv_async() => {
                         match result {
                             Ok(s) => s,
                             Err(e) => {
-                                log::warn!("Legacy health subscriber error: {}", e);
-                                break;
+                                error_count += 1;
+                                if error_count % 10 == 1 {
+                                    log::warn!("Legacy health subscriber error (count={}): {}", error_count, e);
+                                }
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                continue;
                             }
                         }
                     }
@@ -411,12 +416,19 @@ impl NodeManager {
                         match result {
                             Ok(s) => s,
                             Err(e) => {
-                                log::warn!("Scoped health subscriber error: {}", e);
-                                break;
+                                error_count += 1;
+                                if error_count % 10 == 1 {
+                                    log::warn!("Scoped health subscriber error (count={}): {}", error_count, e);
+                                }
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                continue;
                             }
                         }
                     }
                 };
+
+                // Reset error count on successful receive
+                error_count = 0;
 
                 // Extract node name from key (handles both formats)
                 let key_str = sample.key_expr().as_str();
@@ -668,7 +680,7 @@ impl NodeManager {
             }
             CommandType::RemoveNode => self.remove_node(&cmd.node_name).await,
             CommandType::Refresh => self.refresh_all().await.map(|_| "Refreshed".to_string()),
-            CommandType::GetLogs => unreachable!(), // Handled above
+            CommandType::GetLogs => Ok("Logs handled above".to_string()),
         };
 
         // Get updated node state
@@ -856,7 +868,7 @@ impl NodeManager {
         drop(building);
 
         let mut nodes = self.nodes.write().await;
-        if let Some(node) = nodes.get_mut(&path) {
+        if let Some(node) = nodes.get_mut(name) {
             node.build_state.status = status;
             node.build_state.output.clear();
             node.status = NodeStatus::Building;
@@ -877,7 +889,7 @@ impl NodeManager {
         let build_cmd = {
             let nodes = self.nodes.read().await;
             let node = nodes
-                .get(&path)
+                .get(name)
                 .ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))?;
             node.manifest
                 .as_ref()
@@ -893,11 +905,11 @@ impl NodeManager {
         tokio::spawn(async move {
             let result = run_with_timeout(&manager, &path_clone, &build_cmd, &name_clone).await;
 
-            finish_build_activity(&manager, &path_clone, &name_clone, &result, "Build").await;
+            finish_build_activity(&manager, &name_clone, &result, "Build").await;
 
             if result.is_ok() {
                 let mut nodes = manager.nodes.write().await;
-                if let Some(node) = nodes.get_mut(&path_clone) {
+                if let Some(node) = nodes.get_mut(&name_clone) {
                     node.is_built = true;
                 }
                 drop(nodes);
@@ -930,7 +942,7 @@ impl NodeManager {
             let result =
                 run_with_timeout(&manager, &path_clone, "pixi run clean", &name_clone).await;
 
-            finish_build_activity(&manager, &path_clone, &name_clone, &result, "Clean").await;
+            finish_build_activity(&manager, &name_clone, &result, "Clean").await;
 
             let _ = manager.refresh_all().await;
 
@@ -939,7 +951,7 @@ impl NodeManager {
             // artifacts if the clean process hasn't fully flushed yet.
             {
                 let mut nodes = manager.nodes.write().await;
-                if let Some(node) = nodes.get_mut(&path_clone) {
+                if let Some(node) = nodes.get_mut(&name_clone) {
                     node.is_built = false;
                 }
             }
@@ -1031,7 +1043,12 @@ async fn run_with_timeout(
     name: &str,
 ) -> Result<()> {
     let timeout_duration = Duration::from_secs(BUILD_TIMEOUT_SECS);
-    match tokio::time::timeout(timeout_duration, run_build_command(manager, path, cmd)).await {
+    match tokio::time::timeout(
+        timeout_duration,
+        run_build_command(manager, path, cmd, name),
+    )
+    .await
+    {
         Ok(result) => result,
         Err(_) => Err(NodeManagerError::BuildTimeout(name.to_string())),
     }
@@ -1041,7 +1058,6 @@ async fn run_with_timeout(
 /// `label` is "Build" or "Clean" for user-facing messages.
 async fn finish_build_activity(
     manager: &Arc<NodeManager>,
-    path: &str,
     name: &str,
     result: &Result<()>,
     label: &str,
@@ -1049,7 +1065,7 @@ async fn finish_build_activity(
     manager.building_nodes.lock().await.remove(name);
 
     let mut nodes = manager.nodes.write().await;
-    if let Some(node) = nodes.get_mut(path) {
+    if let Some(node) = nodes.get_mut(name) {
         node.build_state.status = BuildStatus::Idle;
 
         let message = match result {
@@ -1094,7 +1110,12 @@ fn validate_build_command(cmd: &str) -> Result<()> {
 }
 
 /// Run a build/clean command and stream output to the node's build state
-async fn run_build_command(manager: &Arc<NodeManager>, path: &str, cmd: &str) -> Result<()> {
+async fn run_build_command(
+    manager: &Arc<NodeManager>,
+    path: &str,
+    cmd: &str,
+    name: &str,
+) -> Result<()> {
     // Validate command before execution to prevent command injection
     validate_build_command(cmd)?;
 
@@ -1124,12 +1145,12 @@ async fn run_build_command(manager: &Arc<NodeManager>, path: &str, cmd: &str) ->
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
         let manager = manager.clone();
-        let path = path.to_string();
+        let name = name.to_string();
 
         tokio::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
                 let mut nodes = manager.nodes.write().await;
-                if let Some(node) = nodes.get_mut(&path) {
+                if let Some(node) = nodes.get_mut(&name) {
                     node.build_state.output.push(line);
                     // Keep only last 100 lines
                     if node.build_state.output.len() > 100 {
@@ -1145,12 +1166,12 @@ async fn run_build_command(manager: &Arc<NodeManager>, path: &str, cmd: &str) ->
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
         let manager = manager.clone();
-        let path = path.to_string();
+        let name = name.to_string();
 
         tokio::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
                 let mut nodes = manager.nodes.write().await;
-                if let Some(node) = nodes.get_mut(&path) {
+                if let Some(node) = nodes.get_mut(&name) {
                     node.build_state.output.push(line);
                     if node.build_state.output.len() > 100 {
                         node.build_state.output.remove(0);
@@ -1453,5 +1474,87 @@ mod tests {
         // Plain node should have empty base_node
         assert_eq!(decoded.nodes[3].name, "openmeteo");
         assert_eq!(decoded.nodes[3].base_node, "");
+    }
+
+    #[test]
+    fn test_build_state_default() {
+        let state = BuildState::default();
+        assert_eq!(state.status, BuildStatus::Idle);
+        assert!(state.output.is_empty());
+    }
+
+    #[test]
+    fn test_cached_node_effective_name_with_override() {
+        let node = CachedNode {
+            path: "/path/to/rtsp-camera".to_string(),
+            manifest: Some(NodeManifest {
+                name: "rtsp-camera".to_string(),
+                version: "0.1.0".to_string(),
+                description: "RTSP camera node".to_string(),
+                node_type: "rust".to_string(),
+                author: None,
+                build: None,
+                command: None,
+                depends_on: vec![],
+            }),
+            status: NodeStatus::Stopped,
+            installed: false,
+            autostart_enabled: false,
+            is_built: false,
+            build_state: BuildState::default(),
+            last_updated_ms: 0,
+            health_status: HealthStatus::Unknown,
+            last_health_check_ms: 0,
+            name_override: Some("rtsp-camera-terrace".to_string()),
+            config_override: None,
+        };
+        assert_eq!(node.effective_name(), "rtsp-camera-terrace");
+    }
+
+    #[test]
+    fn test_cached_node_effective_name_without_override() {
+        let node = CachedNode {
+            path: "/path/to/openmeteo".to_string(),
+            manifest: Some(NodeManifest {
+                name: "openmeteo".to_string(),
+                version: "0.1.0".to_string(),
+                description: "Weather".to_string(),
+                node_type: "rust".to_string(),
+                author: None,
+                build: None,
+                command: None,
+                depends_on: vec![],
+            }),
+            status: NodeStatus::Running,
+            installed: true,
+            autostart_enabled: false,
+            is_built: true,
+            build_state: BuildState::default(),
+            last_updated_ms: 0,
+            health_status: HealthStatus::Unknown,
+            last_health_check_ms: 0,
+            name_override: None,
+            config_override: None,
+        };
+        assert_eq!(node.effective_name(), "openmeteo");
+    }
+
+    #[test]
+    fn test_cached_node_effective_name_no_manifest() {
+        let node = CachedNode {
+            path: "/path/to/unknown".to_string(),
+            manifest: None,
+            status: NodeStatus::Stopped,
+            installed: false,
+            autostart_enabled: false,
+            is_built: false,
+            build_state: BuildState::default(),
+            last_updated_ms: 0,
+            health_status: HealthStatus::Unknown,
+            last_health_check_ms: 0,
+            name_override: None,
+            config_override: None,
+        };
+        assert_eq!(node.effective_name(), "unknown");
     }
 }

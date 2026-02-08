@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { Sample, IntoZBytes } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload, extractMachineId } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
@@ -115,13 +115,16 @@ export function WeatherViewPanel({
   dragHandleProps,
 }: WeatherViewPanelProps) {
   const { machines, selectedMachineId } = useFleetContext();
-  const { registry } = useSchemaRegistry();
+  const { registry, discoverForTopic, schemaVersion } = useSchemaRegistry();
   // Get session from context for publishing
   const { getSession } = useZenohSubscriptionContext();
   // Store weather data per machine with last update timestamp
   const [currentMap, setCurrentMap] = useState<Map<string, { data: CurrentWeather; lastUpdate: number }>>(new Map());
   const [hourlyMap, setHourlyMap] = useState<Map<string, { data: HourlyForecast; lastUpdate: number }>>(new Map());
   const [dailyMap, setDailyMap] = useState<Map<string, { data: DailyForecast; lastUpdate: number }>>(new Map());
+
+  // Buffer last payloads for retry when schemas arrive
+  const lastPayloadsRef = useRef<Map<string, { current?: { payload: Uint8Array; topic: string }; hourly?: { payload: Uint8Array; topic: string }; daily?: { payload: Uint8Array; topic: string } }>>(new Map());
   const [isEditing, setIsEditing] = useState(false);
 
   // Location editing state
@@ -139,7 +142,14 @@ export function WeatherViewPanel({
   const handleCurrentSample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
-      const machineId = extractMachineId(sample.keyexpr().toString()) ?? 'unknown';
+      const topic = sample.keyexpr().toString();
+      const machineId = extractMachineId(topic) ?? 'unknown';
+
+      // Buffer for retry
+      const entry = lastPayloadsRef.current.get(machineId) ?? {};
+      entry.current = { payload, topic };
+      lastPayloadsRef.current.set(machineId, entry);
+
       const result = registry.decode('bubbaloop.weather.v1.CurrentWeather', payload);
       if (result) {
         const data = result.data as unknown as CurrentWeather;
@@ -148,17 +158,25 @@ export function WeatherViewPanel({
           next.set(machineId, { data, lastUpdate: Date.now() });
           return next;
         });
+      } else {
+        discoverForTopic(topic);
       }
     } catch (e) {
       console.error('[WeatherView] Failed to decode current weather:', e);
     }
-  }, [registry]);
+  }, [registry, discoverForTopic]);
 
   // Handle hourly forecast samples
   const handleHourlySample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
-      const machineId = extractMachineId(sample.keyexpr().toString()) ?? 'unknown';
+      const topic = sample.keyexpr().toString();
+      const machineId = extractMachineId(topic) ?? 'unknown';
+
+      const entry = lastPayloadsRef.current.get(machineId) ?? {};
+      entry.hourly = { payload, topic };
+      lastPayloadsRef.current.set(machineId, entry);
+
       const result = registry.decode('bubbaloop.weather.v1.HourlyForecast', payload);
       if (result) {
         const data = result.data as unknown as HourlyForecast;
@@ -167,17 +185,25 @@ export function WeatherViewPanel({
           next.set(machineId, { data, lastUpdate: Date.now() });
           return next;
         });
+      } else {
+        discoverForTopic(topic);
       }
     } catch (e) {
       console.error('[WeatherView] Failed to decode hourly forecast:', e);
     }
-  }, [registry]);
+  }, [registry, discoverForTopic]);
 
   // Handle daily forecast samples
   const handleDailySample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
-      const machineId = extractMachineId(sample.keyexpr().toString()) ?? 'unknown';
+      const topic = sample.keyexpr().toString();
+      const machineId = extractMachineId(topic) ?? 'unknown';
+
+      const entry = lastPayloadsRef.current.get(machineId) ?? {};
+      entry.daily = { payload, topic };
+      lastPayloadsRef.current.set(machineId, entry);
+
       const result = registry.decode('bubbaloop.weather.v1.DailyForecast', payload);
       if (result) {
         const data = result.data as unknown as DailyForecast;
@@ -186,11 +212,13 @@ export function WeatherViewPanel({
           next.set(machineId, { data, lastUpdate: Date.now() });
           return next;
         });
+      } else {
+        discoverForTopic(topic);
       }
     } catch (e) {
       console.error('[WeatherView] Failed to decode daily forecast:', e);
     }
-  }, [registry]);
+  }, [registry, discoverForTopic]);
 
   // Subscribe to all three topics
   const { messageCount: currentCount } = useZenohSubscription(currentTopic, handleCurrentSample);
@@ -198,6 +226,46 @@ export function WeatherViewPanel({
   const { messageCount: dailyCount } = useZenohSubscription(dailyTopic, handleDailySample);
 
   const totalMessages = currentCount + hourlyCount + dailyCount;
+
+  // Re-decode buffered payloads when schemaVersion changes
+  useEffect(() => {
+    if (schemaVersion === 0) return;
+    for (const [machineId, payloads] of lastPayloadsRef.current) {
+      if (payloads.current) {
+        const result = registry.decode('bubbaloop.weather.v1.CurrentWeather', payloads.current.payload);
+        if (result) {
+          const data = result.data as unknown as CurrentWeather;
+          setCurrentMap(prev => {
+            const next = new Map(prev);
+            next.set(machineId, { data, lastUpdate: Date.now() });
+            return next;
+          });
+        }
+      }
+      if (payloads.hourly) {
+        const result = registry.decode('bubbaloop.weather.v1.HourlyForecast', payloads.hourly.payload);
+        if (result) {
+          const data = result.data as unknown as HourlyForecast;
+          setHourlyMap(prev => {
+            const next = new Map(prev);
+            next.set(machineId, { data, lastUpdate: Date.now() });
+            return next;
+          });
+        }
+      }
+      if (payloads.daily) {
+        const result = registry.decode('bubbaloop.weather.v1.DailyForecast', payloads.daily.payload);
+        if (result) {
+          const data = result.data as unknown as DailyForecast;
+          setDailyMap(prev => {
+            const next = new Map(prev);
+            next.set(machineId, { data, lastUpdate: Date.now() });
+            return next;
+          });
+        }
+      }
+    }
+  }, [schemaVersion, registry]);
 
   const handleCloseEdit = () => {
     setIsEditing(false);

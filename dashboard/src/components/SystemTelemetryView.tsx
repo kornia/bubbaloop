@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef, useEffect } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload, extractMachineId } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
@@ -96,8 +96,24 @@ export function SystemTelemetryViewPanel({
   dragHandleProps,
 }: SystemTelemetryViewPanelProps) {
   const { machines, selectedMachineId } = useFleetContext();
-  const { registry } = useSchemaRegistry();
+  const { registry, discoverForTopic, schemaVersion } = useSchemaRegistry();
   const [metricsMap, setMetricsMap] = useState<Map<string, MachineMetrics>>(new Map());
+  const metricsMapRef = useRef(metricsMap);
+  metricsMapRef.current = metricsMap;
+
+  // Throttle: store latest data in ref, flush to state at 250ms intervals
+  const pendingRef = useRef<Map<string, MachineMetrics> | null>(null);
+  const lastPayloadsRef = useRef<Map<string, { payload: Uint8Array; topic: string }>>(new Map());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (pendingRef.current) {
+        setMetricsMap(pendingRef.current);
+        pendingRef.current = null;
+      }
+    }, 250);
+    return () => clearInterval(timer);
+  }, []);
 
   // Match any machine/scope: */*/TypeName/* (ros-z key format: domain/topic%encoded/type/hash)
   const telemetryTopic = '*/*/bubbaloop.system_telemetry.v1.SystemMetrics/*';
@@ -105,20 +121,37 @@ export function SystemTelemetryViewPanel({
   const handleSample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
-      const machineId = extractMachineId(sample.keyexpr().toString()) ?? 'unknown';
+      const topic = sample.keyexpr().toString();
+      const machineId = extractMachineId(topic) ?? 'unknown';
+      lastPayloadsRef.current.set(machineId, { payload, topic });
+
       const result = registry.decode('bubbaloop.system_telemetry.v1.SystemMetrics', payload);
       if (result) {
         const data = result.data as unknown as SystemMetrics;
-        setMetricsMap(prev => {
-          const next = new Map(prev);
-          next.set(machineId, { metrics: data, lastUpdate: Date.now() });
-          return next;
-        });
+        const base = pendingRef.current ?? new Map(metricsMapRef.current);
+        base.set(machineId, { metrics: data, lastUpdate: Date.now() });
+        pendingRef.current = base;
+      } else {
+        discoverForTopic(topic);
       }
     } catch (e) {
       console.error('[SystemTelemetry] Failed to decode:', e);
     }
-  }, [registry]);
+  }, [registry, discoverForTopic]);
+
+  // Re-decode buffered payloads when schemaVersion changes
+  useEffect(() => {
+    if (schemaVersion === 0) return;
+    for (const [machineId, { payload }] of lastPayloadsRef.current) {
+      const result = registry.decode('bubbaloop.system_telemetry.v1.SystemMetrics', payload);
+      if (result) {
+        const data = result.data as unknown as SystemMetrics;
+        const base = pendingRef.current ?? new Map(metricsMapRef.current);
+        base.set(machineId, { metrics: data, lastUpdate: Date.now() });
+        pendingRef.current = base;
+      }
+    }
+  }, [schemaVersion, registry]);
 
   const { messageCount } = useZenohSubscription(telemetryTopic, handleSample);
 

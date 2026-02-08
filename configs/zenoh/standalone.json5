@@ -44,7 +44,7 @@
   plugins: {
     // WebSocket for local dashboard
     remote_api: {
-      websocket_port: 10000,
+      websocket_port: 10001,
     },
   },
 }

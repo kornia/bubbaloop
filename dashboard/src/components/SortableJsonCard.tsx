@@ -13,7 +13,7 @@ interface SortableJsonCardProps {
   availableTopics: Array<{ display: string; raw: string }>;
 }
 
-export function SortableJsonCard({
+export const SortableJsonCard = React.memo(function SortableJsonCard({
   id,
   topic,
   isHidden = false,
@@ -50,4 +50,4 @@ export function SortableJsonCard({
       />
     </div>
   );
-}
+});

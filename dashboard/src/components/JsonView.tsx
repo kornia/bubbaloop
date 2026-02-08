@@ -12,21 +12,6 @@ import { Duration } from 'typed-duration';
 import JsonView from 'react18-json-view';
 import 'react18-json-view/src/style.css';
 
-// Extract schema name from ros-z topic format: <domain_id>/<topic>/<schema>/<hash>
-// e.g., "0/weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_..."
-function extractSchemaFromTopic(topic: string): string | null {
-  const parts = topic.split('/');
-  // Schema is typically the third-to-last or second-to-last part
-  for (let i = parts.length - 2; i >= 1; i--) {
-    const part = parts[i];
-    // Schema looks like "bubbaloop.weather.v1.CurrentWeather"
-    if (part.includes('.') && !part.startsWith('RIHS')) {
-      return part;
-    }
-  }
-  return null;
-}
-
 // Convert BigInt values to strings for JSON serialization
 function bigIntToString(obj: unknown): unknown {
   if (typeof obj === 'bigint') {
@@ -66,7 +51,6 @@ function summarizeLargeFields(data: Record<string, unknown>): Record<string, unk
 
 // Try to decode payload using schema registry first, then built-in decoders as fallback
 function decodePayload(payload: Uint8Array, topic: string, registry?: SchemaRegistry): { data: unknown; schema: string; schemaSource: SchemaSourceType; error?: string } {
-  const schemaFromTopic = extractSchemaFromTopic(topic);
   const text = new TextDecoder().decode(payload);
 
   // 1. Try JSON first
@@ -82,29 +66,9 @@ function decodePayload(payload: Uint8Array, topic: string, registry?: SchemaRegi
     return { data: { message: text }, schema: 'Text', schemaSource: 'builtin' };
   }
 
-  // 2. Dynamic SchemaRegistry — decode using schemas fetched from daemon/nodes
+  // 2. Dynamic SchemaRegistry — consolidated decode chain
   if (registry) {
-    // 2a. If we have a schema hint from the topic (ros-z embeds type name), use it directly
-    if (schemaFromTopic) {
-      const result = registry.decode(schemaFromTopic, payload);
-      if (result) {
-        const data = summarizeLargeFields(result.data);
-        return { data, schema: result.typeName, schemaSource: 'dynamic' };
-      }
-    }
-
-    // 2b. Infer type from topic path (e.g., "network-monitor" → NetworkStatus)
-    const guessedType = registry.guessTypeForTopic(topic);
-    if (guessedType) {
-      const guessResult = registry.decode(guessedType, payload);
-      if (guessResult) {
-        const data = summarizeLargeFields(guessResult.data);
-        return { data, schema: guessResult.typeName, schemaSource: 'dynamic' };
-      }
-    }
-
-    // 2c. Last resort: try all known types (ambiguous — may pick wrong type)
-    const result = registry.tryDecodeAny(payload);
+    const result = registry.tryDecodeForTopic(topic, payload);
     if (result) {
       const data = summarizeLargeFields(result.data);
       return { data, schema: result.typeName, schemaSource: 'dynamic' };
@@ -161,14 +125,30 @@ export function RawDataViewPanel({
   dragHandleProps,
 }: RawDataViewPanelProps) {
   const { machines } = useFleetContext();
-  const { registry, refresh: refreshSchemas, discoverForTopic } = useSchemaRegistry();
+  const { registry, refresh: refreshSchemas, discoverForTopic, schemaVersion } = useSchemaRegistry();
   const [jsonData, setJsonData] = useState<unknown>(null);
   const [schemaName, setSchemaName] = useState<string | null>(null);
   const [schemaSource, setSchemaSource] = useState<SchemaSourceType>('raw');
   const [parseError, setParseError] = useState<string | null>(null);
-  // Track the actual topic the data came from (for debugging/display purposes)
-  const [, setCurrentTopic] = useState<string>('');
   const lastUpdateRef = useRef<number>(0);
+
+  // Throttle: buffer decoded data in ref, flush at 250ms intervals
+  const pendingDataRef = useRef<{ data: unknown; schema: string; source: SchemaSourceType; error: string | null } | null>(null);
+  const lastPayloadRef = useRef<{ payload: Uint8Array; topic: string } | null>(null);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (pendingDataRef.current) {
+        const p = pendingDataRef.current;
+        setJsonData(p.data);
+        setSchemaName(p.schema);
+        setSchemaSource(p.source);
+        setParseError(p.error);
+        pendingDataRef.current = null;
+      }
+    }, 250);
+    return () => clearInterval(timer);
+  }, []);
 
   // Handle incoming samples from Zenoh subscriptions
   const handleSample = useCallback((sample: Sample) => {
@@ -181,20 +161,31 @@ export function RawDataViewPanel({
         return;
       }
 
+      // Buffer payload for retry
+      lastPayloadRef.current = { payload, topic: sampleTopic };
+
       const result = decodePayload(payload, sampleTopic, registry);
 
-      setJsonData(result.data);
-      setSchemaName(result.schema);
-      setSchemaSource(result.schemaSource);
-      setParseError(result.error || null);
-      setCurrentTopic(sampleTopic);
-
+      pendingDataRef.current = { data: result.data, schema: result.schema, source: result.schemaSource, error: result.error || null };
       lastUpdateRef.current = Date.now();
+
+      // Trigger schema discovery for undecoded binary payloads
+      if (result.schemaSource === 'raw') {
+        discoverForTopic(sampleTopic);
+      }
     } catch (e) {
       console.error('[RawDataView] Failed to process sample:', e);
-      setParseError(e instanceof Error ? e.message : 'Failed to process sample');
+      pendingDataRef.current = { data: null, schema: 'Error', source: 'raw', error: e instanceof Error ? e.message : 'Failed to process sample' };
     }
-  }, [registry]);
+  }, [registry, discoverForTopic]);
+
+  // Re-decode last payload when schemaVersion changes
+  useEffect(() => {
+    if (schemaVersion === 0 || !lastPayloadRef.current) return;
+    const { payload, topic } = lastPayloadRef.current;
+    const result = decodePayload(payload, topic, registry);
+    pendingDataRef.current = { data: result.data, schema: result.schema, source: result.schemaSource, error: result.error || null };
+  }, [schemaVersion, registry]);
 
   // Subscribe to topic (works for non-daemon topics)
   useZenohSubscription(topic, handleSample);

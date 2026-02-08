@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef, useEffect } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload, extractMachineId } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
@@ -131,37 +131,72 @@ export function NetworkMonitorViewPanel({
   dragHandleProps,
 }: NetworkMonitorViewPanelProps) {
   const { machines, selectedMachineId } = useFleetContext();
-  const { registry } = useSchemaRegistry();
+  const { registry, discoverForTopic, schemaVersion } = useSchemaRegistry();
   const [statusMap, setStatusMap] = useState<Map<string, MachineNetworkStatus>>(new Map());
+  const statusMapRef = useRef(statusMap);
+  statusMapRef.current = statusMap;
+
+  // Throttle: store latest data in ref, flush to state at 250ms intervals
+  const pendingRef = useRef<Map<string, MachineNetworkStatus> | null>(null);
+  // Buffer last raw payload per machine for retry when schemas arrive
+  const lastPayloadsRef = useRef<Map<string, { payload: Uint8Array; topic: string }>>(new Map());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (pendingRef.current) {
+        setStatusMap(pendingRef.current);
+        pendingRef.current = null;
+      }
+    }, 250);
+    return () => clearInterval(timer);
+  }, []);
 
   // Match any machine/scope via ** (network-monitor uses vanilla zenoh, not ros-z)
   const networkTopic = '**/network-monitor/status';
 
+  const tryDecode = useCallback((payload: Uint8Array, topic: string, machineId: string) => {
+    let result = registry.decode('bubbaloop.network_monitor.v1.NetworkStatus', payload);
+    if (!result) {
+      result = registry.tryDecodeForTopic(topic, payload);
+    }
+    if (result) {
+      const raw = result.data;
+      const checks = ((raw.checks as Record<string, unknown>[]) ?? []).map(toHealthCheck);
+      const summary = raw.summary as Summary | undefined;
+      const status: NetworkStatus = { checks, summary };
+      const base = pendingRef.current ?? new Map(statusMapRef.current);
+      base.set(machineId, { status, lastUpdate: Date.now() });
+      pendingRef.current = base;
+      return true;
+    }
+    return false;
+  }, [registry]);
+
   const handleSample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
-      const machineId = extractMachineId(sample.keyexpr().toString()) ?? 'unknown';
+      const topic = sample.keyexpr().toString();
+      const machineId = extractMachineId(topic) ?? 'unknown';
 
-      // Try SchemaRegistry first, then tryDecodeAny for vanilla zenoh topics
-      let result = registry.decode('bubbaloop.network_monitor.v1.NetworkStatus', payload);
-      if (!result) {
-        result = registry.tryDecodeAny(payload);
-      }
-      if (result) {
-        const raw = result.data;
-        const checks = ((raw.checks as Record<string, unknown>[]) ?? []).map(toHealthCheck);
-        const summary = raw.summary as Summary | undefined;
-        const status: NetworkStatus = { checks, summary };
-        setStatusMap(prev => {
-          const next = new Map(prev);
-          next.set(machineId, { status, lastUpdate: Date.now() });
-          return next;
-        });
+      // Store payload for schema-retry
+      lastPayloadsRef.current.set(machineId, { payload, topic });
+
+      if (!tryDecode(payload, topic, machineId)) {
+        // Schema not loaded yet — trigger discovery
+        discoverForTopic(topic);
       }
     } catch (e) {
       console.error('[NetworkMonitor] Failed to decode:', e);
     }
-  }, [registry]);
+  }, [tryDecode, discoverForTopic]);
+
+  // Re-decode buffered payloads when schemaVersion changes (new schemas arrived)
+  useEffect(() => {
+    if (schemaVersion === 0) return;
+    for (const [machineId, { payload, topic }] of lastPayloadsRef.current) {
+      tryDecode(payload, topic, machineId);
+    }
+  }, [schemaVersion, tryDecode]);
 
   const { messageCount } = useZenohSubscription(networkTopic, handleSample);
 
