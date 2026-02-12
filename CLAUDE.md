@@ -1,177 +1,73 @@
 # Bubbaloop
 
-AI-native orchestration for Physical AI, built on Zenoh.
+Physical AI orchestration built on Zenoh. Single binary: CLI + TUI + daemon.
 
-## Quick Start
+## Structure
+
+```
+crates/bubbaloop/          # Main binary (CLI + TUI + daemon)
+crates/bubbaloop-schemas/  # Protobuf schemas (standalone, NOT in workspace — never add to workspace)
+dashboard/                 # React + Vite + TypeScript
+```
+
+Key source files in `crates/bubbaloop/src/`:
+- `cli/node.rs` (88KB) — node CRUD, install, precompiled binary download
+- `daemon/node_manager.rs` (57KB) — node lifecycle, build queue, health
+- `daemon/systemd.rs` (38KB) — D-Bus/zbus integration
+- `daemon/registry.rs` — `~/.bubbaloop/nodes.json` management
+- `registry.rs` — marketplace fetch/parse/cache, `find_curl()`
+
+Nodes repo: [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official)
+
+## Build & Verify
 
 ```bash
-zenohd &                                                          # 1. Zenoh router
-zenoh-bridge-remote-api --ws-port 10001 -e tcp/127.0.0.1:7447 &  # 2. WebSocket bridge
-pixi run daemon                                                   # 3. Daemon
-pixi run dashboard                                                # 4. Dashboard (another terminal)
+pixi run check     # cargo check (fast — run after every change)
+pixi run clippy    # zero warnings enforced (-D warnings)
+pixi run test      # cargo test
+pixi run fmt       # cargo fmt --all
+pixi run build     # cargo build --release (slow on ARM64)
 ```
 
-## Architecture
+## Conventions — MUST follow
 
-```
-Dashboard / TUI / MCP  →  zenoh-bridge-remote (WS :10001)  →  zenohd (:7447)
-                                                                    │
-                    ┌───────────────────┬───────────────────────────┤
-              bubbaloop daemon    rtsp-camera    openmeteo    system-telemetry ...
-```
+**Use these (not alternatives):**
+- `argh` for CLI — NOT clap (`#[derive(FromArgs)]`, `#[argh(subcommand)]`)
+- `log` + `env_logger` — NOT tracing (`log::info!()`, logs to stderr)
+- `thiserror` for library errors, `anyhow` for CLI — module-specific `type Result<T>`
+- `zbus` for systemd — NEVER spawn `systemctl` as subprocess
+- `println!()` only for CLI user output — all other output via `log` macros
+- `tempfile::tempdir()` for filesystem tests, co-located `#[cfg(test)] mod tests`
+- 100% safe Rust — no `unsafe`
 
-- **zenohd**: Central router, all peers connect on `:7447`
-- **zenoh-bridge-remote-api**: WebSocket bridge for browser dashboard
-- **bubbaloop daemon**: Node lifecycle manager (systemd/D-Bus)
-- **Nodes**: Standalone processes (Rust or Python) that publish/subscribe via Zenoh
+**Async patterns:**
+- tokio with `watch::channel(())` shutdown pattern
+- Zenoh queries: 3 retries, 1s timeout, `QueryTarget::BestMatching`
 
-### Directory Structure
+**Security:**
+- `find_curl()` searches `/usr/bin`, `/usr/local/bin`, `/bin` only (no PATH)
+- Build commands: allowlist prefixes only (cargo, pixi, npm, make, python, pip)
+- Node names: 1-64 chars, `[a-zA-Z0-9_-]`, no null bytes
+- Git clone: always use `--` separator
+- Bind localhost only, never `0.0.0.0`
 
-```
-crates/
-├── bubbaloop/           # Single binary: CLI + TUI + daemon
-└── bubbaloop-schemas/   # Protobuf schemas (standalone, not in workspace)
-dashboard/               # React dashboard (Vite + TypeScript)
-configs/                 # Zenoh configuration files
-docs/                    # MkDocs documentation site
-```
+## DO / DON'T
 
-Official nodes live in [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official).
+**DO:** `pixi run check` after changes | `pixi run fmt && pixi run clippy` before commits | tests with every PR | validate user input | `--` in git clone | verify both `bubbaloop-schemas` and `bubbaloop` compile after proto changes
 
-### Source Code Map (`crates/bubbaloop/src/`)
+**DON'T:** run `bubbaloop tui` (needs TTY) | edit `target/`/`OUT_DIR` | commit `.env`/credentials/`target/` | add `bubbaloop-schemas` to workspace | combine `git`+`path` in Cargo deps | `git push --force` to main
 
-```
-bin/bubbaloop.rs         # Entry point: CLI arg dispatch
-lib.rs                   # Library root: protobuf schemas, descriptor utilities
-cli/
-  node.rs                # Node CRUD: init, add, instance, build, start, stop
-  doctor.rs              # System diagnostics
-  debug.rs               # Zenoh debugging (topics, subscribe, query)
-  marketplace.rs         # Marketplace source management
-  status.rs              # Non-interactive status display
-daemon/
-  node_manager.rs        # Core: node lifecycle, build queue, health monitoring
-  registry.rs            # Node registry: ~/.bubbaloop/nodes.json
-  systemd.rs             # systemd integration via D-Bus (zbus)
-  zenoh_api.rs           # Zenoh queryable handlers
-  zenoh_service.rs       # Pub/sub for state broadcasting
-tui/                     # ratatui terminal UI
-```
+## Commits
 
-## Pixi Tasks
+Conventional: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`
+Never commit: `target/`, `node_modules/`, `dist/`, `.pixi/`
+Always commit: `Cargo.lock`, `pixi.lock`, `package-lock.json`
 
-```bash
-pixi run up              # Launch all services via process-compose
-pixi run build           # cargo build --release
-pixi run daemon          # Run daemon
-pixi run tui             # Run TUI
-pixi run dashboard       # Run React dashboard dev server
+## Pitfalls
 
-pixi run check           # cargo check (fast)
-pixi run test            # cargo test
-pixi run fmt             # cargo fmt --all
-pixi run clippy          # cargo clippy (with -D warnings)
-pixi run lint            # fmt-check + clippy
-
-pixi run dashboard-install   # npm install
-pixi run dashboard-proto     # Generate protobuf TS bindings
-pixi run dashboard-build     # Production build
-```
-
-## CLI Quick Reference
-
-```bash
-bubbaloop status [-f json]              # Service status
-bubbaloop doctor [--fix]                # Diagnostics
-bubbaloop daemon [-z <endpoint>]        # Run daemon
-bubbaloop node init|add|list|build|install|start|stop|logs|remove <name>
-bubbaloop node instance <base> <suffix> # Multi-instance node
-bubbaloop debug topics|subscribe|query  # Zenoh debugging
-bubbaloop marketplace list|add|remove   # Node sources
-```
-
-## Zenoh Topics
-
-```
-bubbaloop/{scope}/{machine}/daemon/api/health|nodes|command|schemas  # Daemon API (query/reply)
-bubbaloop/{scope}/{machine}/daemon/nodes                             # Node state (pub/sub)
-bubbaloop/{scope}/{machine}/health/{node-name}                       # Health heartbeats
-bubbaloop/{scope}/{machine}/{node-name}/schema                       # Node schema (query/reply)
-bubbaloop/{scope}/{machine}/camera/{name}/compressed                 # Camera frames
-bubbaloop/{scope}/{machine}/weather/current|hourly|daily             # Weather data
-```
-
-## Protobuf Schemas
-
-Core schemas in `crates/bubbaloop-schemas/protos/`:
-
-| Proto | Key Types |
-|-------|-----------|
-| `header.proto` | `Header` (timestamps, frame_id, seq, machine_id, scope) |
-| `daemon.proto` | `NodeState`, `NodeStatus`, `NodeCommand`, `NodeList`, `NodeEvent` |
-| `machine.proto` | `MachineInfo`, `MachineList`, `MachineHeartbeat` |
-
-Node-specific schemas (served at runtime by each node via `{node-name}/schema`):
-
-| Node | Key Types |
-|------|-----------|
-| rtsp-camera | `CompressedImage`, `RawImage` |
-| openmeteo | `CurrentWeather`, `HourlyForecast`, `DailyForecast`, `LocationConfig` |
-| system-telemetry | `SystemMetrics`, `CpuMetrics`, etc. |
-| network-monitor | `NetworkStatus`, `HealthCheck` |
-
-`bubbaloop-schemas` is standalone (not in workspace). The daemon serves core schemas at `*/daemon/api/schemas`.
-Node schemas are discovered dynamically by the dashboard via `bubbaloop/**/schema` wildcard queries.
-
-## Key Dependencies
-
-| Crate | Purpose |
-|-------|---------|
-| `zenoh` 1.7 | Pub/sub messaging, query/reply |
-| `ros-z` (git) | ROS 2 compatibility layer over Zenoh |
-| `prost` / `prost-build` 0.14 | Protobuf serialization and codegen |
-| `ratatui` 0.29 | Terminal UI |
-| `zbus` | D-Bus client for systemd |
-| `tokio` 1.0 (full) | Async runtime |
-
-## Agent Guidelines
-
-### Coding Style
-
-- **Rust edition 2021**, async/await with tokio
-- **Error handling**: `thiserror` for libraries, `anyhow` for applications
-- **Naming**: snake_case files/functions, CamelCase types, SCREAMING_SNAKE constants
-- **Logging**: `log::info!` etc. for operational messages; `println!` only for CLI user output
-- **Tests**: co-located `#[cfg(test)] mod tests` blocks, `tempfile` for filesystem tests
-
-### DO
-
-- Run `pixi run check` after Rust changes (fast compile check)
-- Run `pixi run fmt && pixi run clippy` before commits
-- Include tests with every PR
-- Validate node names, build commands, and user input
-- Use `--` separator in git clone commands
-- When adding proto changes, verify both `bubbaloop-schemas` and `bubbaloop` compile
-
-### DON'T
-
-- Don't run `bubbaloop tui` from Claude Code (needs interactive TTY)
-- Don't edit files in `target/` or `OUT_DIR`
-- Don't commit `.env`, credentials, or `target/`
-- Don't add `bubbaloop-schemas` to the workspace (intentionally standalone)
-- Don't combine `git` and `path` in Cargo dependency specs
-- Don't `git push --force` to main
-
-### Verification Workflow
-
-1. `pixi run check` — fast compile check
-2. `pixi run clippy` — lint (zero warnings enforced)
-3. `pixi run test` — run tests
-4. `pixi run fmt` — format check
-
-### Commit Style
-
-Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`
-
-**Never commit:** `target/`, `node_modules/`, `dist/`, `.pixi/`, `*.pb.js`, `*.pb.d.ts`, `*.pyc`
-**Always commit:** `Cargo.lock`, `pixi.lock`, `package-lock.json`
+- OAuth token lacks `workflow` scope — use SSH for workflow files
+- ARM64 release builds are slow — use `pixi run check` first
+- Proto changes require rebuilding both `bubbaloop-schemas/` and `bubbaloop` (descriptor.bin is compiled in)
+- Dashboard deps (`axum`, `rust-embed`) are behind `dashboard` feature flag
+- Logs must go to stderr to avoid corrupting TUI
+- Zenoh session: `"peer"` mode, check `BUBBALOOP_ZENOH_ENDPOINT` env var

@@ -87,14 +87,18 @@ impl {{node_name_pascal}}Node {
             .await
             .map_err(|e| anyhow!("Failed to create publisher: {}", e))?;
 
-        // Declare schema queryable so the dashboard can fetch our protobuf schemas
+        // Declare schema queryable so the dashboard can fetch our protobuf schemas.
+        // NOTE: Do NOT use .complete(true) — it blocks wildcard queries (e.g., "bubbaloop/**/schema")
+        // from reaching other queryables. The .wait() call is required to actually send the reply.
         #[cfg(feature = "proto")]
         let _schema_queryable = self.session
             .declare_queryable("{{node_name}}/schema")
-            .complete(true)
             .callback(|query| {
+                use zenoh::Wait;
                 log::debug!("Schema query received");
-                let _ = query.reply(query.key_expr(), ZBytes::from(DESCRIPTOR.to_vec()));
+                if let Err(e) = query.reply(query.key_expr(), ZBytes::from(DESCRIPTOR.to_vec())).wait() {
+                    log::warn!("Failed to reply to schema query: {}", e);
+                }
             })
             .await
             .map_err(|e| anyhow!("Failed to create schema queryable: {}", e))?;
