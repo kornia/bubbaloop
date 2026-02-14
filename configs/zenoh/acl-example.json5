@@ -1,0 +1,63 @@
+// Zenoh ACL configuration example for bubbaloop
+//
+// This file demonstrates access control rules for node isolation.
+// Each node only gets publish access to its own key prefix.
+// The dashboard gets read-only access to all bubbaloop/** keys.
+//
+// Generate per-deployment configs with: bubbaloop doctor -c security
+//
+// See: https://zenoh.io/docs/manual/access-control/
+{
+  access_control: {
+    enabled: true,
+    default_permission: "deny",
+    rules: [
+      {
+        // Daemon can publish/subscribe to all bubbaloop/** keys
+        id: "daemon-full-access",
+        permission: "allow",
+        messages: ["put", "get", "declare_subscriber", "declare_queryable"],
+        flows: ["egress", "ingress"],
+        key_exprs: ["bubbaloop/**"],
+      },
+      {
+        // Dashboard gets read-only access to all bubbaloop/** keys
+        id: "dashboard-read-only",
+        permission: "allow",
+        messages: ["get", "declare_subscriber"],
+        flows: ["egress", "ingress"],
+        key_exprs: ["bubbaloop/**"],
+      },
+      // Per-node rules are generated from manifest acl_prefix.
+      // Example for a camera node on machine "jetson_1":
+      //
+      // {
+      //   id: "camera-publish",
+      //   permission: "allow",
+      //   messages: ["put", "declare_queryable"],
+      //   flows: ["egress", "ingress"],
+      //   key_exprs: ["bubbaloop/*/jetson_1/camera/**"],
+      // },
+    ],
+    subjects: [
+      {
+        id: "daemon",
+        cert_common_names: ["bubbaloop-daemon"],
+      },
+      {
+        id: "dashboard",
+        cert_common_names: ["bubbaloop-dashboard"],
+      },
+    ],
+    policies: [
+      {
+        rules: ["daemon-full-access"],
+        subjects: ["daemon"],
+      },
+      {
+        rules: ["dashboard-read-only"],
+        subjects: ["dashboard"],
+      },
+    ],
+  },
+}

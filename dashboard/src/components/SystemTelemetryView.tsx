@@ -2,6 +2,7 @@ import { useCallback, useState, useRef, useEffect } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload, extractMachineId } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
+import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useFleetContext } from '../contexts/FleetContext';
 import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
@@ -96,14 +97,14 @@ export function SystemTelemetryViewPanel({
   dragHandleProps,
 }: SystemTelemetryViewPanelProps) {
   const { machines, selectedMachineId } = useFleetContext();
-  const { registry, discoverForTopic, schemaVersion } = useSchemaRegistry();
+  const { registry, discoverForTopic } = useSchemaRegistry();
+  const schemaReady = useSchemaReady();
   const [metricsMap, setMetricsMap] = useState<Map<string, MachineMetrics>>(new Map());
   const metricsMapRef = useRef(metricsMap);
   metricsMapRef.current = metricsMap;
 
   // Throttle: store latest data in ref, flush to state at 250ms intervals
   const pendingRef = useRef<Map<string, MachineMetrics> | null>(null);
-  const lastPayloadsRef = useRef<Map<string, { payload: Uint8Array; topic: string }>>(new Map());
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -123,7 +124,6 @@ export function SystemTelemetryViewPanel({
       const payload = getSamplePayload(sample);
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
-      lastPayloadsRef.current.set(machineId, { payload, topic });
 
       const result = registry.decode('bubbaloop.system_telemetry.v1.SystemMetrics', payload);
       if (result) {
@@ -139,21 +139,8 @@ export function SystemTelemetryViewPanel({
     }
   }, [registry, discoverForTopic]);
 
-  // Re-decode buffered payloads when schemaVersion changes
-  useEffect(() => {
-    if (schemaVersion === 0) return;
-    for (const [machineId, { payload }] of lastPayloadsRef.current) {
-      const result = registry.decode('bubbaloop.system_telemetry.v1.SystemMetrics', payload);
-      if (result) {
-        const data = result.data as unknown as SystemMetrics;
-        const base = pendingRef.current ?? new Map(metricsMapRef.current);
-        base.set(machineId, { metrics: data, lastUpdate: Date.now() });
-        pendingRef.current = base;
-      }
-    }
-  }, [schemaVersion, registry]);
-
-  const { messageCount } = useZenohSubscription(telemetryTopic, handleSample);
+  // Gate callback on schema readiness — samples are ignored until schemas load
+  const { messageCount } = useZenohSubscription(telemetryTopic, schemaReady ? handleSample : undefined);
 
   // Filter metrics by selectedMachineId (null = show all)
   const filteredEntries = Array.from(metricsMap.entries()).filter(([machineId]) =>

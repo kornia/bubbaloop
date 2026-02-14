@@ -29,8 +29,10 @@
 ### Adding a New Zenoh Publisher
 Edit `src/node.rs`:
 ```rust
-// In the node struct, add a publisher field
-let publisher = session.declare_publisher("{{node_name}}/my_topic").await?;
+// Topics follow scoped pattern: bubbaloop/{scope}/{machine_id}/{{node_name}}/{resource}
+// The topic_prefix is built automatically from BUBBALOOP_SCOPE and BUBBALOOP_MACHINE_ID
+let my_topic = format!("{}/my_topic", topic_prefix);
+let publisher = session.declare_publisher(&my_topic).await?;
 
 // In the run loop, publish data
 publisher.put(serde_json::to_vec(&data)?).await?;
@@ -38,22 +40,29 @@ publisher.put(serde_json::to_vec(&data)?).await?;
 
 ### Adding a Subscriber
 ```rust
-let subscriber = session.declare_subscriber("other/topic").await?;
+// Subscribe using scoped pattern (wildcards discover across machines)
+let subscriber = session.declare_subscriber("bubbaloop/**/other_node/output").await?;
 // Handle in select! loop
 ```
 
 ### Changing Configuration
 Edit `config.yaml`:
 ```yaml
-publish_topic: "/{{node_name}}/output"
+publish_topic: "output"  # Appended to bubbaloop/{scope}/{machine_id}/{{node_name}}/
 rate_hz: 10.0  # Adjust publish rate
 ```
 
 ## Zenoh Topics
 
-| Topic | Direction | Format | Description |
-|-------|-----------|--------|-------------|
-| `/{{node_name}}/output` | Publish | JSON | Main output data |
+All topics follow the scoped pattern: `bubbaloop/{scope}/{machine_id}/{{node_name}}/{resource}`
+
+| Topic Suffix | Direction | Format | Description |
+|--------------|-----------|--------|-------------|
+| `output` | Publish | JSON | Main output data |
+| `schema` | Queryable | Protobuf | FileDescriptorSet (if protos exist) |
+| `manifest` | Queryable | JSON | Node self-description contract |
+| `health` | Queryable | JSON | Node health status |
+| `config` | Queryable | JSON | Read-only configuration |
 
 Data published to these topics is:
 - Visible in the Bubbaloop Dashboard

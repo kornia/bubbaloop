@@ -482,6 +482,24 @@ pub(crate) async fn get_zenoh_session() -> Result<zenoh::Session> {
 }
 
 fn init_node(args: InitArgs) -> Result<()> {
+    // Validate node name before creating any files
+    if args.name.is_empty() || args.name.len() > 64 {
+        return Err(NodeError::CommandFailed(format!(
+            "Node name must be 1-64 characters, got '{}'",
+            args.name
+        )));
+    }
+    if !args
+        .name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(NodeError::CommandFailed(format!(
+            "Node name '{}' contains invalid characters (only alphanumeric, hyphens, and underscores allowed)",
+            args.name
+        )));
+    }
+
     // Determine output directory (default: ./<name> in current directory)
     let output_dir = args
         .output

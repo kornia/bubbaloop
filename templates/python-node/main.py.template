@@ -61,7 +61,7 @@ class {{node_name_pascal}}Node:
                 "subscribe_topic": None,
                 "rate_hz": 1.0,
                 "version": "0.1.0",
-                "capabilities": ["sensor"],
+                "capabilities": [],
                 "requires_hardware": [],
                 "data_classification": "internal",
                 "clock_source": "system_realtime",
@@ -78,8 +78,15 @@ class {{node_name_pascal}}Node:
 
         # Setup zenoh
         zenoh_config = zenoh.Config()
-        if endpoint:
-            zenoh_config.insert_json5("connect/endpoints", json.dumps([endpoint]))
+
+        # Resolve endpoint: CLI arg > env var > default
+        if not endpoint:
+            endpoint = os.environ.get("BUBBALOOP_ZENOH_ENDPOINT", "tcp/127.0.0.1:7447")
+        zenoh_config.insert_json5("connect/endpoints", json.dumps([endpoint]))
+
+        # Disable scouting to prevent connecting to remote peers via Tailscale/VPN
+        zenoh_config.insert_json5("scouting/multicast/enabled", "false")
+        zenoh_config.insert_json5("scouting/gossip/enabled", "false")
 
         self.session = zenoh.open(zenoh_config)
         logger.info("Connected to zenoh")
@@ -121,7 +128,7 @@ class {{node_name_pascal}}Node:
         )
         logger.info(f"Health queryable declared on {health_key}")
 
-        # Declare config queryable for runtime configuration (GET/SET)
+        # Declare config queryable for read-only configuration access
         config_key = f"{self._topic_prefix}/config"
         self._config_queryable = self.session.declare_queryable(
             config_key,
@@ -162,7 +169,7 @@ class {{node_name_pascal}}Node:
             "description": "{{description}}",
             "machine_id": self._machine_id,
             "scope": self._scope,
-            "capabilities": self.config.get("capabilities", ["sensor"]),
+            "capabilities": self.config.get("capabilities", []),
             "requires_hardware": self.config.get("requires_hardware", []),
             "publishes": [
                 {
@@ -198,37 +205,13 @@ class {{node_name_pascal}}Node:
         health = {
             "status": "ok",
             "uptime_s": time.time() - self._start_time,
-            "sequence": self.sequence,
         }
         query.reply(query.key_expr, json.dumps(health).encode())
 
     def _on_config_query(self, query: zenoh.Query):
-        """Respond to config queries. GET returns config, PUT updates it."""
+        """Respond to config queries (read-only)."""
         logger.debug("Config query received")
-        # Check if this is a PUT (has payload)
-        payload = query.payload
-        if payload is not None:
-            try:
-                new_config = json.loads(payload.to_bytes().decode())
-                # Validate: only allow updating known keys
-                updated_keys = []
-                for key in new_config:
-                    if key in self.config:
-                        self.config[key] = new_config[key]
-                        updated_keys.append(key)
-                logger.info(f"Config updated: {updated_keys}")
-                query.reply(
-                    query.key_expr,
-                    json.dumps({"status": "ok", "updated": updated_keys}).encode(),
-                )
-            except Exception as e:
-                query.reply(
-                    query.key_expr,
-                    json.dumps({"status": "error", "message": str(e)}).encode(),
-                )
-        else:
-            # GET — return current config
-            query.reply(query.key_expr, json.dumps(self.config).encode())
+        query.reply(query.key_expr, json.dumps(self.config).encode())
 
     def _on_message(self, sample: zenoh.Sample):
         """Handle incoming messages."""

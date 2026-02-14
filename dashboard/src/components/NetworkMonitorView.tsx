@@ -2,6 +2,7 @@ import { useCallback, useState, useRef, useEffect } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload, extractMachineId } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
+import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useFleetContext } from '../contexts/FleetContext';
 import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
@@ -131,15 +132,14 @@ export function NetworkMonitorViewPanel({
   dragHandleProps,
 }: NetworkMonitorViewPanelProps) {
   const { machines, selectedMachineId } = useFleetContext();
-  const { registry, discoverForTopic, schemaVersion } = useSchemaRegistry();
+  const { registry, discoverForTopic } = useSchemaRegistry();
+  const schemaReady = useSchemaReady();
   const [statusMap, setStatusMap] = useState<Map<string, MachineNetworkStatus>>(new Map());
   const statusMapRef = useRef(statusMap);
   statusMapRef.current = statusMap;
 
   // Throttle: store latest data in ref, flush to state at 250ms intervals
   const pendingRef = useRef<Map<string, MachineNetworkStatus> | null>(null);
-  // Buffer last raw payload per machine for retry when schemas arrive
-  const lastPayloadsRef = useRef<Map<string, { payload: Uint8Array; topic: string }>>(new Map());
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -178,9 +178,6 @@ export function NetworkMonitorViewPanel({
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
 
-      // Store payload for schema-retry
-      lastPayloadsRef.current.set(machineId, { payload, topic });
-
       if (!tryDecode(payload, topic, machineId)) {
         // Schema not loaded yet — trigger discovery
         discoverForTopic(topic);
@@ -190,15 +187,8 @@ export function NetworkMonitorViewPanel({
     }
   }, [tryDecode, discoverForTopic]);
 
-  // Re-decode buffered payloads when schemaVersion changes (new schemas arrived)
-  useEffect(() => {
-    if (schemaVersion === 0) return;
-    for (const [machineId, { payload, topic }] of lastPayloadsRef.current) {
-      tryDecode(payload, topic, machineId);
-    }
-  }, [schemaVersion, tryDecode]);
-
-  const { messageCount } = useZenohSubscription(networkTopic, handleSample);
+  // Gate callback on schema readiness — samples are ignored until schemas load
+  const { messageCount } = useZenohSubscription(networkTopic, schemaReady ? handleSample : undefined);
 
   // Filter entries by selectedMachineId if set
   const visibleEntries = Array.from(statusMap.entries()).filter(([machineId]) =>

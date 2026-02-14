@@ -310,10 +310,33 @@ pub fn unregister_node(name_or_path: &str) -> Result<()> {
     // Try matching by effective name first
     registry.nodes.retain(|entry| {
         let entry_path = Path::new(&entry.path);
+
+        // Try to match by effective name (manifest-based or name_override)
         if let Ok(manifest) = read_manifest(entry_path) {
             let eff = effective_name(entry, &manifest);
             if eff == name_or_path {
                 return false; // remove this entry
+            }
+        } else {
+            // Directory deleted - still try to match by name_override or directory name
+            if let Some(ref name_ov) = entry.name_override {
+                if name_ov == name_or_path {
+                    log::warn!(
+                        "Node directory '{}' was already deleted, removing registry entry",
+                        entry.path
+                    );
+                    return false; // remove this entry
+                }
+            }
+            // As a fallback, try matching against the directory name itself
+            if let Some(dir_name) = entry_path.file_name().and_then(|n| n.to_str()) {
+                if dir_name == name_or_path {
+                    log::warn!(
+                        "Node directory '{}' was already deleted, removing registry entry",
+                        entry.path
+                    );
+                    return false; // remove this entry
+                }
             }
         }
 

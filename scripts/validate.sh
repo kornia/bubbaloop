@@ -244,7 +244,64 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════
-printf "\n${CYAN}── PHASE 8: Gemini CLI Review ──${NC}\n"
+printf "\n${CYAN}── PHASE 8: Security Validation ──${NC}\n"
+# ══════════════════════════════════════════════════════════════════════
+
+step "Templates: scouting disabled"
+SCOUT_OK=true
+for tpl in templates/python-node/main.py.template templates/rust-node/src/node.rs.template; do
+    if [ -f "$tpl" ] && ! grep -q 'scouting/multicast/enabled' "$tpl"; then
+        fail "$tpl missing scouting disable"
+        SCOUT_OK=false
+    fi
+done
+$SCOUT_OK && pass
+
+step "Templates: read BUBBALOOP_ZENOH_ENDPOINT"
+ENDPOINT_OK=true
+for tpl in templates/python-node/main.py.template templates/rust-node/src/node.rs.template; do
+    if [ -f "$tpl" ] && ! grep -q 'BUBBALOOP_ZENOH_ENDPOINT' "$tpl"; then
+        fail "$tpl missing BUBBALOOP_ZENOH_ENDPOINT"
+        ENDPOINT_OK=false
+    fi
+done
+$ENDPOINT_OK && pass
+
+step "Python template: no 0.0.0.0 binding"
+if grep -v '^\s*#' templates/python-node/main.py.template 2>/dev/null | grep -q '0\.0\.0\.0'; then
+    fail "Python template binds to 0.0.0.0 (security risk)"
+else
+    pass
+fi
+
+step "Templates: security.acl_prefix in manifest"
+ACL_OK=true
+for tpl in templates/python-node/main.py.template templates/rust-node/src/node.rs.template; do
+    if [ -f "$tpl" ] && ! grep -q 'acl_prefix' "$tpl"; then
+        fail "$tpl missing acl_prefix in manifest"
+        ACL_OK=false
+    fi
+done
+$ACL_OK && pass
+
+step "Systemd: Python sandbox directives present"
+if grep -q 'ProtectHome' crates/bubbaloop/src/daemon/systemd.rs && \
+   grep -q 'MemoryMax' crates/bubbaloop/src/daemon/systemd.rs && \
+   grep -q 'RestrictSUIDSGID' crates/bubbaloop/src/daemon/systemd.rs; then
+    pass
+else
+    fail "systemd.rs missing Python sandbox directives"
+fi
+
+step "Daemon: scouting disabled"
+if grep -q 'scouting/multicast/enabled.*false' crates/bubbaloop/src/daemon/zenoh_service.rs; then
+    pass
+else
+    fail "Daemon zenoh_service.rs doesn't disable scouting"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+printf "\n${CYAN}── PHASE 9: Gemini CLI Review ──${NC}\n"
 # ══════════════════════════════════════════════════════════════════════
 
 if $GEMINI; then

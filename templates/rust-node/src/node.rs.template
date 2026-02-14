@@ -123,11 +123,18 @@ impl {{node_name_pascal}}Node {
 
         // Create zenoh session
         let mut zenoh_config = zenoh::Config::default();
-        if let Some(ep) = endpoint {
-            zenoh_config
-                .insert_json5("connect/endpoints", &format!(r#"["{}"]"#, ep))
-                .unwrap();
-        }
+
+        // Resolve endpoint: CLI arg > env var > default
+        let ep = endpoint
+            .or_else(|| std::env::var("BUBBALOOP_ZENOH_ENDPOINT").ok())
+            .unwrap_or_else(|| "tcp/127.0.0.1:7447".to_string());
+        zenoh_config
+            .insert_json5("connect/endpoints", &format!(r#"["{}"]"#, ep))
+            .unwrap();
+
+        // Disable scouting to prevent connecting to remote peers via Tailscale/VPN
+        zenoh_config.insert_json5("scouting/multicast/enabled", "false").ok();
+        zenoh_config.insert_json5("scouting/gossip/enabled", "false").ok();
 
         let session = zenoh::open(zenoh_config)
             .await

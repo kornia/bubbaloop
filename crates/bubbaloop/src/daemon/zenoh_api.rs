@@ -151,25 +151,25 @@ pub struct ErrorResponse {
     pub code: u16,
 }
 
-fn status_to_string(status: i32) -> String {
+fn status_to_string(status: i32) -> &'static str {
     match status {
-        0 => "unknown".to_string(),
-        1 => "stopped".to_string(),
-        2 => "running".to_string(),
-        3 => "failed".to_string(),
-        4 => "installing".to_string(),
-        5 => "building".to_string(),
-        6 => "not-installed".to_string(),
-        _ => "unknown".to_string(),
+        0 => "unknown",
+        1 => "stopped",
+        2 => "running",
+        3 => "failed",
+        4 => "installing",
+        5 => "building",
+        6 => "not-installed",
+        _ => "unknown",
     }
 }
 
-fn health_status_to_string(health_status: i32) -> String {
+fn health_status_to_string(health_status: i32) -> &'static str {
     match health_status {
-        0 => "unknown".to_string(),
-        1 => "healthy".to_string(),
-        2 => "unhealthy".to_string(),
-        _ => "unknown".to_string(),
+        0 => "unknown",
+        1 => "healthy",
+        2 => "unhealthy",
+        _ => "unknown",
     }
 }
 
@@ -177,7 +177,7 @@ fn node_state_to_response(state: &crate::schemas::daemon::v1::NodeState) -> Node
     NodeStateResponse {
         name: state.name.clone(),
         path: state.path.clone(),
-        status: status_to_string(state.status),
+        status: status_to_string(state.status).to_string(),
         installed: state.installed,
         autostart_enabled: state.autostart_enabled,
         version: state.version.clone(),
@@ -188,7 +188,7 @@ fn node_state_to_response(state: &crate::schemas::daemon::v1::NodeState) -> Node
         base_node: state.base_node.clone(),
         config_override: state.config_override.clone(),
         last_updated_ms: state.last_updated_ms,
-        health_status: health_status_to_string(state.health_status),
+        health_status: health_status_to_string(state.health_status).to_string(),
         last_health_check_ms: state.last_health_check_ms,
         machine_id: state.machine_id.clone(),
         machine_hostname: state.machine_hostname.clone(),
@@ -196,22 +196,24 @@ fn node_state_to_response(state: &crate::schemas::daemon::v1::NodeState) -> Node
     }
 }
 
-fn parse_command(cmd: &str) -> CommandType {
+fn parse_command(cmd: &str) -> Option<CommandType> {
     match cmd.to_lowercase().as_str() {
-        "start" => CommandType::Start,
-        "stop" => CommandType::Stop,
-        "restart" => CommandType::Restart,
-        "install" => CommandType::Install,
-        "uninstall" => CommandType::Uninstall,
-        "build" => CommandType::Build,
-        "clean" => CommandType::Clean,
-        "enable" | "enable_autostart" | "enable-autostart" => CommandType::EnableAutostart,
-        "disable" | "disable_autostart" | "disable-autostart" => CommandType::DisableAutostart,
-        "add" | "add_node" => CommandType::AddNode,
-        "remove" | "remove_node" => CommandType::RemoveNode,
-        "refresh" => CommandType::Refresh,
-        "logs" | "get_logs" | "get-logs" => CommandType::GetLogs,
-        _ => CommandType::Refresh,
+        "start" => Some(CommandType::Start),
+        "stop" => Some(CommandType::Stop),
+        "restart" => Some(CommandType::Restart),
+        "install" => Some(CommandType::Install),
+        "uninstall" => Some(CommandType::Uninstall),
+        "build" => Some(CommandType::Build),
+        "clean" => Some(CommandType::Clean),
+        "enable" | "enable_autostart" | "enable-autostart" => Some(CommandType::EnableAutostart),
+        "disable" | "disable_autostart" | "disable-autostart" => {
+            Some(CommandType::DisableAutostart)
+        }
+        "add" | "add_node" => Some(CommandType::AddNode),
+        "remove" | "remove_node" => Some(CommandType::RemoveNode),
+        "refresh" => Some(CommandType::Refresh),
+        "logs" | "get_logs" | "get-logs" => Some(CommandType::GetLogs),
+        _ => None,
     }
 }
 
@@ -551,8 +553,19 @@ impl ZenohApiService {
             }
         };
 
+        let command_type = match parse_command(&request.command) {
+            Some(ct) => ct,
+            None => {
+                return serde_json::to_string(&ErrorResponse {
+                    error: format!("Unknown command: '{}'. Valid commands: start, stop, restart, install, uninstall, build, clean, enable, disable, add, remove, refresh, logs", request.command),
+                    code: 400,
+                })
+                .unwrap_or_else(|_| r#"{"error":"Unknown command","code":400}"#.to_string())
+            }
+        };
+
         let cmd = NodeCommand {
-            command: parse_command(&request.command) as i32,
+            command: command_type as i32,
             node_name: name.to_string(),
             node_path: request.node_path,
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -616,6 +629,8 @@ mod tests {
         assert_eq!(status_to_string(4), "installing");
         assert_eq!(status_to_string(5), "building");
         assert_eq!(status_to_string(6), "not-installed");
+        // Guard: catches proto enum additions
+        assert_eq!(NodeStatus::NotInstalled as i32, 6);
     }
 
     #[test]
@@ -626,86 +641,59 @@ mod tests {
     }
 
     // parse_command tests
+    fn assert_cmd(input: &str, expected: CommandType) {
+        assert_eq!(
+            parse_command(input).unwrap() as i32,
+            expected as i32,
+            "parse_command({input:?})"
+        );
+    }
+
     #[test]
     fn test_parse_command_basic() {
-        assert_eq!(parse_command("start") as i32, CommandType::Start as i32);
-        assert_eq!(parse_command("stop") as i32, CommandType::Stop as i32);
-        assert_eq!(parse_command("restart") as i32, CommandType::Restart as i32);
-        assert_eq!(parse_command("install") as i32, CommandType::Install as i32);
-        assert_eq!(
-            parse_command("uninstall") as i32,
-            CommandType::Uninstall as i32
-        );
-        assert_eq!(parse_command("build") as i32, CommandType::Build as i32);
-        assert_eq!(parse_command("clean") as i32, CommandType::Clean as i32);
-        assert_eq!(parse_command("refresh") as i32, CommandType::Refresh as i32);
+        assert_cmd("start", CommandType::Start);
+        assert_cmd("stop", CommandType::Stop);
+        assert_cmd("restart", CommandType::Restart);
+        assert_cmd("install", CommandType::Install);
+        assert_cmd("uninstall", CommandType::Uninstall);
+        assert_cmd("build", CommandType::Build);
+        assert_cmd("clean", CommandType::Clean);
+        assert_cmd("refresh", CommandType::Refresh);
     }
 
     #[test]
     fn test_parse_command_case_insensitive() {
-        assert_eq!(parse_command("START") as i32, CommandType::Start as i32);
-        assert_eq!(parse_command("Start") as i32, CommandType::Start as i32);
-        assert_eq!(parse_command("sTaRt") as i32, CommandType::Start as i32);
-        assert_eq!(parse_command("STOP") as i32, CommandType::Stop as i32);
-        assert_eq!(parse_command("ReStArT") as i32, CommandType::Restart as i32);
+        for input in ["START", "Start", "sTaRt"] {
+            assert_cmd(input, CommandType::Start);
+        }
+        assert_cmd("STOP", CommandType::Stop);
+        assert_cmd("ReStArT", CommandType::Restart);
     }
 
     #[test]
     fn test_parse_command_aliases() {
-        // Enable autostart aliases
-        assert_eq!(
-            parse_command("enable") as i32,
-            CommandType::EnableAutostart as i32
-        );
-        assert_eq!(
-            parse_command("enable_autostart") as i32,
-            CommandType::EnableAutostart as i32
-        );
-        assert_eq!(
-            parse_command("enable-autostart") as i32,
-            CommandType::EnableAutostart as i32
-        );
-        // Disable aliases
-        assert_eq!(
-            parse_command("disable") as i32,
-            CommandType::DisableAutostart as i32
-        );
-        assert_eq!(
-            parse_command("disable_autostart") as i32,
-            CommandType::DisableAutostart as i32
-        );
-        assert_eq!(
-            parse_command("disable-autostart") as i32,
-            CommandType::DisableAutostart as i32
-        );
-        // Add/Remove aliases
-        assert_eq!(parse_command("add") as i32, CommandType::AddNode as i32);
-        assert_eq!(
-            parse_command("add_node") as i32,
-            CommandType::AddNode as i32
-        );
-        assert_eq!(
-            parse_command("remove") as i32,
-            CommandType::RemoveNode as i32
-        );
-        assert_eq!(
-            parse_command("remove_node") as i32,
-            CommandType::RemoveNode as i32
-        );
+        for input in ["enable", "enable_autostart", "enable-autostart"] {
+            assert_cmd(input, CommandType::EnableAutostart);
+        }
+        for input in ["disable", "disable_autostart", "disable-autostart"] {
+            assert_cmd(input, CommandType::DisableAutostart);
+        }
+        for input in ["add", "add_node"] {
+            assert_cmd(input, CommandType::AddNode);
+        }
+        for input in ["remove", "remove_node"] {
+            assert_cmd(input, CommandType::RemoveNode);
+        }
     }
 
     #[test]
-    fn test_parse_command_unknown_defaults_to_refresh() {
-        assert_eq!(
-            parse_command("unknown_command") as i32,
-            CommandType::Refresh as i32
-        );
-        assert_eq!(parse_command("foo") as i32, CommandType::Refresh as i32);
-        assert_eq!(parse_command("") as i32, CommandType::Refresh as i32);
-        assert_eq!(
-            parse_command("arbitrary-string") as i32,
-            CommandType::Refresh as i32
-        );
+    fn test_parse_command_unknown_returns_none() {
+        for input in ["unknown_command", "foo", "", "arbitrary-string"] {
+            assert!(
+                parse_command(input).is_none(),
+                "expected None for {input:?}"
+            );
+        }
     }
 
     // node_state_to_response tests
@@ -815,23 +803,11 @@ mod tests {
         );
     }
 
-    // parse_command: GetLogs aliases
     #[test]
     fn test_parse_command_logs_aliases() {
-        assert_eq!(parse_command("logs") as i32, CommandType::GetLogs as i32);
-        assert_eq!(
-            parse_command("get_logs") as i32,
-            CommandType::GetLogs as i32
-        );
-        assert_eq!(
-            parse_command("get-logs") as i32,
-            CommandType::GetLogs as i32
-        );
-        assert_eq!(parse_command("LOGS") as i32, CommandType::GetLogs as i32);
-        assert_eq!(
-            parse_command("Get-Logs") as i32,
-            CommandType::GetLogs as i32
-        );
+        for input in ["logs", "get_logs", "get-logs", "LOGS", "Get-Logs"] {
+            assert_cmd(input, CommandType::GetLogs);
+        }
     }
 
     // Serde round-trip tests
@@ -981,40 +957,5 @@ mod tests {
         let deser: ErrorResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(deser.error, "Not found");
         assert_eq!(deser.code, 404);
-    }
-
-    // Status enum consistency test (CONTRACT: dashboard sync required)
-    #[test]
-    fn test_status_enum_consistency() {
-        // Verify all proto NodeStatus enum values (0-6) are handled
-        assert_eq!(status_to_string(NodeStatus::Unknown as i32), "unknown");
-        assert_eq!(status_to_string(NodeStatus::Stopped as i32), "stopped");
-        assert_eq!(status_to_string(NodeStatus::Running as i32), "running");
-        assert_eq!(status_to_string(NodeStatus::Failed as i32), "failed");
-        assert_eq!(
-            status_to_string(NodeStatus::Installing as i32),
-            "installing"
-        );
-        assert_eq!(status_to_string(NodeStatus::Building as i32), "building");
-        assert_eq!(
-            status_to_string(NodeStatus::NotInstalled as i32),
-            "not-installed"
-        );
-
-        // No status should map to empty string
-        for i in 0..=6 {
-            assert!(
-                !status_to_string(i).is_empty(),
-                "Status {} maps to empty string",
-                i
-            );
-        }
-
-        // Verify max enum value is 6 (catches additions)
-        assert_eq!(
-            NodeStatus::NotInstalled as i32,
-            6,
-            "Max NodeStatus enum value changed — update status_to_string()"
-        );
     }
 }

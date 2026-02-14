@@ -36,6 +36,12 @@ vi.mock('../../hooks/useZenohSubscription', () => ({
   useZenohSubscription: vi.fn(() => ({ messageCount: 0, fps: 0, instantFps: 0 })),
 }));
 
+const _schemaReadyState = vi.hoisted(() => ({ ready: false }));
+
+vi.mock('../../hooks/useSchemaReady', () => ({
+  useSchemaReady: vi.fn(() => _schemaReadyState.ready),
+}));
+
 vi.mock('../../contexts/FleetContext', () => ({
   useFleetContext: vi.fn(() => ({
     machines: [],
@@ -96,6 +102,7 @@ vi.mock('../MachineBadge', () => ({
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CameraView } from '../CameraView';
+import { useZenohSubscription } from '../../hooks/useZenohSubscription';
 
 describe('CameraView', () => {
   const defaultProps = {
@@ -107,6 +114,7 @@ describe('CameraView', () => {
     vi.clearAllMocks();
     _h264State.isSupported = true;
     _h264State.initResolves = true;
+    _schemaReadyState.ready = false;
   });
 
   it('renders canvas element and CAMERA badge in header', () => {
@@ -271,5 +279,29 @@ describe('CameraView', () => {
     );
 
     expect(screen.getByTitle('Drag to reorder')).toBeInTheDocument();
+  });
+
+  it('does not pass handleSample when schemas are not ready', () => {
+    _schemaReadyState.ready = false;
+
+    render(<CameraView {...defaultProps} />);
+
+    // useZenohSubscription should be called with undefined callback
+    const mockSub = vi.mocked(useZenohSubscription);
+    const lastCall = mockSub.mock.calls[mockSub.mock.calls.length - 1];
+    expect(lastCall[0]).toBe(defaultProps.topic);
+    expect(lastCall[1]).toBeUndefined();
+  });
+
+  it('passes handleSample when schemas are ready', () => {
+    _schemaReadyState.ready = true;
+
+    render(<CameraView {...defaultProps} />);
+
+    // useZenohSubscription should be called with a function callback
+    const mockSub = vi.mocked(useZenohSubscription);
+    const lastCall = mockSub.mock.calls[mockSub.mock.calls.length - 1];
+    expect(lastCall[0]).toBe(defaultProps.topic);
+    expect(typeof lastCall[1]).toBe('function');
   });
 });

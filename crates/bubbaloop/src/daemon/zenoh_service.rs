@@ -442,6 +442,89 @@ impl ZenohService {
     }
 }
 
+/// A node's ACL rule derived from its manifest acl_prefix
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeAclRule {
+    /// Rule identifier (e.g., "camera-publish")
+    pub id: String,
+    /// Key expression this node can access
+    pub key_expr: String,
+}
+
+/// Generated ACL configuration for a deployment
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AclConfig {
+    /// Whether ACL enforcement is enabled
+    pub enabled: bool,
+    /// Default permission when no rule matches
+    pub default_permission: String,
+    /// Per-node ACL rules
+    pub rules: Vec<NodeAclRule>,
+}
+
+use serde::{Deserialize, Serialize};
+
+/// Generate ACL configuration from node manifests.
+///
+/// Each node gets publish access to its own `acl_prefix`.
+/// The daemon and dashboard get broader access.
+pub fn generate_acl_config(node_acl_prefixes: &[(&str, &str)]) -> AclConfig {
+    let mut rules = vec![
+        // Daemon gets full access
+        NodeAclRule {
+            id: "daemon-full-access".to_string(),
+            key_expr: "bubbaloop/**".to_string(),
+        },
+        // Dashboard gets read-only access
+        NodeAclRule {
+            id: "dashboard-read-only".to_string(),
+            key_expr: "bubbaloop/**".to_string(),
+        },
+    ];
+
+    // Per-node rules from manifest acl_prefix
+    for (node_name, acl_prefix) in node_acl_prefixes {
+        rules.push(NodeAclRule {
+            id: format!("{}-publish", node_name),
+            key_expr: acl_prefix.to_string(),
+        });
+    }
+
+    AclConfig {
+        enabled: true,
+        default_permission: "deny".to_string(),
+        rules,
+    }
+}
+
+/// Generate a TLS endpoint configuration snippet for Zenoh.
+///
+/// Returns a JSON5-compatible string that can be merged into a Zenoh config.
+pub fn generate_tls_config(
+    cert_path: &str,
+    key_path: &str,
+    ca_path: &str,
+    listen_endpoint: &str,
+) -> String {
+    format!(
+        r#"{{
+  listen: {{
+    endpoints: ["{listen_endpoint}"]
+  }},
+  transport: {{
+    link: {{
+      tls: {{
+        server_certificate: "{cert_path}",
+        server_private_key: "{key_path}",
+        root_ca_certificate: "{ca_path}",
+        client_auth: true
+      }}
+    }}
+  }}
+}}"#
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,5 +632,46 @@ mod tests {
             keys::node_state_key_legacy("my-node"),
             "bubbaloop/daemon/nodes/my-node/state"
         );
+    }
+
+    #[test]
+    fn test_generate_acl_config_empty_nodes() {
+        let config = generate_acl_config(&[]);
+        assert!(config.enabled);
+        assert_eq!(config.default_permission, "deny");
+        // Should have daemon + dashboard rules
+        assert_eq!(config.rules.len(), 2);
+        assert_eq!(config.rules[0].id, "daemon-full-access");
+        assert_eq!(config.rules[1].id, "dashboard-read-only");
+    }
+
+    #[test]
+    fn test_generate_acl_config_with_nodes() {
+        let prefixes = vec![
+            ("camera", "bubbaloop/*/jetson_1/camera/**"),
+            ("weather", "bubbaloop/*/jetson_1/weather/**"),
+        ];
+        let config = generate_acl_config(&prefixes);
+
+        assert_eq!(config.rules.len(), 4); // daemon + dashboard + 2 nodes
+        assert_eq!(config.rules[2].id, "camera-publish");
+        assert_eq!(config.rules[2].key_expr, "bubbaloop/*/jetson_1/camera/**");
+        assert_eq!(config.rules[3].id, "weather-publish");
+        assert_eq!(config.rules[3].key_expr, "bubbaloop/*/jetson_1/weather/**");
+    }
+
+    #[test]
+    fn test_generate_tls_config_contains_paths() {
+        let config = generate_tls_config(
+            "/etc/zenoh/cert.pem",
+            "/etc/zenoh/key.pem",
+            "/etc/zenoh/ca.pem",
+            "tls/0.0.0.0:7447",
+        );
+        assert!(config.contains("/etc/zenoh/cert.pem"));
+        assert!(config.contains("/etc/zenoh/key.pem"));
+        assert!(config.contains("/etc/zenoh/ca.pem"));
+        assert!(config.contains("tls/0.0.0.0:7447"));
+        assert!(config.contains("client_auth: true"));
     }
 }

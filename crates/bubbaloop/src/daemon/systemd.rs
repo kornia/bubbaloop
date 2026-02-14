@@ -195,34 +195,34 @@ impl SystemdClient {
         Ok(Self { connection })
     }
 
-    /// Get the systemd manager proxy
     async fn manager(&self) -> Result<SystemdManagerProxy<'_>> {
         Ok(SystemdManagerProxy::new(&self.connection).await?)
     }
 
-    /// Get the active state of a unit.
-    ///
-    /// Includes a 5-second timeout to prevent indefinite hangs if the D-Bus
-    /// connection is stalled (e.g. by signal backpressure).
-    pub async fn get_active_state(&self, unit_name: &str) -> Result<ActiveState> {
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            self.get_active_state_inner(unit_name),
-        )
-        .await
-        {
+    /// Run an async operation with a D-Bus timeout.
+    async fn with_timeout<F, Fut, T>(secs: u64, op: &str, f: F) -> Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        match tokio::time::timeout(std::time::Duration::from_secs(secs), f()).await {
             Ok(result) => result,
             Err(_) => {
-                log::warn!("D-Bus get_active_state timed out for {}", unit_name);
+                log::warn!("D-Bus {} timed out", op);
                 Err(SystemdError::Timeout)
             }
         }
     }
 
+    pub async fn get_active_state(&self, unit_name: &str) -> Result<ActiveState> {
+        Self::with_timeout(5, &format!("get_active_state({unit_name})"), || {
+            self.get_active_state_inner(unit_name)
+        })
+        .await
+    }
+
     async fn get_active_state_inner(&self, unit_name: &str) -> Result<ActiveState> {
         let manager = self.manager().await?;
-
-        // Try to load the unit - this works even if unit doesn't exist
         match manager.load_unit(unit_name).await {
             Ok(path) => {
                 let unit = SystemdUnitProxy::builder(&self.connection)
@@ -242,11 +242,8 @@ impl SystemdClient {
         }
     }
 
-    /// Check if a unit file is enabled.
-    ///
-    /// Includes a 5-second timeout to prevent D-Bus stalls.
     pub async fn is_enabled(&self, unit_name: &str) -> Result<bool> {
-        match tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        match Self::with_timeout(5, &format!("is_enabled({unit_name})"), || async {
             let manager = self.manager().await?;
             match manager.get_unit_file_state(unit_name).await {
                 Ok(state) => Ok(state == "enabled"),
@@ -255,98 +252,93 @@ impl SystemdClient {
         })
         .await
         {
-            Ok(result) => result,
-            Err(_) => {
-                log::warn!("D-Bus is_enabled timed out for {}", unit_name);
-                Ok(false)
-            }
+            Ok(v) => Ok(v),
+            Err(_) => Ok(false), // timeout → treat as not enabled
         }
     }
 
-    /// Get the unit file state
     pub async fn get_unit_file_state(&self, unit_name: &str) -> Result<UnitFileState> {
         let manager = self.manager().await?;
-
         match manager.get_unit_file_state(unit_name).await {
             Ok(state) => Ok(UnitFileState::from(state.as_str())),
             Err(_) => Ok(UnitFileState::Unknown("not-found".to_string())),
         }
     }
 
-    /// Start a unit
     pub async fn start_unit(&self, unit_name: &str) -> Result<()> {
-        let manager = self.manager().await?;
-        manager
-            .start_unit(unit_name, "replace")
-            .await
-            .map_err(|e| {
-                SystemdError::OperationFailed(format!("Failed to start {}: {}", unit_name, e))
-            })?;
-        Ok(())
+        Self::with_timeout(30, &format!("start_unit({unit_name})"), || async {
+            let manager = self.manager().await?;
+            manager
+                .start_unit(unit_name, "replace")
+                .await
+                .map_err(|e| {
+                    SystemdError::OperationFailed(format!("Failed to start {unit_name}: {e}"))
+                })?;
+            Ok(())
+        })
+        .await
     }
 
-    /// Stop a unit.
-    ///
-    /// Includes a 10-second timeout to prevent D-Bus stalls.
     pub async fn stop_unit(&self, unit_name: &str) -> Result<()> {
-        match tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        Self::with_timeout(10, &format!("stop_unit({unit_name})"), || async {
             let manager = self.manager().await?;
             manager.stop_unit(unit_name, "replace").await.map_err(|e| {
-                SystemdError::OperationFailed(format!("Failed to stop {}: {}", unit_name, e))
+                SystemdError::OperationFailed(format!("Failed to stop {unit_name}: {e}"))
             })?;
             Ok(())
         })
         .await
-        {
-            Ok(result) => result,
-            Err(_) => {
-                log::warn!("D-Bus stop_unit timed out for {}", unit_name);
-                Err(SystemdError::Timeout)
-            }
-        }
     }
 
-    /// Restart a unit
     pub async fn restart_unit(&self, unit_name: &str) -> Result<()> {
-        let manager = self.manager().await?;
-        manager
-            .restart_unit(unit_name, "replace")
-            .await
-            .map_err(|e| {
-                SystemdError::OperationFailed(format!("Failed to restart {}: {}", unit_name, e))
-            })?;
-        Ok(())
+        Self::with_timeout(30, &format!("restart_unit({unit_name})"), || async {
+            let manager = self.manager().await?;
+            manager
+                .restart_unit(unit_name, "replace")
+                .await
+                .map_err(|e| {
+                    SystemdError::OperationFailed(format!("Failed to restart {unit_name}: {e}"))
+                })?;
+            Ok(())
+        })
+        .await
     }
 
-    /// Enable a unit for autostart
     pub async fn enable_unit(&self, unit_name: &str) -> Result<()> {
-        let manager = self.manager().await?;
-        manager
-            .enable_unit_files(&[unit_name], false, false)
-            .await
-            .map_err(|e| {
-                SystemdError::OperationFailed(format!("Failed to enable {}: {}", unit_name, e))
-            })?;
-        Ok(())
+        Self::with_timeout(30, &format!("enable_unit({unit_name})"), || async {
+            let manager = self.manager().await?;
+            manager
+                .enable_unit_files(&[unit_name], false, false)
+                .await
+                .map_err(|e| {
+                    SystemdError::OperationFailed(format!("Failed to enable {unit_name}: {e}"))
+                })?;
+            Ok(())
+        })
+        .await
     }
 
-    /// Disable a unit from autostart
     pub async fn disable_unit(&self, unit_name: &str) -> Result<()> {
-        let manager = self.manager().await?;
-        manager
-            .disable_unit_files(&[unit_name], false)
-            .await
-            .map_err(|e| {
-                SystemdError::OperationFailed(format!("Failed to disable {}: {}", unit_name, e))
-            })?;
-        Ok(())
+        Self::with_timeout(30, &format!("disable_unit({unit_name})"), || async {
+            let manager = self.manager().await?;
+            manager
+                .disable_unit_files(&[unit_name], false)
+                .await
+                .map_err(|e| {
+                    SystemdError::OperationFailed(format!("Failed to disable {unit_name}: {e}"))
+                })?;
+            Ok(())
+        })
+        .await
     }
 
-    /// Reload systemd daemon (after adding/removing unit files)
     pub async fn daemon_reload(&self) -> Result<()> {
-        let manager = self.manager().await?;
-        manager.reload().await?;
-        Ok(())
+        Self::with_timeout(30, "daemon_reload", || async {
+            let manager = self.manager().await?;
+            manager.reload().await?;
+            Ok(())
+        })
+        .await
     }
 
     /// Subscribe to systemd signals and return a receiver for signal events
@@ -667,6 +659,18 @@ pub fn generate_service_unit(
     let machine_id = crate::daemon::util::get_machine_id();
     let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
 
+    // Python nodes get extra sandboxing since they lack memory safety guarantees
+    let python_sandbox = if node_type == "python" {
+        "\n# Python-specific sandboxing (no memory safety)\n\
+         ProtectHome=read-only\n\
+         RestrictSUIDSGID=true\n\
+         MemoryMax=512M\n\
+         CPUQuota=80%"
+            .to_string()
+    } else {
+        String::new()
+    };
+
     Ok(format!(
         r#"[Unit]
 Description=Bubbaloop Node: {safe_name}
@@ -694,6 +698,7 @@ ProtectControlGroups=true
 # Robotics-compatible settings (allow RT scheduling and JIT)
 RestrictRealtime=false
 MemoryDenyWriteExecute=false
+{python_sandbox}
 
 [Install]
 WantedBy=default.target
@@ -1165,6 +1170,49 @@ mod tests {
 
         // Absolute paths should be preserved
         assert!(content.contains("ExecStart=/usr/bin/python3 script.py"));
+    }
+
+    #[test]
+    fn test_generate_service_unit_python_sandboxing() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/py-sandbox",
+            "py-sandbox",
+            "python",
+            None,
+            &[],
+        );
+        assert!(result.is_ok());
+        let content = result.unwrap();
+
+        // Python nodes get extra sandboxing
+        assert!(
+            content.contains("ProtectHome=read-only"),
+            "Missing ProtectHome"
+        );
+        assert!(
+            content.contains("RestrictSUIDSGID=true"),
+            "Missing RestrictSUIDSGID"
+        );
+        assert!(content.contains("MemoryMax=512M"), "Missing MemoryMax");
+        assert!(content.contains("CPUQuota=80%"), "Missing CPUQuota");
+    }
+
+    #[test]
+    fn test_generate_service_unit_rust_no_python_sandbox() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/rust-node",
+            "rust-node",
+            "rust",
+            None,
+            &[],
+        );
+        assert!(result.is_ok());
+        let content = result.unwrap();
+
+        // Rust nodes should NOT have Python-specific sandboxing
+        assert!(!content.contains("ProtectHome=read-only"));
+        assert!(!content.contains("MemoryMax=512M"));
+        assert!(!content.contains("CPUQuota=80%"));
     }
 
     #[test]
