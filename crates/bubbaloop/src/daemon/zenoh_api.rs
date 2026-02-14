@@ -24,17 +24,7 @@ use tokio::sync::watch;
 use zenoh::bytes::ZBytes;
 use zenoh::Session;
 
-/// Get machine ID from environment or hostname.
-/// Sanitizes hyphens to underscores for Zenoh topic compatibility (matching node convention).
-fn get_machine_id() -> String {
-    std::env::var("BUBBALOOP_MACHINE_ID")
-        .unwrap_or_else(|_| {
-            hostname::get()
-                .map(|h| h.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "unknown".to_string())
-        })
-        .replace('-', "_")
-}
+use crate::daemon::util::get_machine_id;
 
 /// Key expressions for API endpoints
 pub mod api_keys {
@@ -93,6 +83,18 @@ pub struct NodeStateResponse {
     pub base_node: String,
     #[serde(default)]
     pub config_override: String,
+    #[serde(default)]
+    pub last_updated_ms: i64,
+    #[serde(default)]
+    pub health_status: String,
+    #[serde(default)]
+    pub last_health_check_ms: i64,
+    #[serde(default)]
+    pub machine_id: String,
+    #[serde(default)]
+    pub machine_hostname: String,
+    #[serde(default)]
+    pub machine_ips: Vec<String>,
 }
 
 /// JSON response for node list
@@ -162,6 +164,15 @@ fn status_to_string(status: i32) -> String {
     }
 }
 
+fn health_status_to_string(health_status: i32) -> String {
+    match health_status {
+        0 => "unknown".to_string(),
+        1 => "healthy".to_string(),
+        2 => "unhealthy".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
 fn node_state_to_response(state: &crate::schemas::daemon::v1::NodeState) -> NodeStateResponse {
     NodeStateResponse {
         name: state.name.clone(),
@@ -176,6 +187,12 @@ fn node_state_to_response(state: &crate::schemas::daemon::v1::NodeState) -> Node
         build_output: state.build_output.clone(),
         base_node: state.base_node.clone(),
         config_override: state.config_override.clone(),
+        last_updated_ms: state.last_updated_ms,
+        health_status: health_status_to_string(state.health_status),
+        last_health_check_ms: state.last_health_check_ms,
+        machine_id: state.machine_id.clone(),
+        machine_hostname: state.machine_hostname.clone(),
+        machine_ips: state.machine_ips.clone(),
     }
 }
 
@@ -833,12 +850,21 @@ mod tests {
             build_output: vec!["ok".to_string()],
             base_node: "".to_string(),
             config_override: "".to_string(),
+            last_updated_ms: 1234567890,
+            health_status: "healthy".to_string(),
+            last_health_check_ms: 1234567800,
+            machine_id: "jetson-01".to_string(),
+            machine_hostname: "jetson-01.local".to_string(),
+            machine_ips: vec!["192.168.1.10".to_string()],
         };
         let json = serde_json::to_string(&resp).unwrap();
         let deser: NodeStateResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(deser.name, "camera");
         assert_eq!(deser.status, "running");
         assert!(deser.installed);
+        assert_eq!(deser.last_updated_ms, 1234567890);
+        assert_eq!(deser.health_status, "healthy");
+        assert_eq!(deser.machine_id, "jetson-01");
     }
 
     #[test]
@@ -955,5 +981,40 @@ mod tests {
         let deser: ErrorResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(deser.error, "Not found");
         assert_eq!(deser.code, 404);
+    }
+
+    // Status enum consistency test (CONTRACT: dashboard sync required)
+    #[test]
+    fn test_status_enum_consistency() {
+        // Verify all proto NodeStatus enum values (0-6) are handled
+        assert_eq!(status_to_string(NodeStatus::Unknown as i32), "unknown");
+        assert_eq!(status_to_string(NodeStatus::Stopped as i32), "stopped");
+        assert_eq!(status_to_string(NodeStatus::Running as i32), "running");
+        assert_eq!(status_to_string(NodeStatus::Failed as i32), "failed");
+        assert_eq!(
+            status_to_string(NodeStatus::Installing as i32),
+            "installing"
+        );
+        assert_eq!(status_to_string(NodeStatus::Building as i32), "building");
+        assert_eq!(
+            status_to_string(NodeStatus::NotInstalled as i32),
+            "not-installed"
+        );
+
+        // No status should map to empty string
+        for i in 0..=6 {
+            assert!(
+                !status_to_string(i).is_empty(),
+                "Status {} maps to empty string",
+                i
+            );
+        }
+
+        // Verify max enum value is 6 (catches additions)
+        assert_eq!(
+            NodeStatus::NotInstalled as i32,
+            6,
+            "Max NodeStatus enum value changed — update status_to_string()"
+        );
     }
 }

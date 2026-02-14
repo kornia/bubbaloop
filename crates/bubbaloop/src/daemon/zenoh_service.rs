@@ -26,21 +26,11 @@ pub enum ZenohServiceError {
 
 pub type Result<T> = std::result::Result<T, ZenohServiceError>;
 
-/// Get machine ID from environment or hostname.
-/// Sanitizes hyphens to underscores for Zenoh topic compatibility (matching node convention).
-fn get_machine_id() -> String {
-    std::env::var("BUBBALOOP_MACHINE_ID")
-        .unwrap_or_else(|_| {
-            hostname::get()
-                .map(|h| h.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "unknown".to_string())
-        })
-        .replace('-', "_")
-}
+use crate::daemon::util::get_machine_id;
 
 /// Key expressions for daemon topics
 pub mod keys {
-    use super::get_machine_id;
+    use crate::daemon::util::get_machine_id;
 
     // Legacy keys (for backward compatibility)
     /// Full node list (legacy, no machine_id)

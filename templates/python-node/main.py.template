@@ -4,11 +4,14 @@
 import argparse
 import json
 import logging
+import os
 import signal
+import socket
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import yaml
 import zenoh
@@ -20,6 +23,19 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def _get_machine_id() -> str:
+    """Get machine ID from env var or sanitized hostname."""
+    machine_id = os.environ.get("BUBBALOOP_MACHINE_ID")
+    if machine_id:
+        return machine_id.replace("-", "_")
+    return socket.gethostname().replace("-", "_")
+
+
+def _get_scope() -> str:
+    """Get scope from env var, default 'local'."""
+    return os.environ.get("BUBBALOOP_SCOPE", "local")
 
 
 def _load_descriptor_set() -> bytes | None:
@@ -41,10 +57,24 @@ class {{node_name_pascal}}Node:
         else:
             logger.warning(f"Config file not found: {config_path}, using defaults")
             self.config = {
-                "publish_topic": "{{node_name}}/output",
+                "publish_topic": "output",
                 "subscribe_topic": None,
                 "rate_hz": 1.0,
+                "version": "0.1.0",
+                "capabilities": ["sensor"],
+                "requires_hardware": [],
+                "data_classification": "internal",
+                "clock_source": "system_realtime",
+                "timestamp_field": "timestamp",
+                "timestamp_unit": "milliseconds",
             }
+
+        # Resolve scoped topic prefix
+        self._machine_id = _get_machine_id()
+        self._scope = _get_scope()
+        self._node_name = "{{node_name}}"
+        self._topic_prefix = f"bubbaloop/{self._scope}/{self._machine_id}/{self._node_name}"
+        logger.info(f"Topic prefix: {self._topic_prefix}")
 
         # Setup zenoh
         zenoh_config = zenoh.Config()
@@ -54,20 +84,54 @@ class {{node_name_pascal}}Node:
         self.session = zenoh.open(zenoh_config)
         logger.info("Connected to zenoh")
 
-        # Setup publisher
-        self.publisher = self.session.declare_publisher(self.config["publish_topic"])
-        logger.info(f"Publishing to: {self.config['publish_topic']}")
+        # Track node start time for health reporting
+        self._start_time = time.time()
+
+        # Setup publisher with scoped topic
+        publish_suffix = self.config["publish_topic"]
+        publish_topic = f"{self._topic_prefix}/{publish_suffix}"
+        self.publisher = self.session.declare_publisher(publish_topic)
+        logger.info(f"Publishing to: {publish_topic}")
 
         # Declare schema queryable so the dashboard can fetch our protobuf schemas
         self._descriptor_bytes = _load_descriptor_set()
         self._schema_queryable = None
         if self._descriptor_bytes:
+            schema_key = f"{self._topic_prefix}/schema"
             # Do NOT use complete=True — it blocks wildcard queries like "bubbaloop/**/schema"
             self._schema_queryable = self.session.declare_queryable(
-                "{{node_name}}/schema",
+                schema_key,
                 self._on_schema_query,
             )
-            logger.info("Schema queryable declared on {{node_name}}/schema")
+            logger.info(f"Schema queryable declared on {schema_key}")
+
+        # Declare manifest queryable for node self-description
+        manifest_key = f"{self._topic_prefix}/manifest"
+        self._manifest_queryable = self.session.declare_queryable(
+            manifest_key,
+            self._on_manifest_query,
+        )
+        logger.info(f"Manifest queryable declared on {manifest_key}")
+
+        # Declare health queryable for monitoring
+        health_key = f"{self._topic_prefix}/health"
+        self._health_queryable = self.session.declare_queryable(
+            health_key,
+            self._on_health_query,
+        )
+        logger.info(f"Health queryable declared on {health_key}")
+
+        # Declare config queryable for runtime configuration (GET/SET)
+        config_key = f"{self._topic_prefix}/config"
+        self._config_queryable = self.session.declare_queryable(
+            config_key,
+            self._on_config_query,
+        )
+        logger.info(f"Config queryable declared on {config_key}")
+
+        # TODO: Zenoh liveliness tokens (requires zenoh-python with liveliness support)
+        # liveliness_key = f"bubbaloop/{self._scope}/{self._machine_id}/{self._node_name}"
+        # self._liveliness_token = self.session.liveliness().declare_token(liveliness_key)
 
         # Setup subscriber (optional)
         self.subscriber = None
@@ -86,6 +150,85 @@ class {{node_name_pascal}}Node:
         logger.debug("Schema query received")
         if self._descriptor_bytes:
             query.reply(query.key_expr, self._descriptor_bytes)
+
+    def _build_manifest(self) -> dict[str, Any]:
+        """Build the node manifest (self-describing contract)."""
+        publish_suffix = self.config.get("publish_topic", "output")
+        full_publish_topic = f"{self._topic_prefix}/{publish_suffix}"
+        return {
+            "name": self._node_name,
+            "version": self.config.get("version", "0.1.0"),
+            "language": "python",
+            "description": "{{description}}",
+            "machine_id": self._machine_id,
+            "scope": self._scope,
+            "capabilities": self.config.get("capabilities", ["sensor"]),
+            "requires_hardware": self.config.get("requires_hardware", []),
+            "publishes": [
+                {
+                    "topic_suffix": publish_suffix,
+                    "full_topic": full_publish_topic,
+                    "rate_hz": self.config.get("rate_hz", 1.0),
+                }
+            ],
+            "subscribes": [self.config["subscribe_topic"]] if self.config.get("subscribe_topic") else [],
+            "schema_key": f"{self._topic_prefix}/schema",
+            "health_key": f"{self._topic_prefix}/health",
+            "config_key": f"{self._topic_prefix}/config",
+            "security": {
+                "acl_prefix": f"bubbaloop/*/{self._machine_id}/{self._node_name}/**",
+                "data_classification": self.config.get("data_classification", "internal"),
+            },
+            "time": {
+                "clock_source": self.config.get("clock_source", "system_realtime"),
+                "timestamp_field": self.config.get("timestamp_field", "timestamp"),
+                "timestamp_unit": self.config.get("timestamp_unit", "milliseconds"),
+            },
+        }
+
+    def _on_manifest_query(self, query: zenoh.Query):
+        """Respond to manifest queries with node contract JSON."""
+        logger.debug("Manifest query received")
+        manifest = self._build_manifest()
+        query.reply(query.key_expr, json.dumps(manifest).encode())
+
+    def _on_health_query(self, query: zenoh.Query):
+        """Respond to health queries."""
+        logger.debug("Health query received")
+        health = {
+            "status": "ok",
+            "uptime_s": time.time() - self._start_time,
+            "sequence": self.sequence,
+        }
+        query.reply(query.key_expr, json.dumps(health).encode())
+
+    def _on_config_query(self, query: zenoh.Query):
+        """Respond to config queries. GET returns config, PUT updates it."""
+        logger.debug("Config query received")
+        # Check if this is a PUT (has payload)
+        payload = query.payload
+        if payload is not None:
+            try:
+                new_config = json.loads(payload.to_bytes().decode())
+                # Validate: only allow updating known keys
+                updated_keys = []
+                for key in new_config:
+                    if key in self.config:
+                        self.config[key] = new_config[key]
+                        updated_keys.append(key)
+                logger.info(f"Config updated: {updated_keys}")
+                query.reply(
+                    query.key_expr,
+                    json.dumps({"status": "ok", "updated": updated_keys}).encode(),
+                )
+            except Exception as e:
+                query.reply(
+                    query.key_expr,
+                    json.dumps({"status": "error", "message": str(e)}).encode(),
+                )
+        else:
+            # GET — return current config
+            query.reply(query.key_expr, json.dumps(self.config).encode())
 
     def _on_message(self, sample: zenoh.Sample):
         """Handle incoming messages."""
@@ -127,6 +270,15 @@ class {{node_name_pascal}}Node:
         """Clean up resources."""
         if self._schema_queryable:
             self._schema_queryable.undeclare()
+        if self._manifest_queryable:
+            self._manifest_queryable.undeclare()
+        if self._health_queryable:
+            self._health_queryable.undeclare()
+        if self._config_queryable:
+            self._config_queryable.undeclare()
+        # TODO: Undeclare liveliness token when zenoh-python supports it
+        # if self._liveliness_token:
+        #     self._liveliness_token.undeclare()
         if self.subscriber:
             self.subscriber.undeclare()
         self.publisher.undeclare()

@@ -108,6 +108,20 @@ export class Session {
   async put(_keyexpr: string, _payload: unknown): Promise<void> {}
 
   async close(): Promise<void> {}
+
+  liveliness() {
+    return {
+      declare_subscriber: async (_topic: string, _options?: unknown) => {
+        return new Subscriber();
+      },
+      declare_token: async (_topic: string) => {
+        return { undeclare: async () => {} };
+      },
+      get: async (_topic: string) => {
+        return (async function* () {})();
+      },
+    };
+  }
 }
 
 /** Mock open function */

@@ -16,10 +16,42 @@ use zenoh::sample::Sample;
 #[cfg(feature = "proto")]
 pub const DESCRIPTOR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/descriptor.bin"));
 
+/// Get machine ID from environment or hostname
+fn get_machine_id() -> String {
+    std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
+        hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "unknown".to_string())
+            .replace('-', "_")
+    })
+}
+
+/// Get scope from environment, defaults to "local"
+fn get_scope() -> String {
+    std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string())
+}
+
+fn default_data_classification() -> String {
+    "internal".to_string()
+}
+
+fn default_clock_source() -> String {
+    "system_realtime".to_string()
+}
+
+fn default_timestamp_field() -> String {
+    "timestamp".to_string()
+}
+
+fn default_timestamp_unit() -> String {
+    "milliseconds".to_string()
+}
+
 /// Node configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Topic to publish to
+    /// Topic suffix to publish to (appended to bubbaloop/{scope}/{machine_id}/{{node_name}}/)
     pub publish_topic: String,
 
     /// Topic to subscribe to (optional)
@@ -27,14 +59,44 @@ pub struct Config {
 
     /// Publishing rate in Hz
     pub rate_hz: f64,
+
+    /// Node capabilities (e.g., "sensor", "actuator")
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+
+    /// Hardware requirements (e.g., "camera", "network")
+    #[serde(default)]
+    pub requires_hardware: Vec<String>,
+
+    /// Data classification (internal, confidential, public)
+    #[serde(default = "default_data_classification")]
+    pub data_classification: String,
+
+    /// Clock source for timestamps
+    #[serde(default = "default_clock_source")]
+    pub clock_source: String,
+
+    /// Timestamp field name in messages
+    #[serde(default = "default_timestamp_field")]
+    pub timestamp_field: String,
+
+    /// Timestamp unit
+    #[serde(default = "default_timestamp_unit")]
+    pub timestamp_unit: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            publish_topic: "{{node_name}}/output".to_string(),
+            publish_topic: "output".to_string(),
             subscribe_topic: None,
             rate_hz: 1.0,
+            capabilities: Vec::new(),
+            requires_hardware: Vec::new(),
+            data_classification: default_data_classification(),
+            clock_source: default_clock_source(),
+            timestamp_field: default_timestamp_field(),
+            timestamp_unit: default_timestamp_unit(),
         }
     }
 }
@@ -72,18 +134,28 @@ impl {{node_name_pascal}}Node {
             .map_err(|e| anyhow!("Failed to open zenoh session: {}", e))?;
 
         log::info!("Connected to zenoh");
-        log::info!("Publishing to: {}", config.publish_topic);
-        if let Some(ref topic) = config.subscribe_topic {
-            log::info!("Subscribing to: {}", topic);
-        }
 
         Ok(Self { config, session })
     }
 
     /// Run the node main loop
     pub async fn run(&mut self, running: Arc<AtomicBool>) -> Result<()> {
+        let scope = get_scope();
+        let machine_id = get_machine_id();
+        let topic_prefix = format!("bubbaloop/{}/{}/{{{{node_name}}}}", scope, machine_id);
+
+        log::info!("Node scoped topic prefix: {}", topic_prefix);
+
+        // Construct full publish topic
+        let full_publish_topic = format!("{}/{}", topic_prefix, self.config.publish_topic);
+        log::info!("Publishing to: {}", full_publish_topic);
+
+        if let Some(ref topic) = self.config.subscribe_topic {
+            log::info!("Subscribing to: {}", topic);
+        }
+
         let publisher: Publisher<'_> = self.session
-            .declare_publisher(&self.config.publish_topic)
+            .declare_publisher(&full_publish_topic)
             .await
             .map_err(|e| anyhow!("Failed to create publisher: {}", e))?;
 
@@ -91,8 +163,10 @@ impl {{node_name_pascal}}Node {
         // NOTE: Do NOT use .complete(true) — it blocks wildcard queries (e.g., "bubbaloop/**/schema")
         // from reaching other queryables. The .wait() call is required to actually send the reply.
         #[cfg(feature = "proto")]
+        let schema_key = format!("{}/schema", topic_prefix);
+        #[cfg(feature = "proto")]
         let _schema_queryable = self.session
-            .declare_queryable("{{node_name}}/schema")
+            .declare_queryable(&schema_key)
             .callback(|query| {
                 use zenoh::Wait;
                 log::debug!("Schema query received");
@@ -102,6 +176,92 @@ impl {{node_name_pascal}}Node {
             })
             .await
             .map_err(|e| anyhow!("Failed to create schema queryable: {}", e))?;
+
+        // Declare manifest queryable for node metadata
+        let manifest_config = self.config.clone();
+        let manifest_scope = scope.clone();
+        let manifest_machine_id = machine_id.clone();
+        let manifest_prefix = topic_prefix.clone();
+        let manifest_publish = full_publish_topic.clone();
+        let _manifest_queryable = self.session
+            .declare_queryable(&format!("{}/manifest", topic_prefix))
+            .callback(move |query| {
+                use zenoh::Wait;
+                log::debug!("Manifest query received");
+                let manifest = serde_json::json!({
+                    "name": "{{node_name}}",
+                    "version": "0.1.0",
+                    "language": "rust",
+                    "description": "{{description}}",
+                    "machine_id": &manifest_machine_id,
+                    "scope": &manifest_scope,
+                    "capabilities": &manifest_config.capabilities,
+                    "requires_hardware": &manifest_config.requires_hardware,
+                    "publishes": [{
+                        "topic_suffix": &manifest_config.publish_topic,
+                        "full_topic": &manifest_publish,
+                        "rate_hz": manifest_config.rate_hz,
+                    }],
+                    "subscribes": manifest_config.subscribe_topic.as_deref().map(|t| vec![t]).unwrap_or_default(),
+                    "schema_key": format!("{}/schema", manifest_prefix),
+                    "health_key": format!("{}/health", manifest_prefix),
+                    "config_key": format!("{}/config", manifest_prefix),
+                    "security": {
+                        "acl_prefix": format!("bubbaloop/*/{}/{{{{node_name}}}}/**", manifest_machine_id),
+                        "data_classification": &manifest_config.data_classification,
+                    },
+                    "time": {
+                        "clock_source": &manifest_config.clock_source,
+                        "timestamp_field": &manifest_config.timestamp_field,
+                        "timestamp_unit": &manifest_config.timestamp_unit,
+                    },
+                });
+                if let Err(e) = query.reply(query.key_expr(), ZBytes::from(manifest.to_string().into_bytes())).wait() {
+                    log::warn!("Failed to reply to manifest query: {}", e);
+                }
+            })
+            .await
+            .map_err(|e| anyhow!("Failed to create manifest queryable: {}", e))?;
+
+        // Declare health queryable for node status monitoring
+        let start_time = std::time::Instant::now();
+        let _health_queryable = self.session
+            .declare_queryable(&format!("{}/health", topic_prefix))
+            .callback(move |query| {
+                use zenoh::Wait;
+                log::debug!("Health query received");
+                let health = serde_json::json!({
+                    "status": "ok",
+                    "uptime_s": start_time.elapsed().as_secs(),
+                });
+                if let Err(e) = query.reply(query.key_expr(), ZBytes::from(health.to_string().into_bytes())).wait() {
+                    log::warn!("Failed to reply to health query: {}", e);
+                }
+            })
+            .await
+            .map_err(|e| anyhow!("Failed to create health queryable: {}", e))?;
+
+        // Declare config queryable for read-only configuration access
+        let config_json = serde_json::to_string(&self.config).unwrap_or_default();
+        let _config_queryable = self.session
+            .declare_queryable(&format!("{}/config", topic_prefix))
+            .callback(move |query| {
+                use zenoh::Wait;
+                log::debug!("Config query received");
+                if let Err(e) = query.reply(query.key_expr(), ZBytes::from(config_json.as_bytes().to_vec())).wait() {
+                    log::warn!("Failed to reply to config query: {}", e);
+                }
+            })
+            .await
+            .map_err(|e| anyhow!("Failed to create config queryable: {}", e))?;
+
+        // Declare liveliness token for presence detection
+        let _liveliness_token = self.session
+            .liveliness()
+            .declare_token(&topic_prefix)
+            .await
+            .map_err(|e| anyhow!("Failed to declare liveliness token: {}", e))?;
+        log::info!("Liveliness token declared for {{{{node_name}}}}");
 
         // Optional subscriber
         let subscriber: Option<Subscriber<FifoChannelHandler<Sample>>> = if let Some(ref topic) = self.config.subscribe_topic {

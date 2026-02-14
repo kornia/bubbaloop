@@ -167,7 +167,84 @@ if [ -f "templates/rust-node/Cargo.toml.template" ]; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════
-printf "\n${CYAN}── PHASE 6: Gemini CLI Review ──${NC}\n"
+printf "\n${CYAN}── PHASE 7: Contract Validation ──${NC}\n"
+# ══════════════════════════════════════════════════════════════════════
+
+step "Machine ID: single definition in daemon/util.rs"
+MACHINE_ID_DEFS=$(grep -rn 'fn get_machine_id' crates/bubbaloop/src/daemon/ | wc -l)
+if [ "$MACHINE_ID_DEFS" -eq 1 ]; then
+    pass "get_machine_id() defined once"
+else
+    fail "get_machine_id() defined $MACHINE_ID_DEFS times (expected 1)"
+fi
+
+step "Templates: scoped topics (BUBBALOOP_SCOPE + BUBBALOOP_MACHINE_ID)"
+SCOPE_OK=true
+for tpl in templates/python-node/main.py.template templates/rust-node/src/node.rs.template; do
+    if [ -f "$tpl" ]; then
+        grep -q 'BUBBALOOP_SCOPE' "$tpl" || { fail "$tpl missing BUBBALOOP_SCOPE"; SCOPE_OK=false; }
+        grep -q 'BUBBALOOP_MACHINE_ID' "$tpl" || { fail "$tpl missing BUBBALOOP_MACHINE_ID"; SCOPE_OK=false; }
+    fi
+done
+$SCOPE_OK && pass
+
+step "JSON API: NodeStateResponse has all 6 new fields"
+API_FILE="crates/bubbaloop/src/daemon/zenoh_api.rs"
+FIELDS_OK=true
+for field in last_updated_ms health_status last_health_check_ms machine_id machine_hostname machine_ips; do
+    if ! grep -q "pub $field" "$API_FILE"; then
+        fail "NodeStateResponse missing field: $field"
+        FIELDS_OK=false
+    fi
+done
+$FIELDS_OK && pass
+
+step "Proto: CONTRACT comment on NodeStatus enum"
+if grep -q 'CONTRACT' crates/bubbaloop-schemas/protos/daemon.proto; then
+    pass
+else
+    fail "daemon.proto missing CONTRACT comment on NodeStatus"
+fi
+
+step "Templates: manifest queryable present"
+MANIFEST_OK=true
+for tpl in templates/python-node/main.py.template templates/rust-node/src/node.rs.template; do
+    if [ -f "$tpl" ] && ! grep -q 'manifest' "$tpl"; then
+        fail "$tpl missing manifest queryable"
+        MANIFEST_OK=false
+    fi
+done
+$MANIFEST_OK && pass
+
+step "Templates: health queryable present"
+HEALTH_OK=true
+for tpl in templates/python-node/main.py.template templates/rust-node/src/node.rs.template; do
+    if [ -f "$tpl" ] && ! grep -q 'health' "$tpl"; then
+        fail "$tpl missing health queryable"
+        HEALTH_OK=false
+    fi
+done
+$HEALTH_OK && pass
+
+step "Templates: config queryable present"
+CONFIG_OK=true
+for tpl in templates/python-node/main.py.template templates/rust-node/src/node.rs.template; do
+    if [ -f "$tpl" ] && ! grep -q '/config' "$tpl"; then
+        fail "$tpl missing config queryable"
+        CONFIG_OK=false
+    fi
+done
+$CONFIG_OK && pass
+
+step "Systemd units: BUBBALOOP_MACHINE_ID injected"
+if grep -q 'BUBBALOOP_MACHINE_ID' crates/bubbaloop/src/daemon/systemd.rs; then
+    pass
+else
+    fail "systemd.rs doesn't inject BUBBALOOP_MACHINE_ID"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+printf "\n${CYAN}── PHASE 8: Gemini CLI Review ──${NC}\n"
 # ══════════════════════════════════════════════════════════════════════
 
 if $GEMINI; then

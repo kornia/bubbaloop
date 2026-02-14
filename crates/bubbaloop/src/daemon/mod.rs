@@ -14,6 +14,7 @@
 pub mod node_manager;
 pub mod registry;
 pub mod systemd;
+pub mod util;
 pub mod zenoh_api;
 pub mod zenoh_service;
 

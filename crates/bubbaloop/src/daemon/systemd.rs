@@ -663,6 +663,10 @@ pub fn generate_service_unit(
         format!("\n{}", requires_line)
     };
 
+    // Propagate machine identity so nodes use the same ID as the daemon
+    let machine_id = crate::daemon::util::get_machine_id();
+    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+
     Ok(format!(
         r#"[Unit]
 Description=Bubbaloop Node: {safe_name}
@@ -676,6 +680,8 @@ Restart=on-failure
 RestartSec=5
 Environment={environment}
 Environment={path_env}
+Environment=BUBBALOOP_MACHINE_ID={machine_id}
+Environment=BUBBALOOP_SCOPE={scope}
 
 # Security hardening (user service compatible)
 NoNewPrivileges=true
@@ -1159,5 +1165,29 @@ mod tests {
 
         // Absolute paths should be preserved
         assert!(content.contains("ExecStart=/usr/bin/python3 script.py"));
+    }
+
+    #[test]
+    fn test_generate_service_unit_contains_machine_id_and_scope() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/test-node",
+            "test-node",
+            "rust",
+            None,
+            &[],
+        );
+        assert!(result.is_ok());
+        let content = result.unwrap();
+
+        // Must contain BUBBALOOP_MACHINE_ID so nodes use the same identity as the daemon
+        assert!(
+            content.contains("Environment=BUBBALOOP_MACHINE_ID="),
+            "Missing BUBBALOOP_MACHINE_ID in unit:\n{content}"
+        );
+        // Must contain BUBBALOOP_SCOPE for multi-environment routing
+        assert!(
+            content.contains("Environment=BUBBALOOP_SCOPE="),
+            "Missing BUBBALOOP_SCOPE in unit:\n{content}"
+        );
     }
 }
