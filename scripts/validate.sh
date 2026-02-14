@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# validate.sh — Full system validation for bubbaloop
+#
+# Usage:
+#   ./scripts/validate.sh          # Full validation (Rust + dashboard + clippy)
+#   ./scripts/validate.sh --quick  # Rust only, skip dashboard
+#   ./scripts/validate.sh --gemini # Full validation + Gemini CLI review
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+QUICK=false
+GEMINI=false
+FAILURES=0
+TOTAL=0
+RUST_TESTS=0
+DASH_TESTS=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --quick) QUICK=true ;;
+        --gemini) GEMINI=true ;;
+    esac
+done
+
+step() {
+    TOTAL=$((TOTAL + 1))
+    printf "${YELLOW}[%d] %s${NC}\n" "$TOTAL" "$1"
+}
+
+pass() {
+    printf "${GREEN}  PASS${NC} %s\n" "${1:-}"
+}
+
+fail() {
+    FAILURES=$((FAILURES + 1))
+    printf "${RED}  FAIL: %s${NC}\n" "$1"
+}
+
+cd "$ROOT_DIR"
+
+# ══════════════════════════════════════════════════════════════════════
+printf "${CYAN}── PHASE 1: Compilation ──${NC}\n"
+# ══════════════════════════════════════════════════════════════════════
+
+step "Cargo check (library)"
+if cargo check --lib -p bubbaloop 2>&1; then
+    pass
+else
+    fail "cargo check --lib failed"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+printf "\n${CYAN}── PHASE 2: Rust Tests ──${NC}\n"
+# ══════════════════════════════════════════════════════════════════════
+
+step "Rust test suite"
+OUTPUT=$(cargo test --lib -p bubbaloop 2>&1)
+if echo "$OUTPUT" | grep -q "test result: ok"; then
+    RUST_TESTS=$(echo "$OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+' || echo "0")
+    pass "$RUST_TESTS tests"
+else
+    fail "Rust tests failed"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+printf "\n${CYAN}── PHASE 3: Dashboard Tests ──${NC}\n"
+# ══════════════════════════════════════════════════════════════════════
+
+if ! $QUICK; then
+    step "Dashboard test suite"
+    OUTPUT=$(cd dashboard && npm test 2>&1)
+    if echo "$OUTPUT" | grep -q "Tests.*passed"; then
+        DASH_TESTS=$(echo "$OUTPUT" | grep -oP '\d+ passed' | grep -oP '\d+' || echo "0")
+        DASH_FILES=$(echo "$OUTPUT" | grep -oP '\d+ passed' | head -1 | grep -oP '\d+' || echo "0")
+        pass "$DASH_TESTS tests"
+    else
+        fail "Dashboard tests failed"
+    fi
+else
+    printf "${YELLOW}  SKIP (--quick mode)${NC}\n"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+printf "\n${CYAN}── PHASE 4: Clippy Lint ──${NC}\n"
+# ══════════════════════════════════════════════════════════════════════
+
+step "Clippy (zero warnings)"
+if pixi run clippy 2>&1; then
+    pass
+else
+    fail "clippy has warnings"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+printf "\n${CYAN}── PHASE 5: Template Integrity ──${NC}\n"
+# ══════════════════════════════════════════════════════════════════════
+
+step "Template directories exist"
+TPL_OK=true
+for tpl_dir in templates/rust-node templates/python-node; do
+    if [ ! -d "$tpl_dir" ]; then
+        fail "Missing: $tpl_dir"
+        TPL_OK=false
+    fi
+done
+$TPL_OK && pass
+
+step "Template variables use {{node_name}}"
+VARS_OK=true
+for tpl in templates/rust-node/node.yaml.template templates/python-node/node.yaml.template; do
+    if [ -f "$tpl" ] && ! grep -q '{{node_name}}' "$tpl"; then
+        fail "$tpl missing {{node_name}}"
+        VARS_OK=false
+    fi
+done
+$VARS_OK && pass
+
+step "No complete=True in Python queryable"
+if grep -v '^\s*#' templates/python-node/main.py.template 2>/dev/null | grep -q 'complete=True'; then
+    fail "Python template has complete=True (blocks wildcard schema discovery)"
+else
+    pass
+fi
+
+step "Cargo.toml template: no git+path ambiguity"
+if [ -f "templates/rust-node/Cargo.toml.template" ]; then
+    if grep -n 'bubbaloop-schemas' templates/rust-node/Cargo.toml.template | grep -q 'git.*path\|path.*git'; then
+        fail "Cargo.toml template has ambiguous git+path"
+    else
+        pass
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+printf "\n${CYAN}── PHASE 6: Gemini CLI Review ──${NC}\n"
+# ══════════════════════════════════════════════════════════════════════
+
+if $GEMINI; then
+    step "Gemini review of zenoh_api.rs"
+    if command -v gemini &>/dev/null; then
+        GEMINI_OUT=$(NODE_OPTIONS="--max-old-space-size=4096" gemini -p \
+            "Review this Rust file briefly. List max 3 actionable bugs or security issues only. Skip style suggestions." \
+            < crates/bubbaloop/src/daemon/zenoh_api.rs 2>&1) || true
+        echo "$GEMINI_OUT"
+        pass "review complete"
+    else
+        fail "gemini CLI not found"
+    fi
+else
+    printf "${YELLOW}  SKIP (use --gemini flag)${NC}\n"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+# Summary
+# ══════════════════════════════════════════════════════════════════════
+echo ""
+echo "================================================================="
+printf "  Rust tests:      ${CYAN}%s${NC}\n" "$RUST_TESTS"
+printf "  Dashboard tests: ${CYAN}%s${NC}\n" "${DASH_TESTS:-skipped}"
+echo "================================================================="
+if [ $FAILURES -eq 0 ]; then
+    printf "${GREEN}  All %d checks passed.${NC}\n" "$TOTAL"
+else
+    printf "${RED}  %d of %d checks failed.${NC}\n" "$FAILURES" "$TOTAL"
+fi
+echo "================================================================="
+
+exit $FAILURES
