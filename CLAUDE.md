@@ -2,6 +2,12 @@
 
 Physical AI orchestration built on Zenoh. Single binary: CLI + TUI + daemon.
 
+## Living Documents (update these as architecture evolves)
+
+- **ARCHITECTURE.md** — Layer model, node contract, security, open-core boundary
+- **ROADMAP.md** — Migration phases (Track A: sensor-centric, Track B: cloud), checkboxes
+- **CONTRIBUTING.md** — Agentic workflows, agent tiers, validation, two-critic loop
+
 ## Structure
 
 ```
