@@ -3,4 +3,5 @@ version: "0.1.0"
 type: python
 description: {{description}}
 author: {{author}}
+build: "python build_proto.py"
 command: "pixi run run"

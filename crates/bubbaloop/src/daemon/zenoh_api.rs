@@ -99,10 +99,12 @@ pub struct NodeStateResponse {
 pub struct NodeListResponse {
     pub nodes: Vec<NodeStateResponse>,
     pub timestamp_ms: i64,
+    #[serde(default)]
+    pub machine_id: String,
 }
 
 /// JSON request for commands
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CommandRequest {
     pub command: String,
     #[serde(default)]
@@ -116,7 +118,7 @@ pub struct CommandRequest {
 }
 
 /// JSON response for commands
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CommandResponse {
     pub success: bool,
     pub message: String,
@@ -125,7 +127,7 @@ pub struct CommandResponse {
 }
 
 /// JSON response for logs
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct LogsResponse {
     pub node_name: String,
     pub lines: Vec<String>,
@@ -134,13 +136,13 @@ pub struct LogsResponse {
 }
 
 /// JSON response for health check
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
 }
 
 /// JSON error response
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
     pub code: u16,
@@ -190,6 +192,7 @@ fn parse_command(cmd: &str) -> CommandType {
         "add" | "add_node" => CommandType::AddNode,
         "remove" | "remove_node" => CommandType::RemoveNode,
         "refresh" => CommandType::Refresh,
+        "logs" | "get_logs" | "get-logs" => CommandType::GetLogs,
         _ => CommandType::Refresh,
     }
 }
@@ -371,6 +374,7 @@ impl ZenohApiService {
         let response = NodeListResponse {
             nodes: list.nodes.iter().map(node_state_to_response).collect(),
             timestamp_ms: list.timestamp_ms,
+            machine_id: self.machine_id.clone(),
         };
         serde_json::to_string(&response)
             .unwrap_or_else(|e| format!(r#"{{"error":"Failed to serialize: {}","code":500}}"#, e))
@@ -474,78 +478,49 @@ impl ZenohApiService {
     }
 
     /// Handle GET /nodes/{name}/logs
+    ///
+    /// Delegates to node_manager via the GetLogs command instead of spawning
+    /// systemctl directly (which violates the zbus-only convention).
     async fn handle_get_logs(&self, name: &str) -> String {
-        // Check if node exists
-        let node = self.node_manager.get_node(name).await;
-        if node.is_none() {
-            return serde_json::to_string(&LogsResponse {
-                node_name: name.to_string(),
-                lines: vec![],
-                success: false,
-                error: Some("Node not found".to_string()),
+        if self.node_manager.get_node(name).await.is_none() {
+            return serde_json::to_string(&ErrorResponse {
+                error: format!("Node '{}' not found", name),
+                code: 404,
             })
-            .unwrap_or_else(|_| {
-                r#"{"node_name":"","lines":[],"success":false,"error":"Node not found"}"#
-                    .to_string()
-            });
+            .unwrap_or_else(|_| r#"{"error":"Not found","code":404}"#.to_string());
         }
 
-        // Get logs using systemctl status (works even without journald)
-        let service_name = format!("bubbaloop-{}.service", name);
-        let output = tokio::process::Command::new("systemctl")
-            .args(["--user", "status", "-l", "--no-pager", &service_name])
-            .output()
-            .await;
+        let cmd = NodeCommand {
+            command: CommandType::GetLogs as i32,
+            node_name: name.to_string(),
+            node_path: String::new(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: Self::now_ms(),
+            source_machine: "api".to_string(),
+            target_machine: self.machine_id.clone(),
+            name_override: String::new(),
+            config_override: String::new(),
+        };
 
-        match output {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let mut lines: Vec<String> = stdout.lines().map(|s| s.to_string()).collect();
+        let result = self.node_manager.execute_command(cmd).await;
 
-                // Also try journalctl as backup
-                if let Ok(journal_output) = tokio::process::Command::new("journalctl")
-                    .args(["--user", "-u", &service_name, "-n", "50", "--no-pager"])
-                    .output()
-                    .await
-                {
-                    let journal_stdout = String::from_utf8_lossy(&journal_output.stdout);
-                    for line in journal_stdout.lines() {
-                        if !line.contains("No entries") && !line.contains("No journal files") {
-                            lines.push(line.to_string());
-                        }
-                    }
-                }
+        let lines: Vec<String> = if result.output.is_empty() {
+            vec![]
+        } else {
+            result.output.lines().map(|s| s.to_string()).collect()
+        };
 
-                // Add stderr if any
-                if !stderr.is_empty() {
-                    lines.push("--- stderr ---".to_string());
-                    for line in stderr.lines() {
-                        lines.push(line.to_string());
-                    }
-                }
-
-                serde_json::to_string(&LogsResponse {
-                    node_name: name.to_string(),
-                    lines,
-                    success: true,
-                    error: None,
-                })
-                .unwrap_or_else(|e| {
-                    format!(r#"{{"error":"Failed to serialize: {}","code":500}}"#, e)
-                })
-            }
-            Err(e) => serde_json::to_string(&LogsResponse {
-                node_name: name.to_string(),
-                lines: vec![],
-                success: false,
-                error: Some(format!("Failed to get logs: {}", e)),
-            })
-            .unwrap_or_else(|_| {
-                r#"{"node_name":"","lines":[],"success":false,"error":"Failed to get logs"}"#
-                    .to_string()
-            }),
-        }
+        serde_json::to_string(&LogsResponse {
+            node_name: name.to_string(),
+            lines,
+            success: result.success,
+            error: if result.success {
+                None
+            } else {
+                Some(result.message)
+            },
+        })
+        .unwrap_or_else(|e| format!(r#"{{"error":"Failed to serialize: {}","code":500}}"#, e))
     }
 
     /// Handle POST /nodes/{name}/command
@@ -823,5 +798,170 @@ mod tests {
             api_keys::refresh_key(machine_id),
             "bubbaloop/jetson_01-v2/daemon/api/refresh"
         );
+    }
+
+    // parse_command: GetLogs aliases
+    #[test]
+    fn test_parse_command_logs_aliases() {
+        assert_eq!(
+            parse_command("logs") as i32,
+            CommandType::GetLogs as i32
+        );
+        assert_eq!(
+            parse_command("get_logs") as i32,
+            CommandType::GetLogs as i32
+        );
+        assert_eq!(
+            parse_command("get-logs") as i32,
+            CommandType::GetLogs as i32
+        );
+        assert_eq!(
+            parse_command("LOGS") as i32,
+            CommandType::GetLogs as i32
+        );
+        assert_eq!(
+            parse_command("Get-Logs") as i32,
+            CommandType::GetLogs as i32
+        );
+    }
+
+    // Serde round-trip tests
+    #[test]
+    fn test_node_state_response_serde_roundtrip() {
+        let resp = NodeStateResponse {
+            name: "camera".to_string(),
+            path: "/opt/nodes/camera".to_string(),
+            status: "running".to_string(),
+            installed: true,
+            autostart_enabled: false,
+            version: "1.2.3".to_string(),
+            description: "Camera node".to_string(),
+            node_type: "rust".to_string(),
+            is_built: true,
+            build_output: vec!["ok".to_string()],
+            base_node: "".to_string(),
+            config_override: "".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: NodeStateResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.name, "camera");
+        assert_eq!(deser.status, "running");
+        assert!(deser.installed);
+    }
+
+    #[test]
+    fn test_node_list_response_serde_roundtrip() {
+        let resp = NodeListResponse {
+            nodes: vec![],
+            timestamp_ms: 1234567890,
+            machine_id: "jetson-01".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: NodeListResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.timestamp_ms, 1234567890);
+        assert_eq!(deser.machine_id, "jetson-01");
+        assert!(deser.nodes.is_empty());
+    }
+
+    #[test]
+    fn test_node_list_response_machine_id_default() {
+        // machine_id should default to empty string when missing (backward compat)
+        let json = r#"{"nodes":[],"timestamp_ms":0}"#;
+        let deser: NodeListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(deser.machine_id, "");
+    }
+
+    #[test]
+    fn test_command_request_serde_roundtrip() {
+        let req = CommandRequest {
+            command: "start".to_string(),
+            node_path: "/path".to_string(),
+            name: Some("my-instance".to_string()),
+            config: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let deser: CommandRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.command, "start");
+        assert_eq!(deser.node_path, "/path");
+        assert_eq!(deser.name, Some("my-instance".to_string()));
+        assert_eq!(deser.config, None);
+    }
+
+    #[test]
+    fn test_command_request_minimal() {
+        // Only command is required; others default
+        let json = r#"{"command":"stop"}"#;
+        let deser: CommandRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(deser.command, "stop");
+        assert_eq!(deser.node_path, "");
+        assert_eq!(deser.name, None);
+        assert_eq!(deser.config, None);
+    }
+
+    #[test]
+    fn test_command_response_serde_roundtrip() {
+        let resp = CommandResponse {
+            success: true,
+            message: "Started".to_string(),
+            output: "ok\n".to_string(),
+            node_state: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: CommandResponse = serde_json::from_str(&json).unwrap();
+        assert!(deser.success);
+        assert_eq!(deser.message, "Started");
+        assert!(deser.node_state.is_none());
+    }
+
+    #[test]
+    fn test_logs_response_serde_roundtrip() {
+        let resp = LogsResponse {
+            node_name: "weather".to_string(),
+            lines: vec!["line1".to_string(), "line2".to_string()],
+            success: true,
+            error: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: LogsResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.node_name, "weather");
+        assert_eq!(deser.lines.len(), 2);
+        assert!(deser.success);
+        assert!(deser.error.is_none());
+    }
+
+    #[test]
+    fn test_logs_response_with_error() {
+        let resp = LogsResponse {
+            node_name: "bad".to_string(),
+            lines: vec![],
+            success: false,
+            error: Some("Node not found".to_string()),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: LogsResponse = serde_json::from_str(&json).unwrap();
+        assert!(!deser.success);
+        assert_eq!(deser.error, Some("Node not found".to_string()));
+    }
+
+    #[test]
+    fn test_health_response_serde_roundtrip() {
+        let resp = HealthResponse {
+            status: "ok".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: HealthResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.status, "ok");
+    }
+
+    #[test]
+    fn test_error_response_serde_roundtrip() {
+        let resp = ErrorResponse {
+            error: "Not found".to_string(),
+            code: 404,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: ErrorResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.error, "Not found");
+        assert_eq!(deser.code, 404);
     }
 }

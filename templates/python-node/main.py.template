@@ -62,10 +62,10 @@ class {{node_name_pascal}}Node:
         self._descriptor_bytes = _load_descriptor_set()
         self._schema_queryable = None
         if self._descriptor_bytes:
+            # Do NOT use complete=True — it blocks wildcard queries like "bubbaloop/**/schema"
             self._schema_queryable = self.session.declare_queryable(
                 "{{node_name}}/schema",
                 self._on_schema_query,
-                complete=True,
             )
             logger.info("Schema queryable declared on {{node_name}}/schema")
 
