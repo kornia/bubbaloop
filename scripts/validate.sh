@@ -131,6 +131,13 @@ else
     pass
 fi
 
+step "No query.key_expr() method call (must be property, not method)"
+if grep -v '^\s*#' templates/python-node/main.py.template 2>/dev/null | grep -q 'key_expr()'; then
+    fail "Python template uses query.key_expr() — must be query.key_expr (property, no parens)"
+else
+    pass
+fi
+
 step "Cargo.toml template: no git+path ambiguity"
 if [ -f "templates/rust-node/Cargo.toml.template" ]; then
     if grep -n 'bubbaloop-schemas' templates/rust-node/Cargo.toml.template | grep -q 'git.*path\|path.*git'; then
