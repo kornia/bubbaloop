@@ -1,0 +1,43 @@
+// Zenoh TLS/mTLS configuration example for multi-machine deployments
+//
+// This config enables transport encryption between bubbaloop nodes.
+// mTLS (mutual TLS) ensures both client and server authenticate.
+//
+// Certificate generation:
+//   bubbaloop init-tls    # Prints step-by-step cert generation guide
+//
+// File layout:
+//   ~/.bubbaloop/certs/
+//     ca.pem              # CA certificate (shared across machines)
+//     server-cert.pem     # This machine's server certificate
+//     server-key.pem      # This machine's private key
+//
+// See: https://zenoh.io/docs/manual/tls/
+{
+  mode: "router",
+  listen: {
+    endpoints: ["tls/0.0.0.0:7447"],
+  },
+  transport: {
+    link: {
+      tls: {
+        // Server certificate signed by the CA
+        server_certificate: "/home/user/.bubbaloop/certs/server-cert.pem",
+        // Server private key
+        server_private_key: "/home/user/.bubbaloop/certs/server-key.pem",
+        // CA certificate for verifying clients (mTLS)
+        root_ca_certificate: "/home/user/.bubbaloop/certs/ca.pem",
+        // Require client certificates (mTLS)
+        client_auth: true,
+      },
+    },
+  },
+  scouting: {
+    multicast: {
+      enabled: false,
+    },
+    gossip: {
+      enabled: false,
+    },
+  },
+}

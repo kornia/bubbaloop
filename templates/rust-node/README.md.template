@@ -20,7 +20,7 @@ bubbaloop node logs {{node_name}} -f
 Edit `config.yaml`:
 
 ```yaml
-publish_topic: "/{{node_name}}/output"
+publish_topic: "output"  # Appended to bubbaloop/{scope}/{machine_id}/{{node_name}}/
 rate_hz: 1.0
 ```
 
@@ -36,6 +36,12 @@ cargo build --release
 
 ## Zenoh Topics
 
-| Topic | Direction | Description |
-|-------|-----------|-------------|
-| `/{{node_name}}/output` | Publish | Node output data |
+Topics follow scoped pattern: `bubbaloop/{scope}/{machine_id}/{{node_name}}/{suffix}`
+
+| Topic Suffix | Direction | Description |
+|--------------|-----------|-------------|
+| `output` | Publish | Node output data |
+| `schema` | Queryable | Protobuf FileDescriptorSet |
+| `manifest` | Queryable | Node self-description |
+| `health` | Queryable | Health status |
+| `config` | Queryable | Read-only configuration |

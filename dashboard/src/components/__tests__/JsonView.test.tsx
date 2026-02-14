@@ -15,6 +15,9 @@ vi.mock('../../hooks/useZenohSubscription', () => ({
   useZenohSubscription: vi.fn(() => ({ messageCount: 0, fps: 0, instantFps: 0 })),
 }));
 
+// JsonView does NOT use useSchemaReady — no mock needed.
+// It has its own fallback decode chain (JSON → schema → built-in → text → hex).
+
 const mockFleetContext = {
   machines: [],
   reportMachines: vi.fn(),
@@ -83,6 +86,7 @@ vi.mock('../MachineBadge', () => ({
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { RawDataViewPanel } from '../JsonView';
+import { useZenohSubscription } from '../../hooks/useZenohSubscription';
 
 describe('RawDataViewPanel', () => {
   const defaultProps = {
@@ -211,5 +215,18 @@ describe('RawDataViewPanel', () => {
     fireEvent.change(select, { target: { value: 'weather-raw-key' } });
 
     expect(onTopicChange).toHaveBeenCalledWith('weather-raw-key');
+  });
+
+  it('always passes callback regardless of schema readiness (has own fallback chain)', () => {
+    // JsonView uses tryDecodeForTopic which has its own fallback:
+    // JSON → SchemaRegistry → built-in decoders → plain text → hex
+    // So it does NOT gate on useSchemaReady — it always processes samples.
+    mockSchemaRegistry.schemaVersion = 0;
+
+    render(<RawDataViewPanel topic="some/topic/**" />);
+
+    const mockSub = vi.mocked(useZenohSubscription);
+    expect(mockSub).toHaveBeenCalledTimes(1);
+    expect(typeof mockSub.mock.calls[0][1]).toBe('function');
   });
 });

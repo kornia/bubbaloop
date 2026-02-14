@@ -35,6 +35,26 @@ pub enum NodeError {
 
 pub type Result<T> = std::result::Result<T, NodeError>;
 
+/// Copy canonical header.proto to a node's protos/ directory if it exists.
+/// This ensures nodes use the correct version of header.proto.
+fn copy_canonical_header_proto(node_path: &Path) {
+    let protos_dir = node_path.join("protos");
+    if !protos_dir.exists() {
+        return;
+    }
+
+    let dest = protos_dir.join("header.proto");
+    if let Err(e) = std::fs::write(&dest, crate::HEADER_PROTO) {
+        log::warn!(
+            "Could not copy canonical header.proto to {}: {}",
+            dest.display(),
+            e
+        );
+    } else {
+        log::info!("Copied canonical header.proto to {}", dest.display());
+    }
+}
+
 /// Node management commands
 #[derive(FromArgs)]
 #[argh(subcommand, name = "node")]
@@ -462,6 +482,24 @@ pub(crate) async fn get_zenoh_session() -> Result<zenoh::Session> {
 }
 
 fn init_node(args: InitArgs) -> Result<()> {
+    // Validate node name before creating any files
+    if args.name.is_empty() || args.name.len() > 64 {
+        return Err(NodeError::CommandFailed(format!(
+            "Node name must be 1-64 characters, got '{}'",
+            args.name
+        )));
+    }
+    if !args
+        .name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(NodeError::CommandFailed(format!(
+            "Node name '{}' contains invalid characters (only alphanumeric, hyphens, and underscores allowed)",
+            args.name
+        )));
+    }
+
     // Determine output directory (default: ./<name> in current directory)
     let output_dir = args
         .output
@@ -477,6 +515,9 @@ fn init_node(args: InitArgs) -> Result<()> {
         &output_dir,
     )
     .map_err(|e| NodeError::CommandFailed(e.to_string()))?;
+
+    // Copy canonical header.proto if protos/ directory exists
+    copy_canonical_header_proto(&output_dir);
 
     let abs_path = output_dir.canonicalize().unwrap_or(output_dir.clone());
 
@@ -1632,6 +1673,9 @@ async fn handle_install(args: InstallArgs) -> Result<()> {
     // Resolve subdir
     let node_path = resolve_node_path(&base_path, Some(&entry.subdir))?;
 
+    // Copy canonical header.proto if protos/ directory exists
+    copy_canonical_header_proto(Path::new(&node_path));
+
     // Register with daemon
     let session = get_zenoh_session().await?;
 
@@ -2676,5 +2720,74 @@ mod tests {
         let result = try_download_precompiled(&entry);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Not a Rust node"));
+    }
+
+    #[test]
+    fn test_copy_canonical_header_proto_creates_file() {
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let node_path = tmp.path();
+        let protos_dir = node_path.join("protos");
+        std::fs::create_dir_all(&protos_dir).unwrap();
+
+        // Call the function
+        copy_canonical_header_proto(node_path);
+
+        // Verify header.proto was created
+        let header_path = protos_dir.join("header.proto");
+        assert!(header_path.exists(), "header.proto should be created");
+
+        // Verify content matches the embedded canonical version
+        let written = std::fs::read(&header_path).unwrap();
+        assert_eq!(
+            written,
+            crate::HEADER_PROTO,
+            "Written header.proto should match canonical version"
+        );
+    }
+
+    #[test]
+    fn test_copy_canonical_header_proto_no_protos_dir() {
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let node_path = tmp.path();
+
+        // Don't create protos/ dir
+        copy_canonical_header_proto(node_path);
+
+        // Should not panic, just silently skip
+        let header_path = node_path.join("protos").join("header.proto");
+        assert!(
+            !header_path.exists(),
+            "Should not create header.proto without protos/ dir"
+        );
+    }
+
+    #[test]
+    fn test_copy_canonical_header_proto_overwrites_existing() {
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let node_path = tmp.path();
+        let protos_dir = node_path.join("protos");
+        std::fs::create_dir_all(&protos_dir).unwrap();
+
+        // Create an old/different header.proto
+        let header_path = protos_dir.join("header.proto");
+        std::fs::write(&header_path, b"old header content").unwrap();
+
+        // Call the function
+        copy_canonical_header_proto(node_path);
+
+        // Verify it was overwritten with canonical version
+        let written = std::fs::read(&header_path).unwrap();
+        assert_eq!(
+            written,
+            crate::HEADER_PROTO,
+            "Should overwrite old header.proto with canonical version"
+        );
+        assert_ne!(written, b"old header content");
     }
 }

@@ -124,6 +124,62 @@ bubbaloop/{scope}/{machine_id}/health/{node_name}       → Periodic heartbeat
 }
 ```
 
+### Schema Contract (Protobuf Nodes)
+
+Every node that publishes protobuf messages **MUST** serve its FileDescriptorSet via a Zenoh queryable. This enables runtime schema discovery for dashboards, AI agents, and cross-node type checking.
+
+**Requirements:**
+
+1. **Declare schema queryable** at `{node-name}/schema` (relative to topic prefix):
+   ```rust
+   // Rust: NEVER use .complete(true) — blocks wildcard discovery
+   let schema_queryable = session
+       .declare_queryable(format!("{}/schema", topic_prefix))
+       .await?;
+
+   // Python: NEVER use complete=True
+   queryable = session.declare_queryable(f"{topic_prefix}/schema")
+   ```
+
+2. **Serve FileDescriptorSet bytes** (not JSON):
+   ```rust
+   // Rust: include compiled descriptor
+   pub const DESCRIPTOR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/descriptor.bin"));
+   query.reply(query.key_expr().clone(), DESCRIPTOR).await?;
+
+   // Python: reply with query.key_expr property (NOT method)
+   with open("descriptor.bin", "rb") as f:
+       descriptor_bytes = f.read()
+   query.reply(query.key_expr, descriptor_bytes)  # key_expr is a PROPERTY
+   ```
+
+3. **Compile descriptor.bin** via `build.rs` (Rust) or protoc (Python):
+   ```rust
+   // build.rs
+   prost_build::Config::new()
+       .file_descriptor_set_path(out_dir.join("descriptor.bin"))
+       .compile_protos(&["protos/my_node.proto", "protos/header.proto"], &["protos/"])?;
+   ```
+
+4. **Include all .proto files** the node uses (including `header.proto` from bubbaloop-schemas):
+   - Copy header.proto into node's `protos/` directory
+   - Reference it in your message definitions: `import "header.proto";`
+
+**Why this matters:**
+
+- Dashboard auto-discovers all schemas via wildcard query `bubbaloop/**/schema`
+- AI agents can introspect message types without reading source code
+- Cross-node type safety: verify sender/receiver compatibility at runtime
+- Version detection: dashboard can warn about schema mismatches
+
+**Common mistakes** (caught by `./scripts/validate.sh`):
+
+- ❌ Using `.complete(true)` in Rust queryables
+- ❌ Using `complete=True` in Python queryables
+- ❌ Using `query.key_expr()` as method in Python (it's a property)
+- ❌ Serving JSON instead of raw FileDescriptorSet bytes
+- ❌ Missing `header.proto` in FileDescriptorSet
+
 ---
 
 ## Topic Hierarchy

@@ -3,6 +3,9 @@ syntax = "proto3";
 package bubbaloop.daemon.v1;
 
 // Node runtime status
+//
+// CONTRACT: When adding values, update zenoh_api.rs::status_to_string(),
+// NodesView.tsx::STATUS_MAP, and proto/daemon.ts::statusToString().
 enum NodeStatus {
   NODE_STATUS_UNKNOWN = 0;
   NODE_STATUS_STOPPED = 1;

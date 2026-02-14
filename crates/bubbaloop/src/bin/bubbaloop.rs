@@ -44,6 +44,7 @@ enum Command {
     Launch(LaunchCommand),
     Marketplace(MarketplaceCommand),
     Debug(DebugCommand),
+    InitTls(InitTlsArgs),
 }
 
 /// Launch the terminal user interface
@@ -58,6 +59,15 @@ struct StatusArgs {
     /// output format: table, json, yaml (default: table)
     #[argh(option, short = 'f', default = "String::from(\"table\")")]
     format: String,
+}
+
+/// Print TLS/mTLS certificate generation guide
+#[derive(FromArgs)]
+#[argh(subcommand, name = "init-tls")]
+struct InitTlsArgs {
+    /// output directory for certificates (default: ~/.bubbaloop/certs)
+    #[argh(option, short = 'o')]
+    output_dir: Option<String>,
 }
 
 /// Run system diagnostics and health checks
@@ -128,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              list, add, remove, enable, disable");
             eprintln!("  debug     Debug Zenoh connectivity:");
             eprintln!("              info, topics, query, subscribe");
+            eprintln!("  init-tls  Print TLS/mTLS certificate generation guide");
             eprintln!("\nRun 'bubbaloop <command> --help' for more information.");
             return Ok(());
         }
@@ -167,6 +178,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.run()
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        }
+        Some(Command::InitTls(args)) => {
+            let cert_dir = args.output_dir.unwrap_or_else(|| {
+                let home =
+                    dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/home/user"));
+                home.join(".bubbaloop/certs").to_string_lossy().to_string()
+            });
+            println!("TLS/mTLS Certificate Setup Guide");
+            println!("=================================\n");
+            println!("Target directory: {}\n", cert_dir);
+            println!("1. Generate a CA key and certificate:");
+            println!("   openssl genrsa -out {}/ca-key.pem 4096", cert_dir);
+            println!(
+                "   openssl req -new -x509 -key {}/ca-key.pem -sha256 \\",
+                cert_dir
+            );
+            println!(
+                "     -subj \"/CN=bubbaloop-ca\" -days 3650 -out {}/ca.pem\n",
+                cert_dir
+            );
+            println!("2. Generate a server key and certificate:");
+            println!("   openssl genrsa -out {}/server-key.pem 4096", cert_dir);
+            println!("   openssl req -new -key {}/server-key.pem \\", cert_dir);
+            println!(
+                "     -subj \"/CN=$(hostname)\" -out {}/server.csr",
+                cert_dir
+            );
+            println!("   openssl x509 -req -in {}/server.csr \\", cert_dir);
+            println!(
+                "     -CA {}/ca.pem -CAkey {}/ca-key.pem -CAcreateserial \\",
+                cert_dir, cert_dir
+            );
+            println!("     -days 365 -sha256 -out {}/server-cert.pem\n", cert_dir);
+            println!("3. Copy ca.pem to ALL machines in the deployment.\n");
+            println!("4. Update Zenoh config (~/.bubbaloop/zenoh/zenohd.json5):");
+            println!("   See: configs/zenoh/tls-example.json5\n");
+            println!("5. Set BUBBALOOP_ZENOH_ENDPOINT on clients:");
+            println!("   export BUBBALOOP_ZENOH_ENDPOINT=\"tls/<router-ip>:7447\"\n");
+            println!("6. Verify with: bubbaloop doctor -c security");
         }
     }
 

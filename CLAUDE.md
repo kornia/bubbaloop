@@ -77,6 +77,16 @@ Conventional: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`
 Never commit: `target/`, `node_modules/`, `dist/`, `.pixi/`
 Always commit: `Cargo.lock`, `pixi.lock`, `package-lock.json`
 
+## Dashboard View Components
+
+New view components that decode protobuf MUST gate their subscription callback on schema readiness:
+```ts
+const schemaReady = useSchemaReady();  // from hooks/useSchemaReady
+useZenohSubscription(topic, schemaReady ? handleSample : undefined);
+```
+This prevents the race where Zenoh delivers messages before `fetchSchemas()` completes.
+Exception: views with their own fallback decode chain (like JsonView) don't need gating.
+
 ## Pitfalls
 
 - OAuth token lacks `workflow` scope — use SSH for workflow files
@@ -85,3 +95,4 @@ Always commit: `Cargo.lock`, `pixi.lock`, `package-lock.json`
 - Dashboard deps (`axum`, `rust-embed`) are behind `dashboard` feature flag
 - Logs must go to stderr to avoid corrupting TUI
 - Zenoh session: `"peer"` mode, check `BUBBALOOP_ZENOH_ENDPOINT` env var
+- Dashboard schema race: subscriptions start before schemas load — always use `useSchemaReady()` gating

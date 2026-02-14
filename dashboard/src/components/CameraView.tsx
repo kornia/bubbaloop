@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
+import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useFleetContext } from '../contexts/FleetContext';
 import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
@@ -122,8 +123,8 @@ export function CameraView({
   }, [cameraName, handleFrame]);
 
   // Get SchemaRegistry for dynamic decoding
-  const { registry, discoverForTopic, schemaVersion } = useSchemaRegistry();
-  const lastCameraPayloadRef = useRef<{ payload: Uint8Array; topic: string } | null>(null);
+  const { registry, discoverForTopic } = useSchemaRegistry();
+  const schemaReady = useSchemaReady();
 
   // Handle incoming samples from Zenoh
   const handleSample = useCallback((sample: Sample) => {
@@ -138,10 +139,8 @@ export function CameraView({
       // This preserves raw bytes (no base64 roundtrip) for H264 decoding.
       const msgType = registry.lookupType('bubbaloop.camera.v1.CompressedImage');
       if (!msgType) {
-        // Buffer payload for retry when schemas arrive
-        lastCameraPayloadRef.current = { payload, topic: sampleTopic };
+        // Schema not yet available — trigger discovery for node-specific schemas
         discoverForTopic(sampleTopic);
-        // Don't try raw H264 decode — data is protobuf-wrapped, not raw H264
         return;
       }
 
@@ -179,35 +178,6 @@ export function CameraView({
     }
   }, [registry, discoverForTopic]);
 
-  // Re-decode buffered frame when new schemas arrive
-  useEffect(() => {
-    if (schemaVersion === 0 || !lastCameraPayloadRef.current) return;
-    const msgType = registry.lookupType('bubbaloop.camera.v1.CompressedImage');
-    if (msgType && decoderRef.current) {
-      const { payload } = lastCameraPayloadRef.current;
-      lastCameraPayloadRef.current = null;
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const msg = msgType.decode(payload) as any;
-        const format: string = msg.format ?? '';
-        const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data ?? []);
-        if (!format || format === 'h264') {
-          const header = msg.header ? {
-            acqTime: toLongBigInt(msg.header.acqTime),
-            pubTime: toLongBigInt(msg.header.pubTime),
-            sequence: msg.header.sequence ?? 0,
-            frameId: msg.header.frameId ?? '',
-          } : undefined;
-          lastMetaRef.current = { header, format, dataSize: data.length };
-          const timestamp = header ? Number(header.pubTime / 1000n) : Date.now() * 1000;
-          decoderRef.current.decode(data, timestamp).catch(console.error);
-        }
-      } catch (e) {
-        console.error('[CameraView] Failed to re-decode buffered frame:', e);
-      }
-    }
-  }, [schemaVersion, registry]);
-
   // Auto-detect correct topic from discovered topics using the camera name.
   // Scans availableTopics for a display name matching "camera/{cameraName}/compressed"
   // and subscribes to the matching raw key expression.
@@ -233,8 +203,9 @@ export function CameraView({
     }
   }, [availableTopics, cameraName, onTopicChange]);
 
-  // Subscribe to camera topic
-  useZenohSubscription(topic, handleSample);
+  // Subscribe to camera topic — gate callback on schema readiness so we don't
+  // drop frames (especially keyframes) before schemas are available to decode them
+  useZenohSubscription(topic, schemaReady ? handleSample : undefined);
 
   // Periodically update metadata state when info panel is visible
   useEffect(() => {

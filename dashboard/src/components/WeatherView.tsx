@@ -1,7 +1,8 @@
-import { useCallback, useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { Sample, IntoZBytes } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload, extractMachineId } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
+import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 import { useFleetContext } from '../contexts/FleetContext';
 import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
@@ -115,7 +116,8 @@ export function WeatherViewPanel({
   dragHandleProps,
 }: WeatherViewPanelProps) {
   const { machines, selectedMachineId } = useFleetContext();
-  const { registry, discoverForTopic, schemaVersion } = useSchemaRegistry();
+  const { registry, discoverForTopic } = useSchemaRegistry();
+  const schemaReady = useSchemaReady();
   // Get session from context for publishing
   const { getSession } = useZenohSubscriptionContext();
   // Store weather data per machine with last update timestamp
@@ -123,8 +125,6 @@ export function WeatherViewPanel({
   const [hourlyMap, setHourlyMap] = useState<Map<string, { data: HourlyForecast; lastUpdate: number }>>(new Map());
   const [dailyMap, setDailyMap] = useState<Map<string, { data: DailyForecast; lastUpdate: number }>>(new Map());
 
-  // Buffer last payloads for retry when schemas arrive
-  const lastPayloadsRef = useRef<Map<string, { current?: { payload: Uint8Array; topic: string }; hourly?: { payload: Uint8Array; topic: string }; daily?: { payload: Uint8Array; topic: string } }>>(new Map());
   const [isEditing, setIsEditing] = useState(false);
 
   // Location editing state
@@ -144,11 +144,6 @@ export function WeatherViewPanel({
       const payload = getSamplePayload(sample);
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
-
-      // Buffer for retry
-      const entry = lastPayloadsRef.current.get(machineId) ?? {};
-      entry.current = { payload, topic };
-      lastPayloadsRef.current.set(machineId, entry);
 
       const result = registry.decode('bubbaloop.weather.v1.CurrentWeather', payload);
       if (result) {
@@ -173,10 +168,6 @@ export function WeatherViewPanel({
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
 
-      const entry = lastPayloadsRef.current.get(machineId) ?? {};
-      entry.hourly = { payload, topic };
-      lastPayloadsRef.current.set(machineId, entry);
-
       const result = registry.decode('bubbaloop.weather.v1.HourlyForecast', payload);
       if (result) {
         const data = result.data as unknown as HourlyForecast;
@@ -200,10 +191,6 @@ export function WeatherViewPanel({
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
 
-      const entry = lastPayloadsRef.current.get(machineId) ?? {};
-      entry.daily = { payload, topic };
-      lastPayloadsRef.current.set(machineId, entry);
-
       const result = registry.decode('bubbaloop.weather.v1.DailyForecast', payload);
       if (result) {
         const data = result.data as unknown as DailyForecast;
@@ -220,52 +207,12 @@ export function WeatherViewPanel({
     }
   }, [registry, discoverForTopic]);
 
-  // Subscribe to all three topics
-  const { messageCount: currentCount } = useZenohSubscription(currentTopic, handleCurrentSample);
-  const { messageCount: hourlyCount } = useZenohSubscription(hourlyTopic, handleHourlySample);
-  const { messageCount: dailyCount } = useZenohSubscription(dailyTopic, handleDailySample);
+  // Subscribe to all three topics — gate callbacks on schema readiness
+  const { messageCount: currentCount } = useZenohSubscription(currentTopic, schemaReady ? handleCurrentSample : undefined);
+  const { messageCount: hourlyCount } = useZenohSubscription(hourlyTopic, schemaReady ? handleHourlySample : undefined);
+  const { messageCount: dailyCount } = useZenohSubscription(dailyTopic, schemaReady ? handleDailySample : undefined);
 
   const totalMessages = currentCount + hourlyCount + dailyCount;
-
-  // Re-decode buffered payloads when schemaVersion changes
-  useEffect(() => {
-    if (schemaVersion === 0) return;
-    for (const [machineId, payloads] of lastPayloadsRef.current) {
-      if (payloads.current) {
-        const result = registry.decode('bubbaloop.weather.v1.CurrentWeather', payloads.current.payload);
-        if (result) {
-          const data = result.data as unknown as CurrentWeather;
-          setCurrentMap(prev => {
-            const next = new Map(prev);
-            next.set(machineId, { data, lastUpdate: Date.now() });
-            return next;
-          });
-        }
-      }
-      if (payloads.hourly) {
-        const result = registry.decode('bubbaloop.weather.v1.HourlyForecast', payloads.hourly.payload);
-        if (result) {
-          const data = result.data as unknown as HourlyForecast;
-          setHourlyMap(prev => {
-            const next = new Map(prev);
-            next.set(machineId, { data, lastUpdate: Date.now() });
-            return next;
-          });
-        }
-      }
-      if (payloads.daily) {
-        const result = registry.decode('bubbaloop.weather.v1.DailyForecast', payloads.daily.payload);
-        if (result) {
-          const data = result.data as unknown as DailyForecast;
-          setDailyMap(prev => {
-            const next = new Map(prev);
-            next.set(machineId, { data, lastUpdate: Date.now() });
-            return next;
-          });
-        }
-      }
-    }
-  }, [schemaVersion, registry]);
 
   const handleCloseEdit = () => {
     setIsEditing(false);

@@ -49,6 +49,10 @@ pub use schemas::Header;
 /// Contains the complete schema definitions for all protobuf messages
 pub const DESCRIPTOR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/descriptor.bin"));
 
+/// Canonical header.proto content, embedded at compile time.
+/// This is used to ensure nodes always use the correct version of header.proto.
+pub const HEADER_PROTO: &[u8] = include_bytes!("../../bubbaloop-schemas/protos/header.proto");
+
 /// Descriptor information for a protobuf message type
 #[derive(Debug, Clone)]
 pub struct MessageDescriptor {

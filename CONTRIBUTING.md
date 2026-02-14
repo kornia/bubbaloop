@@ -41,10 +41,12 @@ Before adding any new process/skill/automation, ask:
 1. Define component + test strategy
 2. Write tests FIRST (vitest + jsdom) — test behavior, not implementation
 3. Designer agent builds UI (React + TypeScript + Tailwind)
-4. All 210+ tests must pass (NO test deletion)
+4. All 490+ tests must pass (NO test deletion)
 5. Live verification (data flows to browser)
 
 **Test-first is non-negotiable**. Dashboard test count only goes up.
+
+**Schema-ready gating**: New view components that decode protobuf MUST use `useSchemaReady()` to gate their `useZenohSubscription` callback. Pass `schemaReady ? handleSample : undefined` to avoid dropping messages during schema loading. See `CameraView.tsx` for reference pattern.
 
 ### 3. CLI Command: Check argh conventions → write + test → `cargo test` → `/qa-tester` (tmux) → `clippy`
 
@@ -120,7 +122,7 @@ Run these at the right time to avoid wasted cycles:
 |---------|------|-----|
 | `pixi run check` | After every Rust change | Fast compilation check |
 | `cargo test --lib -p bubbaloop` | Before commits | 240+ Rust tests must pass |
-| `cd dashboard && npm test` | After dashboard changes | 210+ tests, no deletions allowed |
+| `cd dashboard && npm test -- --run` | After dashboard changes | 490+ tests, no deletions allowed |
 | `pixi run clippy` | Before PRs | Zero warnings enforced (`-D warnings`) |
 | `./scripts/validate.sh` | Before final commit | Full system check (10 phases) |
 | `./scripts/validate.sh --gemini` | Before PR submission | AI cross-review |

@@ -8,6 +8,12 @@ vi.mock('../../hooks/useZenohSubscription', () => ({
   useAllTopicStats: vi.fn(() => new Map()),
 }));
 
+const _schemaReadyState = vi.hoisted(() => ({ ready: false }));
+
+vi.mock('../../hooks/useSchemaReady', () => ({
+  useSchemaReady: vi.fn(() => _schemaReadyState.ready),
+}));
+
 vi.mock('../../contexts/FleetContext', () => ({
   useFleetContext: vi.fn(() => ({
     machines: [],
@@ -62,10 +68,12 @@ vi.mock('react18-json-view', () => ({
 vi.mock('react18-json-view/src/style.css', () => ({}));
 
 import { WeatherViewPanel } from '../WeatherView';
+import { useZenohSubscription } from '../../hooks/useZenohSubscription';
 
 describe('WeatherViewPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _schemaReadyState.ready = false;
   });
 
   it('renders WEATHER badge in header', () => {
@@ -99,5 +107,30 @@ describe('WeatherViewPanel', () => {
   it('shows footer with topic names', () => {
     render(<WeatherViewPanel />);
     expect(screen.getByText('weather/current, weather/hourly, weather/daily')).toBeInTheDocument();
+  });
+
+  describe('schema-ready gating', () => {
+    it('does not pass callbacks when schemas are not ready', () => {
+      _schemaReadyState.ready = false;
+      render(<WeatherViewPanel />);
+
+      const mockSub = vi.mocked(useZenohSubscription);
+      // WeatherView creates 3 subscriptions (current, hourly, daily)
+      expect(mockSub.mock.calls.length).toBe(3);
+      for (const call of mockSub.mock.calls) {
+        expect(call[1]).toBeUndefined();
+      }
+    });
+
+    it('passes callbacks when schemas are ready', () => {
+      _schemaReadyState.ready = true;
+      render(<WeatherViewPanel />);
+
+      const mockSub = vi.mocked(useZenohSubscription);
+      expect(mockSub.mock.calls.length).toBe(3);
+      for (const call of mockSub.mock.calls) {
+        expect(typeof call[1]).toBe('function');
+      }
+    });
   });
 });

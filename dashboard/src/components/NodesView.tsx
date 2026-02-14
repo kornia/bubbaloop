@@ -1,29 +1,17 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
-import { useFleetContext } from '../contexts/FleetContext';
-import { decodeNodeList, NodeCommandProto, CommandResultProto, CommandType } from '../proto/daemon';
-import { getSamplePayload } from '../lib/zenoh';
-import { Duration } from 'typed-duration';
-import { Reply, ReplyError, Sample } from '@eclipse-zenoh/zenoh-ts';
-
-// Node state from protobuf
-interface NodeState {
-  name: string;
-  path: string;
-  status: 'unknown' | 'stopped' | 'running' | 'failed' | 'installing' | 'building' | 'not-installed';
-  installed: boolean;
-  autostart_enabled: boolean;
-  version: string;
-  description: string;
-  node_type: string;
-  is_built: boolean;
-  build_output: string[];
-  machine_id?: string;
-  machine_hostname?: string;
-  machine_ips?: string[];
-  base_node?: string;
-  stale?: boolean;
-}
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { useZenohSubscriptionContext } from "../contexts/ZenohSubscriptionContext";
+import { useFleetContext } from "../contexts/FleetContext";
+import {
+  useNodeDiscovery,
+  type DiscoveredNode,
+} from "../contexts/NodeDiscoveryContext";
+import {
+  NodeCommandProto,
+  CommandResultProto,
+  CommandType,
+} from "../proto/daemon";
+import { Duration } from "typed-duration";
+import { Reply, ReplyError } from "@eclipse-zenoh/zenoh-ts";
 
 // Drag handle props type
 interface DragHandleProps {
@@ -35,401 +23,288 @@ interface NodesViewPanelProps {
   dragHandleProps?: DragHandleProps;
 }
 
-const STATUS_CONFIG: Record<string, { color: string; icon: string; label: string }> = {
-  running: { color: '#00c853', icon: '●', label: 'Running' },
-  stopped: { color: '#9090a0', icon: '○', label: 'Stopped' },
-  failed: { color: '#ff1744', icon: '✕', label: 'Failed' },
-  building: { color: '#ffd600', icon: '◐', label: 'Building' },
-  installing: { color: '#ffd600', icon: '◐', label: 'Installing' },
-  'not-installed': { color: '#606070', icon: '−', label: 'Not Installed' },
-  unknown: { color: '#606070', icon: '?', label: 'Unknown' },
+const STATUS_CONFIG: Record<
+  string,
+  { color: string; icon: string; label: string }
+> = {
+  running: { color: "#00c853", icon: "\u25CF", label: "Running" },
+  stopped: { color: "#9090a0", icon: "\u25CB", label: "Stopped" },
+  failed: { color: "#ff1744", icon: "\u2715", label: "Failed" },
+  building: { color: "#ffd600", icon: "\u25D0", label: "Building" },
+  installing: { color: "#ffd600", icon: "\u25D0", label: "Installing" },
+  "not-installed": { color: "#606070", icon: "\u2212", label: "Not Installed" },
+  unknown: { color: "#606070", icon: "?", label: "Unknown" },
 };
 
 // Map protobuf status number to string
-const STATUS_MAP: Record<number, NodeState['status']> = {
-  1: 'stopped',
-  2: 'running',
-  3: 'failed',
-  4: 'installing',
-  5: 'building',
-  6: 'not-installed',
+export const STATUS_MAP: Record<number, DiscoveredNode["status"]> = {
+  1: "stopped",
+  2: "running",
+  3: "failed",
+  4: "installing",
+  5: "building",
+  6: "not-installed",
 };
 
-function statusNumberToString(status: number): NodeState['status'] {
-  return STATUS_MAP[status] ?? 'unknown';
+export function statusNumberToString(status: number): DiscoveredNode["status"] {
+  return STATUS_MAP[status] ?? "unknown";
 }
+
+const DISCOVERY_VIA_CONFIG: Record<
+  string,
+  { color: string; label: string; title: string }
+> = {
+  daemon: { color: "#3d5afe", label: "D", title: "Discovered via daemon" },
+  manifest: {
+    color: "#ff9800",
+    label: "M",
+    title: "Discovered via manifest only (daemon offline)",
+  },
+  both: {
+    color: "#00c853",
+    label: "B",
+    title: "Discovered via daemon + manifest",
+  },
+};
 
 export function NodesViewPanel({
   onRemove,
   dragHandleProps,
 }: NodesViewPanelProps) {
   const { getSession } = useZenohSubscriptionContext();
-  const [nodes, setNodes] = useState<NodeState[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { nodes, loading, error, daemonConnected, manifestDiscoveryActive } =
+    useNodeDiscovery();
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
-  const [daemonConnected, setDaemonConnected] = useState(false);
+  const [message, setMessage] = useState<{
+    text: string;
+    type: "success" | "error";
+  } | null>(null);
 
-  // Track whether we've received data (avoids stale closure over nodes.length)
-  const hasReceivedDataRef = useRef(false);
-
-  // Track last-seen timestamp per machine for stale detection
-  const machineLastSeenRef = useRef(new Map<string, number>());
-
-  // Keep last-known nodes per machine for stale detection
-  const prevNodesMapRef = useRef(new Map<string, NodeState[]>());
-
-  // 15 seconds = 5 poll cycles at 3s each
-  const STALE_THRESHOLD_MS = 15000;
-
-  // Helper to process a NodeList payload — returns machineId + nodes, does NOT call setNodes
-  const processPayload = useCallback((payload: Uint8Array): { machineId: string; nodes: NodeState[] } | null => {
-    try {
-      const nodeList = decodeNodeList(payload);
-
-      if (nodeList && nodeList.nodes.length > 0) {
-        const listMachineId = nodeList.machineId || '';
-        const mappedNodes: NodeState[] = nodeList.nodes.map(n => ({
-          name: n.name,
-          path: n.path,
-          status: statusNumberToString(n.status),
-          installed: n.installed,
-          autostart_enabled: n.autostartEnabled,
-          version: n.version,
-          description: n.description,
-          node_type: n.nodeType,
-          is_built: n.isBuilt,
-          build_output: n.buildOutput,
-          machine_id: n.machineId || listMachineId,
-          machine_hostname: n.machineHostname,
-          machine_ips: n.machineIps || [],
-          base_node: n.baseNode || '',
-        }));
-        setDaemonConnected(true);
-        setError(null);
-        setLoading(false);
-        hasReceivedDataRef.current = true;
-        return { machineId: listMachineId, nodes: mappedNodes };
-      }
-    } catch (err) {
-      console.error('[NodesView] Failed to decode NodeList:', err);
-      console.error('[NodesView] Decode error:', err);
-    }
-    return null;
-  }, []);
-
-  // Poll daemon for node list via Zenoh GET (queryable)
-  // Subscriptions don't reliably forward larger payloads through the bridge,
-  // but GET queries work consistently.
-  useEffect(() => {
-    const topic = 'bubbaloop/daemon/nodes';
-    let mounted = true;
-    let pollTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const pollNodes = async () => {
+  // Execute command via Zenoh query
+  const executeCommand = useCallback(
+    async (nodeName: string, command: string) => {
       const session = getSession();
-      if (!session || !mounted) {
-        pollTimer = setTimeout(pollNodes, 500);
+      if (!session) {
+        setMessage({ text: "Not connected to Zenoh", type: "error" });
         return;
       }
 
+      setActionLoading(`${nodeName}-${command}`);
+      setMessage(null);
+
       try {
-        const receiver = await session.get(topic, {
-          timeout: Duration.milliseconds.of(5000),
+        // Map command string to enum
+        const commandMap: Record<string, number> = {
+          start: CommandType.COMMAND_TYPE_START,
+          stop: CommandType.COMMAND_TYPE_STOP,
+          restart: CommandType.COMMAND_TYPE_RESTART,
+          install: CommandType.COMMAND_TYPE_INSTALL,
+          uninstall: CommandType.COMMAND_TYPE_UNINSTALL,
+          build: CommandType.COMMAND_TYPE_BUILD,
+          clean: CommandType.COMMAND_TYPE_CLEAN,
+          enable_autostart: CommandType.COMMAND_TYPE_ENABLE_AUTOSTART,
+          disable_autostart: CommandType.COMMAND_TYPE_DISABLE_AUTOSTART,
+          get_logs: CommandType.COMMAND_TYPE_GET_LOGS,
+        };
+
+        // Look up target node to route command to correct machine
+        const targetNode = nodes.find((n) => n.name === nodeName);
+        const commandKey = targetNode?.machine_id
+          ? `bubbaloop/${targetNode.machine_id}/daemon/command`
+          : "bubbaloop/daemon/command";
+
+        const cmd = NodeCommandProto.create({
+          command: commandMap[command] ?? CommandType.COMMAND_TYPE_START,
+          nodeName: nodeName,
+          nodePath: "",
+          requestId: crypto.randomUUID(),
+          targetMachine: targetNode?.machine_id || "",
         });
 
-        const allNodes = new Map<string, NodeState[]>();
+        const payload = NodeCommandProto.encode(cmd).finish();
 
-        if (receiver && mounted) {
+        // Send query and wait for reply
+        const receiver = await session.get(commandKey, {
+          payload: payload,
+          timeout: Duration.milliseconds.of(10000),
+        });
+
+        // Process first reply
+        let gotReply = false;
+        if (receiver) {
           for await (const replyItem of receiver) {
-            if (!mounted) break;
-            if (replyItem instanceof Reply) {
-              const replyResult = replyItem.result();
-              if (replyResult instanceof ReplyError) continue;
-              const payload = getSamplePayload(replyResult as Sample);
-              const result = processPayload(payload);
-              if (result) {
-                allNodes.set(result.machineId, result.nodes);
-                machineLastSeenRef.current.set(result.machineId, Date.now());
+            gotReply = true;
+            try {
+              // Reply can be a Reply object with result() method
+              let sample: unknown;
+              if (replyItem instanceof Reply) {
+                const replyResult = replyItem.result();
+                if (replyResult instanceof ReplyError) {
+                  setMessage({
+                    text: "Reply error from daemon",
+                    type: "error",
+                  });
+                  break;
+                }
+                sample = replyResult;
+              } else {
+                sample = replyItem;
               }
+
+              // Extract payload from Sample
+              const replyPayload = (
+                sample as { payload: () => { toBytes: () => Uint8Array } }
+              )
+                ?.payload?.()
+                ?.toBytes?.();
+              if (replyPayload) {
+                const result = CommandResultProto.decode(replyPayload);
+                if (result.success) {
+                  setMessage({
+                    text: result.message || "Command executed",
+                    type: "success",
+                  });
+                } else {
+                  setMessage({
+                    text: result.message || "Command failed",
+                    type: "error",
+                  });
+                }
+              }
+            } catch (e) {
+              console.error("[NodesView] Failed to decode reply:", e);
             }
+            break; // Only process first reply
           }
         }
 
-        if (mounted) {
-          const now = Date.now();
-
-          // Update prevNodesMap with fresh replies
-          for (const [mid, machineNodes] of allNodes.entries()) {
-            prevNodesMapRef.current.set(mid, machineNodes);
-          }
-
-          // Build merged node list: fresh nodes + stale nodes from offline machines
-          const mergedNodes: NodeState[] = [];
-
-          // Add all fresh nodes (not stale)
-          for (const machineNodes of allNodes.values()) {
-            mergedNodes.push(...machineNodes);
-          }
-
-          // Check previously-known machines that did NOT reply this cycle
-          for (const [mid, lastSeen] of machineLastSeenRef.current.entries()) {
-            if (!allNodes.has(mid)) {
-              if (now - lastSeen <= STALE_THRESHOLD_MS) {
-                // Within grace period: inject last-known nodes as stale
-                const lastKnownNodes = prevNodesMapRef.current.get(mid);
-                if (lastKnownNodes) {
-                  mergedNodes.push(...lastKnownNodes.map(n => ({ ...n, stale: true })));
-                }
-              } else {
-                // Beyond grace period: remove from tracking
-                prevNodesMapRef.current.delete(mid);
-                machineLastSeenRef.current.delete(mid);
-              }
-            }
-          }
-
-          if (mergedNodes.length > 0) {
-            setNodes(mergedNodes);
-          }
+        if (!gotReply) {
+          setMessage({ text: "No response from daemon", type: "error" });
         }
       } catch (err) {
-        console.warn('[NodesView] Poll failed:', err);
+        console.error("[NodesView] Command failed:", err);
+        setMessage({
+          text: `Failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+          type: "error",
+        });
+      } finally {
+        setActionLoading(null);
+        setTimeout(() => setMessage(null), 4000);
+      }
+    },
+    [getSession, nodes],
+  );
+
+  // Fetch logs for a node via Zenoh query
+  const fetchLogs = useCallback(
+    async (nodeName: string): Promise<string> => {
+      const session = getSession();
+      if (!session) {
+        throw new Error("Not connected to Zenoh");
       }
 
-      // Schedule next poll
-      if (mounted) {
-        pollTimer = setTimeout(pollNodes, 3000);
-      }
-    };
-
-    pollNodes();
-
-    // Set timeout for initial connection
-    const timeout = setTimeout(() => {
-      if (!hasReceivedDataRef.current) {
-        setLoading(false);
-        setError('No data from daemon - check if bubbaloop-daemon is running');
-      }
-    }, 15000);
-
-    return () => {
-      mounted = false;
-      clearTimeout(timeout);
-      if (pollTimer) clearTimeout(pollTimer);
-    };
-  }, [getSession, processPayload]);
-
-  // Execute command via Zenoh query
-  const executeCommand = useCallback(async (nodeName: string, command: string) => {
-    const session = getSession();
-    if (!session) {
-      setMessage({ text: 'Not connected to Zenoh', type: 'error' });
-      return;
-    }
-
-    setActionLoading(`${nodeName}-${command}`);
-    setMessage(null);
-
-    try {
-      // Map command string to enum
-      const commandMap: Record<string, number> = {
-        'start': CommandType.COMMAND_TYPE_START,
-        'stop': CommandType.COMMAND_TYPE_STOP,
-        'restart': CommandType.COMMAND_TYPE_RESTART,
-        'install': CommandType.COMMAND_TYPE_INSTALL,
-        'uninstall': CommandType.COMMAND_TYPE_UNINSTALL,
-        'build': CommandType.COMMAND_TYPE_BUILD,
-        'clean': CommandType.COMMAND_TYPE_CLEAN,
-        'enable_autostart': CommandType.COMMAND_TYPE_ENABLE_AUTOSTART,
-        'disable_autostart': CommandType.COMMAND_TYPE_DISABLE_AUTOSTART,
-        'get_logs': CommandType.COMMAND_TYPE_GET_LOGS,
-      };
-
-      // Look up target node to route command to correct machine
-      const targetNode = nodes.find(n => n.name === nodeName);
+      // Look up target node to route logs request to correct machine
+      const targetNode = nodes.find((n) => n.name === nodeName);
       const commandKey = targetNode?.machine_id
         ? `bubbaloop/${targetNode.machine_id}/daemon/command`
-        : 'bubbaloop/daemon/command';
+        : "bubbaloop/daemon/command";
 
       const cmd = NodeCommandProto.create({
-        command: commandMap[command] ?? CommandType.COMMAND_TYPE_START,
+        command: CommandType.COMMAND_TYPE_GET_LOGS,
         nodeName: nodeName,
-        nodePath: '',
+        nodePath: "",
         requestId: crypto.randomUUID(),
-        targetMachine: targetNode?.machine_id || '',
+        targetMachine: targetNode?.machine_id || "",
       });
 
       const payload = NodeCommandProto.encode(cmd).finish();
 
-      // Send query and wait for reply
       const receiver = await session.get(commandKey, {
         payload: payload,
         timeout: Duration.milliseconds.of(10000),
       });
 
-      // Process first reply
-      let gotReply = false;
       if (receiver) {
         for await (const replyItem of receiver) {
-          gotReply = true;
-          try {
-            // Reply can be a Reply object with result() method
-            let sample: unknown;
-            if (replyItem instanceof Reply) {
-              const replyResult = replyItem.result();
-              if (replyResult instanceof ReplyError) {
-                setMessage({ text: 'Reply error from daemon', type: 'error' });
-                break;
-              }
-              sample = replyResult;
-            } else {
-              sample = replyItem;
+          let sample: unknown;
+          if (replyItem instanceof Reply) {
+            const replyResult = replyItem.result();
+            if (replyResult instanceof ReplyError) {
+              throw new Error("Reply error from daemon");
             }
-
-            // Extract payload from Sample
-            const replyPayload = (sample as { payload: () => { toBytes: () => Uint8Array } })?.payload?.()?.toBytes?.();
-            if (replyPayload) {
-              const result = CommandResultProto.decode(replyPayload);
-              if (result.success) {
-                setMessage({ text: result.message || 'Command executed', type: 'success' });
-              } else {
-                setMessage({ text: result.message || 'Command failed', type: 'error' });
-              }
-            }
-          } catch (e) {
-            console.error('[NodesView] Failed to decode reply:', e);
-          }
-          break; // Only process first reply
-        }
-      }
-
-      if (!gotReply) {
-        setMessage({ text: 'No response from daemon', type: 'error' });
-      }
-    } catch (err) {
-      console.error('[NodesView] Command failed:', err);
-      setMessage({ text: `Failed: ${err instanceof Error ? err.message : 'Unknown error'}`, type: 'error' });
-    } finally {
-      setActionLoading(null);
-      setTimeout(() => setMessage(null), 4000);
-    }
-  }, [getSession, nodes]);
-
-  // Fetch logs for a node via Zenoh query
-  const fetchLogs = useCallback(async (nodeName: string): Promise<string> => {
-    const session = getSession();
-    if (!session) {
-      throw new Error('Not connected to Zenoh');
-    }
-
-    // Look up target node to route logs request to correct machine
-    const targetNode = nodes.find(n => n.name === nodeName);
-    const commandKey = targetNode?.machine_id
-      ? `bubbaloop/${targetNode.machine_id}/daemon/command`
-      : 'bubbaloop/daemon/command';
-
-    const cmd = NodeCommandProto.create({
-      command: CommandType.COMMAND_TYPE_GET_LOGS,
-      nodeName: nodeName,
-      nodePath: '',
-      requestId: crypto.randomUUID(),
-      targetMachine: targetNode?.machine_id || '',
-    });
-
-    const payload = NodeCommandProto.encode(cmd).finish();
-
-    const receiver = await session.get(commandKey, {
-      payload: payload,
-      timeout: Duration.milliseconds.of(10000),
-    });
-
-    if (receiver) {
-      for await (const replyItem of receiver) {
-        let sample: unknown;
-        if (replyItem instanceof Reply) {
-          const replyResult = replyItem.result();
-          if (replyResult instanceof ReplyError) {
-            throw new Error('Reply error from daemon');
-          }
-          sample = replyResult;
-        } else {
-          sample = replyItem;
-        }
-
-        const replyPayload = (sample as { payload: () => { toBytes: () => Uint8Array } })?.payload?.()?.toBytes?.();
-        if (replyPayload) {
-          const result = CommandResultProto.decode(replyPayload);
-          if (result.success) {
-            return result.output || 'No logs available';
+            sample = replyResult;
           } else {
-            throw new Error(result.message || 'Failed to fetch logs');
+            sample = replyItem;
           }
-        }
-        break;
-      }
-    }
 
-    throw new Error('No response from daemon');
-  }, [getSession, nodes]);
+          const replyPayload = (
+            sample as { payload: () => { toBytes: () => Uint8Array } }
+          )
+            ?.payload?.()
+            ?.toBytes?.();
+          if (replyPayload) {
+            const result = CommandResultProto.decode(replyPayload);
+            if (result.success) {
+              return result.output || "No logs available";
+            } else {
+              throw new Error(result.message || "Failed to fetch logs");
+            }
+          }
+          break;
+        }
+      }
+
+      throw new Error("No response from daemon");
+    },
+    [getSession, nodes],
+  );
 
   // Group nodes by machine for multi-machine rendering
   const machineGroups = useMemo(() => {
-    const groups = new Map<string, { hostname: string; machineId: string; nodes: NodeState[]; isOnline: boolean }>();
+    const groups = new Map<
+      string,
+      {
+        hostname: string;
+        machineId: string;
+        nodes: DiscoveredNode[];
+        isOnline: boolean;
+      }
+    >();
     for (const node of nodes) {
-      const mid = node.machine_id || 'local';
+      const mid = node.machine_id || "local";
       if (!groups.has(mid)) {
-        groups.set(mid, { hostname: node.machine_hostname || 'local', machineId: mid, nodes: [], isOnline: !node.stale });
+        groups.set(mid, {
+          hostname: node.machine_hostname || "local",
+          machineId: mid,
+          nodes: [],
+          isOnline: !node.stale,
+        });
       }
       groups.get(mid)!.nodes.push(node);
     }
     return Array.from(groups.values());
   }, [nodes]);
 
-  // Report machines and nodes to FleetContext for the FleetBar and MeshView
-  const { reportMachines, reportNodes, selectedMachineId } = useFleetContext();
-
-  useEffect(() => {
-    reportMachines(machineGroups.map(g => ({
-      machineId: g.machineId,
-      hostname: g.hostname,
-      nodeCount: g.nodes.length,
-      runningCount: g.nodes.filter(n => n.status === 'running').length,
-      isOnline: g.isOnline,
-      ips: g.nodes[0]?.machine_ips || [],
-    })));
-  }, [machineGroups, reportMachines]);
-
-  useEffect(() => {
-    reportNodes(nodes.map(n => ({
-      name: n.name,
-      status: n.status,
-      machineId: n.machine_id || 'local',
-      hostname: n.machine_hostname || 'local',
-      ips: n.machine_ips || [],
-      nodeType: n.node_type,
-      version: n.version,
-      baseNode: n.base_node || '',
-    })));
-  }, [nodes, reportNodes]);
-
   // Filter by selected machine from FleetBar
+  const { selectedMachineId } = useFleetContext();
+
   const filteredMachineGroups = useMemo(() => {
     if (!selectedMachineId) return machineGroups;
-    return machineGroups.filter(g => g.machineId === selectedMachineId);
+    return machineGroups.filter((g) => g.machineId === selectedMachineId);
   }, [machineGroups, selectedMachineId]);
 
   const filteredNodes = useMemo(() => {
     if (!selectedMachineId) return nodes;
-    return nodes.filter(n => (n.machine_id || 'local') === selectedMachineId);
+    return nodes.filter((n) => (n.machine_id || "local") === selectedMachineId);
   }, [nodes, selectedMachineId]);
 
-  const [collapsedMachines, setCollapsedMachines] = useState<Set<string>>(new Set());
+  const [collapsedMachines, setCollapsedMachines] = useState<Set<string>>(
+    new Set(),
+  );
 
   const toggleMachineCollapse = useCallback((machineId: string) => {
-    setCollapsedMachines(prev => {
+    setCollapsedMachines((prev) => {
       const next = new Set(prev);
       if (next.has(machineId)) {
         next.delete(machineId);
@@ -440,26 +315,104 @@ export function NodesViewPanel({
     });
   }, []);
 
-  const selectedNodeData = selectedNode ? nodes.find(n => n.name === selectedNode) : undefined;
+  const selectedNodeData = selectedNode
+    ? nodes.find((n) => n.name === selectedNode)
+    : undefined;
+
+  // Render a discovery source badge
+  const renderDiscoveryBadge = (via: DiscoveredNode["discoveredVia"]) => {
+    const cfg = DISCOVERY_VIA_CONFIG[via] || DISCOVERY_VIA_CONFIG.daemon;
+    return (
+      <span
+        className="discovery-badge"
+        title={cfg.title}
+        style={{ color: cfg.color, borderColor: cfg.color }}
+      >
+        {cfg.label}
+      </span>
+    );
+  };
+
+  // Render a node row (shared between single-machine and multi-machine views)
+  const renderNodeRow = (node: DiscoveredNode) => {
+    const statusCfg = STATUS_CONFIG[node.status] || STATUS_CONFIG.unknown;
+    const isSelected = selectedNode === node.name;
+    const isBuilding =
+      node.status === "building" || node.status === "installing";
+
+    return (
+      <div
+        key={`${node.machine_id}-${node.name}`}
+        className={`node-row ${isSelected ? "selected" : ""} ${node.stale ? "stale" : ""}`}
+        onClick={() => setSelectedNode(isSelected ? null : node.name)}
+      >
+        <span className="col-status" style={{ color: statusCfg.color }}>
+          {isBuilding ? (
+            <span className="pulse">{statusCfg.icon}</span>
+          ) : (
+            statusCfg.icon
+          )}
+        </span>
+        <span className="col-name">{node.name}</span>
+        <span className="col-source">
+          {renderDiscoveryBadge(node.discoveredVia)}
+        </span>
+        <span className="col-machine">{node.machine_hostname || "local"}</span>
+        <span className="col-ip mono">{node.machine_ips?.[0] || ""}</span>
+        <span className="col-version">{node.version}</span>
+        <span className={`col-type type-${node.node_type}`}>
+          {node.node_type}
+        </span>
+      </div>
+    );
+  };
 
   return (
     <div className="nodes-panel">
       {/* Header */}
       <div className="panel-header" {...dragHandleProps}>
         <div className="panel-title-section">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
             <rect x="4" y="4" width="16" height="16" rx="2" />
             <path d="M9 9h6M9 13h6M9 17h4" />
           </svg>
           <span className="panel-title">Nodes</span>
-          <span className={`daemon-status ${daemonConnected ? 'connected' : 'disconnected'}`}>
-            {daemonConnected ? '● zenoh' : '○ offline'}
+          <span
+            className={`daemon-status ${daemonConnected ? "connected" : "disconnected"}`}
+          >
+            {daemonConnected ? "\u25CF zenoh" : "\u25CB offline"}
           </span>
+          {manifestDiscoveryActive && (
+            <span
+              className="manifest-discovery-status"
+              title="Manifest discovery in progress"
+            >
+              scanning...
+            </span>
+          )}
         </div>
         <div className="panel-actions">
           {onRemove && (
-            <button className="remove-btn" onClick={onRemove} title="Remove panel">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <button
+              className="remove-btn"
+              onClick={onRemove}
+              title="Remove panel"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
                 <path d="M18 6L6 18M6 6l12 12" />
               </svg>
             </button>
@@ -469,9 +422,7 @@ export function NodesViewPanel({
 
       {/* Message banner */}
       {message && (
-        <div className={`message-banner ${message.type}`}>
-          {message.text}
-        </div>
+        <div className={`message-banner ${message.type}`}>{message.text}</div>
       )}
 
       {/* Content */}
@@ -479,16 +430,25 @@ export function NodesViewPanel({
         {loading && nodes.length === 0 ? (
           <div className="loading-state">
             <div className="spinner" />
-            <span>Connecting to daemon via Zenoh...</span>
+            <span>Discovering nodes via Zenoh...</span>
           </div>
         ) : error && nodes.length === 0 ? (
           <div className="error-state">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <svg
+              width="32"
+              height="32"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
               <circle cx="12" cy="12" r="10" />
               <path d="M12 8v4M12 16h.01" />
             </svg>
             <span>{error}</span>
-            <p className="error-hint">Make sure bubbaloop-daemon is running and publishing to Zenoh</p>
+            <p className="error-hint">
+              Make sure bubbaloop-daemon is running and publishing to Zenoh
+            </p>
           </div>
         ) : (
           <div className="nodes-layout">
@@ -497,6 +457,7 @@ export function NodesViewPanel({
               <div className="list-header">
                 <span className="col-status">St</span>
                 <span className="col-name">Name</span>
+                <span className="col-source">Src</span>
                 <span className="col-machine">Machine</span>
                 <span className="col-ip">IP</span>
                 <span className="col-version">Version</span>
@@ -505,34 +466,15 @@ export function NodesViewPanel({
               {filteredNodes.length === 0 ? (
                 <div className="no-nodes">No nodes registered</div>
               ) : filteredMachineGroups.length <= 1 ? (
-                /* Single machine — flat rendering (current behavior) */
-                filteredNodes.map(node => {
-                  const statusCfg = STATUS_CONFIG[node.status] || STATUS_CONFIG.unknown;
-                  const isSelected = selectedNode === node.name;
-                  const isBuilding = node.status === 'building' || node.status === 'installing';
-
-                  return (
-                    <div
-                      key={`${node.machine_id}-${node.name}`}
-                      className={`node-row ${isSelected ? 'selected' : ''}`}
-                      onClick={() => setSelectedNode(isSelected ? null : node.name)}
-                    >
-                      <span className="col-status" style={{ color: statusCfg.color }}>
-                        {isBuilding ? <span className="pulse">{statusCfg.icon}</span> : statusCfg.icon}
-                      </span>
-                      <span className="col-name">{node.name}</span>
-                      <span className="col-machine">{node.machine_hostname || 'local'}</span>
-                      <span className="col-ip mono">{node.machine_ips?.[0] || ''}</span>
-                      <span className="col-version">{node.version}</span>
-                      <span className={`col-type type-${node.node_type}`}>{node.node_type}</span>
-                    </div>
-                  );
-                })
+                /* Single machine -- flat rendering */
+                filteredNodes.map(renderNodeRow)
               ) : (
-                /* Multiple machines — grouped rendering with collapsible headers */
-                filteredMachineGroups.map(group => {
+                /* Multiple machines -- grouped rendering with collapsible headers */
+                filteredMachineGroups.map((group) => {
                   const isCollapsed = collapsedMachines.has(group.machineId);
-                  const runningCount = group.nodes.filter(n => n.status === 'running').length;
+                  const runningCount = group.nodes.filter(
+                    (n) => n.status === "running",
+                  ).length;
 
                   return (
                     <div key={`machine-${group.machineId}`}>
@@ -540,36 +482,23 @@ export function NodesViewPanel({
                         className="machine-group-header"
                         onClick={() => toggleMachineCollapse(group.machineId)}
                       >
-                        <span className={`collapse-arrow ${isCollapsed ? 'collapsed' : ''}`}>&#9660;</span>
-                        <span className={`machine-status-dot ${group.isOnline ? 'online' : 'offline'}`} />
+                        <span
+                          className={`collapse-arrow ${isCollapsed ? "collapsed" : ""}`}
+                        >
+                          &#9660;
+                        </span>
+                        <span
+                          className={`machine-status-dot ${group.isOnline ? "online" : "offline"}`}
+                        />
                         <span>{group.hostname}</span>
-                        <span className="machine-ip">{group.nodes[0]?.machine_ips?.[0] || ''}</span>
+                        <span className="machine-ip">
+                          {group.nodes[0]?.machine_ips?.[0] || ""}
+                        </span>
                         <span className="machine-node-count">
                           {runningCount}/{group.nodes.length} running
                         </span>
                       </div>
-                      {!isCollapsed && group.nodes.map(node => {
-                        const statusCfg = STATUS_CONFIG[node.status] || STATUS_CONFIG.unknown;
-                        const isSelected = selectedNode === node.name;
-                        const isBuilding = node.status === 'building' || node.status === 'installing';
-
-                        return (
-                          <div
-                            key={`${node.machine_id}-${node.name}`}
-                            className={`node-row ${isSelected ? 'selected' : ''}`}
-                            onClick={() => setSelectedNode(isSelected ? null : node.name)}
-                          >
-                            <span className="col-status" style={{ color: statusCfg.color }}>
-                              {isBuilding ? <span className="pulse">{statusCfg.icon}</span> : statusCfg.icon}
-                            </span>
-                            <span className="col-name">{node.name}</span>
-                            <span className="col-machine">{node.machine_hostname || 'local'}</span>
-                            <span className="col-ip mono">{node.machine_ips?.[0] || ''}</span>
-                            <span className="col-version">{node.version}</span>
-                            <span className={`col-type type-${node.node_type}`}>{node.node_type}</span>
-                          </div>
-                        );
-                      })}
+                      {!isCollapsed && group.nodes.map(renderNodeRow)}
                     </div>
                   );
                 })
@@ -642,6 +571,13 @@ export function NodesViewPanel({
         .daemon-status.disconnected {
           color: #ff1744;
           background: rgba(255, 23, 68, 0.1);
+        }
+
+        .manifest-discovery-status {
+          font-size: 10px;
+          color: var(--text-muted);
+          font-style: italic;
+          animation: pulse 1.5s ease-in-out infinite;
         }
 
         .panel-actions {
@@ -774,8 +710,13 @@ export function NodesViewPanel({
           padding-left: 14px;
         }
 
+        .node-row.stale {
+          opacity: 0.6;
+        }
+
         .col-status { width: 30px; text-align: center; }
         .col-name { flex: 1; color: var(--text-primary); font-weight: 500; }
+        .col-source { width: 36px; text-align: center; }
         .col-machine { width: 100px; color: var(--text-muted); font-size: 11px; }
         .col-ip {
           flex: 1.2;
@@ -791,6 +732,18 @@ export function NodesViewPanel({
 
         .col-type.type-rust { color: #ffd600; }
         .col-type.type-python { color: #00e5ff; }
+
+        .discovery-badge {
+          display: inline-block;
+          font-size: 9px;
+          font-weight: 700;
+          width: 16px;
+          height: 16px;
+          line-height: 16px;
+          text-align: center;
+          border-radius: 3px;
+          border: 1px solid;
+        }
 
         .no-nodes {
           padding: 32px 16px;
@@ -866,7 +819,7 @@ export function NodesViewPanel({
             min-height: 300px;
           }
 
-          .col-machine, .col-version, .col-type {
+          .col-source, .col-machine, .col-version, .col-type {
             display: none;
           }
         }
@@ -877,14 +830,20 @@ export function NodesViewPanel({
 
 // Node detail sub-component
 interface NodeDetailProps {
-  node: NodeState;
+  node: DiscoveredNode;
   onCommand: (nodeName: string, command: string) => void;
   onFetchLogs: (nodeName: string) => Promise<string>;
   actionLoading: string | null;
   onClose: () => void;
 }
 
-function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: NodeDetailProps) {
+function NodeDetail({
+  node,
+  onCommand,
+  onFetchLogs,
+  actionLoading,
+  onClose,
+}: NodeDetailProps) {
   const statusCfg = STATUS_CONFIG[node.status] || STATUS_CONFIG.unknown;
   const isLoading = (cmd: string) => actionLoading === `${node.name}-${cmd}`;
   const [logs, setLogs] = useState<string | null>(null);
@@ -896,7 +855,9 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
       const logsText = await onFetchLogs(node.name);
       setLogs(logsText);
     } catch (e) {
-      setLogs(`Failed to fetch logs: ${e instanceof Error ? e.message : 'Unknown error'}`);
+      setLogs(
+        `Failed to fetch logs: ${e instanceof Error ? e.message : "Unknown error"}`,
+      );
     }
   }, [onFetchLogs, node.name]);
 
@@ -912,18 +873,45 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
     return () => clearInterval(interval);
   }, [showLogs, autoRefresh, fetchLogsInternal]);
 
+  const discoveryVia =
+    DISCOVERY_VIA_CONFIG[node.discoveredVia] || DISCOVERY_VIA_CONFIG.daemon;
+
   return (
     <div className="node-detail">
       <div className="detail-header">
         <div className="detail-title">
           <button className="back-btn" onClick={onClose} title="Back to list">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <path d="M19 12H5M12 19l-7-7 7-7" />
             </svg>
           </button>
           <h3>{node.name}</h3>
+          <span
+            className="discovery-via-badge"
+            style={{
+              color: discoveryVia.color,
+              borderColor: discoveryVia.color,
+            }}
+            title={discoveryVia.title}
+          >
+            {discoveryVia.label === "D"
+              ? "daemon"
+              : discoveryVia.label === "M"
+                ? "manifest"
+                : "daemon+manifest"}
+          </span>
         </div>
-        <span className="status-badge" style={{ color: statusCfg.color, borderColor: statusCfg.color }}>
+        <span
+          className="status-badge"
+          style={{ color: statusCfg.color, borderColor: statusCfg.color }}
+        >
           {statusCfg.icon} {statusCfg.label}
         </span>
       </div>
@@ -931,7 +919,9 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
       <div className="detail-info">
         <div className="info-row">
           <span className="label">Type</span>
-          <span className={`value type-${node.node_type}`}>{node.node_type}</span>
+          <span className={`value type-${node.node_type}`}>
+            {node.node_type}
+          </span>
         </div>
         <div className="info-row">
           <span className="label">Version</span>
@@ -939,12 +929,12 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
         </div>
         <div className="info-row">
           <span className="label">Machine</span>
-          <span className="value">{node.machine_hostname || 'local'}</span>
+          <span className="value">{node.machine_hostname || "local"}</span>
         </div>
         {node.machine_ips && node.machine_ips.length > 0 && (
           <div className="info-row full">
             <span className="label">IPs</span>
-            <span className="value mono">{node.machine_ips.join(', ')}</span>
+            <span className="value mono">{node.machine_ips.join(", ")}</span>
           </div>
         )}
         {node.description && (
@@ -953,78 +943,171 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
             <span className="value">{node.description}</span>
           </div>
         )}
-        <div className="info-row full">
-          <span className="label">Path</span>
-          <span className="value mono path">{node.path}</span>
-        </div>
+        {node.path && (
+          <div className="info-row full">
+            <span className="label">Path</span>
+            <span className="value mono path">{node.path}</span>
+          </div>
+        )}
       </div>
+
+      {/* Manifest details (when available) */}
+      {node.manifest && (
+        <div className="manifest-section">
+          <div className="manifest-header">Manifest Details</div>
+          <div className="manifest-grid">
+            {node.manifest.capabilities.length > 0 && (
+              <div className="info-row full">
+                <span className="label">Capabilities</span>
+                <div className="tag-list">
+                  {node.manifest.capabilities.map((cap) => (
+                    <span key={cap} className="tag capability">
+                      {cap}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {node.manifest.requires_hardware.length > 0 && (
+              <div className="info-row full">
+                <span className="label">Hardware Requirements</span>
+                <div className="tag-list">
+                  {node.manifest.requires_hardware.map((hw) => (
+                    <span key={hw} className="tag hardware">
+                      {hw}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {node.manifest.publishes.length > 0 && (
+              <div className="info-row full">
+                <span className="label">Publishes</span>
+                <div className="publish-list">
+                  {node.manifest.publishes.map((pub) => (
+                    <div key={pub.topic_suffix} className="publish-item">
+                      <span className="mono">{pub.topic_suffix}</span>
+                      {pub.rate_hz > 0 && (
+                        <span className="rate">{pub.rate_hz} Hz</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {node.manifest.subscribes.length > 0 && (
+              <div className="info-row full">
+                <span className="label">Subscribes</span>
+                <div className="tag-list">
+                  {node.manifest.subscribes.map((sub) => (
+                    <span key={sub} className="tag subscribe mono">
+                      {sub}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {node.manifest.scope && (
+              <div className="info-row">
+                <span className="label">Scope</span>
+                <span className="value">{node.manifest.scope}</span>
+              </div>
+            )}
+            {node.manifest.security.data_classification && (
+              <div className="info-row">
+                <span className="label">Data Classification</span>
+                <span className="value">
+                  {node.manifest.security.data_classification}
+                </span>
+              </div>
+            )}
+            {node.manifest.time.clock_source && (
+              <div className="info-row">
+                <span className="label">Clock Source</span>
+                <span className="value">{node.manifest.time.clock_source}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Controls row: start/stop, logs toggle, auto-refresh */}
       <div className="controls-row">
         <div className="control-group">
-          {node.status === 'not-installed' ? (
-            <span className="hint-text">Service not installed (use TUI to install)</span>
-          ) : node.status === 'running' ? (
+          {node.discoveredVia === "manifest" ? (
+            <span className="hint-text">
+              Discovered via manifest only (daemon offline)
+            </span>
+          ) : node.status === "not-installed" ? (
+            <span className="hint-text">
+              Service not installed (use TUI to install)
+            </span>
+          ) : node.status === "running" ? (
             <button
               className="action-btn stop"
-              onClick={() => onCommand(node.name, 'stop')}
-              disabled={isLoading('stop')}
+              onClick={() => onCommand(node.name, "stop")}
+              disabled={isLoading("stop")}
             >
-              {isLoading('stop') ? 'Stopping...' : 'Stop'}
+              {isLoading("stop") ? "Stopping..." : "Stop"}
             </button>
           ) : node.is_built ? (
             <button
               className="action-btn primary"
-              onClick={() => onCommand(node.name, 'start')}
-              disabled={isLoading('start') || node.status === 'building'}
+              onClick={() => onCommand(node.name, "start")}
+              disabled={isLoading("start") || node.status === "building"}
             >
-              {isLoading('start') ? 'Starting...' : 'Start'}
+              {isLoading("start") ? "Starting..." : "Start"}
             </button>
           ) : (
             <span className="hint-text">Not built (use TUI to build)</span>
           )}
         </div>
 
-        <div className="control-group">
-          <button
-            className={`action-btn ${showLogs ? 'active' : 'secondary'}`}
-            onClick={() => setShowLogs(!showLogs)}
-          >
-            {showLogs ? 'Hide Logs' : 'Show Logs'}
-          </button>
-          {showLogs && (
-            <label className="auto-refresh-switch">
-              <input
-                type="checkbox"
-                checked={autoRefresh}
-                onChange={() => setAutoRefresh(!autoRefresh)}
-              />
-              <span className="switch-slider"></span>
-              <span className="switch-label">Auto</span>
-            </label>
-          )}
-        </div>
-      </div>
-
-      <div className="logs-section">
-
-        {/* Service logs */}
-        {showLogs && (
-          <div className="service-logs">
-            <div className="output-content">
-              {logs === null ? (
-                <div className="logs-loading">Loading logs...</div>
-              ) : logs ? (
-                logs.split('\n').map((line, i) => (
-                  <div key={i} className="output-line">{line}</div>
-                ))
-              ) : (
-                <div className="no-logs">No logs available</div>
-              )}
-            </div>
+        {node.discoveredVia !== "manifest" && (
+          <div className="control-group">
+            <button
+              className={`action-btn ${showLogs ? "active" : "secondary"}`}
+              onClick={() => setShowLogs(!showLogs)}
+            >
+              {showLogs ? "Hide Logs" : "Show Logs"}
+            </button>
+            {showLogs && (
+              <label className="auto-refresh-switch">
+                <input
+                  type="checkbox"
+                  checked={autoRefresh}
+                  onChange={() => setAutoRefresh(!autoRefresh)}
+                />
+                <span className="switch-slider"></span>
+                <span className="switch-label">Auto</span>
+              </label>
+            )}
           </div>
         )}
       </div>
+
+      {node.discoveredVia !== "manifest" && (
+        <div className="logs-section">
+          {/* Service logs */}
+          {showLogs && (
+            <div className="service-logs">
+              <div className="output-content">
+                {logs === null ? (
+                  <div className="logs-loading">Loading logs...</div>
+                ) : logs ? (
+                  logs.split("\n").map((line, i) => (
+                    <div key={i} className="output-line">
+                      {line}
+                    </div>
+                  ))
+                ) : (
+                  <div className="no-logs">No logs available</div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <style>{`
         .node-detail {
@@ -1082,6 +1165,15 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
           background: transparent;
         }
 
+        .discovery-via-badge {
+          font-size: 10px;
+          font-weight: 500;
+          padding: 2px 6px;
+          border-radius: 4px;
+          border: 1px solid;
+          background: transparent;
+        }
+
         .detail-info {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -1124,6 +1216,86 @@ function NodeDetail({ node, onCommand, onFetchLogs, actionLoading, onClose }: No
 
         .info-row .value.type-rust { color: #ffd600; }
         .info-row .value.type-python { color: #00e5ff; }
+
+        .manifest-section {
+          margin-bottom: 16px;
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          overflow: hidden;
+        }
+
+        .manifest-header {
+          padding: 8px 12px;
+          background: var(--bg-tertiary);
+          font-size: 11px;
+          font-weight: 600;
+          color: var(--text-muted);
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        .manifest-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+          gap: 8px;
+          padding: 12px;
+        }
+
+        .tag-list {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+        }
+
+        .tag {
+          font-size: 11px;
+          padding: 2px 8px;
+          border-radius: 4px;
+          font-weight: 500;
+        }
+
+        .tag.capability {
+          background: rgba(61, 90, 254, 0.1);
+          color: #3d5afe;
+        }
+
+        .tag.hardware {
+          background: rgba(255, 152, 0, 0.1);
+          color: #ff9800;
+        }
+
+        .tag.subscribe {
+          background: rgba(0, 229, 255, 0.1);
+          color: #00e5ff;
+          font-size: 10px;
+        }
+
+        .publish-list {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .publish-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 12px;
+          color: var(--text-secondary);
+        }
+
+        .publish-item .mono {
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 11px;
+        }
+
+        .publish-item .rate {
+          font-size: 10px;
+          color: var(--text-muted);
+          background: var(--bg-tertiary);
+          padding: 1px 6px;
+          border-radius: 4px;
+        }
 
         .controls-row {
           display: flex;

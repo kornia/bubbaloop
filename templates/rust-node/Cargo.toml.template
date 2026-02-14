@@ -39,6 +39,9 @@ anyhow = "1.0"
 # Graceful shutdown
 ctrlc = "3.4"
 
+# Machine identification
+hostname = "0.3"
+
 # Time utilities
 chrono = { version = "0.4", features = ["serde"] }
 
