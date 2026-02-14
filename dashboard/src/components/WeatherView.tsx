@@ -1,21 +1,91 @@
-import { useCallback, useState, useRef, useEffect } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { Sample, IntoZBytes } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload } from '../lib/zenoh';
+import { getSamplePayload, extractMachineId } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 import { useFleetContext } from '../contexts/FleetContext';
+import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
-import {
-  decodeCurrentWeather,
-  decodeHourlyForecast,
-  decodeDailyForecast,
-  getWeatherDescription,
-  getWindDirection,
-  encodeLocationConfig,
-  CurrentWeather,
-  HourlyForecast,
-  DailyForecast,
-} from '../proto/weather';
+
+// Local interfaces matching the protobuf schema shapes (decoded via SchemaRegistry)
+interface CurrentWeather {
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  temperature_2m: number;
+  relativeHumidity_2m: number;
+  apparentTemperature: number;
+  precipitation: number;
+  rain: number;
+  windSpeed_10m: number;
+  windDirection_10m: number;
+  windGusts_10m: number;
+  weatherCode: number;
+  cloudCover: number;
+  pressureMsl: number;
+  surfacePressure: number;
+  isDay: number;
+}
+
+interface HourlyForecastEntry {
+  time: string; // String from SchemaRegistry (longs: String)
+  temperature_2m: number;
+  relativeHumidity_2m: number;
+  precipitationProbability: number;
+  precipitation: number;
+  weatherCode: number;
+  windSpeed_10m: number;
+  windDirection_10m: number;
+  cloudCover: number;
+}
+
+interface HourlyForecast {
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  entries: HourlyForecastEntry[];
+}
+
+interface DailyForecastEntry {
+  time: string;
+  temperature_2mMax: number;
+  temperature_2mMin: number;
+  precipitationSum: number;
+  precipitationProbabilityMax: number;
+  weatherCode: number;
+  windSpeed_10mMax: number;
+  windGusts_10mMax: number;
+  sunrise: string;
+  sunset: string;
+}
+
+interface DailyForecast {
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  entries: DailyForecastEntry[];
+}
+
+// Weather code to description and emoji
+function getWeatherDescription(code: number): { text: string; emoji: string } {
+  if (code === 0) return { text: 'Clear sky', emoji: '\u2600\uFE0F' };
+  if (code >= 1 && code <= 3) return { text: 'Partly cloudy', emoji: '\u26C5' };
+  if (code >= 45 && code <= 48) return { text: 'Fog', emoji: '\uD83C\uDF2B\uFE0F' };
+  if (code >= 51 && code <= 57) return { text: 'Drizzle', emoji: '\uD83C\uDF27\uFE0F' };
+  if (code >= 61 && code <= 67) return { text: 'Rain', emoji: '\uD83C\uDF27\uFE0F' };
+  if (code >= 71 && code <= 77) return { text: 'Snow', emoji: '\u2744\uFE0F' };
+  if (code >= 80 && code <= 82) return { text: 'Rain showers', emoji: '\uD83C\uDF26\uFE0F' };
+  if (code >= 85 && code <= 86) return { text: 'Snow showers', emoji: '\uD83C\uDF28\uFE0F' };
+  if (code >= 95 && code <= 99) return { text: 'Thunderstorm', emoji: '\u26C8\uFE0F' };
+  return { text: 'Unknown', emoji: '\u2753' };
+}
+
+// Wind direction to compass
+function getWindDirection(degrees: number): string {
+  const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  const index = Math.round(degrees / 45) % 8;
+  return directions[index];
+}
 
 interface DragHandleProps {
   [key: string]: unknown;
@@ -27,13 +97,16 @@ interface WeatherViewPanelProps {
   dragHandleProps?: DragHandleProps;
 }
 
-function formatDate(timestamp: bigint): string {
-  const date = new Date(Number(timestamp / 1000000n));
+// Timestamps come as string nanoseconds from SchemaRegistry (longs: String)
+function formatDate(timestamp: string): string {
+  const ns = BigInt(timestamp || '0');
+  const date = new Date(Number(ns / 1000000n));
   return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
-function formatHour(timestamp: bigint): string {
-  const date = new Date(Number(timestamp / 1000000n));
+function formatHour(timestamp: string): string {
+  const ns = BigInt(timestamp || '0');
+  const date = new Date(Number(ns / 1000000n));
   return date.toLocaleTimeString('en-US', { hour: 'numeric' });
 }
 
@@ -41,15 +114,18 @@ export function WeatherViewPanel({
   onRemove,
   dragHandleProps,
 }: WeatherViewPanelProps) {
-  const { machines } = useFleetContext();
+  const { machines, selectedMachineId } = useFleetContext();
+  const { registry, discoverForTopic, schemaVersion } = useSchemaRegistry();
   // Get session from context for publishing
   const { getSession } = useZenohSubscriptionContext();
-  // Store all three types of weather data
-  const [currentWeather, setCurrentWeather] = useState<CurrentWeather | null>(null);
-  const [hourlyForecast, setHourlyForecast] = useState<HourlyForecast | null>(null);
-  const [dailyForecast, setDailyForecast] = useState<DailyForecast | null>(null);
+  // Store weather data per machine with last update timestamp
+  const [currentMap, setCurrentMap] = useState<Map<string, { data: CurrentWeather; lastUpdate: number }>>(new Map());
+  const [hourlyMap, setHourlyMap] = useState<Map<string, { data: HourlyForecast; lastUpdate: number }>>(new Map());
+  const [dailyMap, setDailyMap] = useState<Map<string, { data: DailyForecast; lastUpdate: number }>>(new Map());
+
+  // Buffer last payloads for retry when schemas arrive
+  const lastPayloadsRef = useRef<Map<string, { current?: { payload: Uint8Array; topic: string }; hourly?: { payload: Uint8Array; topic: string }; daily?: { payload: Uint8Array; topic: string } }>>(new Map());
   const [isEditing, setIsEditing] = useState(false);
-  const lastUpdateRef = useRef<number>(0);
 
   // Location editing state
   const [editLatitude, setEditLatitude] = useState('');
@@ -57,50 +133,92 @@ export function WeatherViewPanel({
   const [isSendingLocation, setIsSendingLocation] = useState(false);
   const [locationUpdateStatus, setLocationUpdateStatus] = useState<'idle' | 'sent' | 'error'>('idle');
 
-  // Fixed weather topic patterns
-  const currentTopic = '0/weather%current/**';
-  const hourlyTopic = '0/weather%hourly/**';
-  const dailyTopic = '0/weather%daily/**';
+  // Match any machine/scope: */*/TypeName/* (ros-z key format: domain/topic%encoded/type/hash)
+  const currentTopic = '*/*/bubbaloop.weather.v1.CurrentWeather/*';
+  const hourlyTopic = '*/*/bubbaloop.weather.v1.HourlyForecast/*';
+  const dailyTopic = '*/*/bubbaloop.weather.v1.DailyForecast/*';
 
   // Handle current weather samples
   const handleCurrentSample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
-      const data = decodeCurrentWeather(payload);
-      if (data) {
-        setCurrentWeather(data);
-        lastUpdateRef.current = Date.now();
+      const topic = sample.keyexpr().toString();
+      const machineId = extractMachineId(topic) ?? 'unknown';
+
+      // Buffer for retry
+      const entry = lastPayloadsRef.current.get(machineId) ?? {};
+      entry.current = { payload, topic };
+      lastPayloadsRef.current.set(machineId, entry);
+
+      const result = registry.decode('bubbaloop.weather.v1.CurrentWeather', payload);
+      if (result) {
+        const data = result.data as unknown as CurrentWeather;
+        setCurrentMap(prev => {
+          const next = new Map(prev);
+          next.set(machineId, { data, lastUpdate: Date.now() });
+          return next;
+        });
+      } else {
+        discoverForTopic(topic);
       }
     } catch (e) {
       console.error('[WeatherView] Failed to decode current weather:', e);
     }
-  }, []);
+  }, [registry, discoverForTopic]);
 
   // Handle hourly forecast samples
   const handleHourlySample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
-      const data = decodeHourlyForecast(payload);
-      if (data) {
-        setHourlyForecast(data);
+      const topic = sample.keyexpr().toString();
+      const machineId = extractMachineId(topic) ?? 'unknown';
+
+      const entry = lastPayloadsRef.current.get(machineId) ?? {};
+      entry.hourly = { payload, topic };
+      lastPayloadsRef.current.set(machineId, entry);
+
+      const result = registry.decode('bubbaloop.weather.v1.HourlyForecast', payload);
+      if (result) {
+        const data = result.data as unknown as HourlyForecast;
+        setHourlyMap(prev => {
+          const next = new Map(prev);
+          next.set(machineId, { data, lastUpdate: Date.now() });
+          return next;
+        });
+      } else {
+        discoverForTopic(topic);
       }
     } catch (e) {
       console.error('[WeatherView] Failed to decode hourly forecast:', e);
     }
-  }, []);
+  }, [registry, discoverForTopic]);
 
   // Handle daily forecast samples
   const handleDailySample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
-      const data = decodeDailyForecast(payload);
-      if (data) {
-        setDailyForecast(data);
+      const topic = sample.keyexpr().toString();
+      const machineId = extractMachineId(topic) ?? 'unknown';
+
+      const entry = lastPayloadsRef.current.get(machineId) ?? {};
+      entry.daily = { payload, topic };
+      lastPayloadsRef.current.set(machineId, entry);
+
+      const result = registry.decode('bubbaloop.weather.v1.DailyForecast', payload);
+      if (result) {
+        const data = result.data as unknown as DailyForecast;
+        setDailyMap(prev => {
+          const next = new Map(prev);
+          next.set(machineId, { data, lastUpdate: Date.now() });
+          return next;
+        });
+      } else {
+        discoverForTopic(topic);
       }
     } catch (e) {
       console.error('[WeatherView] Failed to decode daily forecast:', e);
     }
-  }, []);
+  }, [registry, discoverForTopic]);
 
   // Subscribe to all three topics
   const { messageCount: currentCount } = useZenohSubscription(currentTopic, handleCurrentSample);
@@ -109,17 +227,71 @@ export function WeatherViewPanel({
 
   const totalMessages = currentCount + hourlyCount + dailyCount;
 
+  // Re-decode buffered payloads when schemaVersion changes
+  useEffect(() => {
+    if (schemaVersion === 0) return;
+    for (const [machineId, payloads] of lastPayloadsRef.current) {
+      if (payloads.current) {
+        const result = registry.decode('bubbaloop.weather.v1.CurrentWeather', payloads.current.payload);
+        if (result) {
+          const data = result.data as unknown as CurrentWeather;
+          setCurrentMap(prev => {
+            const next = new Map(prev);
+            next.set(machineId, { data, lastUpdate: Date.now() });
+            return next;
+          });
+        }
+      }
+      if (payloads.hourly) {
+        const result = registry.decode('bubbaloop.weather.v1.HourlyForecast', payloads.hourly.payload);
+        if (result) {
+          const data = result.data as unknown as HourlyForecast;
+          setHourlyMap(prev => {
+            const next = new Map(prev);
+            next.set(machineId, { data, lastUpdate: Date.now() });
+            return next;
+          });
+        }
+      }
+      if (payloads.daily) {
+        const result = registry.decode('bubbaloop.weather.v1.DailyForecast', payloads.daily.payload);
+        if (result) {
+          const data = result.data as unknown as DailyForecast;
+          setDailyMap(prev => {
+            const next = new Map(prev);
+            next.set(machineId, { data, lastUpdate: Date.now() });
+            return next;
+          });
+        }
+      }
+    }
+  }, [schemaVersion, registry]);
+
   const handleCloseEdit = () => {
     setIsEditing(false);
   };
 
   // Initialize location edit fields from current weather data
+  // Use weather from selected machine or first available
   useEffect(() => {
-    if (currentWeather && isEditing) {
+    if (!isEditing) return;
+
+    let currentWeather: CurrentWeather | null = null;
+
+    if (selectedMachineId) {
+      const entry = currentMap.get(selectedMachineId);
+      if (entry) currentWeather = entry.data;
+    } else {
+      // Use first available machine
+      const firstEntry = currentMap.values().next().value;
+      if (firstEntry) currentWeather = firstEntry.data;
+    }
+
+    if (currentWeather) {
       setEditLatitude(currentWeather.latitude.toFixed(4));
       setEditLongitude(currentWeather.longitude.toFixed(4));
     }
-  }, [currentWeather, isEditing]);
+  }, [currentMap, selectedMachineId, isEditing]);
 
   // Send location update to server via Zenoh publish
   const handleSendLocation = useCallback(async () => {
@@ -155,12 +327,19 @@ export function WeatherViewPanel({
     setLocationUpdateStatus('idle');
 
     try {
-      // Encode the location config message (timezone empty = auto)
-      const payload = encodeLocationConfig({
+      // Encode the location config message using SchemaRegistry
+      const locType = registry.lookupType('bubbaloop.weather.v1.LocationConfig');
+      if (!locType) {
+        console.error('[WeatherView] LocationConfig schema not loaded');
+        setLocationUpdateStatus('error');
+        setIsSendingLocation(false);
+        return;
+      }
+      const payload = locType.encode(locType.create({
         latitude: lat,
         longitude: lon,
         timezone: '',
-      });
+      })).finish();
 
       // Publish to the config topic using ros-z format
       // The topic format is: domain_id/topic_name/schema/hash
@@ -185,7 +364,7 @@ export function WeatherViewPanel({
     } finally {
       setIsSendingLocation(false);
     }
-  }, [getSession, editLatitude, editLongitude]);
+  }, [getSession, editLatitude, editLongitude, registry]);
 
   const renderCurrentWeather = (weather: CurrentWeather) => {
     const desc = getWeatherDescription(weather.weatherCode);
@@ -292,7 +471,12 @@ export function WeatherViewPanel({
     );
   };
 
-  const hasAnyData = currentWeather || hourlyForecast || dailyForecast;
+  // Filter maps by selectedMachineId
+  const visibleMachineIds = selectedMachineId
+    ? [selectedMachineId]
+    : Array.from(new Set([...currentMap.keys(), ...hourlyMap.keys(), ...dailyMap.keys()]));
+
+  const hasAnyData = currentMap.size > 0 || hourlyMap.size > 0 || dailyMap.size > 0;
 
   return (
     <div className="weather-view-panel">
@@ -346,9 +530,26 @@ export function WeatherViewPanel({
           </div>
         ) : (
           <div className="weather-content">
-            {currentWeather && renderCurrentWeather(currentWeather)}
-            {hourlyForecast && renderHourlyForecast(hourlyForecast)}
-            {dailyForecast && renderDailyForecast(dailyForecast)}
+            {visibleMachineIds.map((machineId) => {
+              const current = currentMap.get(machineId)?.data;
+              const hourly = hourlyMap.get(machineId)?.data;
+              const daily = dailyMap.get(machineId)?.data;
+
+              if (!current && !hourly && !daily) return null;
+
+              return (
+                <div key={machineId} className="machine-weather-section">
+                  {visibleMachineIds.length > 1 && (
+                    <div className="machine-weather-header">
+                      <span className="machine-name">{machineId}</span>
+                    </div>
+                  )}
+                  {current && renderCurrentWeather(current)}
+                  {hourly && renderHourlyForecast(hourly)}
+                  {daily && renderDailyForecast(daily)}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -641,6 +842,29 @@ export function WeatherViewPanel({
           display: flex;
           flex-direction: column;
           gap: 20px;
+        }
+
+        .machine-weather-section {
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+        }
+
+        .machine-weather-header {
+          padding: 8px 12px;
+          background: var(--bg-tertiary);
+          border-radius: 6px;
+          border: 1px solid var(--border-color);
+          margin-bottom: 8px;
+        }
+
+        .machine-name {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--accent-primary);
+          font-family: 'JetBrains Mono', 'Fira Code', monospace;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
         }
 
         .section-title {

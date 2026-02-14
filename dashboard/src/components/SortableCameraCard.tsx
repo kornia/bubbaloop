@@ -12,10 +12,10 @@ interface SortableCameraCardProps {
   onMaximize: () => void;
   onTopicChange: (topic: string) => void;
   onRemove: () => void;
-  availableTopics: string[];
+  availableTopics: Array<{ display: string; raw: string }>;
 }
 
-export function SortableCameraCard({
+export const SortableCameraCard = React.memo(function SortableCameraCard({
   id,
   cameraName,
   topic,
@@ -59,4 +59,4 @@ export function SortableCameraCard({
       />
     </div>
   );
-}
+});

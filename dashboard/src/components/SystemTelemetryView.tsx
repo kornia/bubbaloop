@@ -1,13 +1,51 @@
-import { useCallback, useState, useRef } from 'react';
+import { useCallback, useState, useRef, useEffect } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload } from '../lib/zenoh';
+import { getSamplePayload, extractMachineId } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useFleetContext } from '../contexts/FleetContext';
+import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
-import {
-  decodeSystemMetrics,
-  SystemMetrics,
-} from '../proto/system_telemetry';
+
+// Local interfaces for decoded system metrics (SchemaRegistry returns longs as strings)
+interface CpuMetrics {
+  usagePercent: number;
+  count: number;
+  perCore: number[];
+}
+
+interface MemoryMetrics {
+  totalBytes: string;
+  usedBytes: string;
+  availableBytes: string;
+  usagePercent: number;
+}
+
+interface DiskMetrics {
+  totalBytes: string;
+  usedBytes: string;
+  availableBytes: string;
+  usagePercent: number;
+}
+
+interface NetworkMetrics {
+  bytesSent: string;
+  bytesRecv: string;
+}
+
+interface LoadMetrics {
+  oneMin: number;
+  fiveMin: number;
+  fifteenMin: number;
+}
+
+interface SystemMetrics {
+  cpu?: CpuMetrics;
+  memory?: MemoryMetrics;
+  disk?: DiskMetrics;
+  network?: NetworkMetrics;
+  load?: LoadMetrics;
+  uptimeSecs: string;
+}
 
 interface DragHandleProps {
   [key: string]: unknown;
@@ -18,8 +56,13 @@ interface SystemTelemetryViewPanelProps {
   dragHandleProps?: DragHandleProps;
 }
 
-function formatBytes(bytes: bigint): string {
-  const num = Number(bytes);
+interface MachineMetrics {
+  metrics: SystemMetrics;
+  lastUpdate: number;
+}
+
+function formatBytes(bytes: string | number): string {
+  const num = typeof bytes === 'string' ? Number(bytes) : bytes;
   if (num >= 1e12) return `${(num / 1e12).toFixed(1)} TB`;
   if (num >= 1e9) return `${(num / 1e9).toFixed(1)} GB`;
   if (num >= 1e6) return `${(num / 1e6).toFixed(1)} MB`;
@@ -27,8 +70,8 @@ function formatBytes(bytes: bigint): string {
   return `${num} B`;
 }
 
-function formatUptime(secs: bigint): string {
-  const s = Number(secs);
+function formatUptime(secs: string | number): string {
+  const s = typeof secs === 'string' ? Number(secs) : secs;
   const days = Math.floor(s / 86400);
   const hours = Math.floor((s % 86400) / 3600);
   const mins = Math.floor((s % 3600) / 60);
@@ -52,30 +95,202 @@ export function SystemTelemetryViewPanel({
   onRemove,
   dragHandleProps,
 }: SystemTelemetryViewPanelProps) {
-  const { machines } = useFleetContext();
-  const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
-  const lastUpdateRef = useRef<number>(0);
+  const { machines, selectedMachineId } = useFleetContext();
+  const { registry, discoverForTopic, schemaVersion } = useSchemaRegistry();
+  const [metricsMap, setMetricsMap] = useState<Map<string, MachineMetrics>>(new Map());
+  const metricsMapRef = useRef(metricsMap);
+  metricsMapRef.current = metricsMap;
 
-  const telemetryTopic = '0/system-telemetry%metrics/**';
+  // Throttle: store latest data in ref, flush to state at 250ms intervals
+  const pendingRef = useRef<Map<string, MachineMetrics> | null>(null);
+  const lastPayloadsRef = useRef<Map<string, { payload: Uint8Array; topic: string }>>(new Map());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (pendingRef.current) {
+        setMetricsMap(pendingRef.current);
+        pendingRef.current = null;
+      }
+    }, 250);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Match any machine/scope: */*/TypeName/* (ros-z key format: domain/topic%encoded/type/hash)
+  const telemetryTopic = '*/*/bubbaloop.system_telemetry.v1.SystemMetrics/*';
 
   const handleSample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
-      const data = decodeSystemMetrics(payload);
-      if (data) {
-        setMetrics(data);
-        lastUpdateRef.current = Date.now();
+      const topic = sample.keyexpr().toString();
+      const machineId = extractMachineId(topic) ?? 'unknown';
+      lastPayloadsRef.current.set(machineId, { payload, topic });
+
+      const result = registry.decode('bubbaloop.system_telemetry.v1.SystemMetrics', payload);
+      if (result) {
+        const data = result.data as unknown as SystemMetrics;
+        const base = pendingRef.current ?? new Map(metricsMapRef.current);
+        base.set(machineId, { metrics: data, lastUpdate: Date.now() });
+        pendingRef.current = base;
+      } else {
+        discoverForTopic(topic);
       }
     } catch (e) {
       console.error('[SystemTelemetry] Failed to decode:', e);
     }
-  }, []);
+  }, [registry, discoverForTopic]);
+
+  // Re-decode buffered payloads when schemaVersion changes
+  useEffect(() => {
+    if (schemaVersion === 0) return;
+    for (const [machineId, { payload }] of lastPayloadsRef.current) {
+      const result = registry.decode('bubbaloop.system_telemetry.v1.SystemMetrics', payload);
+      if (result) {
+        const data = result.data as unknown as SystemMetrics;
+        const base = pendingRef.current ?? new Map(metricsMapRef.current);
+        base.set(machineId, { metrics: data, lastUpdate: Date.now() });
+        pendingRef.current = base;
+      }
+    }
+  }, [schemaVersion, registry]);
 
   const { messageCount } = useZenohSubscription(telemetryTopic, handleSample);
 
-  const cpuColor = (metrics?.cpu?.usagePercent ?? 0) > 80 ? 'var(--error)' : 'var(--accent-primary)';
-  const memColor = (metrics?.memory?.usagePercent ?? 0) > 80 ? 'var(--error)' : 'var(--success)';
-  const diskColor = (metrics?.disk?.usagePercent ?? 0) > 80 ? 'var(--error)' : 'var(--accent-secondary)';
+  // Filter metrics by selectedMachineId (null = show all)
+  const filteredEntries = Array.from(metricsMap.entries()).filter(([machineId]) =>
+    selectedMachineId === null || machineId === selectedMachineId
+  );
+
+  const now = Date.now();
+  const STALE_THRESHOLD = 15000; // 15 seconds
+
+  const renderMetricsCard = (machineId: string, machineMetrics: MachineMetrics) => {
+    const { metrics, lastUpdate } = machineMetrics;
+    const isStale = now - lastUpdate > STALE_THRESHOLD;
+
+    const cpuColor = (metrics?.cpu?.usagePercent ?? 0) > 80 ? 'var(--error)' : 'var(--accent-primary)';
+    const memColor = (metrics?.memory?.usagePercent ?? 0) > 80 ? 'var(--error)' : 'var(--success)';
+    const diskColor = (metrics?.disk?.usagePercent ?? 0) > 80 ? 'var(--error)' : 'var(--accent-secondary)';
+
+    return (
+      <div key={machineId} className="machine-metrics-card" style={{ opacity: isStale ? 0.5 : 1 }}>
+        <div className="machine-header">
+          <span className="machine-name-badge">{machineId}</span>
+          {isStale && <span className="stale-indicator">(stale)</span>}
+        </div>
+        <div className="telemetry-content">
+          {/* Uptime */}
+          <div className="metric-row uptime-row">
+            <span className="uptime-label">Uptime</span>
+            <span className="uptime-value">{formatUptime(metrics.uptimeSecs)}</span>
+          </div>
+
+          {/* CPU */}
+          {metrics.cpu && (
+            <div className="metric-section">
+              <div className="metric-header">
+                <span className="metric-label">CPU</span>
+                <span className="metric-value" style={{ color: cpuColor }}>
+                  {metrics.cpu.usagePercent.toFixed(1)}%
+                </span>
+              </div>
+              <UsageBar percent={metrics.cpu.usagePercent} color={cpuColor} />
+              {metrics.cpu.perCore.length > 0 && (
+                <div className="core-grid">
+                  {metrics.cpu.perCore.map((usage, i) => (
+                    <div key={i} className="core-item" title={`Core ${i}: ${usage.toFixed(1)}%`}>
+                      <div className="core-bar">
+                        <div
+                          className="core-bar-fill"
+                          style={{
+                            height: `${Math.min(usage, 100)}%`,
+                            background: usage > 80 ? 'var(--error)' : 'var(--accent-primary)',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Memory */}
+          {metrics.memory && (
+            <div className="metric-section">
+              <div className="metric-header">
+                <span className="metric-label">Memory</span>
+                <span className="metric-value" style={{ color: memColor }}>
+                  {metrics.memory.usagePercent.toFixed(1)}%
+                </span>
+              </div>
+              <UsageBar percent={metrics.memory.usagePercent} color={memColor} />
+              <div className="metric-detail">
+                {formatBytes(metrics.memory.usedBytes)} / {formatBytes(metrics.memory.totalBytes)}
+              </div>
+            </div>
+          )}
+
+          {/* Disk */}
+          {metrics.disk && (
+            <div className="metric-section">
+              <div className="metric-header">
+                <span className="metric-label">Disk</span>
+                <span className="metric-value" style={{ color: diskColor }}>
+                  {metrics.disk.usagePercent.toFixed(1)}%
+                </span>
+              </div>
+              <UsageBar percent={metrics.disk.usagePercent} color={diskColor} />
+              <div className="metric-detail">
+                {formatBytes(metrics.disk.usedBytes)} / {formatBytes(metrics.disk.totalBytes)}
+              </div>
+            </div>
+          )}
+
+          {/* Load */}
+          {metrics.load && (
+            <div className="metric-section">
+              <div className="metric-header">
+                <span className="metric-label">Load Average</span>
+              </div>
+              <div className="load-values">
+                <div className="load-item">
+                  <span className="load-period">1m</span>
+                  <span className="load-num">{metrics.load.oneMin.toFixed(2)}</span>
+                </div>
+                <div className="load-item">
+                  <span className="load-period">5m</span>
+                  <span className="load-num">{metrics.load.fiveMin.toFixed(2)}</span>
+                </div>
+                <div className="load-item">
+                  <span className="load-period">15m</span>
+                  <span className="load-num">{metrics.load.fifteenMin.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Network I/O */}
+          {metrics.network && (
+            <div className="metric-section">
+              <div className="metric-header">
+                <span className="metric-label">Network I/O</span>
+              </div>
+              <div className="net-values">
+                <div className="net-item">
+                  <span className="net-direction">TX</span>
+                  <span className="net-bytes">{formatBytes(metrics.network.bytesSent)}</span>
+                </div>
+                <div className="net-item">
+                  <span className="net-direction">RX</span>
+                  <span className="net-bytes">{formatBytes(metrics.network.bytesRecv)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="telemetry-panel">
@@ -112,121 +327,15 @@ export function SystemTelemetryViewPanel({
       </div>
 
       <div className="telemetry-content-container">
-        {!metrics ? (
+        {filteredEntries.length === 0 ? (
           <div className="telemetry-waiting">
             <div className="spinner" />
             <span>Waiting for system telemetry...</span>
           </div>
         ) : (
-          <div className="telemetry-content">
-            {/* Uptime */}
-            <div className="metric-row uptime-row">
-              <span className="uptime-label">Uptime</span>
-              <span className="uptime-value">{formatUptime(metrics.uptimeSecs)}</span>
-            </div>
-
-            {/* CPU */}
-            {metrics.cpu && (
-              <div className="metric-section">
-                <div className="metric-header">
-                  <span className="metric-label">CPU</span>
-                  <span className="metric-value" style={{ color: cpuColor }}>
-                    {metrics.cpu.usagePercent.toFixed(1)}%
-                  </span>
-                </div>
-                <UsageBar percent={metrics.cpu.usagePercent} color={cpuColor} />
-                {metrics.cpu.perCore.length > 0 && (
-                  <div className="core-grid">
-                    {metrics.cpu.perCore.map((usage, i) => (
-                      <div key={i} className="core-item" title={`Core ${i}: ${usage.toFixed(1)}%`}>
-                        <div className="core-bar">
-                          <div
-                            className="core-bar-fill"
-                            style={{
-                              height: `${Math.min(usage, 100)}%`,
-                              background: usage > 80 ? 'var(--error)' : 'var(--accent-primary)',
-                            }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Memory */}
-            {metrics.memory && (
-              <div className="metric-section">
-                <div className="metric-header">
-                  <span className="metric-label">Memory</span>
-                  <span className="metric-value" style={{ color: memColor }}>
-                    {metrics.memory.usagePercent.toFixed(1)}%
-                  </span>
-                </div>
-                <UsageBar percent={metrics.memory.usagePercent} color={memColor} />
-                <div className="metric-detail">
-                  {formatBytes(metrics.memory.usedBytes)} / {formatBytes(metrics.memory.totalBytes)}
-                </div>
-              </div>
-            )}
-
-            {/* Disk */}
-            {metrics.disk && (
-              <div className="metric-section">
-                <div className="metric-header">
-                  <span className="metric-label">Disk</span>
-                  <span className="metric-value" style={{ color: diskColor }}>
-                    {metrics.disk.usagePercent.toFixed(1)}%
-                  </span>
-                </div>
-                <UsageBar percent={metrics.disk.usagePercent} color={diskColor} />
-                <div className="metric-detail">
-                  {formatBytes(metrics.disk.usedBytes)} / {formatBytes(metrics.disk.totalBytes)}
-                </div>
-              </div>
-            )}
-
-            {/* Load */}
-            {metrics.load && (
-              <div className="metric-section">
-                <div className="metric-header">
-                  <span className="metric-label">Load Average</span>
-                </div>
-                <div className="load-values">
-                  <div className="load-item">
-                    <span className="load-period">1m</span>
-                    <span className="load-num">{metrics.load.oneMin.toFixed(2)}</span>
-                  </div>
-                  <div className="load-item">
-                    <span className="load-period">5m</span>
-                    <span className="load-num">{metrics.load.fiveMin.toFixed(2)}</span>
-                  </div>
-                  <div className="load-item">
-                    <span className="load-period">15m</span>
-                    <span className="load-num">{metrics.load.fifteenMin.toFixed(2)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Network I/O */}
-            {metrics.network && (
-              <div className="metric-section">
-                <div className="metric-header">
-                  <span className="metric-label">Network I/O</span>
-                </div>
-                <div className="net-values">
-                  <div className="net-item">
-                    <span className="net-direction">TX</span>
-                    <span className="net-bytes">{formatBytes(metrics.network.bytesSent)}</span>
-                  </div>
-                  <div className="net-item">
-                    <span className="net-direction">RX</span>
-                    <span className="net-bytes">{formatBytes(metrics.network.bytesRecv)}</span>
-                  </div>
-                </div>
-              </div>
+          <div className="machines-grid">
+            {filteredEntries.map(([machineId, machineMetrics]) =>
+              renderMetricsCard(machineId, machineMetrics)
             )}
           </div>
         )}
@@ -393,8 +502,51 @@ export function SystemTelemetryViewPanel({
           to { transform: rotate(360deg); }
         }
 
-        .telemetry-content {
+        .machines-grid {
           padding: 16px;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+        }
+
+        .machine-metrics-card {
+          flex: 1;
+          min-width: 320px;
+          background: var(--bg-card);
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          padding: 12px;
+          transition: opacity 0.3s;
+        }
+
+        .machine-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 12px;
+          padding-bottom: 8px;
+          border-bottom: 1px solid var(--border-color);
+        }
+
+        .machine-name-badge {
+          padding: 2px 8px;
+          border-radius: 4px;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.3px;
+          background: rgba(34, 197, 94, 0.15);
+          color: #4ade80;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .stale-indicator {
+          font-size: 10px;
+          color: var(--text-muted);
+          font-style: italic;
+        }
+
+        .telemetry-content {
           display: flex;
           flex-direction: column;
           gap: 16px;

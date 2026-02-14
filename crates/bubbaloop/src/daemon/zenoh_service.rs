@@ -26,13 +26,16 @@ pub enum ZenohServiceError {
 
 pub type Result<T> = std::result::Result<T, ZenohServiceError>;
 
-/// Get machine ID from environment or hostname
+/// Get machine ID from environment or hostname.
+/// Sanitizes hyphens to underscores for Zenoh topic compatibility (matching node convention).
 fn get_machine_id() -> String {
-    std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
-        hostname::get()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "unknown".to_string())
-    })
+    std::env::var("BUBBALOOP_MACHINE_ID")
+        .unwrap_or_else(|_| {
+            hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "unknown".to_string())
+        })
+        .replace('-', "_")
 }
 
 /// Key expressions for daemon topics
@@ -123,9 +126,32 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>> {
         .insert_json5("transport/shared_memory/enabled", "false")
         .ok();
 
-    let session = zenoh::open(config).await?;
+    // Retry loop with exponential backoff
+    let max_backoff = Duration::from_secs(30);
+    let mut backoff = Duration::from_secs(1);
+    let mut attempt = 0u32;
 
-    Ok(Arc::new(session))
+    loop {
+        attempt += 1;
+        match zenoh::open(config.clone()).await {
+            Ok(session) => {
+                if attempt > 1 {
+                    log::info!("Zenoh session established after {} attempts", attempt);
+                }
+                return Ok(Arc::new(session));
+            }
+            Err(e) => {
+                log::warn!(
+                    "Zenoh connection attempt {} failed: {}. Retrying in {:?}...",
+                    attempt,
+                    e,
+                    backoff
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(max_backoff);
+            }
+        }
+    }
 }
 
 /// Zenoh service for the daemon
@@ -158,7 +184,7 @@ impl ZenohService {
     fn now_ms() -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as i64
     }
 
@@ -497,5 +523,41 @@ mod tests {
         assert_eq!(decoded.build_output.len(), 3);
         assert_eq!(decoded.build_output[0], "Building...");
         assert_eq!(decoded.build_output[2], "Finished");
+    }
+
+    #[test]
+    fn test_key_expressions_legacy() {
+        assert_eq!(keys::NODES_LIST_LEGACY, "bubbaloop/daemon/nodes");
+        assert_eq!(keys::COMMAND_LEGACY, "bubbaloop/daemon/command");
+        assert_eq!(keys::EVENTS_LEGACY, "bubbaloop/daemon/events");
+    }
+
+    #[test]
+    fn test_key_expressions_machine_scoped() {
+        let machine = "jetson-1";
+        assert_eq!(
+            keys::nodes_list_key(machine),
+            "bubbaloop/jetson-1/daemon/nodes"
+        );
+        assert_eq!(
+            keys::node_state_key(machine, "my-node"),
+            "bubbaloop/jetson-1/daemon/nodes/my-node/state"
+        );
+        assert_eq!(
+            keys::events_key(machine),
+            "bubbaloop/jetson-1/daemon/events"
+        );
+        assert_eq!(
+            keys::command_key(machine),
+            "bubbaloop/jetson-1/daemon/command"
+        );
+    }
+
+    #[test]
+    fn test_node_state_key_legacy() {
+        assert_eq!(
+            keys::node_state_key_legacy("my-node"),
+            "bubbaloop/daemon/nodes/my-node/state"
+        );
     }
 }

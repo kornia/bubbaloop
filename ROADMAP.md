@@ -1,6 +1,25 @@
 # Bubbaloop Platform Roadmap
 
+<!-- LIVING DOCUMENT: Claude and contributors should update checkboxes as work completes.
+     Check off items when PRs merge. See ARCHITECTURE.md for design details. -->
+
 > AI-Native Cloud Orchestration for Physical AI
+
+---
+
+## Design DNA
+
+> **"Perhaps only apps that rely on specific hardware sensors will remain."**
+> — Peter Steinberger, OpenClaw creator (Feb 2026)
+
+**The Steinberger Test**: Does this make the sensor/hardware layer stronger, or does it add app-layer complexity that AI agents will replace?
+
+**Principles**:
+1. Sensor nodes are the product — not the daemon, not the dashboard
+2. The daemon is scaffolding — useful today, replaceable by AI agents tomorrow
+3. Self-describing nodes are AI-native — discovery without documentation
+4. Data access rights are the moat — who controls the sensors controls the value
+5. Rust + Zenoh + ros-z — memory safety, decentralized pub/sub, schema introspection
 
 ## Vision
 
@@ -66,9 +85,71 @@ Transform Bubbaloop from a local daemon into a **complete platform** where users
 
 ---
 
-## Implementation Phases
+## Implementation Tracks
 
-### Phase 1: Installation & Agent (Week 1-2)
+### Track A: Sensor-Centric Foundation
+
+Building a self-describing, decentralized sensor architecture where nodes are autonomous and AI-discoverable.
+
+#### Phase A1: Contract Enforcement (In Progress)
+
+**Goal:** Establish consistent machine ID, scoped topics, and complete API contracts across all components.
+
+**Deliverables:**
+- [x] Deduplicate `get_machine_id()` to shared Rust module
+- [x] Inject `BUBBALOOP_MACHINE_ID` + `BUBBALOOP_SCOPE` via systemd
+- [x] Scope all template topics to `bubbaloop/{scope}/{machine_id}/...`
+- [x] Complete JSON API with 6 missing fields (machine_id, health timestamps, etc.)
+- [x] Status enum cross-validation tests
+- [x] Proto copy at install/create time
+
+**Status:** Current PR (`feat/multi-machine-dashboard`) — merging soon.
+
+---
+
+#### Phase A2: Self-Describing Nodes
+
+**Goal:** Nodes declare their own capabilities via manifest queryables. Dashboard discovers without daemon dependency.
+
+**Deliverables:**
+- [ ] Define manifest JSON schema with `publishes`, `commands`, `requires_hardware`
+- [ ] Add manifest queryable to Rust + Python templates
+- [ ] Add ros-z liveliness tokens for decentralized presence detection
+- [ ] Dashboard wildcard query `bubbaloop/**/manifest` for discovery
+- [ ] Update official nodes: network-monitor, system-telemetry, openmeteo, camera
+
+---
+
+#### Phase A3: Security Hardening
+
+**Goal:** mTLS, per-node ACLs, Python sandboxing, and security audit tooling.
+
+**Deliverables:**
+- [ ] Enable Zenoh mTLS for multi-machine deployments
+- [ ] Configure per-node ACL rules (sandboxed to own key prefix)
+- [ ] Application-level encryption for sensitive sensor data (camera feeds)
+- [ ] Python node sandbox: localhost-only, limited key access
+- [ ] `bubbaloop doctor` command for security posture audit
+
+---
+
+#### Phase A4: Thin Daemon
+
+**Goal:** Remove daemon as single point of failure for discovery. Nodes serve their own schemas.
+
+**Deliverables:**
+- [ ] Remove schema serving from daemon (nodes do it)
+- [ ] Remove node state tracking (liveliness + manifests replace it)
+- [ ] Dashboard no longer calls daemon API for discovery
+- [ ] Daemon retains: install, start, stop, update, compositions
+
+---
+
+### Track B: Cloud Platform
+
+Multi-machine fleet management, OAuth login, cloud sync, and mobile-first dashboard.
+
+#### Phase B1: Installation & Agent (Week 1-2)
 
 **Goal:** One-liner install, agent with cloud connector
 
@@ -78,186 +159,98 @@ curl -sSL https://get.bubbaloop.com | bash
 
 **Deliverables:**
 - [ ] `scripts/install.sh` - Platform detection, binary download, systemd setup
-- [ ] `crates/bubbaloop-agent/` - Enhanced daemon with cloud modules
-- [ ] `bubbaloop login` command - Opens OAuth flow
+- [ ] `crates/bubbaloop-agent/` with cloud connector modules
+- [ ] `bubbaloop login` command - OAuth flow
 - [ ] Agent registers with cloud on login
-
-**Files to create:**
-```
-scripts/install.sh
-crates/bubbaloop-agent/
-├── Cargo.toml
-├── src/
-│   ├── main.rs
-│   ├── cloud/
-│   │   ├── mod.rs
-│   │   ├── connector.rs
-│   │   ├── auth.rs
-│   │   └── registry.rs
-```
 
 ---
 
-### Phase 2: Cloud Infrastructure (Week 2-3)
+#### Phase B2: Cloud Infrastructure (Week 2-3)
 
 **Goal:** Auth service, machine registry, Zenoh relay
 
 **Deliverables:**
-- [ ] OAuth login works (Google first, then Apple/GitHub)
-- [ ] Machines appear in cloud registry
-- [ ] Zenoh relay accepts authenticated connections
-
-**Infrastructure:**
-```
-cloud/
-├── auth-worker/          # Cloudflare Worker - OAuth
-├── api-worker/           # Cloudflare Worker - Machine registry
-└── zenoh-relay/          # fly.io - Zenoh router with auth
-```
-
-**Database schema:**
-```sql
-CREATE TABLE users (id, email, name, oauth_provider);
-CREATE TABLE machines (id, user_id, name, hostname, platform, last_seen, is_online);
-```
+- [ ] OAuth login (Google, Apple, GitHub)
+- [ ] Machine registry (Cloudflare D1)
+- [ ] Zenoh relay with auth (fly.io)
+- [ ] Cloud workers: auth + API (Cloudflare Workers)
 
 ---
 
-### Phase 3: Cloud Dashboard (Week 3-4)
+#### Phase B3: Cloud Dashboard (Week 3-4)
 
-**Goal:** Extend existing dashboard with cloud features (mobile-first)
-
-**Key Design: Dual-Mode Dashboard**
-- **Local mode** (default): No auth, direct Zenoh to localhost
-- **Cloud mode**: OAuth required, Zenoh via relay, machine selector
+**Goal:** Dual-mode dashboard (local + cloud), mobile-first
 
 **Deliverables:**
 - [ ] Same dashboard works locally AND in cloud
-- [ ] Login from phone works (cloud mode)
-- [ ] Machine selector when multiple machines
-- [ ] Responsive/mobile-first styling
-
-**Files to modify in `dashboard/`:**
-```
-dashboard/src/
-├── components/
-│   ├── Login.tsx             # NEW
-│   ├── MachineSelector.tsx   # NEW
-│   ├── ChatPanel.tsx         # NEW
-│   └── AuthGuard.tsx         # NEW
-├── lib/
-│   ├── auth.ts               # NEW
-│   ├── cloud-zenoh.ts        # NEW
-│   └── zenoh.ts              # MODIFY
-├── App.tsx                   # MODIFY
-└── main.tsx                  # MODIFY
-```
+- [ ] OAuth login + machine selector
+- [ ] Responsive mobile-first styling
+- [ ] Chat panel integration
 
 ---
 
-### Phase 4: MCP Integration (Week 4-5)
+#### Phase B4: MCP Integration (Week 4-5)
 
-**Goal:** Natural language control via chat
-
-**MCP Tools:**
-| Tool | Description |
-|------|-------------|
-| `list_nodes` | List nodes on a machine |
-| `start_node` | Start a node |
-| `stop_node` | Stop a node |
-| `restart_node` | Restart a node |
-| `build_node` | Build a node |
-| `get_logs` | Get node logs |
-| `read_config` | Read node config |
-| `update_config` | Update config + restart |
-| `discover_devices` | Scan USB/network for devices |
-| `install_node_from_url` | Install from GitHub URL |
-| `configure_node` | Update node config for hardware |
+**Goal:** Natural language control via MCP
 
 **Deliverables:**
-- [ ] MCP server in agent (Streamable HTTP)
+- [ ] MCP server in agent (tools: list/start/stop/build/logs/install)
 - [ ] Chat panel in dashboard
-- [ ] "Start the camera" understood and executed
-- [ ] Context-aware responses
-
-**Files to create:**
-```
-crates/bubbaloop-agent/src/mcp/
-├── mod.rs
-├── server.rs
-├── tools.rs
-├── resources.rs
-└── prompts.rs
-```
+- [ ] Natural language execution: "Start the camera"
+- [ ] Device discovery + auto-install tools
 
 ---
 
-### Phase 5: GitHub Integration (Week 5-6)
+#### Phase B5: GitHub Integration (Week 5-6)
 
-**Goal:** Install nodes from any GitHub repo
-
-```bash
-bubbaloop install github.com/user/my-camera-node
-```
-
-**Supported formats:**
-| Format | Detection | Install Method |
-|--------|-----------|----------------|
-| Rust with `node.yaml` | `Cargo.toml` + `node.yaml` | `cargo build --release` |
-| Rust without manifest | `Cargo.toml` only | Generate manifest, build |
-| Python with `pyproject.toml` | `pyproject.toml` | `pip install` |
-| Python with `requirements.txt` | `requirements.txt` | Create venv, pip install |
+**Goal:** Install nodes from any GitHub repo (`bubbaloop install github.com/user/node`)
 
 **Deliverables:**
 - [ ] `install_node_from_url` MCP tool
-- [ ] Auto-detect project type (Rust/Python)
+- [ ] Auto-detect project type (Rust/Python, with/without manifest)
 - [ ] Auto-generate `node.yaml` if missing
-- [ ] Register and install systemd service
-
-**Files to create:**
-```
-crates/bubbaloop-agent/src/installer/
-├── mod.rs
-├── github.rs
-├── rust_builder.rs
-├── python_builder.rs
-└── manifest.rs
-```
+- [ ] Register systemd service
 
 ---
 
-### Phase 6: Hardware Discovery (Week 6-7)
+#### Phase B6: Hardware Discovery (Week 6-7)
 
-**Goal:** Self-extending platform - plug in hardware, Claude figures it out
+**Goal:** Plug in hardware, AI discovers and suggests nodes
 
 **Deliverables:**
 - [ ] USB device enumeration (udev)
 - [ ] Network device scanning (mDNS, IP scan)
-- [ ] Camera detection (V4L2, RTSP probe)
+- [ ] Camera detection (V4L2, RTSP)
 - [ ] Hardware → Node mapping database
-- [ ] Auto-suggestion when new device detected
+- [ ] Auto-suggestion flow via MCP
 
-**Files to create:**
-```
-crates/bubbaloop-agent/src/discovery/
-├── mod.rs
-├── usb.rs
-├── network.rs
-└── v4l2.rs
-```
+---
 
-**Example flow:**
-```
-User: "I just plugged in a USB camera"
+### Phase C: AI-Agent Interface (Convergence)
 
-Claude: [calls discover_devices]
-Found: Logitech C920 (046d:082d)
+**Goal:** MCP server exposing node manifests as tools. Natural language sensor discovery and control.
 
-[calls search_nodes("logitech c920")]
-Found: github.com/bubbaloop/v4l2-camera-node
+**Deliverables:**
+- [ ] MCP server exposes node manifests as tools
+- [ ] Natural language sensor discovery: "What cameras are available?"
+- [ ] AI-assisted node creation: "Create a node that monitors CPU temperature"
+- [ ] Composition orchestration via AI: "Track that person"
+- [ ] Context-aware responses with hardware constraints
 
-Would you like me to install and configure it?
-```
+---
+
+## Open-Core Business Model
+
+| Tier | Price | Machine Limit | Key Features |
+|------|-------|---------------|--------------|
+| **Free** | $0 | 10 machines | CLI, daemon, TUI, local dashboard, community marketplace, node templates |
+| **Startup** | $99/mo | 50 machines | Multi-machine fleet dashboard, cloud time-series sync, basic OTA updates, 48h support |
+| **Team** | $499/mo | 500 machines | Canary deployments, enterprise ACLs, mTLS auto-rotation, anomaly detection, 24h support |
+| **Enterprise** | Custom | Unlimited | On-premise deployment, dedicated engineer, white-label marketplace, SLA guarantees |
+
+**The Steinberger Boundary**: Sensor nodes and local runtime are free (the product). Fleet operations and cloud services are paid.
+
+**Academic/Research**: Always free (Foxglove model).
 
 ---
 
@@ -378,3 +371,22 @@ Installing... Done.
 [calls start_node("v4l2-camera")]
 Camera streaming to /camera/usb/compressed
 ```
+
+---
+
+## Maintaining This Document
+
+**Update when:**
+- Phases complete → check off items
+- New phases added → document goals and deliverables
+- Priorities shift → reorder or add urgency notes
+
+**How to update:**
+- Check off items when PRs merge to main
+- Mark phases as "In Progress" when work starts
+- Add new checkboxes for sub-deliverables as they emerge
+
+**Related files:**
+- `ARCHITECTURE.md` — Design details and technical decisions
+- `CONTRIBUTING.md` — Contribution workflows and PR guidelines
+- `CLAUDE.md` — Coding conventions and constraints

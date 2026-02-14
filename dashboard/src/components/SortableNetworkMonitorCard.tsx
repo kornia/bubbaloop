@@ -10,7 +10,7 @@ interface SortableNetworkMonitorCardProps {
   onRemove: () => void;
 }
 
-export function SortableNetworkMonitorCard({
+export const SortableNetworkMonitorCard = React.memo(function SortableNetworkMonitorCard({
   id,
   isHidden = false,
   onRemove,
@@ -41,4 +41,4 @@ export function SortableNetworkMonitorCard({
       />
     </div>
   );
-}
+});

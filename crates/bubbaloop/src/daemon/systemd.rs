@@ -482,11 +482,12 @@ pub enum SystemdSignalEvent {
 /// Extract node name from service name (e.g., "bubbaloop-rtsp-camera.service" -> "rtsp-camera")
 fn extract_node_name(unit: &str) -> Option<String> {
     if unit.starts_with("bubbaloop-") && unit.ends_with(".service") {
-        Some(
-            unit.strip_prefix("bubbaloop-")?
-                .strip_suffix(".service")?
-                .to_string(),
-        )
+        let name = unit.strip_prefix("bubbaloop-")?.strip_suffix(".service")?;
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
     } else {
         None
     }
@@ -740,4 +741,423 @@ pub async fn uninstall_service(name: &str) -> Result<()> {
 /// Check if a service is installed (unit file exists)
 pub fn is_service_installed(name: &str) -> bool {
     get_service_path(name).exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ActiveState parsing
+    #[test]
+    fn test_active_state_from_known_values() {
+        assert_eq!(ActiveState::from("active"), ActiveState::Active);
+        assert_eq!(ActiveState::from("reloading"), ActiveState::Reloading);
+        assert_eq!(ActiveState::from("inactive"), ActiveState::Inactive);
+        assert_eq!(ActiveState::from("failed"), ActiveState::Failed);
+        assert_eq!(ActiveState::from("activating"), ActiveState::Activating);
+        assert_eq!(ActiveState::from("deactivating"), ActiveState::Deactivating);
+    }
+
+    #[test]
+    fn test_active_state_from_unknown() {
+        assert_eq!(
+            ActiveState::from("unknown-state"),
+            ActiveState::Unknown("unknown-state".to_string())
+        );
+        assert_eq!(
+            ActiveState::from("weird"),
+            ActiveState::Unknown("weird".to_string())
+        );
+    }
+
+    // UnitFileState parsing
+    #[test]
+    fn test_unit_file_state_from_known_values() {
+        assert_eq!(UnitFileState::from("enabled"), UnitFileState::Enabled);
+        assert_eq!(UnitFileState::from("disabled"), UnitFileState::Disabled);
+        assert_eq!(UnitFileState::from("static"), UnitFileState::Static);
+        assert_eq!(UnitFileState::from("masked"), UnitFileState::Masked);
+        assert_eq!(UnitFileState::from("generated"), UnitFileState::Generated);
+        assert_eq!(UnitFileState::from("transient"), UnitFileState::Transient);
+    }
+
+    #[test]
+    fn test_unit_file_state_from_unknown() {
+        assert_eq!(
+            UnitFileState::from("not-found"),
+            UnitFileState::Unknown("not-found".to_string())
+        );
+        assert_eq!(
+            UnitFileState::from("custom"),
+            UnitFileState::Unknown("custom".to_string())
+        );
+    }
+
+    // extract_node_name
+    #[test]
+    fn test_extract_node_name_valid() {
+        assert_eq!(
+            extract_node_name("bubbaloop-rtsp-camera.service"),
+            Some("rtsp-camera".to_string())
+        );
+        assert_eq!(
+            extract_node_name("bubbaloop-weather.service"),
+            Some("weather".to_string())
+        );
+        assert_eq!(
+            extract_node_name("bubbaloop-my-node.service"),
+            Some("my-node".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_node_name_no_prefix() {
+        assert_eq!(extract_node_name("rtsp-camera.service"), None);
+        assert_eq!(extract_node_name("systemd-resolved.service"), None);
+    }
+
+    #[test]
+    fn test_extract_node_name_no_suffix() {
+        assert_eq!(extract_node_name("bubbaloop-rtsp-camera"), None);
+        assert_eq!(extract_node_name("bubbaloop-weather.timer"), None);
+    }
+
+    #[test]
+    fn test_extract_node_name_empty() {
+        assert_eq!(extract_node_name(""), None);
+        assert_eq!(extract_node_name("bubbaloop-.service"), None);
+    }
+
+    // get_service_name
+    #[test]
+    fn test_get_service_name() {
+        assert_eq!(
+            get_service_name("rtsp-camera"),
+            "bubbaloop-rtsp-camera.service"
+        );
+        assert_eq!(get_service_name("weather"), "bubbaloop-weather.service");
+        assert_eq!(get_service_name("my_node"), "bubbaloop-my_node.service");
+    }
+
+    // validate_node_name
+    #[test]
+    fn test_validate_node_name_valid() {
+        assert!(validate_node_name("rtsp-camera").is_ok());
+        assert!(validate_node_name("weather").is_ok());
+        assert!(validate_node_name("my_node").is_ok());
+        assert!(validate_node_name("node123").is_ok());
+        assert!(validate_node_name("a-b-c_d").is_ok());
+        assert!(validate_node_name("a").is_ok()); // minimum length
+        assert!(validate_node_name(&"a".repeat(64)).is_ok()); // maximum length
+    }
+
+    #[test]
+    fn test_validate_node_name_special_chars() {
+        assert!(validate_node_name("node.with.dots").is_err());
+        assert!(validate_node_name("node/with/slash").is_err());
+        assert!(validate_node_name("node with spaces").is_err());
+        assert!(validate_node_name("node@email").is_err());
+        assert!(validate_node_name("node$var").is_err());
+        assert!(validate_node_name("node!").is_err());
+    }
+
+    #[test]
+    fn test_validate_node_name_empty() {
+        let result = validate_node_name("");
+        assert!(result.is_err());
+        if let Err(SystemdError::InvalidNodeName(msg)) = result {
+            assert!(msg.contains("invalid length"));
+        }
+    }
+
+    #[test]
+    fn test_validate_node_name_too_long() {
+        let long_name = "a".repeat(65);
+        let result = validate_node_name(&long_name);
+        assert!(result.is_err());
+        if let Err(SystemdError::InvalidNodeName(msg)) = result {
+            assert!(msg.contains("invalid length"));
+        }
+    }
+
+    #[test]
+    fn test_validate_node_name_injection_attempt() {
+        assert!(validate_node_name("node;rm-rf").is_err());
+        assert!(validate_node_name("node\nmalicious").is_err());
+        assert!(validate_node_name("node|cmd").is_err());
+    }
+
+    // sanitize_description
+    #[test]
+    fn test_sanitize_description_removes_newlines() {
+        assert_eq!(sanitize_description("line1\nline2"), "line1line2");
+        assert_eq!(sanitize_description("line1\r\nline2"), "line1line2");
+    }
+
+    #[test]
+    fn test_sanitize_description_removes_brackets() {
+        assert_eq!(
+            sanitize_description("description [with] brackets"),
+            "description with brackets"
+        );
+        assert_eq!(sanitize_description("[Unit]Description"), "UnitDescription");
+    }
+
+    #[test]
+    fn test_sanitize_description_truncates_long() {
+        let long_desc = "a".repeat(300);
+        let sanitized = sanitize_description(&long_desc);
+        assert_eq!(sanitized.len(), 200);
+        assert_eq!(sanitized, "a".repeat(200));
+    }
+
+    // sanitize_path
+    #[test]
+    fn test_sanitize_path_valid() {
+        assert!(sanitize_path("/home/user/node").is_ok());
+        assert!(sanitize_path("/tmp/test-path_123").is_ok());
+        assert!(sanitize_path("./relative/path").is_ok());
+    }
+
+    #[test]
+    fn test_sanitize_path_rejects_newlines() {
+        assert!(sanitize_path("/home/user\n/node").is_err());
+        assert!(sanitize_path("/home/user\r\n/node").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_path_rejects_null() {
+        assert!(sanitize_path("/home/user\0/node").is_err());
+    }
+
+    // sanitize_command
+    #[test]
+    fn test_sanitize_command_valid() {
+        assert!(sanitize_command("cargo run").is_ok());
+        assert!(sanitize_command("python main.py --arg value").is_ok());
+        assert!(sanitize_command("/usr/bin/node script.js").is_ok());
+    }
+
+    #[test]
+    fn test_sanitize_command_rejects_newlines() {
+        assert!(sanitize_command("cargo run\nmalicious").is_err());
+        assert!(sanitize_command("python\r\nrm -rf /").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_command_rejects_section_markers() {
+        assert!(sanitize_command("cargo run && [Unit]").is_err());
+        assert!(sanitize_command("[Service]\nExecStart=evil").is_err());
+        assert!(sanitize_command("[Install] WantedBy=multi-user.target").is_err());
+    }
+
+    // generate_service_unit
+    #[test]
+    fn test_generate_service_unit_rust_default() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/test-node",
+            "test-node",
+            "rust",
+            None,
+            &[],
+        );
+        assert!(result.is_ok());
+        let content = result.unwrap();
+
+        assert!(content.contains("Description=Bubbaloop Node: test-node"));
+        assert!(content.contains("After=network.target"));
+        assert!(!content.contains("Requires="));
+        assert!(content.contains("WorkingDirectory=/home/user/.bubbaloop/nodes/test-node"));
+        assert!(content
+            .contains("ExecStart=/home/user/.bubbaloop/nodes/test-node/target/release/test-node"));
+        assert!(content.contains("Environment=RUST_LOG=info"));
+        assert!(content.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn test_generate_service_unit_python_default() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/py-node",
+            "py-node",
+            "python",
+            None,
+            &[],
+        );
+        assert!(result.is_ok());
+        let content = result.unwrap();
+
+        assert!(content.contains("Description=Bubbaloop Node: py-node"));
+        assert!(content.contains("WorkingDirectory=/home/user/.bubbaloop/nodes/py-node"));
+        assert!(content
+            .contains("ExecStart=/home/user/.bubbaloop/nodes/py-node/venv/bin/python main.py"));
+        assert!(content.contains("Environment=PYTHONUNBUFFERED=1"));
+    }
+
+    #[test]
+    fn test_generate_service_unit_cargo_command() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/dev-node",
+            "dev-node",
+            "rust",
+            Some("cargo run --release"),
+            &[],
+        );
+        assert!(result.is_ok());
+        let content = result.unwrap();
+
+        // Should replace "cargo " with absolute path
+        assert!(content.contains("/.cargo/bin/cargo run --release"));
+        assert!(content.contains("Environment=RUST_LOG=info"));
+    }
+
+    #[test]
+    fn test_generate_service_unit_pixi_command() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/pixi-node",
+            "pixi-node",
+            "python",
+            Some("pixi run start"),
+            &[],
+        );
+        assert!(result.is_ok());
+        let content = result.unwrap();
+
+        // Should replace "pixi " with absolute path
+        assert!(content.contains("/.pixi/bin/pixi run start"));
+        assert!(content.contains("Environment=PYTHONUNBUFFERED=1"));
+    }
+
+    #[test]
+    fn test_generate_service_unit_with_dependencies() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/dependent-node",
+            "dependent-node",
+            "rust",
+            None,
+            &["dep1".to_string(), "dep2".to_string()],
+        );
+        assert!(result.is_ok());
+        let content = result.unwrap();
+
+        assert!(
+            content.contains("After=network.target bubbaloop-dep1.service bubbaloop-dep2.service")
+        );
+        assert!(content.contains("Requires=bubbaloop-dep1.service bubbaloop-dep2.service"));
+    }
+
+    #[test]
+    fn test_generate_service_unit_invalid_name() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/bad-node",
+            "bad node with spaces",
+            "rust",
+            None,
+            &[],
+        );
+        assert!(result.is_err());
+        if let Err(SystemdError::InvalidNodeName(_)) = result {
+            // Expected error type
+        } else {
+            panic!("Expected InvalidNodeName error");
+        }
+    }
+
+    #[test]
+    fn test_generate_service_unit_invalid_command() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/test-node",
+            "test-node",
+            "rust",
+            Some("cargo run\n[Unit]\nDescription=evil"),
+            &[],
+        );
+        assert!(result.is_err());
+        if let Err(SystemdError::InvalidInput(_)) = result {
+            // Expected error type
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test]
+    fn test_generate_service_unit_invalid_dependency_name() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/test-node",
+            "test-node",
+            "rust",
+            None,
+            &["valid-dep".to_string(), "bad dep".to_string()],
+        );
+        assert!(result.is_err());
+        if let Err(SystemdError::InvalidNodeName(_)) = result {
+            // Expected error type
+        } else {
+            panic!("Expected InvalidNodeName error");
+        }
+    }
+
+    #[test]
+    fn test_generate_service_unit_security_hardening() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/secure-node",
+            "secure-node",
+            "rust",
+            None,
+            &[],
+        );
+        assert!(result.is_ok());
+        let content = result.unwrap();
+
+        // Check for security hardening directives
+        assert!(content.contains("NoNewPrivileges=true"));
+        assert!(content.contains("ProtectSystem=strict"));
+        assert!(content.contains("PrivateTmp=true"));
+        assert!(content.contains("ProtectKernelTunables=true"));
+        assert!(content.contains("ProtectControlGroups=true"));
+
+        // Robotics-compatible settings
+        assert!(content.contains("RestrictRealtime=false"));
+        assert!(content.contains("MemoryDenyWriteExecute=false"));
+    }
+
+    #[test]
+    fn test_generate_service_unit_restart_policy() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/restart-node",
+            "restart-node",
+            "rust",
+            None,
+            &[],
+        );
+        assert!(result.is_ok());
+        let content = result.unwrap();
+
+        assert!(content.contains("Restart=on-failure"));
+        assert!(content.contains("RestartSec=5"));
+    }
+
+    #[test]
+    fn test_sanitize_description_preserves_valid_chars() {
+        let desc = "My node with numbers 123 and symbols: - _ / @ !";
+        let sanitized = sanitize_description(desc);
+        // Should keep everything except brackets and newlines
+        assert!(sanitized.contains("My node with numbers 123"));
+        assert!(sanitized.contains("- _ / @ !"));
+    }
+
+    #[test]
+    fn test_generate_service_unit_absolute_path_command() {
+        let result = generate_service_unit(
+            "/home/user/.bubbaloop/nodes/abs-node",
+            "abs-node",
+            "python",
+            Some("/usr/bin/python3 script.py"),
+            &[],
+        );
+        assert!(result.is_ok());
+        let content = result.unwrap();
+
+        // Absolute paths should be preserved
+        assert!(content.contains("ExecStart=/usr/bin/python3 script.py"));
+    }
 }

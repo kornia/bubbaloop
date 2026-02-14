@@ -24,13 +24,16 @@ use tokio::sync::watch;
 use zenoh::bytes::ZBytes;
 use zenoh::Session;
 
-/// Get machine ID from environment or hostname
+/// Get machine ID from environment or hostname.
+/// Sanitizes hyphens to underscores for Zenoh topic compatibility (matching node convention).
 fn get_machine_id() -> String {
-    std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
-        hostname::get()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "unknown".to_string())
-    })
+    std::env::var("BUBBALOOP_MACHINE_ID")
+        .unwrap_or_else(|_| {
+            hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "unknown".to_string())
+        })
+        .replace('-', "_")
 }
 
 /// Key expressions for API endpoints
@@ -97,10 +100,12 @@ pub struct NodeStateResponse {
 pub struct NodeListResponse {
     pub nodes: Vec<NodeStateResponse>,
     pub timestamp_ms: i64,
+    #[serde(default)]
+    pub machine_id: String,
 }
 
 /// JSON request for commands
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CommandRequest {
     pub command: String,
     #[serde(default)]
@@ -114,7 +119,7 @@ pub struct CommandRequest {
 }
 
 /// JSON response for commands
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CommandResponse {
     pub success: bool,
     pub message: String,
@@ -123,7 +128,7 @@ pub struct CommandResponse {
 }
 
 /// JSON response for logs
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct LogsResponse {
     pub node_name: String,
     pub lines: Vec<String>,
@@ -132,13 +137,13 @@ pub struct LogsResponse {
 }
 
 /// JSON response for health check
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
 }
 
 /// JSON error response
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
     pub code: u16,
@@ -188,6 +193,7 @@ fn parse_command(cmd: &str) -> CommandType {
         "add" | "add_node" => CommandType::AddNode,
         "remove" | "remove_node" => CommandType::RemoveNode,
         "refresh" => CommandType::Refresh,
+        "logs" | "get_logs" | "get-logs" => CommandType::GetLogs,
         _ => CommandType::Refresh,
     }
 }
@@ -224,14 +230,15 @@ impl ZenohApiService {
     pub async fn run(self, mut shutdown: watch::Receiver<()>) -> Result<(), zenoh::Error> {
         log::info!("Starting Zenoh API service...");
 
-        // Declare queryables on both legacy and new paths for backward compatibility
-        // The .complete(true) hint tells Zenoh this queryable is authoritative for this key expression
+        // Declare queryables on both legacy and new paths for backward compatibility.
+        // NOTE: We intentionally do NOT use .complete(true) here. That flag tells Zenoh
+        // this queryable is authoritative for the key expression, which would block
+        // wildcard queries (e.g., "bubbaloop/**/schema") from reaching node queryables.
 
         // Legacy path
         let queryable_legacy = self
             .session
             .declare_queryable(api_keys::API_WILDCARD_LEGACY)
-            .complete(true)
             .await?;
 
         log::info!(
@@ -241,11 +248,7 @@ impl ZenohApiService {
 
         // New machine-scoped path
         let new_wildcard = api_keys::api_wildcard(&self.machine_id);
-        let queryable_new = self
-            .session
-            .declare_queryable(&new_wildcard)
-            .complete(true)
-            .await?;
+        let queryable_new = self.session.declare_queryable(&new_wildcard).await?;
 
         log::info!(
             "Declared queryable on {} for REST-like API (machine-scoped)",
@@ -369,6 +372,7 @@ impl ZenohApiService {
         let response = NodeListResponse {
             nodes: list.nodes.iter().map(node_state_to_response).collect(),
             timestamp_ms: list.timestamp_ms,
+            machine_id: self.machine_id.clone(),
         };
         serde_json::to_string(&response)
             .unwrap_or_else(|e| format!(r#"{{"error":"Failed to serialize: {}","code":500}}"#, e))
@@ -472,78 +476,49 @@ impl ZenohApiService {
     }
 
     /// Handle GET /nodes/{name}/logs
+    ///
+    /// Delegates to node_manager via the GetLogs command instead of spawning
+    /// systemctl directly (which violates the zbus-only convention).
     async fn handle_get_logs(&self, name: &str) -> String {
-        // Check if node exists
-        let node = self.node_manager.get_node(name).await;
-        if node.is_none() {
-            return serde_json::to_string(&LogsResponse {
-                node_name: name.to_string(),
-                lines: vec![],
-                success: false,
-                error: Some("Node not found".to_string()),
+        if self.node_manager.get_node(name).await.is_none() {
+            return serde_json::to_string(&ErrorResponse {
+                error: format!("Node '{}' not found", name),
+                code: 404,
             })
-            .unwrap_or_else(|_| {
-                r#"{"node_name":"","lines":[],"success":false,"error":"Node not found"}"#
-                    .to_string()
-            });
+            .unwrap_or_else(|_| r#"{"error":"Not found","code":404}"#.to_string());
         }
 
-        // Get logs using systemctl status (works even without journald)
-        let service_name = format!("bubbaloop-{}.service", name);
-        let output = tokio::process::Command::new("systemctl")
-            .args(["--user", "status", "-l", "--no-pager", &service_name])
-            .output()
-            .await;
+        let cmd = NodeCommand {
+            command: CommandType::GetLogs as i32,
+            node_name: name.to_string(),
+            node_path: String::new(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: Self::now_ms(),
+            source_machine: "api".to_string(),
+            target_machine: self.machine_id.clone(),
+            name_override: String::new(),
+            config_override: String::new(),
+        };
 
-        match output {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let mut lines: Vec<String> = stdout.lines().map(|s| s.to_string()).collect();
+        let result = self.node_manager.execute_command(cmd).await;
 
-                // Also try journalctl as backup
-                if let Ok(journal_output) = tokio::process::Command::new("journalctl")
-                    .args(["--user", "-u", &service_name, "-n", "50", "--no-pager"])
-                    .output()
-                    .await
-                {
-                    let journal_stdout = String::from_utf8_lossy(&journal_output.stdout);
-                    for line in journal_stdout.lines() {
-                        if !line.contains("No entries") && !line.contains("No journal files") {
-                            lines.push(line.to_string());
-                        }
-                    }
-                }
+        let lines: Vec<String> = if result.output.is_empty() {
+            vec![]
+        } else {
+            result.output.lines().map(|s| s.to_string()).collect()
+        };
 
-                // Add stderr if any
-                if !stderr.is_empty() {
-                    lines.push("--- stderr ---".to_string());
-                    for line in stderr.lines() {
-                        lines.push(line.to_string());
-                    }
-                }
-
-                serde_json::to_string(&LogsResponse {
-                    node_name: name.to_string(),
-                    lines,
-                    success: true,
-                    error: None,
-                })
-                .unwrap_or_else(|e| {
-                    format!(r#"{{"error":"Failed to serialize: {}","code":500}}"#, e)
-                })
-            }
-            Err(e) => serde_json::to_string(&LogsResponse {
-                node_name: name.to_string(),
-                lines: vec![],
-                success: false,
-                error: Some(format!("Failed to get logs: {}", e)),
-            })
-            .unwrap_or_else(|_| {
-                r#"{"node_name":"","lines":[],"success":false,"error":"Failed to get logs"}"#
-                    .to_string()
-            }),
-        }
+        serde_json::to_string(&LogsResponse {
+            node_name: name.to_string(),
+            lines,
+            success: result.success,
+            error: if result.success {
+                None
+            } else {
+                Some(result.message)
+            },
+        })
+        .unwrap_or_else(|e| format!(r#"{{"error":"Failed to serialize: {}","code":500}}"#, e))
     }
 
     /// Handle POST /nodes/{name}/command
@@ -607,4 +582,378 @@ pub async fn run_zenoh_api_server(
 ) -> Result<(), zenoh::Error> {
     let service = ZenohApiService::new(session, node_manager);
     service.run(shutdown).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schemas::daemon::v1::{CommandType, NodeState, NodeStatus};
+
+    // status_to_string tests
+    #[test]
+    fn test_status_to_string_all_known() {
+        assert_eq!(status_to_string(0), "unknown");
+        assert_eq!(status_to_string(1), "stopped");
+        assert_eq!(status_to_string(2), "running");
+        assert_eq!(status_to_string(3), "failed");
+        assert_eq!(status_to_string(4), "installing");
+        assert_eq!(status_to_string(5), "building");
+        assert_eq!(status_to_string(6), "not-installed");
+    }
+
+    #[test]
+    fn test_status_to_string_unknown_values() {
+        assert_eq!(status_to_string(7), "unknown");
+        assert_eq!(status_to_string(-1), "unknown");
+        assert_eq!(status_to_string(100), "unknown");
+    }
+
+    // parse_command tests
+    #[test]
+    fn test_parse_command_basic() {
+        assert_eq!(parse_command("start") as i32, CommandType::Start as i32);
+        assert_eq!(parse_command("stop") as i32, CommandType::Stop as i32);
+        assert_eq!(parse_command("restart") as i32, CommandType::Restart as i32);
+        assert_eq!(parse_command("install") as i32, CommandType::Install as i32);
+        assert_eq!(
+            parse_command("uninstall") as i32,
+            CommandType::Uninstall as i32
+        );
+        assert_eq!(parse_command("build") as i32, CommandType::Build as i32);
+        assert_eq!(parse_command("clean") as i32, CommandType::Clean as i32);
+        assert_eq!(parse_command("refresh") as i32, CommandType::Refresh as i32);
+    }
+
+    #[test]
+    fn test_parse_command_case_insensitive() {
+        assert_eq!(parse_command("START") as i32, CommandType::Start as i32);
+        assert_eq!(parse_command("Start") as i32, CommandType::Start as i32);
+        assert_eq!(parse_command("sTaRt") as i32, CommandType::Start as i32);
+        assert_eq!(parse_command("STOP") as i32, CommandType::Stop as i32);
+        assert_eq!(parse_command("ReStArT") as i32, CommandType::Restart as i32);
+    }
+
+    #[test]
+    fn test_parse_command_aliases() {
+        // Enable autostart aliases
+        assert_eq!(
+            parse_command("enable") as i32,
+            CommandType::EnableAutostart as i32
+        );
+        assert_eq!(
+            parse_command("enable_autostart") as i32,
+            CommandType::EnableAutostart as i32
+        );
+        assert_eq!(
+            parse_command("enable-autostart") as i32,
+            CommandType::EnableAutostart as i32
+        );
+        // Disable aliases
+        assert_eq!(
+            parse_command("disable") as i32,
+            CommandType::DisableAutostart as i32
+        );
+        assert_eq!(
+            parse_command("disable_autostart") as i32,
+            CommandType::DisableAutostart as i32
+        );
+        assert_eq!(
+            parse_command("disable-autostart") as i32,
+            CommandType::DisableAutostart as i32
+        );
+        // Add/Remove aliases
+        assert_eq!(parse_command("add") as i32, CommandType::AddNode as i32);
+        assert_eq!(
+            parse_command("add_node") as i32,
+            CommandType::AddNode as i32
+        );
+        assert_eq!(
+            parse_command("remove") as i32,
+            CommandType::RemoveNode as i32
+        );
+        assert_eq!(
+            parse_command("remove_node") as i32,
+            CommandType::RemoveNode as i32
+        );
+    }
+
+    #[test]
+    fn test_parse_command_unknown_defaults_to_refresh() {
+        assert_eq!(
+            parse_command("unknown_command") as i32,
+            CommandType::Refresh as i32
+        );
+        assert_eq!(parse_command("foo") as i32, CommandType::Refresh as i32);
+        assert_eq!(parse_command("") as i32, CommandType::Refresh as i32);
+        assert_eq!(
+            parse_command("arbitrary-string") as i32,
+            CommandType::Refresh as i32
+        );
+    }
+
+    // node_state_to_response tests
+    #[test]
+    fn test_node_state_to_response_maps_fields() {
+        let state = NodeState {
+            name: "test-node".to_string(),
+            path: "/path/to/node".to_string(),
+            status: NodeStatus::Running as i32,
+            installed: true,
+            autostart_enabled: true,
+            version: "1.0.0".to_string(),
+            description: "A test node".to_string(),
+            node_type: "rust".to_string(),
+            is_built: true,
+            build_output: vec!["line1".to_string()],
+            base_node: "base".to_string(),
+            config_override: "/etc/config.yaml".to_string(),
+            ..Default::default()
+        };
+        let resp = node_state_to_response(&state);
+        assert_eq!(resp.name, "test-node");
+        assert_eq!(resp.path, "/path/to/node");
+        assert_eq!(resp.status, "running");
+        assert!(resp.installed);
+        assert!(resp.autostart_enabled);
+        assert_eq!(resp.version, "1.0.0");
+        assert_eq!(resp.description, "A test node");
+        assert_eq!(resp.node_type, "rust");
+        assert!(resp.is_built);
+        assert_eq!(resp.build_output, vec!["line1"]);
+        assert_eq!(resp.base_node, "base");
+        assert_eq!(resp.config_override, "/etc/config.yaml");
+    }
+
+    #[test]
+    fn test_node_state_to_response_default_status() {
+        let state = NodeState::default();
+        let resp = node_state_to_response(&state);
+        assert_eq!(resp.status, "unknown"); // status 0 = unknown
+    }
+
+    // api_keys module tests
+    #[test]
+    fn test_api_keys_legacy_constants() {
+        assert_eq!(api_keys::API_PREFIX_LEGACY, "bubbaloop/daemon/api");
+        assert_eq!(api_keys::API_WILDCARD_LEGACY, "bubbaloop/daemon/api/**");
+    }
+
+    #[test]
+    fn test_api_keys_machine_scoped() {
+        let machine_id = "my-machine";
+
+        assert_eq!(
+            api_keys::api_prefix(machine_id),
+            "bubbaloop/my-machine/daemon/api"
+        );
+        assert_eq!(
+            api_keys::api_wildcard(machine_id),
+            "bubbaloop/my-machine/daemon/api/**"
+        );
+        assert_eq!(
+            api_keys::health_key(machine_id),
+            "bubbaloop/my-machine/daemon/api/health"
+        );
+        assert_eq!(
+            api_keys::nodes_key(machine_id),
+            "bubbaloop/my-machine/daemon/api/nodes"
+        );
+        assert_eq!(
+            api_keys::nodes_add_key(machine_id),
+            "bubbaloop/my-machine/daemon/api/nodes/add"
+        );
+        assert_eq!(
+            api_keys::refresh_key(machine_id),
+            "bubbaloop/my-machine/daemon/api/refresh"
+        );
+    }
+
+    #[test]
+    fn test_api_keys_special_machine_id() {
+        let machine_id = "jetson_01-v2";
+
+        assert_eq!(
+            api_keys::api_prefix(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api"
+        );
+        assert_eq!(
+            api_keys::api_wildcard(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api/**"
+        );
+        assert_eq!(
+            api_keys::health_key(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api/health"
+        );
+        assert_eq!(
+            api_keys::nodes_key(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api/nodes"
+        );
+        assert_eq!(
+            api_keys::nodes_add_key(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api/nodes/add"
+        );
+        assert_eq!(
+            api_keys::refresh_key(machine_id),
+            "bubbaloop/jetson_01-v2/daemon/api/refresh"
+        );
+    }
+
+    // parse_command: GetLogs aliases
+    #[test]
+    fn test_parse_command_logs_aliases() {
+        assert_eq!(parse_command("logs") as i32, CommandType::GetLogs as i32);
+        assert_eq!(
+            parse_command("get_logs") as i32,
+            CommandType::GetLogs as i32
+        );
+        assert_eq!(
+            parse_command("get-logs") as i32,
+            CommandType::GetLogs as i32
+        );
+        assert_eq!(parse_command("LOGS") as i32, CommandType::GetLogs as i32);
+        assert_eq!(
+            parse_command("Get-Logs") as i32,
+            CommandType::GetLogs as i32
+        );
+    }
+
+    // Serde round-trip tests
+    #[test]
+    fn test_node_state_response_serde_roundtrip() {
+        let resp = NodeStateResponse {
+            name: "camera".to_string(),
+            path: "/opt/nodes/camera".to_string(),
+            status: "running".to_string(),
+            installed: true,
+            autostart_enabled: false,
+            version: "1.2.3".to_string(),
+            description: "Camera node".to_string(),
+            node_type: "rust".to_string(),
+            is_built: true,
+            build_output: vec!["ok".to_string()],
+            base_node: "".to_string(),
+            config_override: "".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: NodeStateResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.name, "camera");
+        assert_eq!(deser.status, "running");
+        assert!(deser.installed);
+    }
+
+    #[test]
+    fn test_node_list_response_serde_roundtrip() {
+        let resp = NodeListResponse {
+            nodes: vec![],
+            timestamp_ms: 1234567890,
+            machine_id: "jetson-01".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: NodeListResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.timestamp_ms, 1234567890);
+        assert_eq!(deser.machine_id, "jetson-01");
+        assert!(deser.nodes.is_empty());
+    }
+
+    #[test]
+    fn test_node_list_response_machine_id_default() {
+        // machine_id should default to empty string when missing (backward compat)
+        let json = r#"{"nodes":[],"timestamp_ms":0}"#;
+        let deser: NodeListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(deser.machine_id, "");
+    }
+
+    #[test]
+    fn test_command_request_serde_roundtrip() {
+        let req = CommandRequest {
+            command: "start".to_string(),
+            node_path: "/path".to_string(),
+            name: Some("my-instance".to_string()),
+            config: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let deser: CommandRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.command, "start");
+        assert_eq!(deser.node_path, "/path");
+        assert_eq!(deser.name, Some("my-instance".to_string()));
+        assert_eq!(deser.config, None);
+    }
+
+    #[test]
+    fn test_command_request_minimal() {
+        // Only command is required; others default
+        let json = r#"{"command":"stop"}"#;
+        let deser: CommandRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(deser.command, "stop");
+        assert_eq!(deser.node_path, "");
+        assert_eq!(deser.name, None);
+        assert_eq!(deser.config, None);
+    }
+
+    #[test]
+    fn test_command_response_serde_roundtrip() {
+        let resp = CommandResponse {
+            success: true,
+            message: "Started".to_string(),
+            output: "ok\n".to_string(),
+            node_state: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: CommandResponse = serde_json::from_str(&json).unwrap();
+        assert!(deser.success);
+        assert_eq!(deser.message, "Started");
+        assert!(deser.node_state.is_none());
+    }
+
+    #[test]
+    fn test_logs_response_serde_roundtrip() {
+        let resp = LogsResponse {
+            node_name: "weather".to_string(),
+            lines: vec!["line1".to_string(), "line2".to_string()],
+            success: true,
+            error: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: LogsResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.node_name, "weather");
+        assert_eq!(deser.lines.len(), 2);
+        assert!(deser.success);
+        assert!(deser.error.is_none());
+    }
+
+    #[test]
+    fn test_logs_response_with_error() {
+        let resp = LogsResponse {
+            node_name: "bad".to_string(),
+            lines: vec![],
+            success: false,
+            error: Some("Node not found".to_string()),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: LogsResponse = serde_json::from_str(&json).unwrap();
+        assert!(!deser.success);
+        assert_eq!(deser.error, Some("Node not found".to_string()));
+    }
+
+    #[test]
+    fn test_health_response_serde_roundtrip() {
+        let resp = HealthResponse {
+            status: "ok".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: HealthResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.status, "ok");
+    }
+
+    #[test]
+    fn test_error_response_serde_roundtrip() {
+        let resp = ErrorResponse {
+            error: "Not found".to_string(),
+            code: 404,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deser: ErrorResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.error, "Not found");
+        assert_eq!(deser.code, 404);
+    }
 }

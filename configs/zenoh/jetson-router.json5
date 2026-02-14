@@ -75,7 +75,7 @@
   plugins: {
     // Uncomment if running dashboard locally on this Jetson
     // remote_api: {
-    //   websocket_port: 10000,
+    //   websocket_port: 10001,
     // },
   },
 }

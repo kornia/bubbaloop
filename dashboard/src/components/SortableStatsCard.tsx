@@ -10,7 +10,7 @@ interface SortableStatsCardProps {
   onRemove: () => void;
 }
 
-export function SortableStatsCard({
+export const SortableStatsCard = React.memo(function SortableStatsCard({
   id,
   isHidden = false,
   onRemove,
@@ -41,4 +41,4 @@ export function SortableStatsCard({
       />
     </div>
   );
-}
+});

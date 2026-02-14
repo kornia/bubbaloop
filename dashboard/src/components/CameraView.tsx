@@ -3,10 +3,31 @@ import { Sample } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useFleetContext } from '../contexts/FleetContext';
+import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
 import { H264Decoder } from '../lib/h264-decoder';
-import { decodeCompressedImage, Header } from '../proto/camera';
 import { normalizeTopicPattern } from '../lib/subscription-manager';
+import Long from 'long';
+
+// Local interface for camera metadata display
+interface CameraMeta {
+  header?: {
+    acqTime: bigint;
+    pubTime: bigint;
+    sequence: number;
+    frameId: string;
+  };
+  format: string;
+  dataSize: number;
+}
+
+// Convert protobufjs Long to BigInt
+function toLongBigInt(value: Long | number | undefined | null): bigint {
+  if (value === undefined || value === null) return 0n;
+  if (typeof value === 'number') return BigInt(value);
+  if (Long.isLong(value)) return BigInt(value.toString());
+  return 0n;
+}
 
 interface DragHandleProps {
   [key: string]: unknown;
@@ -19,7 +40,7 @@ interface CameraViewProps {
   onMaximize?: () => void;
   onTopicChange?: (topic: string) => void;
   onRemove?: () => void;
-  availableTopics?: string[];
+  availableTopics?: Array<{ display: string; raw: string }>;
   dragHandleProps?: DragHandleProps;
 }
 
@@ -42,11 +63,7 @@ export function CameraView({
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
   const frameCountRef = useRef(0);
   const [showInfo, setShowInfo] = useState(false);
-  const lastMetaRef = useRef<{
-    header?: Header;
-    format: string;
-    dataSize: number;
-  } | null>(null);
+  const lastMetaRef = useRef<CameraMeta | null>(null);
   const [lastMeta, setLastMeta] = useState(lastMetaRef.current);
   const metaUpdateIntervalRef = useRef<number | null>(null);
 
@@ -104,6 +121,10 @@ export function CameraView({
     };
   }, [cameraName, handleFrame]);
 
+  // Get SchemaRegistry for dynamic decoding
+  const { registry, discoverForTopic, schemaVersion } = useSchemaRegistry();
+  const lastCameraPayloadRef = useRef<{ payload: Uint8Array; topic: string } | null>(null);
+
   // Handle incoming samples from Zenoh
   const handleSample = useCallback((sample: Sample) => {
     const decoder = decoderRef.current;
@@ -111,86 +132,106 @@ export function CameraView({
 
     try {
       const payload = getSamplePayload(sample);
-      const msg = decodeCompressedImage(payload);
+      const sampleTopic = sample.keyexpr().toString();
+
+      // Use SchemaRegistry to look up CompressedImage type and decode directly.
+      // This preserves raw bytes (no base64 roundtrip) for H264 decoding.
+      const msgType = registry.lookupType('bubbaloop.camera.v1.CompressedImage');
+      if (!msgType) {
+        // Buffer payload for retry when schemas arrive
+        lastCameraPayloadRef.current = { payload, topic: sampleTopic };
+        discoverForTopic(sampleTopic);
+        // Don't try raw H264 decode — data is protobuf-wrapped, not raw H264
+        return;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const msg = msgType.decode(payload) as any;
+      const format: string = msg.format ?? '';
+      const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data ?? []);
+      const header = msg.header ? {
+        acqTime: toLongBigInt(msg.header.acqTime),
+        pubTime: toLongBigInt(msg.header.pubTime),
+        sequence: msg.header.sequence ?? 0,
+        frameId: msg.header.frameId ?? '',
+      } : undefined;
 
       // Store latest metadata in ref (no re-render)
-      lastMetaRef.current = {
-        header: msg.header,
-        format: msg.format,
-        dataSize: msg.data.length,
-      };
+      lastMetaRef.current = { header, format, dataSize: data.length };
 
       // Skip non-h264 formats (but allow empty format in case field is missing)
-      if (msg.format && msg.format !== 'h264') {
-        console.warn(`[CameraView] Unexpected format: ${msg.format}`);
+      if (format && format !== 'h264') {
+        console.warn(`[CameraView] Unexpected format: ${format}`);
         return;
       }
 
       // Use pub_time as timestamp (convert from nanoseconds to microseconds)
-      const timestamp = msg.header
-        ? Number(msg.header.pubTime / 1000n)
+      const timestamp = header
+        ? Number(header.pubTime / 1000n)
         : Date.now() * 1000;
 
       // Fire-and-forget async decode call
-      decoder.decode(msg.data, timestamp).catch((e) => {
+      decoder.decode(data, timestamp).catch((e) => {
         console.error('[CameraView] Decode error:', e);
       });
     } catch (e) {
       console.error('[CameraView] Failed to process sample:', e);
     }
-  }, []);
+  }, [registry, discoverForTopic]);
 
-  // Auto-detect correct topic from discovered topics.
-  // Camera topics may have machine-specific prefixes (e.g.,
-  //   0/bubbaloop%local%nvidia_orin00%camera%terrace%compressed/...)
-  // that don't match the default patterns (e.g., 0/camera%terrace%compressed/**).
-  // When topic discovery finds the real topic, switch the subscription.
+  // Re-decode buffered frame when new schemas arrive
+  useEffect(() => {
+    if (schemaVersion === 0 || !lastCameraPayloadRef.current) return;
+    const msgType = registry.lookupType('bubbaloop.camera.v1.CompressedImage');
+    if (msgType && decoderRef.current) {
+      const { payload } = lastCameraPayloadRef.current;
+      lastCameraPayloadRef.current = null;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const msg = msgType.decode(payload) as any;
+        const format: string = msg.format ?? '';
+        const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data ?? []);
+        if (!format || format === 'h264') {
+          const header = msg.header ? {
+            acqTime: toLongBigInt(msg.header.acqTime),
+            pubTime: toLongBigInt(msg.header.pubTime),
+            sequence: msg.header.sequence ?? 0,
+            frameId: msg.header.frameId ?? '',
+          } : undefined;
+          lastMetaRef.current = { header, format, dataSize: data.length };
+          const timestamp = header ? Number(header.pubTime / 1000n) : Date.now() * 1000;
+          decoderRef.current.decode(data, timestamp).catch(console.error);
+        }
+      } catch (e) {
+        console.error('[CameraView] Failed to re-decode buffered frame:', e);
+      }
+    }
+  }, [schemaVersion, registry]);
+
+  // Auto-detect correct topic from discovered topics using the camera name.
+  // Scans availableTopics for a display name matching "camera/{cameraName}/compressed"
+  // and subscribes to the matching raw key expression.
   const autoDetectedRef = useRef(false);
   useEffect(() => {
     if (autoDetectedRef.current || !onTopicChange || availableTopics.length === 0) return;
 
-    // Extract camera name hint from current topic
-    // e.g., "0/camera%terrace%compressed/**" -> decode % to / -> find "terrace"
-    const currentBase = topic.replace(/\/\*{1,2}$/, '');
-    const decoded = currentBase.replace(/%/g, '/');
-    const segments = decoded.split('/').filter(Boolean);
-    const cameraIdx = segments.indexOf('camera');
-    const compressedIdx = segments.indexOf('compressed');
-    const cameraHint = cameraIdx >= 0 && compressedIdx > cameraIdx
-      ? segments.slice(cameraIdx + 1, compressedIdx).join('/')
-      : null;
-
+    // Use cameraName prop as hint (e.g., "entrance")
+    const cameraHint = cameraName?.toLowerCase();
     if (!cameraHint) return;
 
-    // Check if current topic already receives data (subscription manager matched it)
-    // by looking for it in availableTopics
-    const alreadyMatches = availableTopics.some(t => {
-      const normalized = normalizeTopicPattern(t);
-      return normalized === currentBase;
-    });
-    if (alreadyMatches) return;
-
-    // Find a discovered topic matching the camera name exactly
-    for (const discoveredTopic of availableTopics) {
-      const decodedDiscovered = discoveredTopic.replace(/%/g, '/');
-      const discoveredSegments = decodedDiscovered.split('/');
-      const discCameraIdx = discoveredSegments.indexOf('camera');
-
-      if (discCameraIdx !== -1 && discoveredSegments[discCameraIdx + 2] === 'compressed') {
-        const discoveredHint = discoveredSegments[discCameraIdx + 1];
-        if (discoveredHint === cameraHint) {
-          const normalized = normalizeTopicPattern(discoveredTopic);
-          const newTopic = normalized + '/**';
-          if (newTopic !== topic) {
-            autoDetectedRef.current = true;
-            console.log(`[CameraView] Auto-detected topic for "${cameraHint}": ${topic} -> ${newTopic}`);
-            onTopicChange(newTopic);
-          }
-          return;
-        }
+    // Find a discovered topic matching "camera/{name}/compressed" in display name
+    for (const dt of availableTopics) {
+      const d = dt.display.toLowerCase();
+      if (d.includes(`camera/${cameraHint}/compressed`) || d.includes(`camera%${cameraHint}%compressed`)) {
+        autoDetectedRef.current = true;
+        const rawBase = normalizeTopicPattern(dt.raw);
+        const newTopic = rawBase + '/**';
+        console.log(`[CameraView] Auto-detected topic for "${cameraHint}": -> ${newTopic}`);
+        onTopicChange(newTopic);
+        return;
       }
     }
-  }, [availableTopics, topic, onTopicChange]);
+  }, [availableTopics, cameraName, onTopicChange]);
 
   // Subscribe to camera topic
   useZenohSubscription(topic, handleSample);
@@ -213,9 +254,13 @@ export function CameraView({
     };
   }, [showInfo]);
 
-  // Handle topic change from dropdown
-  const handleTopicSelect = (newTopic: string) => {
-    if (newTopic && newTopic !== topic && onTopicChange) {
+  // Handle topic change from dropdown — normalize raw key and add wildcard
+  const handleTopicSelect = (rawKey: string) => {
+    if (!rawKey || !onTopicChange) return;
+    const base = normalizeTopicPattern(rawKey);
+    const newTopic = base + '/**';
+    if (newTopic !== topic) {
+      autoDetectedRef.current = true; // prevent auto-detection from overriding
       onTopicChange(newTopic);
     }
   };
@@ -356,7 +401,7 @@ export function CameraView({
       <div className="camera-footer">
         {(() => {
           // Filter to only show CompressedImage topics
-          const cameraTopics = availableTopics.filter(t => t.includes('CompressedImage'));
+          const cameraTopics = availableTopics.filter(t => t.display.includes('camera') && t.display.includes('compressed'));
           return cameraTopics.length > 0 ? (
             <select
               className="topic-select"
@@ -365,7 +410,7 @@ export function CameraView({
             >
               {!topic && <option value="">-- Select camera --</option>}
               {cameraTopics.map((t) => (
-                <option key={t} value={t}>{t}</option>
+                <option key={t.raw} value={t.raw}>{t.display}</option>
               ))}
             </select>
           ) : (

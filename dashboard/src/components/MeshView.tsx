@@ -244,7 +244,7 @@ function buildGraph(machines: MachineInfo[], fleetNodes: FleetNodeInfo[], cx: nu
 // Component
 // ---------------------------------------------------------------------------
 
-export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionStatus = 'connected' }: { availableTopics?: string[]; zenohEndpoint?: string; connectionStatus?: string }) {
+export function MeshView({ availableTopics = [], zenohEndpoint = '', connectionStatus = 'connected' }: { availableTopics?: Array<{ display: string; raw: string }>; zenohEndpoint?: string; connectionStatus?: string }) {
   const { machines, nodes: fleetNodes } = useFleetContext();
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1479,7 +1479,7 @@ function DetailSidePanel({
   detailNode: SimNode | null;
   machines: MachineInfo[];
   fleetNodes: FleetNodeInfo[];
-  availableTopics: string[];
+  availableTopics: Array<{ display: string; raw: string }>;
   onClose: () => void;
 }) {
   const isOpen = detailNode !== null;

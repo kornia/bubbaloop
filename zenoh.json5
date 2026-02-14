@@ -28,7 +28,7 @@
     // Remote API plugin exposes WebSocket endpoint for zenoh-ts clients
     remote_api: {
       // WebSocket port for browser connections
-      websocket_port: 10000,
+      websocket_port: 10001,
     },
   },
 }
