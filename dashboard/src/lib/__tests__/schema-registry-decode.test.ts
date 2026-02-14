@@ -1037,10 +1037,9 @@ describe('SchemaRegistry: Architectural Integration Tests', () => {
   });
 
   describe('Schema Discovery Pattern for Real Topics', () => {
-    let registry: SchemaRegistry;
-
     beforeEach(() => {
-      registry = new SchemaRegistry();
+      // SchemaRegistry instance available if needed
+      new SchemaRegistry();
     });
 
     it('documents prefix-based query for system-telemetry (no mismatch)', () => {
