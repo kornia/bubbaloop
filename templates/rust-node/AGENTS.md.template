@@ -58,8 +58,8 @@ All topics follow the scoped pattern: `bubbaloop/{scope}/{machine_id}/{{node_nam
 
 | Topic Suffix | Direction | Format | Description |
 |--------------|-----------|--------|-------------|
-| `output` | Publish | JSON | Main output data |
-| `schema` | Queryable | Protobuf | FileDescriptorSet (if protos exist) |
+| `output` | Publish | JSON/Protobuf | Main output data |
+| `schema` | Queryable | Protobuf | FileDescriptorSet (REQUIRED for protobuf nodes) |
 | `manifest` | Queryable | JSON | Node self-description contract |
 | `health` | Queryable | JSON | Node health status |
 | `config` | Queryable | JSON | Read-only configuration |
@@ -68,6 +68,52 @@ Data published to these topics is:
 - Visible in the Bubbaloop Dashboard
 - Available to other nodes on the Zenoh network
 - Persisted if a recorder node is running
+
+### Schema Contract (Protobuf Nodes)
+
+If this node publishes protobuf messages, it **MUST** serve its schema:
+
+1. **Add protos directory** with your .proto files + `header.proto`:
+   ```
+   {{node_name}}/
+   ├── protos/
+   │   ├── header.proto      # Copy from bubbaloop-schemas
+   │   └── {{node_name}}.proto
+   ├── build.rs               # Compiles descriptor.bin
+   └── src/
+       └── node.rs
+   ```
+
+2. **Create build.rs** to compile descriptor.bin:
+   ```rust
+   fn main() {
+       let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+       prost_build::Config::new()
+           .file_descriptor_set_path(out_dir.join("descriptor.bin"))
+           .compile_protos(
+               &["protos/{{node_name}}.proto", "protos/header.proto"],
+               &["protos/"]
+           ).unwrap();
+   }
+   ```
+
+3. **Declare schema queryable** in `src/node.rs`:
+   ```rust
+   pub const DESCRIPTOR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/descriptor.bin"));
+
+   let schema_queryable = session
+       .declare_queryable(format!("{}/schema", topic_prefix))
+       .await?;
+
+   // In select! loop, handle queries:
+   Ok(query) = schema_queryable.recv_async() => {
+       query.reply(query.key_expr().clone(), DESCRIPTOR).await?;
+   }
+   ```
+
+4. **NEVER use `.complete(true)`** — it blocks wildcard schema discovery.
+
+See `ARCHITECTURE.md` for full schema contract details.
 
 ## Dependencies
 

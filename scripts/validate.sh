@@ -167,6 +167,75 @@ if [ -f "templates/rust-node/Cargo.toml.template" ]; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════
+printf "\n${CYAN}── PHASE 6: Schema Contract Validation ──${NC}\n"
+# ══════════════════════════════════════════════════════════════════════
+
+step "Rust template: DESCRIPTOR constant present"
+if grep -q 'pub const DESCRIPTOR.*include_bytes' templates/rust-node/src/node.rs.template; then
+    pass
+else
+    fail "Rust template missing DESCRIPTOR constant"
+fi
+
+step "Rust template: build.rs generates descriptor.bin"
+if [ -f "templates/rust-node/build.rs.template" ]; then
+    if grep -q 'file_descriptor_set_path' templates/rust-node/build.rs.template && \
+       grep -q 'descriptor.bin' templates/rust-node/build.rs.template; then
+        pass
+    else
+        fail "Rust build.rs.template doesn't generate descriptor.bin"
+    fi
+else
+    fail "Rust template missing build.rs.template"
+fi
+
+step "Rust template: schema queryable present"
+if grep -q '/schema' templates/rust-node/src/node.rs.template && \
+   grep -q 'declare_queryable' templates/rust-node/src/node.rs.template; then
+    pass
+else
+    fail "Rust template missing schema queryable"
+fi
+
+step "Python template: schema queryable present"
+if grep -q '/schema' templates/python-node/main.py.template && \
+   grep -q 'declare_queryable' templates/python-node/main.py.template; then
+    pass
+else
+    fail "Python template missing schema queryable"
+fi
+
+step "Python template: descriptor.bin referenced"
+if grep -q 'descriptor.bin' templates/python-node/main.py.template; then
+    pass
+else
+    fail "Python template doesn't reference descriptor.bin"
+fi
+
+step "Deployed nodes: protos/ directories exist for protobuf nodes"
+PROTOS_OK=true
+for node_dir in "$HOME"/.bubbaloop/nodes/*/; do
+    if [ -d "$node_dir" ]; then
+        # Check if node uses protobuf (has .proto files or descriptor.bin)
+        if find "$node_dir" -name "*.proto" -o -name "descriptor.bin" 2>/dev/null | grep -q .; then
+            # If it uses protobuf, check for protos/ or descriptor.bin
+            if [ ! -d "$node_dir/protos" ] && [ ! -f "$node_dir/descriptor.bin" ]; then
+                fail "Protobuf node missing protos/: $(basename "$node_dir")"
+                PROTOS_OK=false
+            fi
+        fi
+    fi
+done 2>/dev/null
+$PROTOS_OK && pass
+
+step "ARCHITECTURE.md: Schema Contract section present"
+if grep -q '### Schema Contract (Protobuf Nodes)' ARCHITECTURE.md; then
+    pass
+else
+    fail "ARCHITECTURE.md missing Schema Contract section"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
 printf "\n${CYAN}── PHASE 7: Contract Validation ──${NC}\n"
 # ══════════════════════════════════════════════════════════════════════
 

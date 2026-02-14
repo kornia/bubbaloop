@@ -58,8 +58,8 @@ All topics follow the scoped pattern: `bubbaloop/{scope}/{machine_id}/{{node_nam
 
 | Topic Suffix | Direction | Format | Description |
 |--------------|-----------|--------|-------------|
-| `output` | Publish | JSON | Main output data |
-| `schema` | Queryable | Protobuf | FileDescriptorSet (if protos exist) |
+| `output` | Publish | JSON/Protobuf | Main output data |
+| `schema` | Queryable | Protobuf | FileDescriptorSet (REQUIRED for protobuf nodes) |
 | `manifest` | Queryable | JSON | Node self-description contract |
 | `health` | Queryable | JSON | Node health status |
 | `config` | Queryable | JSON | Read-only configuration |
@@ -68,6 +68,47 @@ Data published to these topics is:
 - Visible in the Bubbaloop Dashboard
 - Available to other nodes on the Zenoh network
 - Persisted if a recorder node is running
+
+### Schema Contract (Protobuf Nodes)
+
+If this node publishes protobuf messages, it **MUST** serve its schema:
+
+1. **Add protos directory** with your .proto files + `header.proto`:
+   ```
+   {{node_name}}/
+   ├── protos/
+   │   ├── header.proto         # Copy from bubbaloop-schemas
+   │   └── {{node_name}}.proto
+   ├── descriptor.bin            # Compiled by protoc (add to .gitignore)
+   └── main.py
+   ```
+
+2. **Compile descriptor.bin** using protoc:
+   ```bash
+   protoc --descriptor_set_out=descriptor.bin \
+          --include_imports \
+          protos/{{node_name}}.proto protos/header.proto
+   ```
+
+3. **Declare schema queryable** in `main.py`:
+   ```python
+   # Load descriptor once at startup
+   with open("descriptor.bin", "rb") as f:
+       DESCRIPTOR_BYTES = f.read()
+
+   # Declare queryable (NEVER use complete=True)
+   @session.declare_queryable(f"{topic_prefix}/schema")
+   def handle_schema_query(query):
+       # query.key_expr is a PROPERTY, not a method
+       query.reply(query.key_expr, DESCRIPTOR_BYTES)
+   ```
+
+4. **Common mistakes** to avoid:
+   - ❌ `complete=True` — blocks wildcard discovery
+   - ❌ `query.key_expr()` — TypeError (it's a property, not method)
+   - ❌ Serving JSON instead of raw bytes
+
+See `ARCHITECTURE.md` for full schema contract details.
 
 ## Dependencies
 
