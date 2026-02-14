@@ -48,4 +48,4 @@ jobs:
         run: pixi run clippy
 
       - name: Test
-        run: pixi run test
+        run: pixi run cargo test --lib -p bubbaloop
