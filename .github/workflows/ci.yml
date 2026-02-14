@@ -29,6 +29,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: dashboard/package-lock.json
 
       - name: Build dashboard
         run: cd dashboard && npm ci && npm run proto && npm run build

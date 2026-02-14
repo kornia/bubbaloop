@@ -37,7 +37,7 @@ class {{node_name_pascal}}Node:
         # Load configuration
         if config_path.exists():
             with open(config_path) as f:
-                self.config = yaml.safe_load(f)
+                self.config = yaml.safe_load(f) or {}
         else:
             logger.warning(f"Config file not found: {config_path}, using defaults")
             self.config = {
@@ -105,8 +105,9 @@ class {{node_name_pascal}}Node:
 
     def run(self):
         """Run the node main loop."""
-        interval = 1.0 / self.config.get("rate_hz", 1.0)
-        logger.info(f"{{node_name}} node started (rate: {self.config.get('rate_hz', 1.0)} Hz)")
+        rate_hz = max(self.config.get("rate_hz", 1.0), 0.01)
+        interval = 1.0 / rate_hz
+        logger.info(f"{{node_name}} node started (rate: {rate_hz} Hz)")
 
         while self.running:
             # Publish output
@@ -148,20 +149,22 @@ def main():
     )
     args = parser.parse_args()
 
-    node = {{node_name_pascal}}Node(args.config, args.endpoint)
-
-    # Setup signal handlers
-    def signal_handler(signum, frame):
-        logger.info("Shutdown signal received")
-        node.stop()
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
+    node = None
     try:
+        node = {{node_name_pascal}}Node(args.config, args.endpoint)
+
+        # Setup signal handlers
+        def signal_handler(signum, frame):
+            logger.info("Shutdown signal received")
+            node.stop()
+
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
         node.run()
     finally:
-        node.close()
+        if node is not None:
+            node.close()
 
 
 if __name__ == "__main__":
