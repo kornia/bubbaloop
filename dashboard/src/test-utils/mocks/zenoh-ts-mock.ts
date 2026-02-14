@@ -86,10 +86,7 @@ export class IntoZBytes {
 
 /** Mock Config */
 export class Config {
-  private _endpoint: string;
-  constructor(endpoint?: string) {
-    this._endpoint = endpoint ?? '';
-  }
+  constructor(_endpoint?: string) {}
 }
 
 /** Mock Session */
