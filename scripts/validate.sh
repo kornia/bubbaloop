@@ -138,6 +138,25 @@ else
     pass
 fi
 
+step "No .complete(true) in Rust queryable template"
+if grep -v '^\s*//' templates/rust-node/src/node.rs.template 2>/dev/null | grep -q '\.complete(true)'; then
+    fail "Rust template uses .complete(true) (blocks wildcard schema discovery)"
+else
+    pass
+fi
+
+step "Deployed Python nodes: no key_expr() bug"
+DEPLOYED_OK=true
+for py in "$HOME"/.bubbaloop/nodes/*/main.py "$HOME"/.bubbaloop/nodes/*/*/main.py; do
+    if [ -f "$py" ]; then
+        if grep -v '^\s*#' "$py" | grep -q 'key_expr()'; then
+            fail "Deployed node has key_expr() bug: $py"
+            DEPLOYED_OK=false
+        fi
+    fi
+done 2>/dev/null
+$DEPLOYED_OK && pass
+
 step "Cargo.toml template: no git+path ambiguity"
 if [ -f "templates/rust-node/Cargo.toml.template" ]; then
     if grep -n 'bubbaloop-schemas' templates/rust-node/Cargo.toml.template | grep -q 'git.*path\|path.*git'; then

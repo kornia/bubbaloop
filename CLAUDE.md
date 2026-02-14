@@ -57,6 +57,14 @@ pixi run build     # cargo build --release (slow on ARM64)
 
 **DON'T:** run `bubbaloop tui` (needs TTY) | edit `target/`/`OUT_DIR` | commit `.env`/credentials/`target/` | add `bubbaloop-schemas` to workspace | combine `git`+`path` in Cargo deps | `git push --force` to main
 
+## Zenoh API Rules (templates & nodes)
+
+- **NEVER** use `.complete(true)` on queryables — blocks wildcard queries like `bubbaloop/**/schema`
+- **Python**: `query.key_expr` is a **property** NOT a method — NEVER use `query.key_expr()`
+- **Python**: `query.reply(query.key_expr, payload_bytes)` — correct reply pattern
+- **Rust**: Do NOT use `.complete(true)` — use `.await?` directly
+- **Validation**: Run `./scripts/validate.sh` to catch these errors automatically
+
 ## Commits
 
 Conventional: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`
