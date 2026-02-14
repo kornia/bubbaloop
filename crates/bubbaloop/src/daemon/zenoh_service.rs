@@ -29,12 +29,13 @@ pub type Result<T> = std::result::Result<T, ZenohServiceError>;
 /// Get machine ID from environment or hostname.
 /// Sanitizes hyphens to underscores for Zenoh topic compatibility (matching node convention).
 fn get_machine_id() -> String {
-    std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
-        hostname::get()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "unknown".to_string())
-    })
-    .replace('-', "_")
+    std::env::var("BUBBALOOP_MACHINE_ID")
+        .unwrap_or_else(|_| {
+            hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "unknown".to_string())
+        })
+        .replace('-', "_")
 }
 
 /// Key expressions for daemon topics

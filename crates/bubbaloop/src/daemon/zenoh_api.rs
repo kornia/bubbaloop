@@ -27,12 +27,13 @@ use zenoh::Session;
 /// Get machine ID from environment or hostname.
 /// Sanitizes hyphens to underscores for Zenoh topic compatibility (matching node convention).
 fn get_machine_id() -> String {
-    std::env::var("BUBBALOOP_MACHINE_ID").unwrap_or_else(|_| {
-        hostname::get()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "unknown".to_string())
-    })
-    .replace('-', "_")
+    std::env::var("BUBBALOOP_MACHINE_ID")
+        .unwrap_or_else(|_| {
+            hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "unknown".to_string())
+        })
+        .replace('-', "_")
 }
 
 /// Key expressions for API endpoints
@@ -247,10 +248,7 @@ impl ZenohApiService {
 
         // New machine-scoped path
         let new_wildcard = api_keys::api_wildcard(&self.machine_id);
-        let queryable_new = self
-            .session
-            .declare_queryable(&new_wildcard)
-            .await?;
+        let queryable_new = self.session.declare_queryable(&new_wildcard).await?;
 
         log::info!(
             "Declared queryable on {} for REST-like API (machine-scoped)",
@@ -803,10 +801,7 @@ mod tests {
     // parse_command: GetLogs aliases
     #[test]
     fn test_parse_command_logs_aliases() {
-        assert_eq!(
-            parse_command("logs") as i32,
-            CommandType::GetLogs as i32
-        );
+        assert_eq!(parse_command("logs") as i32, CommandType::GetLogs as i32);
         assert_eq!(
             parse_command("get_logs") as i32,
             CommandType::GetLogs as i32
@@ -815,10 +810,7 @@ mod tests {
             parse_command("get-logs") as i32,
             CommandType::GetLogs as i32
         );
-        assert_eq!(
-            parse_command("LOGS") as i32,
-            CommandType::GetLogs as i32
-        );
+        assert_eq!(parse_command("LOGS") as i32, CommandType::GetLogs as i32);
         assert_eq!(
             parse_command("Get-Logs") as i32,
             CommandType::GetLogs as i32
