@@ -182,15 +182,7 @@ impl NodeManager {
         let systemd = SystemdClient::new().await?;
         let (event_tx, _) = broadcast::channel(100);
 
-        // Get machine ID from environment or hostname.
-        // Sanitize hyphens to underscores for Zenoh topic compatibility (matching node convention).
-        let machine_id = std::env::var("BUBBALOOP_MACHINE_ID")
-            .unwrap_or_else(|_| {
-                hostname::get()
-                    .map(|h| h.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| "unknown".to_string())
-            })
-            .replace('-', "_");
+        let machine_id = super::util::get_machine_id();
 
         // Get machine hostname
         let machine_hostname = hostname::get()

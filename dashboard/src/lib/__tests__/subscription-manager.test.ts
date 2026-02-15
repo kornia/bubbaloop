@@ -87,6 +87,33 @@ describe('normalizeTopicPattern', () => {
     const topic = 'camera/terrace/data';
     expect(normalizeTopicPattern(topic)).toBe('camera/terrace/data');
   });
+
+  describe('ros-z new format (slash-preserved)', () => {
+    it('strips type and hash from new ros-z format', () => {
+      const topic = '0/bubbaloop/local/m1/camera/terrace/raw_shm/bubbaloop.camera.v1.Image/RIHS01_abc123';
+      expect(normalizeTopicPattern(topic)).toBe('0/bubbaloop/local/m1/camera/terrace/raw_shm');
+    });
+
+    it('strips type and hash from telemetry new format', () => {
+      const topic = '0/bubbaloop/local/nvidia_orin00/system_telemetry/metrics/bubbaloop.system_telemetry.v1.SystemMetrics/RIHS01_xyz';
+      expect(normalizeTopicPattern(topic)).toBe('0/bubbaloop/local/nvidia_orin00/system_telemetry/metrics');
+    });
+
+    it('preserves new format without type/hash', () => {
+      const topic = '0/bubbaloop/local/m1/camera/raw';
+      expect(normalizeTopicPattern(topic)).toBe('0/bubbaloop/local/m1/camera/raw');
+    });
+
+    it('handles new format with only hash suffix', () => {
+      const topic = '0/bubbaloop/local/m1/test/RIHS01_abc123';
+      expect(normalizeTopicPattern(topic)).toBe('0/bubbaloop/local/m1/test');
+    });
+
+    it('handles new format with trailing wildcard', () => {
+      const topic = '0/bubbaloop/local/m1/camera/**';
+      expect(normalizeTopicPattern(topic)).toBe('0/bubbaloop/local/m1/camera');
+    });
+  });
 });
 
 describe('ZenohSubscriptionManager', () => {

@@ -1,10 +1,31 @@
 # {{node_name}} node configuration
 
-# Topic to publish output to
-publish_topic: {{node_name}}/output
+# Topic suffix for published data (full topic: bubbaloop/{scope}/{machine_id}/{{node_name}}/{suffix})
+publish_topic: output
 
 # Topic to subscribe to (optional, set to null to disable)
 subscribe_topic: null
 
 # Publishing rate in Hz
 rate_hz: 1.0
+
+# --- Node Manifest (served at {prefix}/manifest) ---
+# Capabilities this node provides (e.g., sensor, actuator, health-check, network, compute)
+capabilities:
+  - sensor
+
+# Hardware requirements (e.g., camera, gpio, network, gpu, serial)
+requires_hardware:
+  - network
+
+# Data classification for security (internal, confidential, public)
+data_classification: internal
+
+# Clock source for timestamp correlation (system_realtime, hardware_clock, ntp_synced)
+clock_source: system_realtime
+
+# Timestamp field path in published messages (for multi-sensor correlation)
+timestamp_field: timestamp
+
+# Timestamp unit (nanoseconds, milliseconds, seconds, iso8601)
+timestamp_unit: milliseconds

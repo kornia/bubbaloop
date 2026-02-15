@@ -1,24 +1,29 @@
-import { useMemo, useState } from 'react';
-import { useZenohSession, useZenohTopicDiscovery, ConnectionStatus } from './lib/zenoh';
-import { ZenohSubscriptionProvider } from './contexts/ZenohSubscriptionContext';
-import { FleetProvider } from './contexts/FleetContext';
-import { SchemaRegistryProvider } from './contexts/SchemaRegistryContext';
-import { Dashboard } from './components/Dashboard';
-import { FleetBar } from './components/FleetBar';
-import { MeshView } from './components/MeshView';
-import { H264Decoder } from './lib/h264-decoder';
+import { useMemo, useState } from "react";
+import {
+  useZenohSession,
+  useZenohTopicDiscovery,
+  ConnectionStatus,
+} from "./lib/zenoh";
+import { ZenohSubscriptionProvider } from "./contexts/ZenohSubscriptionContext";
+import { FleetProvider } from "./contexts/FleetContext";
+import { SchemaRegistryProvider } from "./contexts/SchemaRegistryContext";
+import { NodeDiscoveryProvider } from "./contexts/NodeDiscoveryContext";
+import { Dashboard } from "./components/Dashboard";
+import { FleetBar } from "./components/FleetBar";
+import { MeshView } from "./components/MeshView";
+import { H264Decoder } from "./lib/h264-decoder";
 
-type AppView = 'dashboard' | 'loop';
+type AppView = "dashboard" | "loop";
 
 // Zenoh endpoint resolution:
 // 1. ?zenoh=ws://host:port URL parameter override
 // 2. /zenoh proxy path (works with both Vite dev server and serve.mjs)
 function getZenohEndpoint(): string {
   const params = new URLSearchParams(window.location.search);
-  const override = params.get('zenoh');
+  const override = params.get("zenoh");
   if (override) return override;
 
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   return `${protocol}://${window.location.host}/zenoh`;
 }
 
@@ -27,27 +32,39 @@ const ZENOH_ENDPOINT = getZenohEndpoint();
 // Default camera configuration - modify these to match your setup
 // Default cameras — topic starts empty; CameraView auto-detects the correct
 // scoped topic from discovered topics using the camera name as a hint.
-const DEFAULT_CAMERAS = [
-  { name: 'entrance', topic: '' },
-];
+const DEFAULT_CAMERAS = [{ name: "entrance", topic: "" }];
 
-function StatusIndicator({ status, endpoint, onReconnect }: { status: ConnectionStatus; endpoint: string; onReconnect: () => void }) {
+function StatusIndicator({
+  status,
+  endpoint,
+  onReconnect,
+}: {
+  status: ConnectionStatus;
+  endpoint: string;
+  onReconnect: () => void;
+}) {
   const statusConfig = {
-    disconnected: { color: 'var(--text-muted)', label: 'Disconnected' },
-    connecting: { color: 'var(--warning)', label: 'Connecting...' },
-    connected: { color: 'var(--success)', label: 'Connected' },
-    error: { color: 'var(--error)', label: 'Error' },
+    disconnected: { color: "var(--text-muted)", label: "Disconnected" },
+    connecting: { color: "var(--warning)", label: "Connecting..." },
+    connected: { color: "var(--success)", label: "Connected" },
+    error: { color: "var(--error)", label: "Error" },
   };
 
   const config = statusConfig[status];
 
   return (
     <div className="status-indicator">
-      <span className="status-endpoint" title={endpoint}>{endpoint}</span>
+      <span className="status-endpoint" title={endpoint}>
+        {endpoint}
+      </span>
       <span className="status-dot" style={{ backgroundColor: config.color }} />
       <span className="status-label">{config.label}</span>
-      {(status === 'error' || status === 'disconnected') && (
-        <button className="reconnect-btn" onClick={onReconnect} title="Reconnect">
+      {(status === "error" || status === "disconnected") && (
+        <button
+          className="reconnect-btn"
+          onClick={onReconnect}
+          title="Reconnect"
+        >
           ↻
         </button>
       )}
@@ -72,7 +89,7 @@ function StatusIndicator({ status, endpoint, onReconnect }: { status: Connection
           width: 8px;
           height: 8px;
           border-radius: 50%;
-          animation: ${status === 'connecting' ? 'pulse 1s infinite' : 'none'};
+          animation: ${status === "connecting" ? "pulse 1s infinite" : "none"};
         }
 
         .status-label {
@@ -125,7 +142,6 @@ function StatusIndicator({ status, endpoint, onReconnect }: { status: Connection
   );
 }
 
-
 function BrowserCheck() {
   const isSupported = H264Decoder.isSupported();
   const isSecureContext = window.isSecureContext;
@@ -144,12 +160,20 @@ function BrowserCheck() {
           <strong>WebCodecs not supported</strong>
           {needsSecureContext ? (
             <>
-              <p>WebCodecs requires a <strong>secure context</strong> (localhost or HTTPS).</p>
-              <p>Access via <code>https://{window.location.host}</code> or <code>http://localhost:5173</code></p>
+              <p>
+                WebCodecs requires a <strong>secure context</strong> (localhost
+                or HTTPS).
+              </p>
+              <p>
+                Access via <code>https://{window.location.host}</code> or{" "}
+                <code>http://localhost:5173</code>
+              </p>
             </>
           ) : (
             <>
-              <p>Your browser doesn't support WebCodecs API for H264 decoding.</p>
+              <p>
+                Your browser doesn't support WebCodecs API for H264 decoding.
+              </p>
               <p>Please use Chrome 94+, Edge 94+, or Safari 16.4+.</p>
             </>
           )}
@@ -198,8 +222,8 @@ function BrowserCheck() {
 export default function App() {
   const zenohConfig = useMemo(() => ({ endpoint: ZENOH_ENDPOINT }), []);
   const { session, status, error, reconnect } = useZenohSession(zenohConfig);
-  const { topics: availableTopics } = useZenohTopicDiscovery(session, '**');
-  const [currentView, setCurrentView] = useState<AppView>('dashboard');
+  const { topics: availableTopics } = useZenohTopicDiscovery(session, "**");
+  const [currentView, setCurrentView] = useState<AppView>("dashboard");
 
   return (
     <div className="app">
@@ -208,10 +232,17 @@ export default function App() {
           <h1>Bubbaloop</h1>
           <div className="view-switcher">
             <button
-              className={`view-tab ${currentView === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setCurrentView('dashboard')}
+              className={`view-tab ${currentView === "dashboard" ? "active" : ""}`}
+              onClick={() => setCurrentView("dashboard")}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
                 <rect x="3" y="3" width="7" height="7" rx="1" />
                 <rect x="14" y="3" width="7" height="7" rx="1" />
                 <rect x="3" y="14" width="7" height="7" rx="1" />
@@ -220,10 +251,17 @@ export default function App() {
               Dashboard
             </button>
             <button
-              className={`view-tab ${currentView === 'loop' ? 'active' : ''}`}
-              onClick={() => setCurrentView('loop')}
+              className={`view-tab ${currentView === "loop" ? "active" : ""}`}
+              onClick={() => setCurrentView("loop")}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
                 <circle cx="12" cy="12" r="3" />
                 <circle cx="5" cy="6" r="2" />
                 <circle cx="19" cy="6" r="2" />
@@ -238,7 +276,11 @@ export default function App() {
             </button>
           </div>
         </div>
-        <StatusIndicator status={status} endpoint={ZENOH_ENDPOINT} onReconnect={reconnect} />
+        <StatusIndicator
+          status={status}
+          endpoint={ZENOH_ENDPOINT}
+          onReconnect={reconnect}
+        />
       </header>
 
       <BrowserCheck />
@@ -251,31 +293,43 @@ export default function App() {
 
       {session ? (
         <FleetProvider>
-          <SchemaRegistryProvider session={session}>
-            <ZenohSubscriptionProvider session={session}>
-              <FleetBar />
-              {currentView === 'dashboard' ? (
-                <Dashboard cameras={DEFAULT_CAMERAS} availableTopics={availableTopics} />
-              ) : (
-                <MeshView availableTopics={availableTopics} zenohEndpoint={ZENOH_ENDPOINT} connectionStatus={status} />
-              )}
-            </ZenohSubscriptionProvider>
-          </SchemaRegistryProvider>
+          <NodeDiscoveryProvider session={session}>
+            <SchemaRegistryProvider session={session}>
+              <ZenohSubscriptionProvider session={session}>
+                <FleetBar />
+                {currentView === "dashboard" ? (
+                  <Dashboard
+                    cameras={DEFAULT_CAMERAS}
+                    availableTopics={availableTopics}
+                  />
+                ) : (
+                  <MeshView
+                    availableTopics={availableTopics}
+                    zenohEndpoint={ZENOH_ENDPOINT}
+                    connectionStatus={status}
+                  />
+                )}
+              </ZenohSubscriptionProvider>
+            </SchemaRegistryProvider>
+          </NodeDiscoveryProvider>
         </FleetProvider>
       ) : (
         <div className="connecting-placeholder">
           <div className="placeholder-content">
-            {status === 'connecting' ? (
+            {status === "connecting" ? (
               <>
                 <div className="spinner" />
                 <p>Connecting to Zenoh...</p>
                 <p className="hint">{ZENOH_ENDPOINT}</p>
               </>
-            ) : status === 'error' ? (
+            ) : status === "error" ? (
               <>
                 <span className="error-icon">❌</span>
                 <p>Failed to connect to {ZENOH_ENDPOINT}</p>
-                <p className="hint">Check that zenoh-bridge-remote-api is running (proxied via Vite)</p>
+                <p className="hint">
+                  Check that zenoh-bridge-remote-api is running (proxied via
+                  Vite)
+                </p>
               </>
             ) : (
               <>

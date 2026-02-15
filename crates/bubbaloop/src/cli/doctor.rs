@@ -290,6 +290,7 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
     let run_services = check_type == "all" || check_type == "zenoh";
     let run_zenoh = check_type == "all" || check_type == "zenoh";
     let run_daemon = check_type == "all" || check_type == "daemon";
+    let run_security = check_type == "all" || check_type == "security";
 
     let mut session: Option<Session> = None;
 
@@ -379,7 +380,7 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
     // 4. Check node subscriptions (requires Zenoh connection)
     if check_type == "all" {
         if !json {
-            println!("[4/4] Checking node subscriptions...");
+            println!("[4/5] Checking node subscriptions...");
         }
         if let Some(ref session) = session {
             results.extend(check_node_subscriptions(session).await);
@@ -390,6 +391,17 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
                 "Fix Zenoh connection first",
             ));
         }
+        if !json {
+            println!();
+        }
+    }
+
+    // 5. Security checks
+    if run_security {
+        if !json {
+            println!("[5/5] Checking security posture...");
+        }
+        results.extend(check_security().await);
         if !json {
             println!();
         }
@@ -980,6 +992,224 @@ async fn check_node_subscriptions(session: &Session) -> Vec<DiagnosticResult> {
     results
 }
 
+/// Check security posture of the deployment
+async fn check_security() -> Vec<DiagnosticResult> {
+    let mut results = Vec::new();
+
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return results,
+    };
+
+    let bubbaloop_dir = home.join(".bubbaloop");
+
+    // Check 1: TLS enabled/disabled
+    results.push(check_tls_status(&bubbaloop_dir));
+
+    // Check 2: ACL configuration present
+    results.push(check_acl_status(&bubbaloop_dir));
+
+    // Check 3: Scouting disabled in zenoh config
+    results.push(check_scouting_disabled(&bubbaloop_dir));
+
+    // Check 4: Localhost-only binding
+    results.push(check_localhost_binding(&bubbaloop_dir));
+
+    // Check 5: Python node sandbox check
+    results.extend(check_python_sandbox());
+
+    // Check 6: Node name validation
+    results.extend(check_node_names(&bubbaloop_dir));
+
+    results
+}
+
+/// Check if TLS is configured in Zenoh config
+fn check_tls_status(bubbaloop_dir: &std::path::Path) -> DiagnosticResult {
+    let zenoh_config = bubbaloop_dir.join("zenoh/zenohd.json5");
+    if let Ok(content) = std::fs::read_to_string(&zenoh_config) {
+        if content.contains("tls") && content.contains("server_certificate") {
+            DiagnosticResult::pass("TLS config", "TLS is configured")
+        } else {
+            DiagnosticResult::fail(
+                "TLS config",
+                "TLS not configured (plaintext transport)",
+                "Run: bubbaloop init-tls",
+            )
+        }
+    } else {
+        DiagnosticResult::fail(
+            "TLS config",
+            "Zenoh config not found",
+            "Run: bubbaloop doctor --fix",
+        )
+    }
+}
+
+/// Check if ACL rules are configured
+fn check_acl_status(bubbaloop_dir: &std::path::Path) -> DiagnosticResult {
+    let zenoh_config = bubbaloop_dir.join("zenoh/zenohd.json5");
+    if let Ok(content) = std::fs::read_to_string(&zenoh_config) {
+        if content.contains("access_control") {
+            DiagnosticResult::pass("ACL config", "access control rules present")
+        } else {
+            DiagnosticResult::fail(
+                "ACL config",
+                "no access control rules configured",
+                "See: configs/zenoh/acl-example.json5",
+            )
+        }
+    } else {
+        DiagnosticResult::fail(
+            "ACL config",
+            "Zenoh config not found",
+            "Run: bubbaloop doctor --fix",
+        )
+    }
+}
+
+/// Check if scouting is disabled in zenoh config
+fn check_scouting_disabled(bubbaloop_dir: &std::path::Path) -> DiagnosticResult {
+    let zenoh_config = bubbaloop_dir.join("zenoh/zenohd.json5");
+    if let Ok(content) = std::fs::read_to_string(&zenoh_config) {
+        // Check for multicast disabled
+        let multicast_disabled = content.contains("multicast")
+            && content.contains("enabled")
+            && content.contains("false");
+        if multicast_disabled {
+            DiagnosticResult::pass("Scouting", "multicast scouting disabled")
+        } else {
+            DiagnosticResult::fail(
+                "Scouting",
+                "multicast scouting may be enabled (security risk on shared networks)",
+                "Add scouting.multicast.enabled: false to zenohd.json5",
+            )
+        }
+    } else {
+        DiagnosticResult::fail(
+            "Scouting",
+            "Zenoh config not found",
+            "Run: bubbaloop doctor --fix",
+        )
+    }
+}
+
+/// Check if Zenoh binds to localhost only
+fn check_localhost_binding(bubbaloop_dir: &std::path::Path) -> DiagnosticResult {
+    let zenoh_config = bubbaloop_dir.join("zenoh/zenohd.json5");
+    if let Ok(content) = std::fs::read_to_string(&zenoh_config) {
+        // Check for 0.0.0.0 binding (allows remote connections)
+        if content.contains("0.0.0.0") {
+            DiagnosticResult::fail(
+                "Localhost binding",
+                "Zenoh binds to 0.0.0.0 (all interfaces)",
+                "Use 127.0.0.1 for local-only or enable TLS for remote access",
+            )
+        } else {
+            DiagnosticResult::pass("Localhost binding", "not binding to all interfaces")
+        }
+    } else {
+        DiagnosticResult::fail(
+            "Localhost binding",
+            "Zenoh config not found",
+            "Run: bubbaloop doctor --fix",
+        )
+    }
+}
+
+/// Check if Python node systemd units have sandboxing directives
+fn check_python_sandbox() -> Vec<DiagnosticResult> {
+    let mut results = Vec::new();
+
+    let systemd_dir = dirs::home_dir()
+        .map(|h| h.join(".config/systemd/user"))
+        .unwrap_or_default();
+
+    if !systemd_dir.exists() {
+        return results;
+    }
+
+    let entries = match std::fs::read_dir(&systemd_dir) {
+        Ok(e) => e,
+        Err(_) => return results,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("bubbaloop-") || !name.ends_with(".service") {
+            continue;
+        }
+
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            // Only check Python nodes (they have PYTHONUNBUFFERED)
+            if !content.contains("PYTHONUNBUFFERED") {
+                continue;
+            }
+
+            let has_sandbox = content.contains("ProtectHome=read-only")
+                && content.contains("MemoryMax=")
+                && content.contains("RestrictSUIDSGID=true");
+
+            if has_sandbox {
+                results.push(DiagnosticResult::pass(
+                    &format!("Python sandbox ({})", name),
+                    "sandboxing directives present",
+                ));
+            } else {
+                results.push(DiagnosticResult::fail(
+                    &format!("Python sandbox ({})", name),
+                    "missing sandboxing directives",
+                    "Reinstall node to get updated unit file with sandboxing",
+                ));
+            }
+        }
+    }
+
+    results
+}
+
+/// Validate a node name: 1-64 chars, [a-zA-Z0-9_-], no null bytes
+fn is_valid_node_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Check that registered node names are valid
+fn check_node_names(bubbaloop_dir: &std::path::Path) -> Vec<DiagnosticResult> {
+    let mut results = Vec::new();
+    let nodes_json = bubbaloop_dir.join("nodes.json");
+
+    if let Ok(content) = std::fs::read_to_string(&nodes_json) {
+        // Simple check: parse as JSON and validate each node name
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(nodes) = parsed.get("nodes").and_then(|n| n.as_array()) {
+                for node in nodes {
+                    if let Some(name) = node.get("name").and_then(|n| n.as_str()) {
+                        if is_valid_node_name(name) {
+                            results.push(DiagnosticResult::pass(
+                                &format!("Node name ({})", name),
+                                "valid",
+                            ));
+                        } else {
+                            results.push(DiagnosticResult::fail(
+                                &format!("Node name ({})", name),
+                                "invalid characters or length",
+                                "Node names must be 1-64 chars, [a-zA-Z0-9_-]",
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    results
+}
+
 async fn query_with_timeout<T: for<'de> Deserialize<'de>>(
     session: &Session,
     key_expr: &str,
@@ -1070,5 +1300,180 @@ mod tests {
         let node: NodeState = serde_json::from_str(json).unwrap();
         assert_eq!(node.name, "test-node");
         assert_eq!(node.status, "running");
+    }
+
+    // Security check tests
+
+    #[test]
+    fn test_is_valid_node_name_accepts_valid() {
+        assert!(is_valid_node_name("camera"));
+        assert!(is_valid_node_name("rtsp-camera"));
+        assert!(is_valid_node_name("my_node_123"));
+        assert!(is_valid_node_name("A"));
+        assert!(is_valid_node_name("a".repeat(64).as_str()));
+    }
+
+    #[test]
+    fn test_is_valid_node_name_rejects_invalid() {
+        assert!(!is_valid_node_name(""));
+        assert!(!is_valid_node_name("bad node"));
+        assert!(!is_valid_node_name("bad/node"));
+        assert!(!is_valid_node_name("bad.node"));
+        assert!(!is_valid_node_name("bad\0node"));
+        assert!(!is_valid_node_name(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn test_check_tls_status_with_tls_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let zenoh_dir = dir.path().join("zenoh");
+        std::fs::create_dir_all(&zenoh_dir).unwrap();
+        std::fs::write(
+            zenoh_dir.join("zenohd.json5"),
+            r#"{ transport: { link: { tls: { server_certificate: "/path/cert.pem" } } } }"#,
+        )
+        .unwrap();
+
+        let result = check_tls_status(dir.path());
+        assert!(result.passed, "Expected TLS check to pass");
+    }
+
+    #[test]
+    fn test_check_tls_status_without_tls() {
+        let dir = tempfile::tempdir().unwrap();
+        let zenoh_dir = dir.path().join("zenoh");
+        std::fs::create_dir_all(&zenoh_dir).unwrap();
+        std::fs::write(zenoh_dir.join("zenohd.json5"), r#"{ mode: "router" }"#).unwrap();
+
+        let result = check_tls_status(dir.path());
+        assert!(!result.passed, "Expected TLS check to fail");
+    }
+
+    #[test]
+    fn test_check_scouting_disabled_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let zenoh_dir = dir.path().join("zenoh");
+        std::fs::create_dir_all(&zenoh_dir).unwrap();
+        std::fs::write(
+            zenoh_dir.join("zenohd.json5"),
+            r#"{ scouting: { multicast: { enabled: false } } }"#,
+        )
+        .unwrap();
+
+        let result = check_scouting_disabled(dir.path());
+        assert!(result.passed, "Expected scouting check to pass");
+    }
+
+    #[test]
+    fn test_check_scouting_disabled_fails_when_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let zenoh_dir = dir.path().join("zenoh");
+        std::fs::create_dir_all(&zenoh_dir).unwrap();
+        std::fs::write(zenoh_dir.join("zenohd.json5"), r#"{ mode: "router" }"#).unwrap();
+
+        let result = check_scouting_disabled(dir.path());
+        assert!(!result.passed, "Expected scouting check to fail");
+    }
+
+    #[test]
+    fn test_check_localhost_binding_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let zenoh_dir = dir.path().join("zenoh");
+        std::fs::create_dir_all(&zenoh_dir).unwrap();
+        std::fs::write(
+            zenoh_dir.join("zenohd.json5"),
+            r#"{ listen: { endpoints: ["tcp/127.0.0.1:7447"] } }"#,
+        )
+        .unwrap();
+
+        let result = check_localhost_binding(dir.path());
+        assert!(result.passed, "Expected localhost check to pass");
+    }
+
+    #[test]
+    fn test_check_localhost_binding_fails_wildcard() {
+        let dir = tempfile::tempdir().unwrap();
+        let zenoh_dir = dir.path().join("zenoh");
+        std::fs::create_dir_all(&zenoh_dir).unwrap();
+        std::fs::write(
+            zenoh_dir.join("zenohd.json5"),
+            r#"{ listen: { endpoints: ["tcp/0.0.0.0:7447"] } }"#,
+        )
+        .unwrap();
+
+        let result = check_localhost_binding(dir.path());
+        assert!(
+            !result.passed,
+            "Expected localhost check to fail for 0.0.0.0"
+        );
+    }
+
+    #[test]
+    fn test_check_acl_status_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let zenoh_dir = dir.path().join("zenoh");
+        std::fs::create_dir_all(&zenoh_dir).unwrap();
+        std::fs::write(
+            zenoh_dir.join("zenohd.json5"),
+            r#"{ access_control: { enabled: true } }"#,
+        )
+        .unwrap();
+
+        let result = check_acl_status(dir.path());
+        assert!(result.passed, "Expected ACL check to pass");
+    }
+
+    #[test]
+    fn test_check_acl_status_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let zenoh_dir = dir.path().join("zenoh");
+        std::fs::create_dir_all(&zenoh_dir).unwrap();
+        std::fs::write(zenoh_dir.join("zenohd.json5"), r#"{ mode: "router" }"#).unwrap();
+
+        let result = check_acl_status(dir.path());
+        assert!(!result.passed, "Expected ACL check to fail");
+    }
+
+    #[test]
+    fn test_check_node_names_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("nodes.json"),
+            r#"{"nodes": [{"name": "camera"}, {"name": "rtsp-cam"}]}"#,
+        )
+        .unwrap();
+
+        let results = check_node_names(dir.path());
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.passed));
+    }
+
+    #[test]
+    fn test_check_node_names_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("nodes.json"),
+            r#"{"nodes": [{"name": "good-node"}, {"name": "bad node!"}]}"#,
+        )
+        .unwrap();
+
+        let results = check_node_names(dir.path());
+        assert_eq!(results.len(), 2);
+        assert!(results[0].passed);
+        assert!(!results[1].passed);
+    }
+
+    #[test]
+    fn test_parse_zenoh_endpoint_tcp() {
+        let (host, port) = parse_zenoh_endpoint("tcp/192.168.1.100:7447");
+        assert_eq!(host, "192.168.1.100");
+        assert_eq!(port, 7447);
+    }
+
+    #[test]
+    fn test_parse_zenoh_endpoint_default() {
+        let (host, port) = parse_zenoh_endpoint("invalid");
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(port, 7447);
     }
 }
