@@ -6,7 +6,7 @@
  */
 
 import * as protobuf from 'protobufjs';
-import { Session, Reply, ReplyError, Sample } from '@eclipse-zenoh/zenoh-ts';
+import { Session, Reply, ReplyError, Sample, ConsolidationMode } from '@eclipse-zenoh/zenoh-ts';
 import { Duration } from 'typed-duration';
 import { getSamplePayload } from './zenoh';
 
@@ -232,9 +232,11 @@ export class SchemaRegistry {
     try {
       const receiver = await session.get(pattern, {
         timeout: Duration.milliseconds.of(5000),
+        consolidation: ConsolidationMode.NONE,
       });
 
       if (receiver) {
+        let replyIndex = 0;
         for await (const replyItem of receiver) {
           if (replyItem instanceof Reply) {
             const replyResult = replyItem.result();
@@ -244,18 +246,25 @@ export class SchemaRegistry {
               const keyExpr = (replyResult as Sample).keyexpr().toString();
               // Skip core daemon schemas (already loaded by fetchCoreSchemas)
               if (keyExpr.includes('/daemon/api/schemas')) continue;
-              // Extract node name from key expression (last segment before /schema)
+              // When nodes reply with the wildcard pattern (query.key_expr()),
+              // all replies share the same key — use index-based source names
+              // to avoid dedup skipping subsequent schemas.
+              const isWildcard = keyExpr.includes('*');
               const segments = keyExpr.split('/');
               const schemaIdx = segments.lastIndexOf('schema');
-              const nodeName = schemaIdx > 0 ? segments[schemaIdx - 1] : keyExpr;
-              // Store prefix (without /schema) to match discoverSchemaForTopic's key format
-              const prefix = segments.slice(0, schemaIdx).join('/');
+              const nodeName = isWildcard
+                ? `discovered-${replyIndex}`
+                : (schemaIdx > 0 ? segments[schemaIdx - 1] : keyExpr);
+              const prefix = isWildcard
+                ? `wildcard-${replyIndex}`
+                : segments.slice(0, schemaIdx).join('/');
               // Only skip if already succeeded — failed prefixes should be retried
               if (!this.succeededPrefixes.has(prefix) && this.loadDescriptorSet(payload, `node:${prefix}`, nodeName)) {
                 this.succeededPrefixes.add(prefix);
                 this.failedPrefixes.delete(prefix);
                 discovered++;
               }
+              replyIndex++;
             }
           }
         }
