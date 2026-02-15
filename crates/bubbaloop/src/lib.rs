@@ -25,6 +25,9 @@ pub mod registry;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
+/// Agent logic layer — lightweight rule engine
+pub mod agent;
+
 /// Protobuf schemas for bubbaloop
 pub mod schemas {
     pub mod header {

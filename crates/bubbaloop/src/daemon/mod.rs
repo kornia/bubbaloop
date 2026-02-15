@@ -29,6 +29,7 @@ pub async fn run(
     zenoh_endpoint: Option<String>,
     strict: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::Arc;
     use tokio::sync::watch;
 
     log::info!("Starting bubbaloop daemon...");
@@ -141,11 +142,23 @@ pub async fn run(
         }
     });
 
+    // Start agent rule engine
+    let agent = Arc::new(crate::agent::Agent::new(
+        session.clone(),
+        node_manager.clone(),
+    ));
+    let agent_shutdown = shutdown_rx.clone();
+    let agent_ref = agent.clone();
+    let agent_task = tokio::spawn(async move {
+        agent_ref.run(agent_shutdown).await;
+    });
+
     // Start MCP server (HTTP on port 8088, feature-gated)
     #[cfg(feature = "mcp")]
     let mcp_task = {
         let mcp_session = session.clone();
         let mcp_manager = node_manager.clone();
+        let mcp_agent = Some(agent.clone());
         let mcp_shutdown = shutdown_rx.clone();
         let mcp_port = std::env::var("BUBBALOOP_MCP_PORT")
             .ok()
@@ -153,7 +166,7 @@ pub async fn run(
             .unwrap_or(crate::mcp::MCP_PORT);
         tokio::spawn(async move {
             if let Err(e) =
-                crate::mcp::run_mcp_server(mcp_session, mcp_manager, mcp_port, mcp_shutdown).await
+                crate::mcp::run_mcp_server(mcp_session, mcp_manager, mcp_agent, mcp_port, mcp_shutdown).await
             {
                 log::error!("MCP server error: {}", e);
             }
@@ -166,6 +179,7 @@ pub async fn run(
     log::info!("Bubbaloop daemon running. Press Ctrl+C to exit.");
     log::info!("  Zenoh pub/sub topics: bubbaloop/daemon/*");
     log::info!("  Zenoh API queryables: bubbaloop/daemon/api/*");
+    log::info!("  Agent rule engine: active");
     #[cfg(feature = "mcp")]
     log::info!("  MCP server: http://127.0.0.1:{}/mcp",
         std::env::var("BUBBALOOP_MCP_PORT")
@@ -176,8 +190,9 @@ pub async fn run(
     // Run the Zenoh service (blocks until shutdown)
     zenoh_service.run(shutdown_rx).await?;
 
-    // Abort API service
+    // Abort services
     api_task.abort();
+    agent_task.abort();
 
     // Abort MCP server
     #[cfg(feature = "mcp")]

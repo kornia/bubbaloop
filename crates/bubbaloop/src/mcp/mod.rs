@@ -3,6 +3,7 @@
 //! Exposes bubbaloop node operations as MCP tools that any LLM can call.
 //! Runs as an HTTP server on port 8088 inside the daemon process.
 
+use crate::agent::Agent;
 use crate::daemon::node_manager::NodeManager;
 use crate::schemas::daemon::v1::{CommandType, NodeCommand};
 use rmcp::handler::server::tool::ToolRouter;
@@ -22,6 +23,7 @@ pub const MCP_PORT: u16 = 8088;
 pub struct BubbaLoopMcpServer {
     session: Arc<Session>,
     node_manager: Arc<NodeManager>,
+    agent: Option<Arc<Agent>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -54,10 +56,11 @@ struct QueryTopicRequest {
 
 #[tool_router]
 impl BubbaLoopMcpServer {
-    pub fn new(session: Arc<Session>, node_manager: Arc<NodeManager>) -> Self {
+    pub fn new(session: Arc<Session>, node_manager: Arc<NodeManager>, agent: Option<Arc<Agent>>) -> Self {
         Self {
             session,
             node_manager,
+            agent,
             tool_router: Self::tool_router(),
         }
     }
@@ -230,6 +233,36 @@ impl BubbaLoopMcpServer {
         let result = self.zenoh_get_text("bubbaloop/**/manifest").await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
+
+    #[tool(description = "Get the agent's current status including active rules, recent triggers, and human overrides.")]
+    async fn get_agent_status(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        match &self.agent {
+            Some(agent) => {
+                let status = agent.get_status().await;
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string()),
+                )]))
+            }
+            None => Ok(CallToolResult::success(vec![Content::text(
+                "Agent not available",
+            )])),
+        }
+    }
+
+    #[tool(description = "List all agent rules with their triggers, conditions, and actions.")]
+    async fn list_agent_rules(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        match &self.agent {
+            Some(agent) => {
+                let rules = agent.get_rules().await;
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&rules).unwrap_or_else(|_| "[]".to_string()),
+                )]))
+            }
+            None => Ok(CallToolResult::success(vec![Content::text(
+                "Agent not available",
+            )])),
+        }
+    }
 }
 
 // ── ServerHandler implementation ──────────────────────────────────
@@ -332,6 +365,7 @@ fn now_ms() -> i64 {
 pub async fn run_mcp_server(
     session: Arc<Session>,
     node_manager: Arc<NodeManager>,
+    agent: Option<Arc<Agent>>,
     port: u16,
     mut shutdown_rx: tokio::sync::watch::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -341,9 +375,10 @@ pub async fn run_mcp_server(
 
     let session_for_factory = session;
     let manager_for_factory = node_manager;
+    let agent_for_factory = agent;
 
     let mcp_service = StreamableHttpService::new(
-        move || Ok(BubbaLoopMcpServer::new(session_for_factory.clone(), manager_for_factory.clone())),
+        move || Ok(BubbaLoopMcpServer::new(session_for_factory.clone(), manager_for_factory.clone(), agent_for_factory.clone())),
         LocalSessionManager::default().into(),
         Default::default(),
     );
