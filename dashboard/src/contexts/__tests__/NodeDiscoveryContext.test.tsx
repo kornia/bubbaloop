@@ -1,26 +1,61 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { ReactNode } from 'react';
 import {
   NodeDiscoveryProvider,
   useNodeDiscovery,
   type NodeManifest,
-  type DiscoveredNode,
 } from '../NodeDiscoveryContext';
-import { Reply, Sample, ReplyError } from '@eclipse-zenoh/zenoh-ts';
 
 // ============================================================================
 // Mocks
 // ============================================================================
 
-// Hoist mock functions so they can be referenced in vi.mock()
-const { mockReportMachines, mockReportNodes, mockDecodeNodeList, mockGetSamplePayload } =
-  vi.hoisted(() => ({
+// Hoist mock functions and zenoh classes so they can be referenced in vi.mock()
+const {
+  mockReportMachines,
+  mockReportNodes,
+  mockDecodeNodeList,
+  mockGetSamplePayload,
+  MockReply,
+  MockReplyError,
+  MockSample,
+} = vi.hoisted(() => {
+  class _ReplyError {
+    constructor(public message: string) {}
+  }
+  class _Sample {
+    constructor(
+      public _keyexpr: string,
+      public _payload: Uint8Array,
+    ) {}
+    key_expr() { return this._keyexpr; }
+    keyexpr = this._keyexpr;
+    payload() {
+      const p = this._payload;
+      return { toBytes: () => p };
+    }
+  }
+  class _Reply {
+    constructor(
+      public _sample?: _Sample,
+      public _error?: _ReplyError,
+    ) {}
+    result() {
+      if (this._error) return this._error;
+      return this._sample;
+    }
+  }
+  return {
     mockReportMachines: vi.fn(),
     mockReportNodes: vi.fn(),
     mockDecodeNodeList: vi.fn(),
     mockGetSamplePayload: vi.fn(),
-  }));
+    MockReply: _Reply,
+    MockReplyError: _ReplyError,
+    MockSample: _Sample,
+  };
+});
 
 // Mock FleetContext
 vi.mock('../FleetContext', () => ({
@@ -44,6 +79,13 @@ vi.mock('../../lib/zenoh', () => ({
   getSamplePayload: mockGetSamplePayload,
 }));
 
+// Mock @eclipse-zenoh/zenoh-ts so instanceof checks work
+vi.mock('@eclipse-zenoh/zenoh-ts', () => ({
+  Reply: MockReply,
+  ReplyError: MockReplyError,
+  Sample: MockSample,
+}));
+
 // Mock typed-duration
 vi.mock('typed-duration', () => ({
   Duration: {
@@ -57,7 +99,7 @@ vi.mock('typed-duration', () => ({
 // Test Helpers
 // ============================================================================
 
-function createMockSession(responses: Map<string, Reply[]> = new Map()): any {
+function createMockSession(responses: Map<string, any[]> = new Map()): any {
   return {
     get: vi.fn(async (keyexpr: string) => {
       const replies = responses.get(keyexpr) || [];
@@ -72,19 +114,19 @@ function createMockSession(responses: Map<string, Reply[]> = new Map()): any {
   };
 }
 
-function createMockSample(keyexpr: string, payload: Uint8Array): Sample {
-  return new Sample(keyexpr, payload);
+function createMockSample(keyexpr: string, payload: Uint8Array): any {
+  return new MockSample(keyexpr, payload);
 }
 
-function createMockReply(sample: Sample): Reply {
-  return new Reply(sample);
+function createMockReply(sample: any): any {
+  return new MockReply(sample);
 }
 
-function createMockReplyError(): Reply {
-  return new Reply(undefined, new ReplyError('Mock error'));
+function createMockReplyError(): any {
+  return new MockReply(undefined, new MockReplyError('Mock error'));
 }
 
-function createNodeListPayload(nodes: any[], machineId = 'test-machine'): Uint8Array {
+function createNodeListPayload(): Uint8Array {
   return new Uint8Array([1, 2, 3]); // Mock bytes
 }
 
@@ -197,24 +239,7 @@ describe('NodeDiscoveryContext', () => {
       });
 
       it('sets daemonConnected=true after receiving daemon data', async () => {
-        const nodeListData = createNodeListPayload([
-          {
-            name: 'camera-node',
-            path: '/path/to/camera',
-            status: 2, // running
-            installed: true,
-            autostartEnabled: true,
-            version: '1.0.0',
-            description: 'Camera node',
-            nodeType: 'camera',
-            isBuilt: true,
-            buildOutput: [],
-            machineId: 'machine-1',
-            machineHostname: 'host-1',
-            machineIps: ['192.168.1.1'],
-            baseNode: 'camera-base',
-          },
-        ]);
+        const nodeListData = createNodeListPayload();
 
         mockDecodeNodeList.mockReturnValue({
           nodes: [
@@ -257,7 +282,7 @@ describe('NodeDiscoveryContext', () => {
       });
 
       it('maps protobuf status numbers to string status', async () => {
-        const nodeListData = createNodeListPayload([]);
+        const nodeListData = createNodeListPayload();
 
         mockDecodeNodeList.mockReturnValue({
           nodes: [
@@ -341,7 +366,7 @@ describe('NodeDiscoveryContext', () => {
           machineId: 'machine-1',
         });
 
-        const nodeListData = createNodeListPayload([]);
+        const nodeListData = createNodeListPayload();
         mockGetSamplePayload.mockReturnValue(nodeListData);
 
         const sample = createMockSample('bubbaloop/daemon/nodes', nodeListData);
@@ -365,7 +390,7 @@ describe('NodeDiscoveryContext', () => {
 
         mockDecodeNodeList.mockReturnValue(null);
 
-        const nodeListData = createNodeListPayload([]);
+        const nodeListData = createNodeListPayload();
         mockGetSamplePayload.mockReturnValue(nodeListData);
 
         const errorReply = createMockReplyError();
@@ -484,7 +509,7 @@ describe('NodeDiscoveryContext', () => {
 
     describe('node merging', () => {
       it('marks daemon-only nodes as discoveredVia=daemon', async () => {
-        const nodeListData = createNodeListPayload([]);
+        const nodeListData = createNodeListPayload();
 
         mockDecodeNodeList.mockReturnValue({
           nodes: [
@@ -572,7 +597,7 @@ describe('NodeDiscoveryContext', () => {
         const machineId = 'machine-1';
 
         // Daemon response
-        const nodeListData = createNodeListPayload([]);
+        const nodeListData = createNodeListPayload();
         mockDecodeNodeList.mockReturnValue({
           nodes: [
             {
@@ -655,7 +680,7 @@ describe('NodeDiscoveryContext', () => {
 
     describe('fleet reporting', () => {
       it('calls reportMachines with machine groups', async () => {
-        const nodeListData = createNodeListPayload([]);
+        const nodeListData = createNodeListPayload();
 
         mockDecodeNodeList.mockReturnValue({
           nodes: [
@@ -732,7 +757,7 @@ describe('NodeDiscoveryContext', () => {
       });
 
       it('calls reportNodes with all discovered nodes', async () => {
-        const nodeListData = createNodeListPayload([]);
+        const nodeListData = createNodeListPayload();
 
         mockDecodeNodeList.mockReturnValue({
           nodes: [
