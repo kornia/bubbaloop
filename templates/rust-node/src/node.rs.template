@@ -48,6 +48,21 @@ fn default_timestamp_unit() -> String {
     "milliseconds".to_string()
 }
 
+/// Command definition for the manifest
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandDef {
+    /// Command name (e.g., "capture_frame")
+    pub name: String,
+    /// Human-readable description
+    pub description: String,
+    /// Parameter names and types (e.g., {"resolution": "string"})
+    #[serde(default)]
+    pub parameters: std::collections::HashMap<String, String>,
+    /// Return type description
+    #[serde(default)]
+    pub returns: Option<String>,
+}
+
 /// Node configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -67,6 +82,10 @@ pub struct Config {
     /// Hardware requirements (e.g., "camera", "network")
     #[serde(default)]
     pub requires_hardware: Vec<String>,
+
+    /// Supported commands (declared in config, exposed via manifest)
+    #[serde(default)]
+    pub commands: Vec<CommandDef>,
 
     /// Data classification (internal, confidential, public)
     #[serde(default = "default_data_classification")]
@@ -93,6 +112,7 @@ impl Default for Config {
             rate_hz: 1.0,
             capabilities: Vec::new(),
             requires_hardware: Vec::new(),
+            commands: Vec::new(),
             data_classification: default_data_classification(),
             clock_source: default_clock_source(),
             timestamp_field: default_timestamp_field(),
@@ -213,9 +233,16 @@ impl {{node_name_pascal}}Node {
                         "rate_hz": manifest_config.rate_hz,
                     }],
                     "subscribes": manifest_config.subscribe_topic.as_deref().map(|t| vec![t]).unwrap_or_default(),
+                    "commands": manifest_config.commands.iter().map(|c| serde_json::json!({
+                        "name": &c.name,
+                        "description": &c.description,
+                        "parameters": &c.parameters,
+                        "returns": &c.returns,
+                    })).collect::<Vec<_>>(),
                     "schema_key": format!("{}/schema", manifest_prefix),
                     "health_key": format!("{}/health", manifest_prefix),
                     "config_key": format!("{}/config", manifest_prefix),
+                    "command_key": format!("{}/command", manifest_prefix),
                     "security": {
                         "acl_prefix": format!("bubbaloop/*/{}/{{{{node_name}}}}/**", manifest_machine_id),
                         "data_classification": &manifest_config.data_classification,
@@ -264,6 +291,65 @@ impl {{node_name_pascal}}Node {
             })
             .await
             .map_err(|e| anyhow!("Failed to create config queryable: {}", e))?;
+
+        // Declare command queryable for imperative actions from agents/CLI
+        // Request: JSON {"command": "name", "params": {...}}
+        // Response: JSON {"result": ..., "error": null}
+        let command_config = self.config.clone();
+        let _command_queryable = self.session
+            .declare_queryable(&format!("{}/command", topic_prefix))
+            .callback(move |query| {
+                use zenoh::Wait;
+                log::debug!("Command query received");
+                let response = match query.payload() {
+                    Some(payload) => {
+                        let bytes = payload.to_bytes();
+                        match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                            Ok(req) => {
+                                let cmd_name = req.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                                let known = command_config.commands.iter().any(|c| c.name == cmd_name);
+                                if known {
+                                    // TODO: Implement command handling logic per command name
+                                    serde_json::json!({
+                                        "result": format!("Command '{}' received (not yet implemented)", cmd_name),
+                                        "error": null
+                                    })
+                                } else {
+                                    let available: Vec<&str> = command_config.commands.iter().map(|c| c.name.as_str()).collect();
+                                    serde_json::json!({
+                                        "result": null,
+                                        "error": format!("Unknown command '{}'. Available: {:?}", cmd_name, available)
+                                    })
+                                }
+                            }
+                            Err(e) => serde_json::json!({
+                                "result": null,
+                                "error": format!("Invalid JSON payload: {}", e)
+                            }),
+                        }
+                    }
+                    None => {
+                        // No payload = list available commands
+                        let cmds: Vec<serde_json::Value> = command_config.commands.iter().map(|c| {
+                            serde_json::json!({
+                                "name": c.name,
+                                "description": c.description,
+                                "parameters": c.parameters,
+                                "returns": c.returns,
+                            })
+                        }).collect();
+                        serde_json::json!({
+                            "result": cmds,
+                            "error": null
+                        })
+                    }
+                };
+                if let Err(e) = query.reply(query.key_expr(), ZBytes::from(response.to_string().into_bytes())).wait() {
+                    log::warn!("Failed to reply to command query: {}", e);
+                }
+            })
+            .await
+            .map_err(|e| anyhow!("Failed to create command queryable: {}", e))?;
 
         // Declare liveliness token for presence detection
         let _liveliness_token = self.session

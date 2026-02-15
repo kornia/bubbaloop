@@ -21,6 +21,10 @@ pub mod templates;
 /// Shared node registry for marketplace operations
 pub mod registry;
 
+/// MCP server for AI agent integration
+#[cfg(feature = "mcp")]
+pub mod mcp;
+
 /// Protobuf schemas for bubbaloop
 pub mod schemas {
     pub mod header {

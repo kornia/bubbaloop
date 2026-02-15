@@ -305,6 +305,33 @@ for tpl in templates/python-node/main.py.template templates/rust-node/src/node.r
 done
 $CONFIG_OK && pass
 
+step "Templates: command queryable present"
+CMD_OK=true
+for tpl in templates/python-node/main.py.template templates/rust-node/src/node.rs.template; do
+    if [ -f "$tpl" ] && ! grep -q '/command' "$tpl"; then
+        fail "$tpl missing command queryable"
+        CMD_OK=false
+    fi
+done
+$CMD_OK && pass
+
+step "Templates: command_key in manifest"
+CMD_KEY_OK=true
+for tpl in templates/python-node/main.py.template templates/rust-node/src/node.rs.template; do
+    if [ -f "$tpl" ] && ! grep -q 'command_key' "$tpl"; then
+        fail "$tpl missing command_key in manifest"
+        CMD_KEY_OK=false
+    fi
+done
+$CMD_KEY_OK && pass
+
+step "ARCHITECTURE.md: Command Contract section present"
+if grep -q '### Command Contract' ARCHITECTURE.md; then
+    pass
+else
+    fail "ARCHITECTURE.md missing Command Contract section"
+fi
+
 step "Systemd units: BUBBALOOP_MACHINE_ID injected"
 if grep -q 'BUBBALOOP_MACHINE_ID' crates/bubbaloop/src/daemon/systemd.rs; then
     pass

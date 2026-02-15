@@ -63,6 +63,7 @@ class {{node_name_pascal}}Node:
                 "version": "0.1.0",
                 "capabilities": [],
                 "requires_hardware": [],
+                "commands": [],
                 "data_classification": "internal",
                 "clock_source": "system_realtime",
                 "timestamp_field": "timestamp",
@@ -139,6 +140,14 @@ class {{node_name_pascal}}Node:
         )
         logger.info(f"Config queryable declared on {config_key}")
 
+        # Declare command queryable for imperative actions from agents/CLI
+        command_key = f"{self._topic_prefix}/command"
+        self._command_queryable = self.session.declare_queryable(
+            command_key,
+            self._on_command_query,
+        )
+        logger.info(f"Command queryable declared on {command_key}")
+
         # TODO: Zenoh liveliness tokens (requires zenoh-python with liveliness support)
         # liveliness_key = f"bubbaloop/{self._scope}/{self._machine_id}/{self._node_name}"
         # self._liveliness_token = self.session.liveliness().declare_token(liveliness_key)
@@ -182,9 +191,11 @@ class {{node_name_pascal}}Node:
                 }
             ],
             "subscribes": [self.config["subscribe_topic"]] if self.config.get("subscribe_topic") else [],
+            "commands": self.config.get("commands", []),
             "schema_key": f"{self._topic_prefix}/schema",
             "health_key": f"{self._topic_prefix}/health",
             "config_key": f"{self._topic_prefix}/config",
+            "command_key": f"{self._topic_prefix}/command",
             "security": {
                 "acl_prefix": f"bubbaloop/*/{self._machine_id}/{self._node_name}/**",
                 "data_classification": self.config.get("data_classification", "internal"),
@@ -215,6 +226,49 @@ class {{node_name_pascal}}Node:
         """Respond to config queries (read-only)."""
         logger.debug("Config query received")
         query.reply(query.key_expr, json.dumps(self.config).encode())
+
+    def _on_command_query(self, query: zenoh.Query):
+        """Handle command queries from agents/CLI.
+
+        Request: JSON {"command": "name", "params": {...}}
+        Response: JSON {"result": ..., "error": null}
+        No payload = list available commands.
+        """
+        logger.debug("Command query received")
+        payload = query.payload
+        if payload is None:
+            # No payload = list available commands
+            commands = self.config.get("commands", [])
+            response = {"result": commands, "error": None}
+        else:
+            try:
+                req = json.loads(payload.to_bytes())
+                cmd_name = req.get("command", "")
+                known_commands = {c["name"] for c in self.config.get("commands", [])}
+                if cmd_name in known_commands:
+                    result = self.handle_command(cmd_name, req.get("params", {}))
+                    response = {"result": result, "error": None}
+                else:
+                    response = {
+                        "result": None,
+                        "error": f"Unknown command '{cmd_name}'. Available: {sorted(known_commands)}",
+                    }
+            except (json.JSONDecodeError, Exception) as e:
+                response = {"result": None, "error": str(e)}
+        query.reply(query.key_expr, json.dumps(response).encode())
+
+    def handle_command(self, command: str, params: dict[str, Any]) -> Any:
+        """Handle a command. Override this method to implement command logic.
+
+        Args:
+            command: The command name.
+            params: Command parameters.
+
+        Returns:
+            The command result (will be JSON-serialized).
+        """
+        # TODO: Implement your command handling logic here
+        return f"Command '{command}' received (not yet implemented)"
 
     def _on_message(self, sample: zenoh.Sample):
         """Handle incoming messages."""
@@ -262,6 +316,8 @@ class {{node_name_pascal}}Node:
             self._health_queryable.undeclare()
         if self._config_queryable:
             self._config_queryable.undeclare()
+        if self._command_queryable:
+            self._command_queryable.undeclare()
         # TODO: Undeclare liveliness token when zenoh-python supports it
         # if self._liveliness_token:
         #     self._liveliness_token.undeclare()

@@ -1,0 +1,365 @@
+//! MCP (Model Context Protocol) server for AI agent integration.
+//!
+//! Exposes bubbaloop node operations as MCP tools that any LLM can call.
+//! Runs as an HTTP server on port 8088 inside the daemon process.
+
+use crate::daemon::node_manager::NodeManager;
+use crate::schemas::daemon::v1::{CommandType, NodeCommand};
+use rmcp::handler::server::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::*;
+use rmcp::{tool, tool_handler, tool_router, ServerHandler};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use std::sync::Arc;
+use zenoh::Session;
+
+/// Default port for the MCP HTTP server.
+pub const MCP_PORT: u16 = 8088;
+
+/// Bubbaloop MCP server — wraps Zenoh operations as MCP tools.
+#[derive(Clone)]
+pub struct BubbaLoopMcpServer {
+    session: Arc<Session>,
+    node_manager: Arc<NodeManager>,
+    tool_router: ToolRouter<Self>,
+}
+
+// ── Tool parameter types ──────────────────────────────────────────
+
+#[derive(Deserialize, JsonSchema)]
+struct NodeNameRequest {
+    /// Name of the node (e.g., "rtsp-camera", "openmeteo")
+    node_name: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct SendCommandRequest {
+    /// Name of the node to send the command to
+    node_name: String,
+    /// Command name (must be listed in the node's manifest)
+    command: String,
+    /// Optional JSON parameters for the command
+    #[serde(default)]
+    params: serde_json::Value,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct QueryTopicRequest {
+    /// Full Zenoh key expression to query (e.g., "bubbaloop/local/nvidia_orin00/openmeteo/status")
+    key_expr: String,
+}
+
+// ── Tool implementations ──────────────────────────────────────────
+
+#[tool_router]
+impl BubbaLoopMcpServer {
+    pub fn new(session: Arc<Session>, node_manager: Arc<NodeManager>) -> Self {
+        Self {
+            session,
+            node_manager,
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    #[tool(description = "List all registered nodes with their status, capabilities, and topics. Returns node name, status (running/stopped/etc), type, and whether it's built.")]
+    async fn list_nodes(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        let node_list = self.node_manager.get_node_list().await;
+        let nodes: Vec<serde_json::Value> = node_list
+            .nodes
+            .iter()
+            .map(|n| {
+                serde_json::json!({
+                    "name": n.name,
+                    "status": format!("{:?}", crate::schemas::daemon::v1::NodeStatus::try_from(n.status).unwrap_or(crate::schemas::daemon::v1::NodeStatus::Unknown)),
+                    "installed": n.installed,
+                    "is_built": n.is_built,
+                    "node_type": n.node_type,
+                    "path": n.path,
+                    "machine_id": n.machine_id,
+                })
+            })
+            .collect();
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&nodes).unwrap_or_else(|_| "[]".to_string()),
+        )]))
+    }
+
+    #[tool(description = "Get detailed health status of a specific node including uptime.")]
+    async fn get_node_health(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match self.node_manager.get_node(&req.node_name).await {
+            Some(node) => {
+                let health = serde_json::json!({
+                    "name": node.name,
+                    "status": format!("{:?}", crate::schemas::daemon::v1::NodeStatus::try_from(node.status).unwrap_or(crate::schemas::daemon::v1::NodeStatus::Unknown)),
+                    "health_status": format!("{:?}", crate::schemas::daemon::v1::HealthStatus::try_from(node.health_status).unwrap_or(crate::schemas::daemon::v1::HealthStatus::Unknown)),
+                    "last_health_check_ms": node.last_health_check_ms,
+                    "last_updated_ms": node.last_updated_ms,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&health).unwrap_or_default(),
+                )]))
+            }
+            None => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Node '{}' not found",
+                req.node_name
+            ))])),
+        }
+    }
+
+    #[tool(description = "Get the current configuration of a node by querying its Zenoh config queryable.")]
+    async fn get_node_config(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let result = self.zenoh_get_text(&format!("bubbaloop/**/{}/**/config", req.node_name)).await;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Get the manifest (self-description) of a node including its capabilities, published topics, commands, and hardware requirements.")]
+    async fn get_node_manifest(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let result = self.zenoh_get_text(&format!("bubbaloop/**/{}/**/manifest", req.node_name)).await;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Send a command to a node's command queryable. The node must support the command (check its manifest first). Returns the command result or error.")]
+    async fn send_command(
+        &self,
+        Parameters(req): Parameters<SendCommandRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let key_expr = format!("bubbaloop/**/{}/**/command", req.node_name);
+        let payload = serde_json::json!({
+            "command": req.command,
+            "params": req.params,
+        });
+        let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
+
+        match self
+            .session
+            .get(&key_expr)
+            .payload(zenoh::bytes::ZBytes::from(payload_bytes))
+            .timeout(std::time::Duration::from_secs(5))
+            .await
+        {
+            Ok(replies) => {
+                let mut results = Vec::new();
+                while let Ok(reply) = replies.recv_async().await {
+                    match reply.result() {
+                        Ok(sample) => {
+                            let bytes = sample.payload().to_bytes();
+                            match String::from_utf8(bytes.to_vec()) {
+                                Ok(text) => results.push(text),
+                                Err(_) => results.push(format!("<{} bytes binary>", bytes.len())),
+                            }
+                        }
+                        Err(err) => {
+                            results.push(format!("Error: {:?}", err.payload().to_bytes()));
+                        }
+                    }
+                }
+                if results.is_empty() {
+                    Ok(CallToolResult::success(vec![Content::text(
+                        "No response from node (is it running?)",
+                    )]))
+                } else {
+                    Ok(CallToolResult::success(vec![Content::text(
+                        results.join("\n"),
+                    )]))
+                }
+            }
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Zenoh query failed: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "Start a stopped node via the daemon. The node must be installed and built.")]
+    async fn start_node(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let result = self.execute_daemon_command(CommandType::Start, &req.node_name).await;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Stop a running node via the daemon.")]
+    async fn stop_node(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let result = self.execute_daemon_command(CommandType::Stop, &req.node_name).await;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Restart a node (stop then start).")]
+    async fn restart_node(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let result = self.execute_daemon_command(CommandType::Restart, &req.node_name).await;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Get the latest logs from a node's systemd service.")]
+    async fn get_node_logs(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let result = self.execute_daemon_command(CommandType::GetLogs, &req.node_name).await;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Query any Zenoh key expression and return the response. Use this for reading sensor data or any custom queryable.")]
+    async fn query_zenoh(
+        &self,
+        Parameters(req): Parameters<QueryTopicRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let result = self.zenoh_get_text(&req.key_expr).await;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Discover all nodes across all machines by querying manifests. Returns a list of all self-describing nodes with their capabilities.")]
+    async fn discover_nodes(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        let result = self.zenoh_get_text("bubbaloop/**/manifest").await;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+}
+
+// ── ServerHandler implementation ──────────────────────────────────
+
+#[tool_handler]
+impl ServerHandler for BubbaLoopMcpServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            protocol_version: ProtocolVersion::V_2024_11_05,
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            server_info: Implementation::from_build_env(),
+            instructions: Some(
+                "Bubbaloop physical AI orchestration. Use list_nodes to see available \
+                 sensor nodes, get_node_manifest to understand a node's capabilities, \
+                 and send_command to trigger actions. Use discover_nodes for cross-machine \
+                 fleet discovery via Zenoh."
+                    .into(),
+            ),
+        }
+    }
+}
+
+// ── Helper methods ────────────────────────────────────────────────
+
+impl BubbaLoopMcpServer {
+    /// Execute a daemon command (start/stop/restart/etc.) via the NodeManager.
+    async fn execute_daemon_command(&self, cmd_type: CommandType, node_name: &str) -> String {
+        let cmd = NodeCommand {
+            command: cmd_type as i32,
+            node_name: node_name.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: now_ms(),
+            source_machine: "mcp".to_string(),
+            target_machine: String::new(),
+            node_path: String::new(),
+            name_override: String::new(),
+            config_override: String::new(),
+        };
+
+        let result = self.node_manager.execute_command(cmd).await;
+        if result.success {
+            if result.output.is_empty() {
+                result.message
+            } else {
+                format!("{}\n{}", result.message, result.output)
+            }
+        } else {
+            format!("Error: {}", result.message)
+        }
+    }
+
+    /// Query a Zenoh key expression and return text results.
+    async fn zenoh_get_text(&self, key_expr: &str) -> String {
+        match self
+            .session
+            .get(key_expr)
+            .timeout(std::time::Duration::from_secs(3))
+            .await
+        {
+            Ok(replies) => {
+                let mut results = Vec::new();
+                while let Ok(reply) = replies.recv_async().await {
+                    match reply.result() {
+                        Ok(sample) => {
+                            let key = sample.key_expr().to_string();
+                            let bytes = sample.payload().to_bytes();
+                            match String::from_utf8(bytes.to_vec()) {
+                                Ok(text) => results.push(format!("[{}] {}", key, text)),
+                                Err(_) => {
+                                    results.push(format!("[{}] <{} bytes binary>", key, bytes.len()))
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            results.push(format!("Error: {:?}", err.payload().to_bytes()));
+                        }
+                    }
+                }
+                if results.is_empty() {
+                    "No responses received (are nodes running?)".to_string()
+                } else {
+                    results.join("\n")
+                }
+            }
+            Err(e) => format!("Zenoh query failed: {}", e),
+        }
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+/// Start the MCP HTTP server on the given port.
+///
+/// Mounts the StreamableHttpService at `/mcp` and blocks until shutdown.
+pub async fn run_mcp_server(
+    session: Arc<Session>,
+    node_manager: Arc<NodeManager>,
+    port: u16,
+    mut shutdown_rx: tokio::sync::watch::Receiver<()>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use rmcp::transport::streamable_http_server::{
+        session::local::LocalSessionManager, StreamableHttpService,
+    };
+
+    let session_for_factory = session;
+    let manager_for_factory = node_manager;
+
+    let mcp_service = StreamableHttpService::new(
+        move || Ok(BubbaLoopMcpServer::new(session_for_factory.clone(), manager_for_factory.clone())),
+        LocalSessionManager::default().into(),
+        Default::default(),
+    );
+
+    let router = axum::Router::new().nest_service("/mcp", mcp_service);
+
+    let bind_addr = format!("127.0.0.1:{}", port);
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    log::info!("MCP server listening on http://{}/mcp", bind_addr);
+
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async move {
+            shutdown_rx.changed().await.ok();
+        })
+        .await?;
+
+    log::info!("MCP server stopped.");
+    Ok(())
+}

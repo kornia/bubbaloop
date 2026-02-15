@@ -91,7 +91,7 @@ Transform Bubbaloop from a local daemon into a **complete platform** where users
 
 Building a self-describing, decentralized sensor architecture where nodes are autonomous and AI-discoverable.
 
-#### Phase A1: Contract Enforcement (In Progress)
+#### Phase A1: Contract Enforcement (Complete)
 
 **Goal:** Establish consistent machine ID, scoped topics, and complete API contracts across all components.
 
@@ -103,19 +103,20 @@ Building a self-describing, decentralized sensor architecture where nodes are au
 - [x] Status enum cross-validation tests
 - [x] Proto copy at install/create time
 
-**Status:** Current PR (`feat/multi-machine-dashboard`) — merging soon.
+**Status:** Merged in PR #33.
 
 ---
 
-#### Phase A2: Self-Describing Nodes
+#### Phase A2: Self-Describing Nodes (Mostly Complete)
 
 **Goal:** Nodes declare their own capabilities via manifest queryables. Dashboard discovers without daemon dependency.
 
 **Deliverables:**
-- [ ] Define manifest JSON schema with `publishes`, `commands`, `requires_hardware`
-- [ ] Add manifest queryable to Rust + Python templates
-- [ ] Add ros-z liveliness tokens for decentralized presence detection
-- [ ] Dashboard wildcard query `bubbaloop/**/manifest` for discovery
+- [x] Define manifest JSON schema with `publishes`, `commands`, `requires_hardware`
+- [x] Add manifest queryable to Rust + Python templates
+- [x] Add command queryable to Rust + Python templates
+- [ ] Add ros-z liveliness tokens for decentralized presence detection (Python blocked on zenoh-python)
+- [x] Dashboard wildcard query `bubbaloop/**/manifest` for discovery
 - [ ] Update official nodes: network-monitor, system-telemetry, openmeteo, camera
 
 ---
@@ -189,12 +190,13 @@ curl -sSL https://get.bubbaloop.com | bash
 
 ---
 
-#### Phase B4: MCP Integration (Week 4-5)
+#### Phase B4: MCP Integration (Week 4-5) — In Progress
 
 **Goal:** Natural language control via MCP
 
 **Deliverables:**
-- [ ] MCP server in agent (tools: list/start/stop/build/logs/install)
+- [x] MCP server in daemon (tools: list/start/stop/restart/logs/config/manifest/command/query/discover)
+- [x] `.mcp.json` for Claude Code integration
 - [ ] Chat panel in dashboard
 - [ ] Natural language execution: "Start the camera"
 - [ ] Device discovery + auto-install tools

@@ -86,6 +86,7 @@ bubbaloop/{scope}/{machine_id}/{node_name}/schema      → FileDescriptorSet byt
 bubbaloop/{scope}/{machine_id}/{node_name}/manifest    → JSON manifest
 bubbaloop/{scope}/{machine_id}/{node_name}/health      → "ok" | error details
 bubbaloop/{scope}/{machine_id}/{node_name}/config      → JSON config (GET/SET)
+bubbaloop/{scope}/{machine_id}/{node_name}/command     → JSON command interface
 ```
 
 Standard node publishers:
@@ -116,8 +117,18 @@ bubbaloop/{scope}/{machine_id}/health/{node_name}       → Periodic heartbeat
       "qos": { "reliability": "best_effort", "durability": "volatile" }
     }
   ],
+  "commands": [
+    {
+      "name": "ping_host",
+      "description": "Ping a specific host and return latency",
+      "parameters": { "host": "string", "count": "integer" },
+      "returns": "object"
+    }
+  ],
   "schema_key": "bubbaloop/local/nvidia_orin00/network-monitor/schema",
   "health_key": "bubbaloop/local/nvidia_orin00/network-monitor/health",
+  "config_key": "bubbaloop/local/nvidia_orin00/network-monitor/config",
+  "command_key": "bubbaloop/local/nvidia_orin00/network-monitor/command",
   "security": {
     "acl_prefix": "bubbaloop/*/nvidia_orin00/network-monitor/**"
   }
@@ -179,6 +190,32 @@ Every node that publishes protobuf messages **MUST** serve its FileDescriptorSet
 - ❌ Using `query.key_expr()` as method in Python (it's a property)
 - ❌ Serving JSON instead of raw FileDescriptorSet bytes
 - ❌ Missing `header.proto` in FileDescriptorSet
+
+### Command Contract (Actuation Nodes)
+
+Nodes that support imperative actions MUST declare a command queryable at `{topic_prefix}/command`. This enables AI agents, CLI tools, and other nodes to trigger actions.
+
+**Protocol:**
+
+- **Query with no payload** → returns list of available commands
+- **Query with JSON payload** → executes the command
+
+```json
+// Request
+{"command": "capture_frame", "params": {"resolution": "1080p"}}
+
+// Success response
+{"result": "frame captured", "error": null}
+
+// Error response
+{"result": null, "error": "Unknown command 'foo'. Available: [\"capture_frame\"]"}
+```
+
+**Manifest integration:** Commands are declared in the manifest `commands` field so AI agents can discover capabilities before sending commands. The `command_key` field points to the queryable.
+
+**ACL implications:** The command queryable accepts `put` operations, making it a **write** endpoint. ACL rules must distinguish between:
+- **Read** (subscriber/get): dashboard, monitors
+- **Write** (put to command): AI agent, CLI, authorized controllers
 
 ---
 

@@ -141,18 +141,47 @@ pub async fn run(
         }
     });
 
+    // Start MCP server (HTTP on port 8088, feature-gated)
+    #[cfg(feature = "mcp")]
+    let mcp_task = {
+        let mcp_session = session.clone();
+        let mcp_manager = node_manager.clone();
+        let mcp_shutdown = shutdown_rx.clone();
+        let mcp_port = std::env::var("BUBBALOOP_MCP_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(crate::mcp::MCP_PORT);
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::mcp::run_mcp_server(mcp_session, mcp_manager, mcp_port, mcp_shutdown).await
+            {
+                log::error!("MCP server error: {}", e);
+            }
+        })
+    };
+
     // Create and run Zenoh service (pub/sub with protobuf)
     let zenoh_service = ZenohService::new(session, node_manager);
 
     log::info!("Bubbaloop daemon running. Press Ctrl+C to exit.");
     log::info!("  Zenoh pub/sub topics: bubbaloop/daemon/*");
     log::info!("  Zenoh API queryables: bubbaloop/daemon/api/*");
+    #[cfg(feature = "mcp")]
+    log::info!("  MCP server: http://127.0.0.1:{}/mcp",
+        std::env::var("BUBBALOOP_MCP_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(crate::mcp::MCP_PORT));
 
     // Run the Zenoh service (blocks until shutdown)
     zenoh_service.run(shutdown_rx).await?;
 
     // Abort API service
     api_task.abort();
+
+    // Abort MCP server
+    #[cfg(feature = "mcp")]
+    mcp_task.abort();
 
     log::info!("Bubbaloop daemon stopped.");
 

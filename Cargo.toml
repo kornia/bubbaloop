@@ -66,6 +66,10 @@ mime_guess = "2"
 # WebSocket proxy (dashboard)
 tokio-tungstenite = "0.26"
 
+# MCP server
+rmcp = { version = "0.15", features = ["server", "macros", "transport-streamable-http-server"] }
+schemars = "1.0"
+
 # internal dependencies
 bubbaloop = { path = "crates/bubbaloop" }
 
