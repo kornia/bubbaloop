@@ -116,8 +116,8 @@ export function SystemTelemetryViewPanel({
     return () => clearInterval(timer);
   }, []);
 
-  // Match any machine/scope: */*/TypeName/* (ros-z key format: domain/topic%encoded/type/hash)
-  const telemetryTopic = '*/*/bubbaloop.system_telemetry.v1.SystemMetrics/*';
+  // Match any machine/scope: **/TypeName/* (works with new ros-z format: 0/bubbaloop/scope/machine/node/resource/type/hash)
+  const telemetryTopic = '**/bubbaloop.system_telemetry.v1.SystemMetrics/*';
 
   const handleSample = useCallback((sample: Sample) => {
     try {

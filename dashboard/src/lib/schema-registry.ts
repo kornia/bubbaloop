@@ -555,8 +555,13 @@ export function extractTopicPrefix(topic: string): string | null {
   const parts = topic.split('/');
 
   if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
-    // ros-z: decode %-encoded topic portion (second slash-separated part)
-    segments = parts[1].replace(/%/g, '/').split('/');
+    if (parts[1].includes('%')) {
+      // Old ros-z: decode %-encoded topic portion
+      segments = parts[1].replace(/%/g, '/').split('/');
+    } else {
+      // New ros-z: slashes preserved, skip domain ID
+      segments = parts.slice(1);
+    }
   } else {
     segments = parts;
   }

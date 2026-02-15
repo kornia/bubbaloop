@@ -33,28 +33,15 @@ export function normalizeTopicPattern(topic: string): string {
 
   const parts = normalized.split('/');
 
-  // Check if it's ros-z format (starts with domain ID like "0/")
-  if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
-    // ros-z format: domain/encoded_topic/type/hash
-    // Check if part[2] is type info
-    if (parts.length >= 3) {
-      const thirdPart = parts[2];
-      if (thirdPart.includes('.') || thirdPart.startsWith('RIHS')) {
-        return parts.slice(0, 2).join('/');
-      }
-    }
-    return normalized;
-  }
-
-  // Raw Zenoh key format: find type/hash from the end and strip them
-  // Type looks like "bubbaloop.camera.v1.Image", hash starts with "RIHS"
+  // Strip type/hash segments from the end.
+  // Type name looks like "bubbaloop.camera.v1.Image" (has dots, starts with "bubbaloop")
+  // Hash starts with "RIHS"
   let cutIndex = parts.length;
   for (let i = parts.length - 1; i >= 0; i--) {
     const part = parts[i];
     if (part.startsWith('RIHS') || (part.includes('.') && part.startsWith('bubbaloop'))) {
       cutIndex = i;
     } else {
-      // Stop when we hit a part that's not type/hash
       break;
     }
   }

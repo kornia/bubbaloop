@@ -133,10 +133,10 @@ export function WeatherViewPanel({
   const [isSendingLocation, setIsSendingLocation] = useState(false);
   const [locationUpdateStatus, setLocationUpdateStatus] = useState<'idle' | 'sent' | 'error'>('idle');
 
-  // Match any machine/scope: */*/TypeName/* (ros-z key format: domain/topic%encoded/type/hash)
-  const currentTopic = '*/*/bubbaloop.weather.v1.CurrentWeather/*';
-  const hourlyTopic = '*/*/bubbaloop.weather.v1.HourlyForecast/*';
-  const dailyTopic = '*/*/bubbaloop.weather.v1.DailyForecast/*';
+  // Match any machine/scope: **/TypeName/* (works with new ros-z format: 0/bubbaloop/scope/machine/node/resource/type/hash)
+  const currentTopic = '**/bubbaloop.weather.v1.CurrentWeather/*';
+  const hourlyTopic = '**/bubbaloop.weather.v1.HourlyForecast/*';
+  const dailyTopic = '**/bubbaloop.weather.v1.DailyForecast/*';
 
   // Handle current weather samples
   const handleCurrentSample = useCallback((sample: Sample) => {

@@ -222,7 +222,8 @@ export interface UseTopicDiscoveryResult {
  * Does NOT strip machine/scope segments — they're needed to distinguish topics.
  *
  * Examples:
- *   ros-z:   "0/bubbaloop%local%m1%camera%entrance%compressed/Type/RIHS..." → "local/m1/camera/entrance/compressed"
+ *   ros-z (new): "0/bubbaloop/local/m1/camera/compressed/Type/RIHS..."             → "local/m1/camera/compressed"
+ *   ros-z (old): "0/bubbaloop%local%m1%camera%entrance%compressed/Type/RIHS..." → "local/m1/camera/entrance/compressed"
  *   vanilla: "bubbaloop/nvidia-orin00/daemon/nodes"                         → "nvidia-orin00/daemon/nodes"
  *   vanilla: "bubbaloop/local/nvidia_orin00/health/system-telemetry"        → "local/nvidia_orin00/health/system-telemetry"
  *   legacy:  "bubbaloop/daemon/nodes"                                       → "daemon/nodes"
@@ -230,15 +231,33 @@ export interface UseTopicDiscoveryResult {
 export function normalizeKeyExpr(keyExpr: string): { display: string; raw: string } {
   const parts = keyExpr.split('/');
 
-  // ros-z format: starts with domain ID (digit), has %‐encoded topic, then type/hash
+  // ros-z format: starts with domain ID (digit)
   if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
-    const decoded = parts[1].replace(/%/g, '/');
-    const segments = decoded.split('/');
-    // Strip "bubbaloop/" prefix only
-    if (segments.length >= 2 && segments[0] === 'bubbaloop') {
-      return { display: segments.slice(1).join('/'), raw: keyExpr };
+    // Old format: 0/<%-encoded-topic>/type/hash (parts[1] has %)
+    if (parts[1].includes('%')) {
+      const decoded = parts[1].replace(/%/g, '/');
+      const segments = decoded.split('/');
+      if (segments.length >= 2 && segments[0] === 'bubbaloop') {
+        return { display: segments.slice(1).join('/'), raw: keyExpr };
+      }
+      return { display: decoded, raw: keyExpr };
     }
-    return { display: decoded, raw: keyExpr };
+    // New format: 0/topic/path.../type/hash (slashes preserved)
+    // Strip domain ID (first) and type+hash (last 2 from end)
+    let endIdx = parts.length;
+    for (let i = parts.length - 1; i >= 1; i--) {
+      const part = parts[i];
+      if (part.startsWith('RIHS') || (part.includes('.') && !part.startsWith('/'))) {
+        endIdx = i;
+      } else {
+        break;
+      }
+    }
+    const topicParts = parts.slice(1, endIdx);
+    if (topicParts.length >= 1 && topicParts[0] === 'bubbaloop') {
+      return { display: topicParts.slice(1).join('/'), raw: keyExpr };
+    }
+    return { display: topicParts.join('/'), raw: keyExpr };
   }
 
   // Vanilla zenoh: strip "bubbaloop/" prefix only
@@ -253,7 +272,8 @@ export function normalizeKeyExpr(keyExpr: string): { display: string; raw: strin
  * Extract machine ID from a Zenoh key expression.
  *
  * Handles two formats:
- * - ros-z encoded: "0/bubbaloop%local%nvidia_orin00%camera%entrance/..."
+ * - ros-z encoded (old): "0/bubbaloop%local%nvidia_orin00%camera%entrance/..."
+ * - ros-z new: "0/bubbaloop/local/nvidia_orin00/camera/..."
  * - vanilla zenoh: "bubbaloop/local/nvidia_orin00/health/system-telemetry"
  *                  "bubbaloop/nvidia-orin00/daemon/nodes" (machine-scoped daemon)
  *
@@ -262,13 +282,20 @@ export function normalizeKeyExpr(keyExpr: string): { display: string; raw: strin
 export function extractMachineId(keyExpr: string): string | null {
   const parts = keyExpr.split('/');
 
-  // ros-z format: starts with domain ID (digit), second segment is %-encoded
+  // ros-z format: starts with domain ID (digit)
   if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
-    const decoded = parts[1].replace(/%/g, '/');
-    const segments = decoded.split('/');
-    // bubbaloop/{scope}/{machine}/... → return segments[2]
-    if (segments.length >= 3 && segments[0] === 'bubbaloop') {
-      return segments[2];
+    // Old format: %-encoded
+    if (parts[1].includes('%')) {
+      const decoded = parts[1].replace(/%/g, '/');
+      const segments = decoded.split('/');
+      if (segments.length >= 3 && segments[0] === 'bubbaloop') {
+        return segments[2];
+      }
+      return null;
+    }
+    // New format: 0/bubbaloop/{scope}/{machine}/...
+    if (parts[1] === 'bubbaloop' && parts.length >= 4) {
+      return parts[3];
     }
     return null;
   }

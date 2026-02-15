@@ -192,6 +192,47 @@ describe('extractTopicPrefix', () => {
       expect(extractTopicPrefix('')).toBe(null);
     });
   });
+
+  describe('ros-z new format (slash-preserved)', () => {
+    it('extracts prefix from new format camera topic', () => {
+      const topic = '0/bubbaloop/local/nvidia_orin00/camera/entrance/compressed/bubbaloop.camera.v1.Image/RIHS01_abc';
+      expect(extractTopicPrefix(topic)).toBe('bubbaloop/local/nvidia_orin00/camera');
+    });
+
+    it('extracts prefix from new format telemetry topic', () => {
+      const topic = '0/bubbaloop/local/m1/system_telemetry/metrics/bubbaloop.system_telemetry.v1.SystemMetrics/RIHS01_xyz';
+      expect(extractTopicPrefix(topic)).toBe('bubbaloop/local/m1/system_telemetry');
+    });
+
+    it('extracts prefix from new format weather topic', () => {
+      const topic = '42/bubbaloop/dev/orin_dev01/weather/current/type/hash';
+      expect(extractTopicPrefix(topic)).toBe('bubbaloop/dev/orin_dev01/weather');
+    });
+
+    it('returns null for new format without bubbaloop prefix', () => {
+      const topic = '0/other/local/m1/node/output';
+      expect(extractTopicPrefix(topic)).toBe(null);
+    });
+
+    it('returns null for new format with too few segments', () => {
+      const topic = '0/bubbaloop/local/m1';
+      expect(extractTopicPrefix(topic)).toBe(null);
+    });
+  });
+
+  describe('format equivalence', () => {
+    it('old and new format extract same prefix for camera topic', () => {
+      const oldTopic = '0/bubbaloop%local%nvidia_orin00%camera%entrance%compressed/Type/RIHS123';
+      const newTopic = '0/bubbaloop/local/nvidia_orin00/camera/entrance/compressed/Type/RIHS123';
+      expect(extractTopicPrefix(oldTopic)).toBe(extractTopicPrefix(newTopic));
+    });
+
+    it('old and new format extract same prefix for telemetry topic', () => {
+      const oldTopic = '0/bubbaloop%production%jetson_nano%system_telemetry%metrics/Type/Hash';
+      const newTopic = '0/bubbaloop/production/jetson_nano/system_telemetry/metrics/Type/Hash';
+      expect(extractTopicPrefix(oldTopic)).toBe(extractTopicPrefix(newTopic));
+    });
+  });
 });
 
 describe('extractMachineId', () => {

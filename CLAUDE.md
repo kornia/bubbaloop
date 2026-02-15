@@ -65,6 +65,7 @@ pixi run build     # cargo build --release (slow on ARM64)
 
 ## Zenoh API Rules (templates & nodes)
 
+- **ALL nodes MUST use `mode: "client"`** — peer mode doesn't route through zenohd router
 - **NEVER** use `.complete(true)` on queryables — blocks wildcard queries like `bubbaloop/**/schema`
 - **Python**: `query.key_expr` is a **property** NOT a method — NEVER use `query.key_expr()`
 - **Python**: `query.reply(query.key_expr, payload_bytes)` — correct reply pattern
@@ -94,5 +95,5 @@ Exception: views with their own fallback decode chain (like JsonView) don't need
 - Proto changes require rebuilding both `bubbaloop-schemas/` and `bubbaloop` (descriptor.bin is compiled in)
 - Dashboard deps (`axum`, `rust-embed`) are behind `dashboard` feature flag
 - Logs must go to stderr to avoid corrupting TUI
-- Zenoh session: `"peer"` mode, check `BUBBALOOP_ZENOH_ENDPOINT` env var
+- Zenoh session: MUST use `"client"` mode for router routing; check `BUBBALOOP_ZENOH_ENDPOINT` env var
 - Dashboard schema race: subscriptions start before schemas load — always use `useSchemaReady()` gating

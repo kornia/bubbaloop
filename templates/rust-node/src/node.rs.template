@@ -124,6 +124,9 @@ impl {{node_name_pascal}}Node {
         // Create zenoh session
         let mut zenoh_config = zenoh::Config::default();
 
+        // Use client mode for proper routing through zenohd router
+        zenoh_config.insert_json5("mode", r#""client""#).unwrap();
+
         // Resolve endpoint: CLI arg > env var > default
         let ep = endpoint
             .or_else(|| std::env::var("BUBBALOOP_ZENOH_ENDPOINT").ok())

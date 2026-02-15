@@ -79,6 +79,9 @@ class {{node_name_pascal}}Node:
         # Setup zenoh
         zenoh_config = zenoh.Config()
 
+        # Use client mode for proper routing through zenohd router
+        zenoh_config.insert_json5('mode', '"client"')
+
         # Resolve endpoint: CLI arg > env var > default
         if not endpoint:
             endpoint = os.environ.get("BUBBALOOP_ZENOH_ENDPOINT", "tcp/127.0.0.1:7447")
