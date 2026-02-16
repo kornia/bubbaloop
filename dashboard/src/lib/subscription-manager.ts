@@ -31,6 +31,13 @@ export function normalizeTopicPattern(topic: string): string {
     normalized = normalized.slice(0, -2);
   }
 
+  // Don't strip type/hash from intentional wildcard subscription patterns
+  // like "**/bubbaloop.weather.v1.CurrentWeather" — these are meant to match
+  // by type name across all topics. Only strip from concrete key expressions.
+  if (normalized.includes('*')) {
+    return normalized;
+  }
+
   const parts = normalized.split('/');
 
   // Strip type/hash segments from the end.
