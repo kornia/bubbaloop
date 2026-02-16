@@ -52,6 +52,25 @@ struct QueryTopicRequest {
     key_expr: String,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct AddRuleRequest {
+    /// Rule name (unique identifier)
+    name: String,
+    /// Zenoh key expression pattern to subscribe to (e.g., "bubbaloop/**/telemetry/status")
+    trigger: String,
+    /// Optional condition: JSON object with "field", "operator" (==, !=, >, <, >=, <=, contains), "value"
+    #[serde(default)]
+    condition: Option<serde_json::Value>,
+    /// Action: JSON object with "type" (log/command/publish) and type-specific fields
+    action: serde_json::Value,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct RuleNameRequest {
+    /// Name of the rule to remove or look up
+    rule_name: String,
+}
+
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
@@ -131,7 +150,38 @@ impl BubbaLoopMcpServer {
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Send a command to a node's command queryable. The node must support the command (check its manifest first). Returns the command result or error.")]
+    #[tool(description = "List available commands for a specific node with their parameters and descriptions. Use this before send_command to discover what actions a node supports.")]
+    async fn list_commands(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let manifest_text = self.zenoh_get_text(&format!("bubbaloop/**/{}/**/manifest", req.node_name)).await;
+        // Try to parse the manifest and extract commands
+        // The manifest text is formatted as "[key_expr] json_body" from zenoh_get_text
+        let commands = manifest_text
+            .lines()
+            .filter_map(|line| {
+                // zenoh_get_text formats as "[key] json"
+                let json_start = line.find(']').map(|i| i + 2)?;
+                let json_str = line.get(json_start..)?;
+                let manifest: serde_json::Value = serde_json::from_str(json_str).ok()?;
+                manifest.get("commands").cloned()
+            })
+            .next();
+
+        match commands {
+            Some(cmds) if cmds.is_array() && !cmds.as_array().unwrap().is_empty() => {
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&cmds).unwrap_or_else(|_| "[]".to_string()),
+                )]))
+            }
+            _ => Ok(CallToolResult::success(vec![Content::text(
+                format!("No commands available for node '{}'", req.node_name),
+            )])),
+        }
+    }
+
+    #[tool(description = "Send a command to a node's command queryable. The node must support the command — call list_commands first to see available commands. Example: node_name='rtsp-camera', command='capture_frame', params={'resolution': '1080p'}. Returns the command result or error.")]
     async fn send_command(
         &self,
         Parameters(req): Parameters<SendCommandRequest>,
@@ -263,6 +313,84 @@ impl BubbaLoopMcpServer {
             )])),
         }
     }
+
+    #[tool(description = "Add a new rule to the agent rule engine. Rules trigger actions when sensor data matches conditions. Example: trigger='bubbaloop/**/telemetry/status', condition={'field': 'cpu_temp', 'operator': '>', 'value': 80}, action={'type': 'log', 'message': 'CPU too hot!'}")]
+    async fn add_rule(
+        &self,
+        Parameters(req): Parameters<AddRuleRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match &self.agent {
+            Some(agent) => {
+                // Parse condition if provided
+                let condition = req.condition.and_then(|v| serde_json::from_value(v).ok());
+                // Parse action
+                let action: crate::agent::Action = match serde_json::from_value(req.action.clone()) {
+                    Ok(a) => a,
+                    Err(e) => return Ok(CallToolResult::success(vec![Content::text(
+                        format!("Invalid action format: {}. Use {{\"type\": \"log\", \"message\": \"...\"}} or {{\"type\": \"command\", \"node\": \"...\", \"command\": \"...\"}}", e)
+                    )])),
+                };
+                let rule = crate::agent::Rule {
+                    name: req.name,
+                    trigger: req.trigger,
+                    condition,
+                    action,
+                    enabled: true,
+                };
+                match agent.add_rule(rule).await {
+                    Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+                    Err(e) => Ok(CallToolResult::success(vec![Content::text(format!("Error: {}", e))])),
+                }
+            }
+            None => Ok(CallToolResult::success(vec![Content::text("Agent not available")])),
+        }
+    }
+
+    #[tool(description = "Remove a rule from the agent rule engine by name.")]
+    async fn remove_rule(
+        &self,
+        Parameters(req): Parameters<RuleNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match &self.agent {
+            Some(agent) => {
+                match agent.remove_rule(&req.rule_name).await {
+                    Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+                    Err(e) => Ok(CallToolResult::success(vec![Content::text(format!("Error: {}", e))])),
+                }
+            }
+            None => Ok(CallToolResult::success(vec![Content::text("Agent not available")])),
+        }
+    }
+
+    #[tool(description = "Update an existing rule in the agent rule engine. Provide the full rule definition — it replaces the rule with the same name.")]
+    async fn update_rule(
+        &self,
+        Parameters(req): Parameters<AddRuleRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        match &self.agent {
+            Some(agent) => {
+                let condition = req.condition.and_then(|v| serde_json::from_value(v).ok());
+                let action: crate::agent::Action = match serde_json::from_value(req.action.clone()) {
+                    Ok(a) => a,
+                    Err(e) => return Ok(CallToolResult::success(vec![Content::text(
+                        format!("Invalid action format: {}", e)
+                    )])),
+                };
+                let rule = crate::agent::Rule {
+                    name: req.name,
+                    trigger: req.trigger,
+                    condition,
+                    action,
+                    enabled: true,
+                };
+                match agent.update_rule(rule).await {
+                    Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+                    Err(e) => Ok(CallToolResult::success(vec![Content::text(format!("Error: {}", e))])),
+                }
+            }
+            None => Ok(CallToolResult::success(vec![Content::text("Agent not available")])),
+        }
+    }
 }
 
 // ── ServerHandler implementation ──────────────────────────────────
@@ -275,10 +403,14 @@ impl ServerHandler for BubbaLoopMcpServer {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Bubbaloop physical AI orchestration. Use list_nodes to see available \
-                 sensor nodes, get_node_manifest to understand a node's capabilities, \
-                 and send_command to trigger actions. Use discover_nodes for cross-machine \
-                 fleet discovery via Zenoh."
+                "Bubbaloop physical AI orchestration platform. Recommended workflow:\n\
+                 1) list_nodes — see all registered nodes with status\n\
+                 2) list_commands or get_node_manifest — discover a node's capabilities and commands\n\
+                 3) send_command — trigger actions on a node (command names from step 2)\n\
+                 4) query_zenoh — one-off sensor data reads from any Zenoh key expression\n\
+                 Node lifecycle: start_node, stop_node, restart_node, get_node_logs\n\
+                 Agent rules: get_agent_status, list_agent_rules, add_rule, remove_rule, update_rule\n\
+                 Fleet discovery: discover_nodes — find all self-describing nodes across machines"
                     .into(),
             ),
         }
