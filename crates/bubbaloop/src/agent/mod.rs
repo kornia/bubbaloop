@@ -79,14 +79,20 @@ impl Agent {
         Ok(config.rules)
     }
 
+    /// Maximum number of rules to prevent resource exhaustion.
+    const MAX_RULES: usize = 100;
+
+    /// Persist rules to disk atomically (write-to-temp + rename).
     fn save_rules(rules: &[Rule]) -> Result<(), Box<dyn std::error::Error>> {
         let config = RuleConfig { rules: rules.to_vec() };
         let yaml = serde_yaml::to_string(&config)?;
         let path = rules_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+            let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+            std::io::Write::write_all(&mut temp, yaml.as_bytes())?;
+            temp.persist(&path)?;
         }
-        std::fs::write(&path, yaml)?;
         Ok(())
     }
 
@@ -111,12 +117,20 @@ impl Agent {
     /// Add a new rule and persist to disk.
     pub async fn add_rule(&self, rule: Rule) -> Result<String, String> {
         let mut rules = self.rules.write().await;
+        if rules.len() >= Self::MAX_RULES {
+            return Err(format!("Maximum rule count ({}) reached", Self::MAX_RULES));
+        }
         if rules.iter().any(|r| r.name == rule.name) {
             return Err(format!("Rule '{}' already exists", rule.name));
         }
         let name = rule.name.clone();
         rules.push(rule);
-        Self::save_rules(&rules).map_err(|e| format!("Failed to save rules: {}", e))?;
+        let snapshot = rules.clone();
+        drop(rules);
+        Self::save_rules(&snapshot).map_err(|e| {
+            log::error!("Failed to save rules: {}", e);
+            "Failed to persist rules".to_string()
+        })?;
         Ok(format!("Rule '{}' added", name))
     }
 
@@ -128,7 +142,12 @@ impl Agent {
         if rules.len() == before {
             return Err(format!("Rule '{}' not found", name));
         }
-        Self::save_rules(&rules).map_err(|e| format!("Failed to save rules: {}", e))?;
+        let snapshot = rules.clone();
+        drop(rules);
+        Self::save_rules(&snapshot).map_err(|e| {
+            log::error!("Failed to save rules: {}", e);
+            "Failed to persist rules".to_string()
+        })?;
         Ok(format!("Rule '{}' removed", name))
     }
 
@@ -137,7 +156,12 @@ impl Agent {
         let mut rules = self.rules.write().await;
         if let Some(existing) = rules.iter_mut().find(|r| r.name == rule.name) {
             *existing = rule.clone();
-            Self::save_rules(&rules).map_err(|e| format!("Failed to save rules: {}", e))?;
+            let snapshot = rules.clone();
+            drop(rules);
+            Self::save_rules(&snapshot).map_err(|e| {
+                log::error!("Failed to save rules: {}", e);
+                "Failed to persist rules".to_string()
+            })?;
             Ok(format!("Rule '{}' updated", rule.name))
         } else {
             Err(format!("Rule '{}' not found", rule.name))

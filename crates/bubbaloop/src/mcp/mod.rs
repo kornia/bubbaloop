@@ -6,6 +6,7 @@
 use crate::agent::Agent;
 use crate::daemon::node_manager::NodeManager;
 use crate::schemas::daemon::v1::{CommandType, NodeCommand};
+use crate::validation;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
@@ -112,6 +113,9 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
         match self.node_manager.get_node(&req.node_name).await {
             Some(node) => {
                 let health = serde_json::json!({
@@ -137,6 +141,9 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
         let result = self.zenoh_get_text(&format!("bubbaloop/**/{}/**/config", req.node_name)).await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
@@ -146,6 +153,9 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
         let result = self.zenoh_get_text(&format!("bubbaloop/**/{}/**/manifest", req.node_name)).await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
@@ -155,6 +165,9 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
         let manifest_text = self.zenoh_get_text(&format!("bubbaloop/**/{}/**/manifest", req.node_name)).await;
         // Try to parse the manifest and extract commands
         // The manifest text is formatted as "[key_expr] json_body" from zenoh_get_text
@@ -181,11 +194,14 @@ impl BubbaLoopMcpServer {
         }
     }
 
-    #[tool(description = "Send a command to a node's command queryable. The node must support the command — call list_commands first to see available commands. Example: node_name='rtsp-camera', command='capture_frame', params={'resolution': '1080p'}. Returns the command result or error.")]
+    #[tool(description = "Send a command to a node's command queryable. The node must support the command — call list_commands first to see available commands. Example: node_name='rtsp-camera', command='capture_frame', params={\"resolution\": \"1080p\"}. Returns the command result or error.")]
     async fn send_command(
         &self,
         Parameters(req): Parameters<SendCommandRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
         let key_expr = format!("bubbaloop/**/{}/**/command", req.node_name);
         let payload = serde_json::json!({
             "command": req.command,
@@ -238,6 +254,9 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
         let result = self.execute_daemon_command(CommandType::Start, &req.node_name).await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
@@ -247,6 +266,9 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
         let result = self.execute_daemon_command(CommandType::Stop, &req.node_name).await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
@@ -256,6 +278,9 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
         let result = self.execute_daemon_command(CommandType::Restart, &req.node_name).await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
@@ -265,6 +290,9 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
         let result = self.execute_daemon_command(CommandType::GetLogs, &req.node_name).await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
@@ -314,28 +342,16 @@ impl BubbaLoopMcpServer {
         }
     }
 
-    #[tool(description = "Add a new rule to the agent rule engine. Rules trigger actions when sensor data matches conditions. Example: trigger='bubbaloop/**/telemetry/status', condition={'field': 'cpu_temp', 'operator': '>', 'value': 80}, action={'type': 'log', 'message': 'CPU too hot!'}")]
+    #[tool(description = "Add a new rule to the agent rule engine. Rules trigger actions when sensor data matches conditions. Example: trigger=\"bubbaloop/**/telemetry/status\", condition={\"field\": \"cpu_temp\", \"operator\": \">\", \"value\": 80}, action={\"type\": \"log\", \"message\": \"CPU too hot!\"}")]
     async fn add_rule(
         &self,
         Parameters(req): Parameters<AddRuleRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match &self.agent {
             Some(agent) => {
-                // Parse condition if provided
-                let condition = req.condition.and_then(|v| serde_json::from_value(v).ok());
-                // Parse action
-                let action: crate::agent::Action = match serde_json::from_value(req.action.clone()) {
-                    Ok(a) => a,
-                    Err(e) => return Ok(CallToolResult::success(vec![Content::text(
-                        format!("Invalid action format: {}. Use {{\"type\": \"log\", \"message\": \"...\"}} or {{\"type\": \"command\", \"node\": \"...\", \"command\": \"...\"}}", e)
-                    )])),
-                };
-                let rule = crate::agent::Rule {
-                    name: req.name,
-                    trigger: req.trigger,
-                    condition,
-                    action,
-                    enabled: true,
+                let rule = match Self::parse_rule_request(req) {
+                    Ok(r) => r,
+                    Err(msg) => return Ok(CallToolResult::success(vec![Content::text(msg)])),
                 };
                 match agent.add_rule(rule).await {
                     Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
@@ -351,6 +367,9 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<RuleNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = validation::validate_rule_name(&req.rule_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
         match &self.agent {
             Some(agent) => {
                 match agent.remove_rule(&req.rule_name).await {
@@ -369,19 +388,9 @@ impl BubbaLoopMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         match &self.agent {
             Some(agent) => {
-                let condition = req.condition.and_then(|v| serde_json::from_value(v).ok());
-                let action: crate::agent::Action = match serde_json::from_value(req.action.clone()) {
-                    Ok(a) => a,
-                    Err(e) => return Ok(CallToolResult::success(vec![Content::text(
-                        format!("Invalid action format: {}", e)
-                    )])),
-                };
-                let rule = crate::agent::Rule {
-                    name: req.name,
-                    trigger: req.trigger,
-                    condition,
-                    action,
-                    enabled: true,
+                let rule = match Self::parse_rule_request(req) {
+                    Ok(r) => r,
+                    Err(msg) => return Ok(CallToolResult::success(vec![Content::text(msg)])),
                 };
                 match agent.update_rule(rule).await {
                     Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
@@ -420,6 +429,36 @@ impl ServerHandler for BubbaLoopMcpServer {
 // ── Helper methods ────────────────────────────────────────────────
 
 impl BubbaLoopMcpServer {
+    /// Validate and parse an AddRuleRequest into a Rule.
+    /// Returns Err(String) with a user-facing message on validation failure.
+    fn parse_rule_request(req: AddRuleRequest) -> Result<crate::agent::Rule, String> {
+        validation::validate_rule_name(&req.name)?;
+        validation::validate_trigger_pattern(&req.trigger)?;
+        let condition = match req.condition {
+            Some(v) => Some(serde_json::from_value(v).map_err(|e| {
+                format!(
+                    "Invalid condition format: {}. Use {{\"field\": \"...\", \"operator\": \">\", \"value\": ...}}",
+                    e
+                )
+            })?),
+            None => None,
+        };
+        let action: crate::agent::Action =
+            serde_json::from_value(req.action).map_err(|e| {
+                format!(
+                    "Invalid action format: {}. Use {{\"type\": \"log\", \"message\": \"...\"}} or {{\"type\": \"command\", \"node\": \"...\", \"command\": \"...\"}}",
+                    e
+                )
+            })?;
+        Ok(crate::agent::Rule {
+            name: req.name,
+            trigger: req.trigger,
+            condition,
+            action,
+            enabled: true,
+        })
+    }
+
     /// Execute a daemon command (start/stop/restart/etc.) via the NodeManager.
     async fn execute_daemon_command(&self, cmd_type: CommandType, node_name: &str) -> String {
         let cmd = NodeCommand {

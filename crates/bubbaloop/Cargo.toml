@@ -78,6 +78,7 @@ tokio-tungstenite = { workspace = true, optional = true }
 # MCP server (optional)
 rmcp = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
+tempfile = "3"
 
 [features]
 default = ["dashboard"]

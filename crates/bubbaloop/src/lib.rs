@@ -28,6 +28,9 @@ pub mod mcp;
 /// Agent logic layer — lightweight rule engine
 pub mod agent;
 
+/// Shared input validation for trust boundaries
+pub mod validation;
+
 /// Protobuf schemas for bubbaloop
 pub mod schemas {
     pub mod header {
