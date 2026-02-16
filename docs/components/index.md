@@ -99,7 +99,7 @@ Each component follows a common pattern:
 
 Components are implemented as Rust applications using:
 
-- **ros-z**: ROS-compatible Zenoh bindings
+- **Zenoh**: Decentralized pub/sub with queryables
 - **protobuf**: Message serialization
 - **tokio**: Async runtime
 

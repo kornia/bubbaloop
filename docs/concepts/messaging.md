@@ -1,6 +1,6 @@
 # Messaging
 
-Bubbaloop uses Zenoh with ROS-Z conventions for all inter-component communication.
+Bubbaloop uses vanilla Zenoh with Protobuf serialization for all inter-component communication.
 
 ## Zenoh Overview
 
@@ -27,14 +27,14 @@ flowchart LR
 **Example: Publishing**
 ```rust
 // Rust publisher
-let publisher = session.declare_publisher("0/camera%front%compressed").await?;
-publisher.put(compressed_image_bytes).await?;
+let publisher = session.declare_publisher("bubbaloop/local/my_machine/camera/compressed").await?;
+publisher.put(compressed_image.encode_to_vec()).await?;
 ```
 
 **Example: Subscribing**
 ```typescript
 // TypeScript subscriber
-const subscriber = session.declareSubscriber("0/camera%front%compressed/**");
+const subscriber = session.declareSubscriber("bubbaloop/local/my_machine/camera/**");
 subscriber.callback = (sample) => {
     const image = CompressedImage.decode(sample.payload);
     // Process image...
@@ -51,25 +51,18 @@ flowchart LR
     service -->|reply| client
 ```
 
-## ROS-Z Conventions
+## Topic Conventions
 
-Bubbaloop uses ROS-Z conventions for topic naming and message formats.
+All topics follow the scoped pattern:
 
-### Topic Format
+```
+bubbaloop/{scope}/{machine_id}/{node_name}/{resource}
+```
 
-ROS topics are mapped to Zenoh key expressions:
-
-| ROS Topic | Zenoh Key Expression |
-|-----------|---------------------|
-| `/camera/front/compressed` | `0/camera%front%compressed/**` |
-| `/weather/current` | `0/weather%current/**` |
-
-**Conversion rules:**
-
-- Leading `/` removed
-- `/` replaced with `%`
-- Prefix `0/` added (namespace)
-- Suffix `/**` for wildcard matching
+| Example Topic | Description |
+|---------------|-------------|
+| `bubbaloop/local/nvidia_orin00/camera/compressed` | Camera compressed frames |
+| `bubbaloop/local/nvidia_orin00/openmeteo/current` | Current weather data |
 
 ### Message Serialization
 

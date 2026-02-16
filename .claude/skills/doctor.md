@@ -138,14 +138,14 @@ Look for:
 
 If logs show ONLY startup messages but no ongoing publishing, the node may be stalled.
 
-### Step 9: ros-z Topic Compatibility
-Check for hyphens in topic names AND machine IDs (ros-z rejects hyphens in path components):
+### Step 9: Topic Format Validation
+Check for hyphens in topic names AND machine IDs (use underscores for consistency):
 ```bash
 # Check config files for hyphenated topics
 for cfg in ~/.bubbaloop/nodes/*/config.yaml ~/.bubbaloop/nodes/*/*/config.yaml; do
   [ -f "$cfg" ] || continue
   if grep -qP 'publish_topic:.*-' "$cfg" 2>/dev/null; then
-    echo "WARNING: $cfg has hyphenated topic (ros-z will reject)"
+    echo "WARNING: $cfg has hyphenated topic (should use underscores)"
   fi
 done
 
@@ -153,7 +153,7 @@ done
 for f in ~/.config/systemd/user/bubbaloop-*.service; do
   mid=$(grep 'BUBBALOOP_MACHINE_ID=' "$f" 2>/dev/null | grep -oP '=\K.*')
   if [ -n "$mid" ] && echo "$mid" | grep -q '-'; then
-    echo "WARNING: $f has hyphenated MACHINE_ID=$mid (ros-z will reject)"
+    echo "WARNING: $f has hyphenated MACHINE_ID=$mid (should use underscores)"
   fi
 done
 ```
@@ -181,7 +181,7 @@ for svc in $(systemctl --user list-units 'bubbaloop-*' --no-pager --plain | grep
 done
 ```
 
-Data topics use underscores (ros-z requirement) but schema queryables might use hyphens.
+Data topics use underscores (convention) but schema queryables might use hyphens.
 This mismatch prevents `discoverSchemaForTopic()` from mapping topics to schemas.
 If `--fix`: update node code to use consistent naming (prefer underscores for both).
 

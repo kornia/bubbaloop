@@ -1,7 +1,7 @@
 [workspace]
 name = "bubbaloop"
 version = "0.0.1"
-description = "Multi-camera RTSP streaming with ROS-Z"
+description = "Physical AI orchestration built on Zenoh"
 authors = ["Edgar Riba <edgar.riba@gmail.com>"]
 channels = ["conda-forge"]
 platforms = ["linux-64", "linux-aarch64"]

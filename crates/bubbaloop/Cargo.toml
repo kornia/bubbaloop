@@ -30,9 +30,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 
-# ROS-Z
-ros-z.workspace = true
-
 # CLI
 argh.workspace = true
 log.workspace = true

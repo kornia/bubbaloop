@@ -6,7 +6,6 @@
 //!
 //! # Features
 //!
-//! - `ros-z`: Enables `MessageTypeInfo`/`WithTypeInfo` impls for ZPub/ZSub
 //! - `descriptor`: Enables `get_descriptor_for_message` for MCAP schema registration
 //! - `config`: Enables `TopicsConfig` for YAML-based topic configuration
 
@@ -39,6 +38,7 @@ pub mod config;
 // Descriptor utilities (behind "descriptor" feature)
 #[cfg(feature = "descriptor")]
 mod descriptor_utils {
+    use crate::MessageTypeName;
     use prost::Message;
     use prost_reflect::{DescriptorPool, FileDescriptor};
     use std::sync::OnceLock;
@@ -130,9 +130,8 @@ mod descriptor_utils {
     /// Get the protobuf descriptor bytes and schema name for a specific message type
     ///
     /// Returns a `MessageDescriptor` containing a minimal FileDescriptorSet and the
-    /// fully qualified protobuf type name. Requires the `ros-z` feature for `MessageTypeInfo`.
-    #[cfg(feature = "ros-z")]
-    pub fn get_descriptor_for_message<T: ros_z::MessageTypeInfo>(
+    /// fully qualified protobuf type name.
+    pub fn get_descriptor_for_message<T: MessageTypeName>(
     ) -> Result<MessageDescriptor, prost::DecodeError> {
         let type_name = T::type_name();
         let descriptor_bytes = extract_message_descriptor(type_name)?;
@@ -141,30 +140,17 @@ mod descriptor_utils {
 }
 
 #[cfg(feature = "descriptor")]
-pub use descriptor_utils::{MessageDescriptor, DESCRIPTOR};
+pub use descriptor_utils::{get_descriptor_for_message, MessageDescriptor, DESCRIPTOR};
 
-#[cfg(all(feature = "descriptor", feature = "ros-z"))]
-pub use descriptor_utils::get_descriptor_for_message;
+/// Trait for protobuf types to provide their fully-qualified type name.
+/// Used for descriptor lookup and schema registration.
+pub trait MessageTypeName {
+    fn type_name() -> &'static str;
+}
 
-// ros-z type info implementations (enables ZPub/ZSub with ProtobufSerdes)
-#[cfg(feature = "ros-z")]
-mod rosz_impls {
-    use ros_z::{MessageTypeInfo, TypeHash, WithTypeInfo};
-
-    macro_rules! impl_type_info {
-        ($($type:ty => $name:literal),+ $(,)?) => {
-            $(
-                impl MessageTypeInfo for $type {
-                    fn type_name() -> &'static str { $name }
-                    fn type_hash() -> TypeHash { TypeHash::zero() }
-                }
-                impl WithTypeInfo for $type {}
-            )+
-        };
-    }
-
-    impl_type_info! {
-        crate::Header => "bubbaloop.header.v1.Header",
+impl MessageTypeName for Header {
+    fn type_name() -> &'static str {
+        "bubbaloop.header.v1.Header"
     }
 }
 

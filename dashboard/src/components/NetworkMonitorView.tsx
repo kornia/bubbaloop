@@ -151,7 +151,7 @@ export function NetworkMonitorViewPanel({
     return () => clearInterval(timer);
   }, []);
 
-  // Match any machine/scope via ** (network-monitor uses vanilla zenoh, not ros-z)
+  // Match any machine/scope via ** wildcard (vanilla Zenoh format)
   const networkTopic = '**/network-monitor/status';
 
   const tryDecode = useCallback((payload: Uint8Array, topic: string, machineId: string) => {

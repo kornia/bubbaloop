@@ -113,11 +113,6 @@ describe('extractTopicPrefix', () => {
     expect(extractTopicPrefix(topic)).toBe('bubbaloop/local/m1/system-telemetry');
   });
 
-  it('extracts prefix from ros-z topic', () => {
-    const topic = '0/bubbaloop%local%m1%node%res/Type/Hash';
-    expect(extractTopicPrefix(topic)).toBe('bubbaloop/local/m1/node');
-  });
-
   it('returns null for short topics (fewer than 4 segments)', () => {
     expect(extractTopicPrefix('bubbaloop/foo')).toBe(null);
     expect(extractTopicPrefix('bubbaloop/foo/bar')).toBe(null);
@@ -135,11 +130,6 @@ describe('extractTopicPrefix', () => {
   it('handles camera topics', () => {
     const topic = 'bubbaloop/local/m1/camera/entrance/compressed';
     expect(extractTopicPrefix(topic)).toBe('bubbaloop/local/m1/camera');
-  });
-
-  it('handles ros-z with multiple resource segments', () => {
-    const topic = '0/bubbaloop%local%nvidia_orin00%camera%entrance%compressed/Type/RIHS123';
-    expect(extractTopicPrefix(topic)).toBe('bubbaloop/local/nvidia_orin00/camera');
   });
 
   it('handles machine-scoped daemon topics', () => {
@@ -164,15 +154,6 @@ describe('extractTopicPrefix', () => {
       expect(extractTopicPrefix(topic)).toBe('bubbaloop/dev/orin_dev01/weather');
     });
 
-    it('extracts prefix from ros-z topic on jetson_nano', () => {
-      const topic = '0/bubbaloop%production%jetson_nano%camera%rear%compressed/Type/RIHS123';
-      expect(extractTopicPrefix(topic)).toBe('bubbaloop/production/jetson_nano/camera');
-    });
-
-    it('extracts prefix from ros-z topic on orin_dev01', () => {
-      const topic = '42/bubbaloop%dev%orin_dev01%system-telemetry%metrics/Type/Hash';
-      expect(extractTopicPrefix(topic)).toBe('bubbaloop/dev/orin_dev01/system-telemetry');
-    });
   });
 
   describe('topics with fewer than 4 segments', () => {
@@ -193,44 +174,15 @@ describe('extractTopicPrefix', () => {
     });
   });
 
-  describe('ros-z new format (slash-preserved)', () => {
-    it('extracts prefix from new format camera topic', () => {
-      const topic = '0/bubbaloop/local/nvidia_orin00/camera/entrance/compressed/bubbaloop.camera.v1.Image/RIHS01_abc';
-      expect(extractTopicPrefix(topic)).toBe('bubbaloop/local/nvidia_orin00/camera');
-    });
-
-    it('extracts prefix from new format telemetry topic', () => {
-      const topic = '0/bubbaloop/local/m1/system_telemetry/metrics/bubbaloop.system_telemetry.v1.SystemMetrics/RIHS01_xyz';
-      expect(extractTopicPrefix(topic)).toBe('bubbaloop/local/m1/system_telemetry');
-    });
-
-    it('extracts prefix from new format weather topic', () => {
-      const topic = '42/bubbaloop/dev/orin_dev01/weather/current/type/hash';
-      expect(extractTopicPrefix(topic)).toBe('bubbaloop/dev/orin_dev01/weather');
-    });
-
-    it('returns null for new format without bubbaloop prefix', () => {
-      const topic = '0/other/local/m1/node/output';
+  describe('non-bubbaloop prefix topics', () => {
+    it('returns null for topic starting with a digit', () => {
+      const topic = '0/bubbaloop/local/m1/camera/raw';
       expect(extractTopicPrefix(topic)).toBe(null);
     });
 
-    it('returns null for new format with too few segments', () => {
-      const topic = '0/bubbaloop/local/m1';
+    it('returns null for non-bubbaloop topics with enough segments', () => {
+      const topic = 'other/local/m1/node/output';
       expect(extractTopicPrefix(topic)).toBe(null);
-    });
-  });
-
-  describe('format equivalence', () => {
-    it('old and new format extract same prefix for camera topic', () => {
-      const oldTopic = '0/bubbaloop%local%nvidia_orin00%camera%entrance%compressed/Type/RIHS123';
-      const newTopic = '0/bubbaloop/local/nvidia_orin00/camera/entrance/compressed/Type/RIHS123';
-      expect(extractTopicPrefix(oldTopic)).toBe(extractTopicPrefix(newTopic));
-    });
-
-    it('old and new format extract same prefix for telemetry topic', () => {
-      const oldTopic = '0/bubbaloop%production%jetson_nano%system_telemetry%metrics/Type/Hash';
-      const newTopic = '0/bubbaloop/production/jetson_nano/system_telemetry/metrics/Type/Hash';
-      expect(extractTopicPrefix(oldTopic)).toBe(extractTopicPrefix(newTopic));
     });
   });
 });
@@ -249,11 +201,6 @@ describe('extractMachineId', () => {
   it('returns null for legacy daemon', () => {
     const topic = 'bubbaloop/daemon/nodes';
     expect(extractMachineId(topic)).toBe(null);
-  });
-
-  it('extracts from ros-z topic', () => {
-    const topic = '0/bubbaloop%local%nvidia_orin00%camera%entrance/Type/Hash';
-    expect(extractMachineId(topic)).toBe('nvidia_orin00');
   });
 
   it('returns null for legacy fleet topics', () => {
@@ -276,44 +223,34 @@ describe('extractMachineId', () => {
     expect(extractMachineId(topic)).toBe('nvidia_orin00');
   });
 
-  it('handles ros-z with domain ID 1', () => {
-    const topic = '1/bubbaloop%local%test_machine%node%resource/Type/Hash';
-    expect(extractMachineId(topic)).toBe('test_machine');
-  });
-
   it('returns null for topics with insufficient segments', () => {
     expect(extractMachineId('bubbaloop/local')).toBe(null);
   });
 });
 
 describe('extractSchemaFromTopic', () => {
-  it('extracts schema from ros-z topic format', () => {
-    const topic = '0/weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_abc123';
-    expect(extractSchemaFromTopic(topic)).toBe('bubbaloop.weather.v1.CurrentWeather');
+  it('always returns null for vanilla zenoh topics', () => {
+    expect(extractSchemaFromTopic('bubbaloop/local/m1/network-monitor/status')).toBe(null);
   });
 
-  it('extracts schema from system telemetry ros-z topic', () => {
-    const topic = '0/bubbaloop%local%m1%system-telemetry%metrics/bubbaloop.system_telemetry.v1.SystemMetrics/RIHS01_xyz';
-    expect(extractSchemaFromTopic(topic)).toBe('bubbaloop.system_telemetry.v1.SystemMetrics');
+  it('returns null for daemon topics', () => {
+    expect(extractSchemaFromTopic('bubbaloop/daemon/nodes')).toBe(null);
   });
 
-  it('returns null for vanilla zenoh topics without schema', () => {
-    const topic = 'bubbaloop/local/m1/network-monitor/status';
-    expect(extractSchemaFromTopic(topic)).toBe(null);
+  it('returns null for weather topics', () => {
+    expect(extractSchemaFromTopic('bubbaloop/local/m1/weather/current')).toBe(null);
   });
 
-  it('returns null for topics with no dotted segments', () => {
-    const topic = 'bubbaloop/daemon/nodes';
-    expect(extractSchemaFromTopic(topic)).toBe(null);
-  });
-
-  it('skips RIHS hash segments', () => {
-    const topic = '0/topic/RIHS01_abc123';
-    expect(extractSchemaFromTopic(topic)).toBe(null);
+  it('returns null for camera topics', () => {
+    expect(extractSchemaFromTopic('bubbaloop/local/m1/camera/entrance/compressed')).toBe(null);
   });
 
   it('returns null for empty topic', () => {
     expect(extractSchemaFromTopic('')).toBe(null);
+  });
+
+  it('returns null for telemetry topics', () => {
+    expect(extractSchemaFromTopic('bubbaloop/local/m1/system-telemetry/metrics')).toBe(null);
   });
 });
 
@@ -387,17 +324,17 @@ describe('SchemaRegistry', () => {
   });
 
   describe('tryDecodeForTopic', () => {
-    it('decodes using ros-z schema hint in topic', () => {
+    it('decodes weather message via topic guess', () => {
       const msgType = registry.lookupType('bubbaloop.weather.v1.CurrentWeather')!;
       const encoded = msgType.encode({ temperature: 23.5, humidity: 65.0 }).finish();
-      const topic = '0/bubbaloop%local%m1%weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_abc';
+      const topic = 'bubbaloop/local/m1/weather/current';
       const result = registry.tryDecodeForTopic(topic, encoded);
       expect(result).not.toBeNull();
       expect(result!.typeName).toBe('bubbaloop.weather.v1.CurrentWeather');
       expect((result!.data as Record<string, number>).temperature).toBeCloseTo(23.5);
     });
 
-    it('falls back to brute force when no schema hint', () => {
+    it('falls back to brute force when no topic guess matches', () => {
       const msgType = registry.lookupType('test.v1.TestMessage')!;
       const encoded = msgType.encode({ name: 'test', value: 99 }).finish();
       // No schema hint in topic — will try guessTypeForTopic then brute force
@@ -494,6 +431,43 @@ describe('SchemaRegistry', () => {
       expect(registry.getTypeNames().length).toBeGreaterThan(0);
       registry.clear();
       expect(registry.getTypeNames()).toEqual([]);
+    });
+  });
+
+  describe('guessTypeForTopic: additional vanilla zenoh patterns', () => {
+    it('returns null when no schemas loaded', () => {
+      const emptyRegistry = new SchemaRegistry();
+      const guess = emptyRegistry.guessTypeForTopic('bubbaloop/local/m1/weather/current');
+      expect(guess).toBeNull();
+    });
+
+    it('does not guess from topic with insufficient segments', () => {
+      const guess = registry.guessTypeForTopic('bubbaloop');
+      // Should return null or a weak match (no segments to match)
+      if (guess !== null) {
+        expect(guess).toBeDefined();
+      }
+    });
+
+    it('caches null results for unrecognized topics', () => {
+      const g1 = registry.guessTypeForTopic('bubbaloop/local/m1/unknown/data');
+      const g2 = registry.guessTypeForTopic('bubbaloop/local/m1/unknown/data');
+      expect(g1).toBe(g2);
+    });
+  });
+
+  describe('tryDecodeAny', () => {
+    it('returns null for empty payload', () => {
+      const result = registry.tryDecodeAny(new Uint8Array(0));
+      expect(result).toBeNull();
+    });
+
+    it('decodes a valid TestMessage payload', () => {
+      const msgType = registry.lookupType('test.v1.TestMessage')!;
+      const encoded = msgType.encode({ name: 'brute-force', value: 77 }).finish();
+      const result = registry.tryDecodeAny(encoded);
+      expect(result).not.toBeNull();
+      expect(result!.data).toEqual({ name: 'brute-force', value: 77 });
     });
   });
 

@@ -3,61 +3,6 @@ import { extractMachineId, getSamplePayload, normalizeKeyExpr } from '../zenoh';
 import type { Sample } from '@eclipse-zenoh/zenoh-ts';
 
 describe('extractMachineId', () => {
-  describe('ros-z format', () => {
-    it('extracts machine id from ros-z encoded topic', () => {
-      const key = '0/bubbaloop%local%nvidia_orin00%camera%entrance/bubbaloop.camera.v1.Image/RIHS01_abc';
-      expect(extractMachineId(key)).toBe('nvidia_orin00');
-    });
-
-    it('extracts machine id from ros-z with different scope', () => {
-      const key = '0/bubbaloop%production%jetson_nano%health%system/type/hash';
-      expect(extractMachineId(key)).toBe('jetson_nano');
-    });
-
-    it('returns null for ros-z without bubbaloop prefix', () => {
-      const key = '0/other%topic/type/hash';
-      expect(extractMachineId(key)).toBeNull();
-    });
-
-    it('returns null for ros-z with too few segments', () => {
-      const key = '0/bubbaloop%short/type/hash';
-      // decoded: "bubbaloop/short" → segments length < 3
-      expect(extractMachineId(key)).toBeNull();
-    });
-
-    it('handles ros-z with multiple domain IDs', () => {
-      const key = '42/bubbaloop%dev%orin_dev01%weather%current/type/hash';
-      expect(extractMachineId(key)).toBe('orin_dev01');
-    });
-  });
-
-  describe('ros-z new format (slash-preserved)', () => {
-    it('extracts machine id from new ros-z format', () => {
-      const key = '0/bubbaloop/local/nvidia_orin00/camera/entrance/bubbaloop.camera.v1.Image/RIHS01_abc';
-      expect(extractMachineId(key)).toBe('nvidia_orin00');
-    });
-
-    it('extracts machine id with different scope', () => {
-      const key = '0/bubbaloop/production/jetson_nano/health/system/type/hash';
-      expect(extractMachineId(key)).toBe('jetson_nano');
-    });
-
-    it('extracts machine id with different domain ID', () => {
-      const key = '42/bubbaloop/dev/orin_dev01/weather/current/type/hash';
-      expect(extractMachineId(key)).toBe('orin_dev01');
-    });
-
-    it('returns null for new format without bubbaloop prefix', () => {
-      const key = '0/other/topic/data/type/hash';
-      expect(extractMachineId(key)).toBeNull();
-    });
-
-    it('returns null for new format with too few segments', () => {
-      const key = '0/bubbaloop/short';
-      expect(extractMachineId(key)).toBeNull();
-    });
-  });
-
   describe('vanilla zenoh format', () => {
     it('extracts machine id from machine-scoped daemon path', () => {
       expect(extractMachineId('bubbaloop/nvidia-orin00/daemon/nodes')).toBe('nvidia-orin00');
@@ -123,84 +68,9 @@ describe('extractMachineId', () => {
       expect(extractMachineId('bubbaloop/local/nvidia')).toBeNull();
     });
   });
-
-  describe('format equivalence', () => {
-    it('old and new format extract same machine ID', () => {
-      const oldKey = '0/bubbaloop%local%nvidia_orin00%camera%entrance/Type/Hash';
-      const newKey = '0/bubbaloop/local/nvidia_orin00/camera/entrance/Type/Hash';
-      expect(extractMachineId(oldKey)).toBe(extractMachineId(newKey));
-    });
-  });
 });
 
 describe('normalizeKeyExpr', () => {
-  describe('ros-z topics from different machines', () => {
-    it('normalizes ros-z topic from nvidia_orin00', () => {
-      const key = '0/bubbaloop%local%nvidia_orin00%camera%entrance%compressed/bubbaloop.camera.v1.Image/RIHS01_abc';
-      const result = normalizeKeyExpr(key);
-      expect(result.display).toBe('local/nvidia_orin00/camera/entrance/compressed');
-      expect(result.raw).toBe(key);
-    });
-
-    it('normalizes ros-z topic from jetson_nano', () => {
-      const key = '0/bubbaloop%production%jetson_nano%health%system/type/hash';
-      const result = normalizeKeyExpr(key);
-      expect(result.display).toBe('production/jetson_nano/health/system');
-      expect(result.raw).toBe(key);
-    });
-
-    it('normalizes ros-z topic from orin_dev01 with different domain ID', () => {
-      const key = '42/bubbaloop%dev%orin_dev01%weather%current/type/hash';
-      const result = normalizeKeyExpr(key);
-      expect(result.display).toBe('dev/orin_dev01/weather/current');
-      expect(result.raw).toBe(key);
-    });
-
-    it('handles ros-z topic without bubbaloop prefix', () => {
-      const key = '0/custom%topic%data/type/hash';
-      const result = normalizeKeyExpr(key);
-      expect(result.display).toBe('custom/topic/data');
-      expect(result.raw).toBe(key);
-    });
-  });
-
-  describe('ros-z new format (slash-preserved)', () => {
-    it('normalizes new ros-z topic stripping type and hash', () => {
-      const key = '0/bubbaloop/local/nvidia_orin00/camera/entrance/compressed/bubbaloop.camera.v1.Image/RIHS01_abc';
-      const result = normalizeKeyExpr(key);
-      expect(result.display).toBe('local/nvidia_orin00/camera/entrance/compressed');
-      expect(result.raw).toBe(key);
-    });
-
-    it('normalizes new format with different scope and machine', () => {
-      const key = '0/bubbaloop/production/jetson_nano/system_telemetry/metrics/bubbaloop.system_telemetry.v1.SystemMetrics/RIHS01_xyz';
-      const result = normalizeKeyExpr(key);
-      expect(result.display).toBe('production/jetson_nano/system_telemetry/metrics');
-      expect(result.raw).toBe(key);
-    });
-
-    it('normalizes new format with different domain ID', () => {
-      const key = '42/bubbaloop/dev/orin_dev01/weather/current/bubbaloop.weather.v1.Weather/RIHS01_def';
-      const result = normalizeKeyExpr(key);
-      expect(result.display).toBe('dev/orin_dev01/weather/current');
-      expect(result.raw).toBe(key);
-    });
-
-    it('handles new format without bubbaloop prefix', () => {
-      const key = '0/custom/topic/data/bubbaloop.some.v1.Type/RIHS01_abc';
-      const result = normalizeKeyExpr(key);
-      expect(result.display).toBe('custom/topic/data');
-      expect(result.raw).toBe(key);
-    });
-
-    it('handles new format without type/hash suffix', () => {
-      const key = '0/bubbaloop/local/m1/camera/raw';
-      const result = normalizeKeyExpr(key);
-      expect(result.display).toBe('local/m1/camera/raw');
-      expect(result.raw).toBe(key);
-    });
-  });
-
   describe('vanilla zenoh topics from different scopes', () => {
     it('normalizes topic with local scope', () => {
       const key = 'bubbaloop/local/nvidia_orin00/health/system-telemetry';
@@ -248,13 +118,33 @@ describe('normalizeKeyExpr', () => {
       expect(result.display).toBe(key);
       expect(result.raw).toBe(key);
     });
-  });
 
-  describe('format equivalence', () => {
-    it('old and new format produce same display for camera topic', () => {
-      const oldKey = '0/bubbaloop%local%nvidia_orin00%camera%entrance%compressed/bubbaloop.camera.v1.Image/RIHS01_abc';
-      const newKey = '0/bubbaloop/local/nvidia_orin00/camera/entrance/compressed/bubbaloop.camera.v1.Image/RIHS01_abc';
-      expect(normalizeKeyExpr(oldKey).display).toBe(normalizeKeyExpr(newKey).display);
+    it('returns single-segment key unchanged', () => {
+      const key = 'test';
+      const result = normalizeKeyExpr(key);
+      expect(result.display).toBe('test');
+      expect(result.raw).toBe('test');
+    });
+
+    it('handles weather topics', () => {
+      const key = 'bubbaloop/local/nvidia_orin00/weather/current';
+      const result = normalizeKeyExpr(key);
+      expect(result.display).toBe('local/nvidia_orin00/weather/current');
+      expect(result.raw).toBe(key);
+    });
+
+    it('handles system telemetry topics', () => {
+      const key = 'bubbaloop/local/m1/system-telemetry/metrics';
+      const result = normalizeKeyExpr(key);
+      expect(result.display).toBe('local/m1/system-telemetry/metrics');
+      expect(result.raw).toBe(key);
+    });
+
+    it('handles network monitor topics', () => {
+      const key = 'bubbaloop/local/m1/network-monitor/status';
+      const result = normalizeKeyExpr(key);
+      expect(result.display).toBe('local/m1/network-monitor/status');
+      expect(result.raw).toBe(key);
     });
   });
 });
@@ -314,5 +204,90 @@ describe('getSamplePayload', () => {
     const result = getSamplePayload(mockSample);
     expect(result).toEqual(protobufBytes);
     expect(result.length).toBe(9);
+  });
+});
+
+describe('extractMachineId: production topology variants', () => {
+  it('extracts machine id from production scope with camera topic', () => {
+    expect(extractMachineId('bubbaloop/production/factory_cam01/camera/entrance/compressed')).toBe('factory_cam01');
+  });
+
+  it('extracts machine id from staging scope', () => {
+    expect(extractMachineId('bubbaloop/staging/test_device_01/health/metrics')).toBe('test_device_01');
+  });
+
+  it('extracts machine id from dev scope with weather topic', () => {
+    expect(extractMachineId('bubbaloop/dev/orin_dev01/weather/current')).toBe('orin_dev01');
+  });
+
+  it('extracts machine id from deeply nested data path', () => {
+    expect(extractMachineId('bubbaloop/local/nvidia_orin00/camera/entrance/side/compressed')).toBe('nvidia_orin00');
+  });
+
+  it('extracts machine id with numeric-only machine name', () => {
+    expect(extractMachineId('bubbaloop/local/42/sensor/temperature')).toBe('42');
+  });
+
+  it('returns null for bubbaloop with only scope (two segments)', () => {
+    expect(extractMachineId('bubbaloop/production')).toBeNull();
+  });
+
+  it('handles machine-scoped daemon with deep API path', () => {
+    expect(extractMachineId('bubbaloop/jetson-nano-02/daemon/api/schemas')).toBe('jetson-nano-02');
+  });
+
+  it('returns null for fleet with machine-like second segment', () => {
+    expect(extractMachineId('bubbaloop/fleet/nvidia_orin00')).toBeNull();
+  });
+});
+
+describe('normalizeKeyExpr: additional vanilla zenoh patterns', () => {
+  it('normalizes daemon API schemas topic', () => {
+    const key = 'bubbaloop/nvidia_orin00/daemon/api/schemas';
+    const result = normalizeKeyExpr(key);
+    expect(result.display).toBe('nvidia_orin00/daemon/api/schemas');
+    expect(result.raw).toBe(key);
+  });
+
+  it('normalizes fleet topic', () => {
+    const key = 'bubbaloop/fleet/status';
+    const result = normalizeKeyExpr(key);
+    expect(result.display).toBe('fleet/status');
+    expect(result.raw).toBe(key);
+  });
+
+  it('normalizes deeply nested camera path', () => {
+    const key = 'bubbaloop/production/factory_cam01/camera/entrance/side/compressed';
+    const result = normalizeKeyExpr(key);
+    expect(result.display).toBe('production/factory_cam01/camera/entrance/side/compressed');
+    expect(result.raw).toBe(key);
+  });
+
+  it('handles bubbaloop-only prefix (single segment after bubbaloop)', () => {
+    const key = 'bubbaloop/single';
+    const result = normalizeKeyExpr(key);
+    expect(result.display).toBe('single');
+    expect(result.raw).toBe(key);
+  });
+
+  it('handles empty string', () => {
+    const key = '';
+    const result = normalizeKeyExpr(key);
+    expect(result.display).toBe('');
+    expect(result.raw).toBe('');
+  });
+
+  it('preserves raw for non-bubbaloop multi-segment topic', () => {
+    const key = 'zenoh/admin/router/status';
+    const result = normalizeKeyExpr(key);
+    expect(result.display).toBe(key);
+    expect(result.raw).toBe(key);
+  });
+
+  it('normalizes staging scope topic', () => {
+    const key = 'bubbaloop/staging/test01/sensor/temperature';
+    const result = normalizeKeyExpr(key);
+    expect(result.display).toBe('staging/test01/sensor/temperature');
+    expect(result.raw).toBe(key);
   });
 });

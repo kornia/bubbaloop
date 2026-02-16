@@ -389,7 +389,7 @@ Bubbaloop serves as the physical AI foundation for OpenClaw and other AI agents.
 | **Rust for all core components** | Memory safety without GC. No buffer overflows, no use-after-free. Critical for systems that control physical hardware — a segfault in a motor controller is a safety hazard. |
 | **Python only for rapid prototyping nodes** | Python nodes are the "onramp" — quick to write, easy to iterate. But production nodes should graduate to Rust. |
 | **Zenoh (not DDS, not MQTT)** | Decentralized pub/sub/query with 97% less discovery traffic than DDS. Written in Rust. Zero-copy shared memory. ACLs. Runs cloud-to-edge-to-thing. |
-| **ros-z (ZettaScale)** | ROS 2 message type interop without the DDS baggage. `MessageTypeInfo` trait gives us runtime schema introspection. Protobuf feature enables prost integration. |
+| **Protobuf + Zenoh queryables** | Self-describing message types via FileDescriptorSet serving. Runtime schema introspection without DDS overhead. Vanilla Zenoh API — no abstraction layers. |
 | **argh (not clap)** | Minimal CLI parsing. No proc macros, fast compile times. |
 | **log + env_logger (not tracing)** | Simple, synchronous logging. Logs to stderr (never pollutes stdout). |
 | **thiserror + anyhow** | `thiserror` for library errors, `anyhow` for CLI. Module-specific `type Result<T> = std::result::Result<T, Error>`. |

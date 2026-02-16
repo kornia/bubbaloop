@@ -71,7 +71,6 @@ function decodePayload(payload: Uint8Array, topic: string, registry?: SchemaRegi
   }
 
   // 3. Built-in decoders as fallback (when SchemaRegistry is not yet loaded)
-  // Daemon topics (vanilla zenoh, no ros-z schema hint)
   if (topic.includes('daemon/nodes')) {
     const msg = decodeNodeList(payload);
     if (msg) {

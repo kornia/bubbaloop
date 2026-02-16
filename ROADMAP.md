@@ -19,7 +19,7 @@
 2. The daemon is scaffolding — useful today, replaceable by AI agents tomorrow
 3. Self-describing nodes are AI-native — discovery without documentation
 4. Data access rights are the moat — who controls the sensors controls the value
-5. Rust + Zenoh + ros-z — memory safety, decentralized pub/sub, schema introspection
+5. Rust + Zenoh + Protobuf — memory safety, decentralized pub/sub, schema introspection
 
 ## Vision
 
@@ -115,7 +115,7 @@ Building a self-describing, decentralized sensor architecture where nodes are au
 - [x] Define manifest JSON schema with `publishes`, `commands`, `requires_hardware`
 - [x] Add manifest queryable to Rust + Python templates
 - [x] Add command queryable to Rust + Python templates
-- [ ] Add ros-z liveliness tokens for decentralized presence detection (Python blocked on zenoh-python)
+- [ ] Add Zenoh liveliness tokens for decentralized presence detection (Python blocked on zenoh-python)
 - [x] Dashboard wildcard query `bubbaloop/**/manifest` for discovery
 - [ ] Update official nodes: network-monitor, system-telemetry, openmeteo, camera
 
