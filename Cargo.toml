@@ -26,9 +26,6 @@ serde_yaml = "0.9"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 
-# ROS-Z pub/sub
-ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
-
 # Zenoh
 zenoh = "1.7"
 

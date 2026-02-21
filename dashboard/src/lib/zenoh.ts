@@ -202,7 +202,7 @@ export function getSamplePayload(sample: Sample): Uint8Array {
 
 /** A discovered topic entry */
 export interface DiscoveredTopic {
-  /** Human-readable name (ros-z decoded, type/hash stripped) */
+  /** Human-readable name (bubbaloop/ prefix stripped) */
   display: string;
   /** Raw Zenoh key expression (for subscribing) */
   raw: string;
@@ -217,48 +217,17 @@ export interface UseTopicDiscoveryResult {
 /**
  * Normalize a raw Zenoh key expression to a human-readable form.
  *
- * For ros-z topics: decodes the %-encoded portion and strips domain ID + type/hash.
- * For vanilla topics: strips the leading "bubbaloop/" prefix only.
- * Does NOT strip machine/scope segments — they're needed to distinguish topics.
+ * Vanilla Zenoh format: strips the leading "bubbaloop/" prefix only.
+ * Does NOT strip machine/scope segments -- they're needed to distinguish topics.
  *
  * Examples:
- *   ros-z (new): "0/bubbaloop/local/m1/camera/compressed/Type/RIHS..."             → "local/m1/camera/compressed"
- *   ros-z (old): "0/bubbaloop%local%m1%camera%entrance%compressed/Type/RIHS..." → "local/m1/camera/entrance/compressed"
- *   vanilla: "bubbaloop/nvidia-orin00/daemon/nodes"                         → "nvidia-orin00/daemon/nodes"
- *   vanilla: "bubbaloop/local/nvidia_orin00/health/system-telemetry"        → "local/nvidia_orin00/health/system-telemetry"
- *   legacy:  "bubbaloop/daemon/nodes"                                       → "daemon/nodes"
+ *   "bubbaloop/local/nvidia_orin00/camera/entrance/compressed" -> "local/nvidia_orin00/camera/entrance/compressed"
+ *   "bubbaloop/nvidia-orin00/daemon/nodes"                     -> "nvidia-orin00/daemon/nodes"
+ *   "bubbaloop/local/nvidia_orin00/health/system-telemetry"    -> "local/nvidia_orin00/health/system-telemetry"
+ *   "bubbaloop/daemon/nodes"                                   -> "daemon/nodes"
  */
 export function normalizeKeyExpr(keyExpr: string): { display: string; raw: string } {
   const parts = keyExpr.split('/');
-
-  // ros-z format: starts with domain ID (digit)
-  if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
-    // Old format: 0/<%-encoded-topic>/type/hash (parts[1] has %)
-    if (parts[1].includes('%')) {
-      const decoded = parts[1].replace(/%/g, '/');
-      const segments = decoded.split('/');
-      if (segments.length >= 2 && segments[0] === 'bubbaloop') {
-        return { display: segments.slice(1).join('/'), raw: keyExpr };
-      }
-      return { display: decoded, raw: keyExpr };
-    }
-    // New format: 0/topic/path.../type/hash (slashes preserved)
-    // Strip domain ID (first) and type+hash (last 2 from end)
-    let endIdx = parts.length;
-    for (let i = parts.length - 1; i >= 1; i--) {
-      const part = parts[i];
-      if (part.startsWith('RIHS') || (part.includes('.') && !part.startsWith('/'))) {
-        endIdx = i;
-      } else {
-        break;
-      }
-    }
-    const topicParts = parts.slice(1, endIdx);
-    if (topicParts.length >= 1 && topicParts[0] === 'bubbaloop') {
-      return { display: topicParts.slice(1).join('/'), raw: keyExpr };
-    }
-    return { display: topicParts.join('/'), raw: keyExpr };
-  }
 
   // Vanilla zenoh: strip "bubbaloop/" prefix only
   if (parts[0] === 'bubbaloop' && parts.length >= 2) {
@@ -271,34 +240,14 @@ export function normalizeKeyExpr(keyExpr: string): { display: string; raw: strin
 /**
  * Extract machine ID from a Zenoh key expression.
  *
- * Handles two formats:
- * - ros-z encoded (old): "0/bubbaloop%local%nvidia_orin00%camera%entrance/..."
- * - ros-z new: "0/bubbaloop/local/nvidia_orin00/camera/..."
- * - vanilla zenoh: "bubbaloop/local/nvidia_orin00/health/system-telemetry"
- *                  "bubbaloop/nvidia-orin00/daemon/nodes" (machine-scoped daemon)
+ * Vanilla Zenoh format:
+ * - "bubbaloop/{machine}/daemon/..."  -> machine (machine-scoped daemon)
+ * - "bubbaloop/{scope}/{machine}/..." -> machine (full-scoped, 4+ segments)
  *
  * Returns null for legacy paths like "bubbaloop/daemon/nodes" or "bubbaloop/fleet/..."
  */
 export function extractMachineId(keyExpr: string): string | null {
   const parts = keyExpr.split('/');
-
-  // ros-z format: starts with domain ID (digit)
-  if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
-    // Old format: %-encoded
-    if (parts[1].includes('%')) {
-      const decoded = parts[1].replace(/%/g, '/');
-      const segments = decoded.split('/');
-      if (segments.length >= 3 && segments[0] === 'bubbaloop') {
-        return segments[2];
-      }
-      return null;
-    }
-    // New format: 0/bubbaloop/{scope}/{machine}/...
-    if (parts[1] === 'bubbaloop' && parts.length >= 4) {
-      return parts[3];
-    }
-    return null;
-  }
 
   // Vanilla zenoh: "bubbaloop/..."
   if (parts[0] === 'bubbaloop') {
@@ -308,12 +257,12 @@ export function extractMachineId(keyExpr: string): string | null {
       return null;
     }
 
-    // Machine-scoped daemon: "bubbaloop/{machine}/daemon/..." → return parts[1]
+    // Machine-scoped daemon: "bubbaloop/{machine}/daemon/..." -> return parts[1]
     if (parts.length >= 3 && parts[2] === 'daemon') {
       return parts[1];
     }
 
-    // Full-scoped: "bubbaloop/{scope}/{machine}/{resource}/..." → return parts[2]
+    // Full-scoped: "bubbaloop/{scope}/{machine}/{resource}/..." -> return parts[2]
     if (parts.length >= 4) {
       return parts[2];
     }
@@ -328,7 +277,7 @@ export function useZenohTopicDiscovery(
 ): UseTopicDiscoveryResult {
   const [topics, setTopics] = useState<DiscoveredTopic[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
-  // Map from raw key expression → display name (deduplicate by raw key)
+  // Map from raw key expression -> display name (deduplicate by raw key)
   const topicMapRef = useRef<Map<string, string>>(new Map());
   const subscriberRef = useRef<Subscriber | null>(null);
 

@@ -34,14 +34,14 @@ flowchart LR
     end
 
     subgraph Node["Camera Node"]
-        rosz[ros-z Publisher]
+        zenoh[Zenoh Publisher]
     end
 
     cam -->|RTSP/RTP| rtspsrc
     rtspsrc --> depay
     depay --> parse
     parse --> sink
-    sink -->|H264 NAL units| rosz
+    sink -->|H264 NAL units| zenoh
 ```
 
 ## Configuration
@@ -134,18 +134,19 @@ pixi run cameras -- -z tcp/192.168.1.50:7447
 
 | Topic | Type | Description |
 |-------|------|-------------|
-| `/camera/{name}/compressed` | `CompressedImage` | H264 compressed frames |
+| `bubbaloop/{scope}/{machine_id}/camera/{name}/compressed` | `CompressedImage` | H264 compressed frames |
 
-### Zenoh Key Expression
+### Topic Format
 
 ```
-0/camera%{name}%compressed/**
+bubbaloop/{scope}/{machine_id}/camera/{name}/compressed
 ```
 
-**Example:** Camera named `front_door` publishes to:
+**Example:** Camera named `front_door` on machine `nvidia_orin00` publishes to:
 
-- ROS topic: `/camera/front_door/compressed`
-- Zenoh key: `0/camera%front_door%compressed/**`
+```
+bubbaloop/local/nvidia_orin00/camera/front_door/compressed
+```
 
 ## Message Format
 

@@ -521,4 +521,259 @@ rules:
         let cond = config.rules[0].condition.as_ref().unwrap();
         assert!(cond.evaluate(&json!({"x": 1})));
     }
+
+    #[test]
+    fn test_condition_integer_vs_float_comparison() {
+        // JSON "1" should equal "1.0" for numeric comparison
+        let cond = Condition {
+            field: "value".to_string(),
+            operator: Operator::Eq,
+            value: json!(1.0),
+        };
+        assert!(cond.evaluate(&json!({"value": 1})));
+    }
+
+    #[test]
+    fn test_condition_boolean() {
+        let cond = Condition {
+            field: "active".to_string(),
+            operator: Operator::Eq,
+            value: json!(true),
+        };
+        assert!(cond.evaluate(&json!({"active": true})));
+        assert!(!cond.evaluate(&json!({"active": false})));
+    }
+
+    #[test]
+    fn test_condition_deeply_nested() {
+        let cond = Condition {
+            field: "a.b.c.d".to_string(),
+            operator: Operator::Eq,
+            value: json!("found"),
+        };
+        let data = json!({"a": {"b": {"c": {"d": "found"}}}});
+        assert!(cond.evaluate(&data));
+        let bad_data = json!({"a": {"b": {"x": 1}}});
+        assert!(!cond.evaluate(&bad_data));
+    }
+
+    #[test]
+    fn test_condition_null_field_value() {
+        let cond = Condition {
+            field: "val".to_string(),
+            operator: Operator::Eq,
+            value: json!(null),
+        };
+        assert!(cond.evaluate(&json!({"val": null})));
+        assert!(!cond.evaluate(&json!({"val": 0})));
+    }
+
+    #[test]
+    fn test_condition_lt_boundary() {
+        let cond = Condition {
+            field: "x".to_string(),
+            operator: Operator::Lt,
+            value: json!(10),
+        };
+        assert!(cond.evaluate(&json!({"x": 9})));
+        assert!(!cond.evaluate(&json!({"x": 10})));
+        assert!(!cond.evaluate(&json!({"x": 11})));
+    }
+
+    #[test]
+    fn test_condition_gte_boundary() {
+        let cond = Condition {
+            field: "x".to_string(),
+            operator: Operator::Gte,
+            value: json!(5.0),
+        };
+        assert!(cond.evaluate(&json!({"x": 5.0})));
+        assert!(cond.evaluate(&json!({"x": 5.1})));
+        assert!(!cond.evaluate(&json!({"x": 4.9})));
+    }
+
+    #[test]
+    fn test_condition_contains_empty_string() {
+        let cond = Condition {
+            field: "msg".to_string(),
+            operator: Operator::Contains,
+            value: json!(""),
+        };
+        // Every string contains the empty string
+        assert!(cond.evaluate(&json!({"msg": "anything"})));
+    }
+
+    #[test]
+    fn test_condition_contains_non_string() {
+        // Contains on non-string types should return false
+        let cond = Condition {
+            field: "num".to_string(),
+            operator: Operator::Contains,
+            value: json!("5"),
+        };
+        assert!(!cond.evaluate(&json!({"num": 5})));
+    }
+
+    #[test]
+    fn test_condition_gt_non_numeric() {
+        // Gt on strings should fail gracefully
+        let cond = Condition {
+            field: "name".to_string(),
+            operator: Operator::Gt,
+            value: json!("abc"),
+        };
+        assert!(!cond.evaluate(&json!({"name": "xyz"})));
+    }
+
+    #[test]
+    fn test_publish_action_target_node() {
+        let action = Action::Publish {
+            topic: "test/topic".to_string(),
+            payload: json!({"key": "value"}),
+        };
+        assert!(action.target_node().is_none());
+    }
+
+    #[test]
+    fn test_full_yaml_roundtrip() {
+        // Parse a complex config, serialize back, parse again
+        let yaml = r#"
+rules:
+  - name: "complex-rule"
+    trigger: "bubbaloop/**/telemetry/status"
+    enabled: true
+    condition:
+      field: "sensors.temp.celsius"
+      operator: ">="
+      value: 45.5
+    action:
+      type: "command"
+      node: "sprinkler-controller"
+      command: "activate"
+      params:
+        zone: "garden"
+        duration_s: 300
+"#;
+        let config: RuleConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.rules.len(), 1);
+
+        let rule = &config.rules[0];
+        assert_eq!(rule.name, "complex-rule");
+        assert!(rule.enabled);
+
+        let cond = rule.condition.as_ref().unwrap();
+        assert_eq!(cond.field, "sensors.temp.celsius");
+
+        // Verify condition evaluates correctly
+        let hot = json!({"sensors": {"temp": {"celsius": 50.0}}});
+        let cool = json!({"sensors": {"temp": {"celsius": 30.0}}});
+        assert!(cond.evaluate(&hot));
+        assert!(!cond.evaluate(&cool));
+
+        match &rule.action {
+            Action::Command { node, command, params } => {
+                assert_eq!(node, "sprinkler-controller");
+                assert_eq!(command, "activate");
+                assert_eq!(params["zone"], "garden");
+                assert_eq!(params["duration_s"], 300);
+            }
+            _ => panic!("Expected Command action"),
+        }
+    }
+
+    #[test]
+    fn test_multiple_rules_same_trigger() {
+        let yaml = r#"
+rules:
+  - name: "warn-temp"
+    trigger: "bubbaloop/**/status"
+    condition:
+      field: "temp"
+      operator: ">"
+      value: 70
+    action:
+      type: "log"
+      message: "Temperature warning"
+      level: "warn"
+  - name: "critical-temp"
+    trigger: "bubbaloop/**/status"
+    condition:
+      field: "temp"
+      operator: ">"
+      value: 90
+    action:
+      type: "log"
+      message: "Temperature CRITICAL"
+      level: "error"
+"#;
+        let config: RuleConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.rules.len(), 2);
+        assert_eq!(config.rules[0].trigger, config.rules[1].trigger);
+
+        let cond0 = config.rules[0].condition.as_ref().unwrap();
+        let cond1 = config.rules[1].condition.as_ref().unwrap();
+
+        let data = json!({"temp": 85});
+        assert!(cond0.evaluate(&data));  // > 70
+        assert!(!cond1.evaluate(&data)); // not > 90
+
+        let critical_data = json!({"temp": 95});
+        assert!(cond0.evaluate(&critical_data));
+        assert!(cond1.evaluate(&critical_data));
+    }
+
+    #[test]
+    fn test_rule_no_condition_always_triggers() {
+        let yaml = r#"
+rules:
+  - name: "log-everything"
+    trigger: "bubbaloop/**/data"
+    action:
+      type: "log"
+      message: "Data received"
+"#;
+        let config: RuleConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.rules[0].condition.is_none());
+        // No condition = always triggers (tested in evaluate_rules_for_sample)
+    }
+
+    #[test]
+    fn test_agent_status_serialization() {
+        let status = AgentStatus {
+            rule_count: 2,
+            rules: vec!["rule-a".to_string(), "rule-b".to_string()],
+            recent_triggers: HashMap::from([(
+                "rule-a".to_string(),
+                RuleTriggerLog {
+                    last_triggered_ms: 1234567890,
+                    trigger_key: "bubbaloop/local/m1/sensor/status".to_string(),
+                    trigger_count: 5,
+                },
+            )]),
+            active_overrides: 1,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: AgentStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.rule_count, 2);
+        assert_eq!(deserialized.rules.len(), 2);
+        assert_eq!(deserialized.active_overrides, 1);
+        assert_eq!(deserialized.recent_triggers["rule-a"].trigger_count, 5);
+    }
+
+    #[test]
+    fn test_log_action_default_level() {
+        let yaml = r#"
+rules:
+  - name: "test"
+    trigger: "test"
+    action:
+      type: "log"
+      message: "hello"
+"#;
+        let config: RuleConfig = serde_yaml::from_str(yaml).unwrap();
+        match &config.rules[0].action {
+            Action::Log { level, .. } => assert_eq!(level, "warn"),
+            _ => panic!("Expected Log action"),
+        }
+    }
 }

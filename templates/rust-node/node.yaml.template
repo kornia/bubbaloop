@@ -5,3 +5,14 @@ description: {{description}}
 author: {{author}}
 build: "pixi run build"
 command: "./target/release/{{node_name}}_node"
+
+# Optional: MCP tool metadata for AI agent integration (planned).
+# When supported, the daemon will read this to enrich MCP tool descriptions.
+# For now, the daemon auto-discovers commands from the node's manifest queryable.
+# mcp:
+#   tools:
+#     - name: "example_command"
+#       description: "Detailed description for AI agents"
+#       examples:
+#         - params: {key: "value"}
+#           description: "Example usage"

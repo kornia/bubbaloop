@@ -54,7 +54,7 @@ Focus on:
 1. Correctness bugs (logic errors, off-by-one, race conditions)
 2. API misuse (wrong function signatures, missing error handling)
 3. Security issues (injection, unsafe patterns)
-4. Zenoh/ros-z specific issues (topic naming, session lifecycle)
+4. Zenoh-specific issues (topic naming, session lifecycle, queryable patterns)
 
 For each finding, categorize as:
 - CRITICAL: Must fix before merge

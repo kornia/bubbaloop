@@ -54,10 +54,10 @@ fn create_header(sequence: u64, node_name: &str) -> Header {
 }
 ```
 
-Enable the `ros-z` feature in `Cargo.toml` if you need ROS-Z pub/sub:
+Nodes publish using vanilla Zenoh topics with the standard format:
 
-```toml
-bubbaloop-schemas = { git = "https://github.com/kornia/bubbaloop.git", branch = "main", path = "crates/bubbaloop-schemas", features = ["ros-z"] }
+```
+bubbaloop/{scope}/{machine_id}/{node_name}/{resource}
 ```
 
 ## Step 3: Build
@@ -122,9 +122,7 @@ The `bubbaloop-schemas` crate provides these protobuf types:
 | `CurrentWeather`, `HourlyForecast`, `DailyForecast` | `weather` | (default) |
 | `SystemMetrics` | `system_telemetry` | (default) |
 | `NetworkStatus` | `network_monitor` | (default) |
-| ROS-Z trait impls | - | `ros-z` |
 | `TopicsConfig` | `config` | `config` |
-| `get_descriptor_for_message` | - | `descriptor` + `ros-z` |
 
 ## Next Steps
 

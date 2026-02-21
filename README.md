@@ -132,22 +132,103 @@ Common issues:
 - **Agent guidelines**: See [CLAUDE.md](CLAUDE.md) for architecture and coding standards
 - **CLI reference**: `bubbaloop --help` or `bubbaloop node --help`
 
+## AI Agent Integration (MCP)
+
+Bubbaloop includes an MCP (Model Context Protocol) server that lets any LLM control your sensor nodes via natural language. Build with `--features mcp` to enable.
+
+```bash
+# Build with MCP support
+cargo build --release --features mcp
+
+# The daemon starts the MCP server on port 8088
+bubbaloop daemon
+# → MCP server: http://127.0.0.1:8088/mcp
+```
+
+**Available MCP tools:**
+
+| Tool | Description |
+|------|-------------|
+| `list_nodes` | List all nodes with status |
+| `get_node_manifest` | Get a node's capabilities and topics |
+| `send_command` | Send a command to a node |
+| `start_node` / `stop_node` | Control node lifecycle |
+| `get_node_logs` | Read node service logs |
+| `discover_nodes` | Fleet-wide manifest discovery |
+| `query_zenoh` | Query any Zenoh key expression |
+| `get_agent_status` | View agent rule engine status |
+| `list_agent_rules` | List active automation rules |
+
+Configure Claude Code to use it via `.mcp.json` (already in project root).
+
+## Agent Rule Engine
+
+The daemon includes a lightweight rule engine for autonomous sensor-to-action automation. Define rules in `~/.bubbaloop/rules.yaml`:
+
+```yaml
+rules:
+  - name: "high-temp-alert"
+    trigger: "bubbaloop/**/telemetry/status"
+    condition:
+      field: "cpu_temp"
+      operator: ">"
+      value: 80.0
+    action:
+      type: "log"
+      message: "CPU temperature exceeds 80C"
+
+  - name: "capture-on-motion"
+    trigger: "bubbaloop/**/motion/detected"
+    condition:
+      field: "confidence"
+      operator: ">="
+      value: 0.8
+    action:
+      type: "command"
+      node: "rtsp-camera"
+      command: "capture_frame"
+      params:
+        resolution: "1080p"
+```
+
+Rules support: `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains` operators. Actions: `log`, `command` (send to node), `publish` (to Zenoh topic). Human overrides via `bubbaloop/{scope}/{machine_id}/human/override/**` topic.
+
+## Node Contract
+
+Every node is self-describing with standard queryables:
+
+```
+{node}/schema      → Protobuf FileDescriptorSet (binary)
+{node}/manifest    → Capabilities, topics, commands (JSON)
+{node}/health      → Status and uptime (JSON)
+{node}/config      → Current configuration (JSON)
+{node}/command     → Imperative actions (JSON request/response)
+```
+
+AI agents discover nodes via `bubbaloop/**/manifest` wildcard query, then interact through commands and data subscriptions.
+
 ## Architecture
 
 ```
-Dashboard (React) ─┬─ WebSocket ─── zenoh-bridge ─┬─ Zenoh pub/sub
-TUI (ratatui) ─────┤                              │
-CLI ───────────────┘                              │
-                                                  │
-Daemon ───────────────────────────────────────────┤
-  ├─ Node Manager (lifecycle, builds)            │
-  ├─ Registry (~/.bubbaloop/nodes.json)          │
-  └─ Systemd D-Bus (zbus)                        │
-                                                  │
-Nodes ────────────────────────────────────────────┘
-  ├─ rtsp-camera (RTSP → H264 → Zenoh)
-  ├─ openmeteo (weather API → Zenoh)
-  └─ custom nodes...
+                    ┌──────────────────────────────────┐
+                    │   AI Agent (Claude via MCP)       │
+                    │   http://127.0.0.1:8088/mcp      │
+                    └──────────────┬───────────────────┘
+                                   │
+Dashboard (React) ─┬─ WebSocket ───┤─── Zenoh pub/sub
+TUI (ratatui) ─────┤               │
+CLI ───────────────┘               │
+                                   │
+Daemon ────────────────────────────┤
+  ├─ Node Manager (lifecycle)      │
+  ├─ Agent Rule Engine (rules.yaml)│
+  ├─ MCP Server (feature-gated)   │
+  └─ Systemd D-Bus (zbus)         │
+                                   │
+Nodes (self-describing) ───────────┘
+  ├─ rtsp-camera  [schema|manifest|health|config|command]
+  ├─ openmeteo    [schema|manifest|health|config|command]
+  └─ custom...    [schema|manifest|health|config|command]
 ```
 
 ## License

@@ -148,9 +148,10 @@ class {{node_name_pascal}}Node:
         )
         logger.info(f"Command queryable declared on {command_key}")
 
-        # TODO: Zenoh liveliness tokens (requires zenoh-python with liveliness support)
-        # liveliness_key = f"bubbaloop/{self._scope}/{self._machine_id}/{self._node_name}"
-        # self._liveliness_token = self.session.liveliness().declare_token(liveliness_key)
+        # Declare liveliness token for presence detection
+        liveliness_key = f"bubbaloop/{self._scope}/{self._machine_id}/{self._node_name}/liveliness"
+        self._liveliness_token = self.session.liveliness().declare_token(liveliness_key)
+        logger.info(f"Liveliness token: {liveliness_key}")
 
         # Setup subscriber (optional)
         self.subscriber = None

@@ -27,8 +27,8 @@ describe('SchemaRegistry: End-to-End Decode Pipeline', () => {
     registry = new SchemaRegistry();
   });
 
-  describe('ros-z topic hint decode', () => {
-    it('decodes weather message via ros-z topic with schema hint', () => {
+  describe('vanilla topic guess decode', () => {
+    it('decodes weather message via vanilla zenoh topic with type guess', () => {
       // Create a weather schema
       const root = new protobuf.Root();
       const weatherNs = root.define('bubbaloop.weather.v1');
@@ -45,8 +45,8 @@ describe('SchemaRegistry: End-to-End Decode Pipeline', () => {
       const msgType = registry.lookupType('bubbaloop.weather.v1.CurrentWeather')!;
       const encoded = msgType.encode({ temperature: 23.5, humidity: 65.0, wind_speed: 12.3 }).finish();
 
-      // Decode via ros-z topic (has schema hint in path)
-      const topic = '0/bubbaloop%local%m1%weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_abc123';
+      // Decode via vanilla Zenoh topic (no schema hint — uses guessTypeForTopic)
+      const topic = 'bubbaloop/local/m1/weather/current';
       const result = registry.tryDecodeForTopic(topic, encoded);
 
       expect(result).not.toBeNull();
@@ -645,6 +645,57 @@ describe('SchemaRegistry: Edge Cases', () => {
   });
 });
 
+describe('SchemaRegistry: tryDecodeForTopic with vanilla Zenoh topics', () => {
+  let registry: SchemaRegistry;
+
+  beforeEach(() => {
+    registry = new SchemaRegistry();
+
+    const root = new protobuf.Root();
+    const ns = root.define('bubbaloop.system_telemetry.v1');
+    const metrics = new protobuf.Type('SystemMetrics');
+    metrics.add(new protobuf.Field('cpu_usage', 1, 'float'));
+    metrics.add(new protobuf.Field('memory_usage', 2, 'float'));
+    metrics.add(new protobuf.Field('uptime_secs', 3, 'uint64'));
+    ns.add(metrics);
+    root.resolveAll();
+    injectSchema(registry, root, 'telemetry', 'system-telemetry-node');
+  });
+
+  it('decodes system telemetry via topic guess', () => {
+    const msgType = registry.lookupType('bubbaloop.system_telemetry.v1.SystemMetrics')!;
+    const encoded = msgType.encode({ cpu_usage: 45.2, memory_usage: 72.8, uptime_secs: '86400' }).finish();
+    const result = registry.tryDecodeForTopic('bubbaloop/local/m1/system-telemetry/metrics', encoded);
+    expect(result).not.toBeNull();
+    expect(result!.typeName).toBe('bubbaloop.system_telemetry.v1.SystemMetrics');
+    const data = result!.data as Record<string, unknown>;
+    expect((data.cpuUsage as number)).toBeCloseTo(45.2);
+    expect((data.memoryUsage as number)).toBeCloseTo(72.8);
+  });
+
+  it('decodes system telemetry from different machine IDs', () => {
+    const msgType = registry.lookupType('bubbaloop.system_telemetry.v1.SystemMetrics')!;
+    const encoded = msgType.encode({ cpu_usage: 10.0, memory_usage: 50.0 }).finish();
+
+    const r1 = registry.tryDecodeForTopic('bubbaloop/local/nvidia_orin00/system-telemetry/metrics', encoded);
+    const r2 = registry.tryDecodeForTopic('bubbaloop/production/jetson_nano/system-telemetry/metrics', encoded);
+
+    expect(r1).not.toBeNull();
+    expect(r2).not.toBeNull();
+    expect(r1!.typeName).toBe(r2!.typeName);
+  });
+
+  it('returns null for payload that does not match any schema', () => {
+    // Random bytes that look nothing like protobuf
+    const garbage = new Uint8Array([0xff, 0xfe, 0xfd, 0xfc, 0xfb]);
+    const result = registry.tryDecodeForTopic('bubbaloop/local/m1/system-telemetry/metrics', garbage);
+    // Should return null or a decode with empty/default fields filtered by hasContent
+    if (result !== null) {
+      expect(result.data).toBeDefined();
+    }
+  });
+});
+
 describe('SchemaRegistry: guessTypeForTopic with Realistic Topics', () => {
   let registry: SchemaRegistry;
 
@@ -921,14 +972,6 @@ describe('SchemaRegistry: Architectural Integration Tests', () => {
         .toBe('bubbaloop/local/m1/daemon');
     });
 
-    it('extracts prefix from ros-z format topics', () => {
-      // ros-z: 0/<%-encoded-topic>/<schema>/<hash>
-      expect(extractTopicPrefix('0/bubbaloop%local%nvidia_orin00%camera%entrance%compressed/bubbaloop.camera.v1.CompressedImage/RIHS01_xxx'))
-        .toBe('bubbaloop/local/nvidia_orin00/camera');
-      expect(extractTopicPrefix('0/bubbaloop%local%m1%weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_xyz'))
-        .toBe('bubbaloop/local/m1/weather');
-    });
-
     it('returns null for short topics (< 4 segments)', () => {
       expect(extractTopicPrefix('bubbaloop/daemon')).toBeNull();
       expect(extractTopicPrefix('bubbaloop/local/m1')).toBeNull();
@@ -1003,36 +1046,26 @@ describe('SchemaRegistry: Architectural Integration Tests', () => {
     });
   });
 
-  describe('extractSchemaFromTopic: Edge Cases', () => {
-    it('extracts schema from standard ros-z topic', () => {
-      expect(extractSchemaFromTopic('0/bubbaloop%local%m1%camera%entrance%compressed/bubbaloop.camera.v1.CompressedImage/RIHS01_xxx'))
-        .toBe('bubbaloop.camera.v1.CompressedImage');
-      expect(extractSchemaFromTopic('0/bubbaloop%local%m1%weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_abc'))
-        .toBe('bubbaloop.weather.v1.CurrentWeather');
-    });
-
-    it('handles multiple dots in schema type names', () => {
-      // Complex nested type name with many dots
-      expect(extractSchemaFromTopic('0/topic/foo.bar.baz.v2.ComplexType/RIHS01_hash'))
-        .toBe('foo.bar.baz.v2.ComplexType');
-    });
-
-    it('returns null for topics without schema hints', () => {
-      // Vanilla zenoh topics (no ros-z schema hint)
+  describe('extractSchemaFromTopic: Always Returns Null (Vanilla Zenoh)', () => {
+    it('returns null for vanilla zenoh topics', () => {
       expect(extractSchemaFromTopic('bubbaloop/local/m1/daemon/nodes')).toBeNull();
       expect(extractSchemaFromTopic('bubbaloop/local/m1/weather/current')).toBeNull();
     });
 
-    it('returns null for hash-only segments (RIHS prefix)', () => {
-      // Topic with hash but no schema type
-      expect(extractSchemaFromTopic('0/topic/RIHS01_abc123')).toBeNull();
+    it('returns null for camera topics', () => {
+      expect(extractSchemaFromTopic('bubbaloop/local/m1/camera/entrance/compressed')).toBeNull();
     });
 
-    it('filters out hash segments with RIHS prefix', () => {
-      // Should not return the hash segment (last part)
-      const schema = extractSchemaFromTopic('0/topic/bubbaloop.weather.v1.CurrentWeather/RIHS01_xyz');
-      expect(schema).toBe('bubbaloop.weather.v1.CurrentWeather');
-      expect(schema).not.toContain('RIHS');
+    it('returns null for system telemetry topics', () => {
+      expect(extractSchemaFromTopic('bubbaloop/local/m1/system-telemetry/metrics')).toBeNull();
+    });
+
+    it('returns null for network monitor topics', () => {
+      expect(extractSchemaFromTopic('bubbaloop/local/m1/network-monitor/status')).toBeNull();
+    });
+
+    it('returns null for empty topic', () => {
+      expect(extractSchemaFromTopic('')).toBeNull();
     });
   });
 

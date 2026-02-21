@@ -30,9 +30,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 
-# ROS-Z
-ros-z.workspace = true
-
 # CLI
 argh.workspace = true
 log.workspace = true
@@ -78,6 +75,7 @@ tokio-tungstenite = { workspace = true, optional = true }
 # MCP server (optional)
 rmcp = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
+tempfile = "3"
 
 [features]
 default = ["dashboard"]

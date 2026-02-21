@@ -7,23 +7,15 @@ export type SampleCallback = (sample: Sample) => void;
  * This ensures that full key expressions and wildcard patterns that match
  * the same keys are deduplicated to use the same subscription.
  *
- * Handles two formats:
- * 1. ros-z format: {domain_id}/{topic_encoded}/{type_name}/{type_hash}
- *    Example: "0/camera%terrace%raw_shm/bubbaloop.camera.v1.Image/RIHS01_..."
- *    Normalized: "0/camera%terrace%raw_shm"
+ * Vanilla Zenoh format: bubbaloop/{scope}/{machine_id}/{node_name}/{data_topic}
+ * Example: "bubbaloop/local/nvidia_orin00/camera/entrance/compressed"
  *
- * 2. Raw Zenoh key: {topic/path}/{type_name}/{type_hash}
- *    Example: "camera/terrace/raw_shm/bubbaloop.camera.v1.Image/RIHS01_..."
- *    Normalized: "camera/terrace/raw_shm"
- *
- * This function extracts just the topic part, stripping:
- * - Trailing wildcards (/** or /*)
- * - Type name and hash suffixes
+ * This function strips trailing wildcards (/** or /*) for deduplication.
  */
 export function normalizeTopicPattern(topic: string): string {
   if (!topic) return topic;
 
-  // Strip trailing wildcards first
+  // Strip trailing wildcards
   let normalized = topic;
   if (normalized.endsWith('/**')) {
     normalized = normalized.slice(0, -3);
@@ -31,31 +23,12 @@ export function normalizeTopicPattern(topic: string): string {
     normalized = normalized.slice(0, -2);
   }
 
-  const parts = normalized.split('/');
-
-  // Strip type/hash segments from the end.
-  // Type name looks like "bubbaloop.camera.v1.Image" (has dots, starts with "bubbaloop")
-  // Hash starts with "RIHS"
-  let cutIndex = parts.length;
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const part = parts[i];
-    if (part.startsWith('RIHS') || (part.includes('.') && part.startsWith('bubbaloop'))) {
-      cutIndex = i;
-    } else {
-      break;
-    }
-  }
-
-  if (cutIndex < parts.length) {
-    return parts.slice(0, cutIndex).join('/');
-  }
-
   return normalized;
 }
 
 /**
  * Convert a normalized base topic to a Zenoh subscription pattern.
- * Adds /** wildcard to match all type/hash variants.
+ * Adds /** wildcard to match all sub-topics.
  */
 function toSubscriptionPattern(baseTopic: string): string {
   if (!baseTopic) return baseTopic;
@@ -63,26 +36,6 @@ function toSubscriptionPattern(baseTopic: string): string {
     return baseTopic;
   }
   return baseTopic + '/**';
-}
-
-/**
- * Extract the display name from a topic (for matching across formats).
- * Handles both ros-z format (0/camera%terrace%raw_shm) and raw format (camera/terrace/raw_shm).
- * Returns: camera/terrace/raw_shm
- */
-function toDisplayName(topic: string): string {
-  if (!topic) return topic;
-
-  const parts = topic.split('/');
-
-  // Check if it's ros-z format (starts with domain ID like "0/")
-  if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
-    // ros-z format: decode percent encoding in the second part
-    return parts[1].replace(/%/g, '/');
-  }
-
-  // Raw format: already in display form
-  return topic;
 }
 
 export interface TopicStats {
@@ -624,26 +577,25 @@ export class ZenohSubscriptionManager {
 
   /**
    * Handle a sample from the monitor wildcard subscription.
-   * Aggregates stats by normalized topic.
+   * Aggregates stats by topic key expression.
    */
   private handleMonitorSample(sample: Sample, endpointId: string): void {
     const endpoint = this.endpoints.get(endpointId);
     if (!endpoint) return;
 
     const keyExpr = sample.keyexpr().toString();
-    const normalizedTopic = normalizeTopicPattern(keyExpr);
     const now = Date.now();
 
-    // Get or create monitored topic stats
-    let stats = endpoint.monitoredTopics.get(normalizedTopic);
+    // Get or create monitored topic stats (use key expression directly)
+    let stats = endpoint.monitoredTopics.get(keyExpr);
     if (!stats) {
       stats = {
         messageCount: 0,
         lastSeen: 0,
         hzBuffer: new TimestampRingBuffer(),
       };
-      endpoint.monitoredTopics.set(normalizedTopic, stats);
-      console.log(`[SubscriptionManager] Monitor discovered topic: ${normalizedTopic}`);
+      endpoint.monitoredTopics.set(keyExpr, stats);
+      console.log(`[SubscriptionManager] Monitor discovered topic: ${keyExpr}`);
     }
 
     stats.messageCount++;
@@ -651,8 +603,8 @@ export class ZenohSubscriptionManager {
     stats.hzBuffer.push(now);
 
     // Also record in discovered topics set
-    if (!endpoint.discoveredTopics.has(normalizedTopic)) {
-      endpoint.discoveredTopics.add(normalizedTopic);
+    if (!endpoint.discoveredTopics.has(keyExpr)) {
+      endpoint.discoveredTopics.add(keyExpr);
     }
   }
 
@@ -671,14 +623,12 @@ export class ZenohSubscriptionManager {
         // Compute Hz from ring buffer
         const hz = stats.hzBuffer.getHz(now);
 
-        // Check if this topic has active listeners by matching display names
-        // (monitor uses raw format, subscriptions use ros-z format)
-        const topicDisplayName = toDisplayName(topic);
+        // Check if this topic has active listeners by direct topic match
         let hasActiveListeners = false;
         let listenerCount = 0;
 
         endpoint.subscriptions.forEach((sub, subTopic) => {
-          if (toDisplayName(subTopic) === topicDisplayName && sub.listeners.size > 0) {
+          if (subTopic === topic && sub.listeners.size > 0) {
             hasActiveListeners = true;
             listenerCount = sub.listeners.size;
           }
@@ -777,10 +727,9 @@ export class ZenohSubscriptionManager {
 
     // Record discovered topic from the actual key expression
     const keyExpr = sample.keyexpr().toString();
-    const normalizedKey = normalizeTopicPattern(keyExpr);
-    if (!endpoint.discoveredTopics.has(normalizedKey)) {
-      endpoint.discoveredTopics.add(normalizedKey);
-      console.log(`[SubscriptionManager] Discovered new topic: ${normalizedKey} (from ${keyExpr})`);
+    if (!endpoint.discoveredTopics.has(keyExpr)) {
+      endpoint.discoveredTopics.add(keyExpr);
+      console.log(`[SubscriptionManager] Discovered new topic: ${keyExpr}`);
     }
 
     // Debug: log messages to track subscription behavior
@@ -826,4 +775,3 @@ export function getGlobalSubscriptionManager(): ZenohSubscriptionManager {
   }
   return globalManager;
 }
-

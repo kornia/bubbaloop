@@ -36,9 +36,14 @@ If it's app-layer complexity → reject it. If it strengthens sensor nodes → a
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  LAYER 4: CONSUMERS (replaceable)                               │
-│  AI Agent (MCP) │ Dashboard (React) │ CLI (argh) │ Any Zenoh   │
-│  client                                                         │
+│  LAYER 5: AI AGENTS (OpenClaw, Claude, custom)                   │
+│  MCP client │ Control plane │ Optional Zenoh for data streams    │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │ MCP (http://127.0.0.1:8088/mcp)
+┌──────────────────────────┴──────────────────────────────────────┐
+│  LAYER 4: CONSUMERS + MCP AGGREGATOR                             │
+│  Dashboard (React) │ CLI (argh) │ MCP Server (daemon)            │
+│  ~15-20 generic tools │ Manifest-driven discovery                │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
 ╔══════════════════════════╧══════════════════════════════════════╗
@@ -73,7 +78,7 @@ If it's app-layer complexity → reject it. If it strengthens sensor nodes → a
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Key principle**: Nodes are autonomous. An AI agent can discover, understand, and consume any node directly — the daemon is optional for discovery, required only for lifecycle operations.
+**Key principle**: Nodes are autonomous and self-describing. AI agents discover capabilities via manifests and interact via the daemon's MCP tools. The daemon is scaffolding that translates between MCP (control plane) and Zenoh (data plane).
 
 ---
 
@@ -358,6 +363,25 @@ Paid tiers:
 
 ---
 
+## OpenClaw Integration
+
+Bubbaloop serves as the physical AI foundation for OpenClaw and other AI agents.
+
+**Dual-plane access:**
+- **MCP** (control plane): discover nodes, send commands, manage lifecycle, program rules
+- **Zenoh** (data plane): subscribe to high-frequency sensor streams directly
+
+**Convention alignment:** AI agents connecting to bubbaloop should:
+1. Use MCP tools for all control operations (never spawn processes)
+2. Call `list_nodes` → `list_commands` → `send_command` workflow
+3. Use `query_zenoh` for one-off sensor reads
+4. Connect to Zenoh directly only for streaming data (cameras, IMUs)
+5. Program the agent rule engine via `add_rule`/`remove_rule` MCP tools
+
+**Tool design principle:** The daemon exposes ~15-20 generic MCP tools. Per-node tools are NOT exposed individually — AI tool selection degrades above ~40 tools. Nodes self-describe via manifests; the `send_command` tool dispatches to any node command.
+
+---
+
 ## Key Technology Choices
 
 | Choice | Reason |
@@ -365,7 +389,7 @@ Paid tiers:
 | **Rust for all core components** | Memory safety without GC. No buffer overflows, no use-after-free. Critical for systems that control physical hardware — a segfault in a motor controller is a safety hazard. |
 | **Python only for rapid prototyping nodes** | Python nodes are the "onramp" — quick to write, easy to iterate. But production nodes should graduate to Rust. |
 | **Zenoh (not DDS, not MQTT)** | Decentralized pub/sub/query with 97% less discovery traffic than DDS. Written in Rust. Zero-copy shared memory. ACLs. Runs cloud-to-edge-to-thing. |
-| **ros-z (ZettaScale)** | ROS 2 message type interop without the DDS baggage. `MessageTypeInfo` trait gives us runtime schema introspection. Protobuf feature enables prost integration. |
+| **Protobuf + Zenoh queryables** | Self-describing message types via FileDescriptorSet serving. Runtime schema introspection without DDS overhead. Vanilla Zenoh API — no abstraction layers. |
 | **argh (not clap)** | Minimal CLI parsing. No proc macros, fast compile times. |
 | **log + env_logger (not tracing)** | Simple, synchronous logging. Logs to stderr (never pollutes stdout). |
 | **thiserror + anyhow** | `thiserror` for library errors, `anyhow` for CLI. Module-specific `type Result<T> = std::result::Result<T, Error>`. |
