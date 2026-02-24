@@ -75,12 +75,13 @@ tokio-tungstenite = { workspace = true, optional = true }
 # MCP server (optional)
 rmcp = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
+tower_governor = { version = "0.8", optional = true }
 tempfile = "3"
 
 [features]
 default = ["dashboard"]
 dashboard = ["dep:axum", "dep:rust-embed", "dep:mime_guess", "dep:tokio-tungstenite"]
-mcp = ["dep:rmcp", "dep:schemars", "dep:axum"]
+mcp = ["dep:rmcp", "dep:schemars", "dep:axum", "dep:tower_governor"]
 
 [dev-dependencies]
 tempfile = "3"

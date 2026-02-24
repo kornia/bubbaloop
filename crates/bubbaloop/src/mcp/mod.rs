@@ -102,8 +102,11 @@ impl BubbaLoopMcpServer {
         }
     }
 
-    #[tool(description = "List all registered nodes with their status, capabilities, and topics. Returns node name, status (running/stopped/etc), type, and whether it's built.")]
+    #[tool(
+        description = "List all registered nodes with their status, capabilities, and topics. Returns node name, status (running/stopped/etc), type, and whether it's built."
+    )]
     async fn list_nodes(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_nodes");
         let node_list = self.node_manager.get_node_list().await;
         let nodes: Vec<serde_json::Value> = node_list
             .nodes
@@ -130,6 +133,7 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=get_node_health node={}", req.node_name);
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
@@ -153,39 +157,63 @@ impl BubbaLoopMcpServer {
         }
     }
 
-    #[tool(description = "Get the current configuration of a node by querying its Zenoh config queryable.")]
+    #[tool(
+        description = "Get the current configuration of a node by querying its Zenoh config queryable."
+    )]
     async fn get_node_config(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=get_node_config node={}", req.node_name);
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let result = self.zenoh_get_text(&format!("bubbaloop/{}/{}/{}/config", self.scope, self.machine_id, req.node_name)).await;
+        let result = self
+            .zenoh_get_text(&format!(
+                "bubbaloop/{}/{}/{}/config",
+                self.scope, self.machine_id, req.node_name
+            ))
+            .await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Get the manifest (self-description) of a node including its capabilities, published topics, commands, and hardware requirements.")]
+    #[tool(
+        description = "Get the manifest (self-description) of a node including its capabilities, published topics, commands, and hardware requirements."
+    )]
     async fn get_node_manifest(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=get_node_manifest node={}", req.node_name);
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let result = self.zenoh_get_text(&format!("bubbaloop/{}/{}/{}/manifest", self.scope, self.machine_id, req.node_name)).await;
+        let result = self
+            .zenoh_get_text(&format!(
+                "bubbaloop/{}/{}/{}/manifest",
+                self.scope, self.machine_id, req.node_name
+            ))
+            .await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "List available commands for a specific node with their parameters and descriptions. Use this before send_command to discover what actions a node supports.")]
+    #[tool(
+        description = "List available commands for a specific node with their parameters and descriptions. Use this before send_command to discover what actions a node supports."
+    )]
     async fn list_commands(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_commands node={}", req.node_name);
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let manifest_text = self.zenoh_get_text(&format!("bubbaloop/{}/{}/{}/manifest", self.scope, self.machine_id, req.node_name)).await;
+        let manifest_text = self
+            .zenoh_get_text(&format!(
+                "bubbaloop/{}/{}/{}/manifest",
+                self.scope, self.machine_id, req.node_name
+            ))
+            .await;
         // Try to parse the manifest and extract commands
         // The manifest text is formatted as "[key_expr] json_body" from zenoh_get_text
         let commands = manifest_text
@@ -205,21 +233,32 @@ impl BubbaLoopMcpServer {
                     serde_json::to_string_pretty(&cmds).unwrap_or_else(|_| "[]".to_string()),
                 )]))
             }
-            _ => Ok(CallToolResult::success(vec![Content::text(
-                format!("No commands available for node '{}'", req.node_name),
-            )])),
+            _ => Ok(CallToolResult::success(vec![Content::text(format!(
+                "No commands available for node '{}'",
+                req.node_name
+            ))])),
         }
     }
 
-    #[tool(description = "Send a command to a node's command queryable. The node must support the command — call list_commands first to see available commands. Example: node_name='rtsp-camera', command='capture_frame', params={\"resolution\": \"1080p\"}. Returns the command result or error.")]
+    #[tool(
+        description = "Send a command to a node's command queryable. The node must support the command — call list_commands first to see available commands. Example: node_name='rtsp-camera', command='capture_frame', params={\"resolution\": \"1080p\"}. Returns the command result or error."
+    )]
     async fn send_command(
         &self,
         Parameters(req): Parameters<SendCommandRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=send_command node={} cmd={}",
+            req.node_name,
+            req.command
+        );
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let key_expr = format!("bubbaloop/{}/{}/{}/command", self.scope, self.machine_id, req.node_name);
+        let key_expr = format!(
+            "bubbaloop/{}/{}/{}/command",
+            self.scope, self.machine_id, req.node_name
+        );
         let payload = serde_json::json!({
             "command": req.command,
             "params": req.params,
@@ -266,15 +305,20 @@ impl BubbaLoopMcpServer {
         }
     }
 
-    #[tool(description = "Start a stopped node via the daemon. The node must be installed and built.")]
+    #[tool(
+        description = "Start a stopped node via the daemon. The node must be installed and built."
+    )]
     async fn start_node(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=start_node node={}", req.node_name);
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let result = self.execute_daemon_command(CommandType::Start, &req.node_name).await;
+        let result = self
+            .execute_daemon_command(CommandType::Start, &req.node_name)
+            .await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -283,10 +327,13 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=stop_node node={}", req.node_name);
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let result = self.execute_daemon_command(CommandType::Stop, &req.node_name).await;
+        let result = self
+            .execute_daemon_command(CommandType::Stop, &req.node_name)
+            .await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -295,10 +342,13 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=restart_node node={}", req.node_name);
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let result = self.execute_daemon_command(CommandType::Restart, &req.node_name).await;
+        let result = self
+            .execute_daemon_command(CommandType::Restart, &req.node_name)
+            .await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -307,18 +357,24 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=get_node_logs node={}", req.node_name);
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let result = self.execute_daemon_command(CommandType::GetLogs, &req.node_name).await;
+        let result = self
+            .execute_daemon_command(CommandType::GetLogs, &req.node_name)
+            .await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Query a Zenoh key expression (admin only). Key must start with 'bubbaloop/'. Returns up to 100 results.")]
+    #[tool(
+        description = "Query a Zenoh key expression (admin only). Key must start with 'bubbaloop/'. Returns up to 100 results."
+    )]
     async fn query_zenoh(
         &self,
         Parameters(req): Parameters<QueryTopicRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=query_zenoh key_expr={}", req.key_expr);
         if let Err(e) = crate::validation::validate_query_key_expr(&req.key_expr) {
             return Ok(CallToolResult::success(vec![Content::text(format!(
                 "Validation error: {}",
@@ -329,14 +385,20 @@ impl BubbaLoopMcpServer {
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Discover all nodes across all machines by querying manifests. Returns a list of all self-describing nodes with their capabilities.")]
+    #[tool(
+        description = "Discover all nodes across all machines by querying manifests. Returns a list of all self-describing nodes with their capabilities."
+    )]
     async fn discover_nodes(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=discover_nodes");
         let result = self.zenoh_get_text("bubbaloop/**/manifest").await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Get the agent's current status including active rules, recent triggers, and human overrides.")]
+    #[tool(
+        description = "Get the agent's current status including active rules, recent triggers, and human overrides."
+    )]
     async fn get_agent_status(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=get_agent_status");
         match &self.agent {
             Some(agent) => {
                 let status = agent.get_status().await;
@@ -352,6 +414,7 @@ impl BubbaLoopMcpServer {
 
     #[tool(description = "List all agent rules with their triggers, conditions, and actions.")]
     async fn list_agent_rules(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_agent_rules");
         match &self.agent {
             Some(agent) => {
                 let rules = agent.get_rules().await;
@@ -365,11 +428,14 @@ impl BubbaLoopMcpServer {
         }
     }
 
-    #[tool(description = "Add a new rule to the agent rule engine. Rules trigger actions when sensor data matches conditions. Example: trigger=\"bubbaloop/**/telemetry/status\", condition={\"field\": \"cpu_temp\", \"operator\": \">\", \"value\": 80}, action={\"type\": \"log\", \"message\": \"CPU too hot!\"}")]
+    #[tool(
+        description = "Add a new rule to the agent rule engine. Rules trigger actions when sensor data matches conditions. Example: trigger=\"bubbaloop/**/telemetry/status\", condition={\"field\": \"cpu_temp\", \"operator\": \">\", \"value\": 80}, action={\"type\": \"log\", \"message\": \"CPU too hot!\"}"
+    )]
     async fn add_rule(
         &self,
         Parameters(req): Parameters<AddRuleRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=add_rule name={}", req.name);
         match &self.agent {
             Some(agent) => {
                 let rule = match Self::parse_rule_request(req) {
@@ -378,10 +444,15 @@ impl BubbaLoopMcpServer {
                 };
                 match agent.add_rule(rule).await {
                     Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
-                    Err(e) => Ok(CallToolResult::success(vec![Content::text(format!("Error: {}", e))])),
+                    Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Error: {}",
+                        e
+                    ))])),
                 }
             }
-            None => Ok(CallToolResult::success(vec![Content::text("Agent not available")])),
+            None => Ok(CallToolResult::success(vec![Content::text(
+                "Agent not available",
+            )])),
         }
     }
 
@@ -390,25 +461,32 @@ impl BubbaLoopMcpServer {
         &self,
         Parameters(req): Parameters<RuleNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=remove_rule name={}", req.rule_name);
         if let Err(e) = validation::validate_rule_name(&req.rule_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
         match &self.agent {
-            Some(agent) => {
-                match agent.remove_rule(&req.rule_name).await {
-                    Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
-                    Err(e) => Ok(CallToolResult::success(vec![Content::text(format!("Error: {}", e))])),
-                }
-            }
-            None => Ok(CallToolResult::success(vec![Content::text("Agent not available")])),
+            Some(agent) => match agent.remove_rule(&req.rule_name).await {
+                Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+                Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Error: {}",
+                    e
+                ))])),
+            },
+            None => Ok(CallToolResult::success(vec![Content::text(
+                "Agent not available",
+            )])),
         }
     }
 
-    #[tool(description = "Update an existing rule in the agent rule engine. Provide the full rule definition — it replaces the rule with the same name.")]
+    #[tool(
+        description = "Update an existing rule in the agent rule engine. Provide the full rule definition — it replaces the rule with the same name."
+    )]
     async fn update_rule(
         &self,
         Parameters(req): Parameters<AddRuleRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=update_rule name={}", req.name);
         match &self.agent {
             Some(agent) => {
                 let rule = match Self::parse_rule_request(req) {
@@ -417,10 +495,15 @@ impl BubbaLoopMcpServer {
                 };
                 match agent.update_rule(rule).await {
                     Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
-                    Err(e) => Ok(CallToolResult::success(vec![Content::text(format!("Error: {}", e))])),
+                    Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Error: {}",
+                        e
+                    ))])),
                 }
             }
-            None => Ok(CallToolResult::success(vec![Content::text("Agent not available")])),
+            None => Ok(CallToolResult::success(vec![Content::text(
+                "Agent not available",
+            )])),
         }
     }
 }
@@ -474,8 +557,7 @@ impl ServerHandler for BubbaLoopMcpServer {
         }
 
         // Delegate to the tool router
-        let tcc =
-            rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         self.tool_router.call(tcc).await
     }
 
@@ -572,9 +654,11 @@ impl BubbaLoopMcpServer {
                             let bytes = sample.payload().to_bytes();
                             match String::from_utf8(bytes.to_vec()) {
                                 Ok(text) => results.push(format!("[{}] {}", key, text)),
-                                Err(_) => {
-                                    results.push(format!("[{}] <{} bytes binary>", key, bytes.len()))
-                                }
+                                Err(_) => results.push(format!(
+                                    "[{}] <{} bytes binary>",
+                                    key,
+                                    bytes.len()
+                                )),
                             }
                         }
                         Err(err) => {
@@ -615,8 +699,8 @@ pub async fn run_mcp_server(
     };
 
     // Load or generate auth token
-    let token = auth::load_or_generate_token()
-        .map_err(|e| format!("Failed to load MCP token: {}", e))?;
+    let token =
+        auth::load_or_generate_token().map_err(|e| format!("Failed to load MCP token: {}", e))?;
     log::info!("MCP authentication enabled (token in ~/.bubbaloop/mcp-token)");
 
     let session_for_factory = session;
@@ -626,29 +710,53 @@ pub async fn run_mcp_server(
     let machine_id = crate::daemon::util::get_machine_id();
 
     let mcp_service = StreamableHttpService::new(
-        move || Ok(BubbaLoopMcpServer::new(
-            session_for_factory.clone(),
-            manager_for_factory.clone(),
-            agent_for_factory.clone(),
-            Some(token.clone()),
-            scope.clone(),
-            machine_id.clone(),
-        )),
+        move || {
+            Ok(BubbaLoopMcpServer::new(
+                session_for_factory.clone(),
+                manager_for_factory.clone(),
+                agent_for_factory.clone(),
+                Some(token.clone()),
+                scope.clone(),
+                machine_id.clone(),
+            ))
+        },
         LocalSessionManager::default().into(),
         Default::default(),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", mcp_service);
+    // Rate limiting: 100 requests per minute burst via tower-governor
+    let governor_conf = tower_governor::governor::GovernorConfigBuilder::default()
+        .per_second(60)
+        .burst_size(100)
+        .finish()
+        .unwrap();
+
+    let governor_limiter = governor_conf.limiter().clone();
+    let cleanup_interval = std::time::Duration::from_secs(60);
+    std::thread::spawn(move || loop {
+        std::thread::sleep(cleanup_interval);
+        governor_limiter.retain_recent();
+    });
+
+    let router = axum::Router::new()
+        .nest_service("/mcp", mcp_service)
+        .layer(tower_governor::GovernorLayer::new(governor_conf));
 
     let bind_addr = format!("127.0.0.1:{}", port);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    log::info!("MCP server listening on http://{}/mcp", bind_addr);
+    log::info!(
+        "MCP server listening on http://{}/mcp (rate limit: 100 req/min)",
+        bind_addr
+    );
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            shutdown_rx.changed().await.ok();
-        })
-        .await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown_rx.changed().await.ok();
+    })
+    .await?;
 
     log::info!("MCP server stopped.");
     Ok(())
