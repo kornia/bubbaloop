@@ -154,6 +154,38 @@ impl Agent {
         Ok(format!("Rule '{}' removed", name))
     }
 
+    /// Get a snapshot of the trigger log (recent rule triggers).
+    pub async fn get_trigger_log(&self) -> HashMap<String, RuleTriggerLog> {
+        self.trigger_log.read().await.clone()
+    }
+
+    /// Test a rule's condition against sample data without executing the action.
+    /// Returns a JSON result indicating whether the condition matches.
+    pub async fn test_rule(
+        &self,
+        rule_name: &str,
+        sample_data: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let rules = self.rules.read().await;
+        let rule = rules
+            .iter()
+            .find(|r| r.name == rule_name)
+            .ok_or_else(|| format!("Rule '{}' not found", rule_name))?;
+
+        let condition_met = match &rule.condition {
+            Some(cond) => cond.evaluate(sample_data),
+            None => true, // No condition = always triggers
+        };
+
+        Ok(serde_json::json!({
+            "rule_name": rule_name,
+            "condition_met": condition_met,
+            "has_condition": rule.condition.is_some(),
+            "trigger": rule.trigger,
+            "enabled": rule.enabled,
+        }))
+    }
+
     /// Update an existing rule and persist to disk.
     pub async fn update_rule(&self, rule: Rule) -> Result<String, String> {
         let mut rules = self.rules.write().await;

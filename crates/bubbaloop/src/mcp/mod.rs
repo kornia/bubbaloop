@@ -80,6 +80,14 @@ struct RuleNameRequest {
     rule_name: String,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct TestRuleRequest {
+    /// Name of the rule to test
+    rule_name: String,
+    /// Sample data to evaluate the rule condition against (JSON object)
+    sample_data: serde_json::Value,
+}
+
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
@@ -557,6 +565,159 @@ impl BubbaLoopMcpServer {
                     ))])),
                 }
             }
+            None => Ok(CallToolResult::success(vec![Content::text(
+                "Agent not available",
+            )])),
+        }
+    }
+
+    // ── New tools (Task 15) ───────────────────────────────────────────
+
+    #[tool(description = "Get Zenoh connection parameters for subscribing to a node's data stream. Returns topic pattern, encoding, and endpoint. Use this to set up streaming data access outside MCP.")]
+    async fn get_stream_info(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=get_stream_info node={}", req.node_name);
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
+        let info = serde_json::json!({
+            "zenoh_topic": format!("bubbaloop/{}/{}/{}/**", self.scope, self.machine_id, req.node_name),
+            "encoding": "protobuf",
+            "endpoint": "tcp/localhost:7447",
+            "note": "Subscribe to this topic via Zenoh client library for real-time data. MCP is control-plane only."
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&info).unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(description = "Get overall system status including daemon health, node count, and Zenoh connection state.")]
+    async fn get_system_status(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=get_system_status");
+        let nodes = self.platform.list_nodes().await;
+        let (total, running, healthy) = match &nodes {
+            Ok(list) => {
+                let total = list.len();
+                let running = list.iter().filter(|n| n.status == "Running").count();
+                let healthy = list.iter().filter(|n| n.health == "Healthy").count();
+                (total, running, healthy)
+            }
+            Err(_) => (0, 0, 0),
+        };
+        let status = serde_json::json!({
+            "scope": self.scope,
+            "machine_id": self.machine_id,
+            "nodes_total": total,
+            "nodes_running": running,
+            "nodes_healthy": healthy,
+            "mcp_server": "running",
+            "agent_available": self.agent.is_some(),
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&status).unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(description = "Get machine hardware and OS information: architecture, hostname, OS version.")]
+    async fn get_machine_info(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=get_machine_info");
+        let info = serde_json::json!({
+            "machine_id": self.machine_id,
+            "scope": self.scope,
+            "arch": std::env::consts::ARCH,
+            "os": std::env::consts::OS,
+            "hostname": hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "unknown".to_string()),
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&info).unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(description = "Trigger a build for a node. Builds the node's source code using its configured build command (Cargo, pixi, etc.). Admin only.")]
+    async fn build_node(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=build_node node={}", req.node_name);
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
+        match self
+            .platform
+            .execute_command(&req.node_name, platform::NodeCommand::Build)
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "Get the protobuf schema of a node's data messages. Returns the schema in human-readable format if available.")]
+    async fn get_node_schema(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=get_node_schema node={}", req.node_name);
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
+        let key = format!(
+            "bubbaloop/{}/{}/{}/schema",
+            self.scope, self.machine_id, req.node_name
+        );
+        match self.platform.query_zenoh(&key).await {
+            Ok(result) => Ok(CallToolResult::success(vec![Content::text(result)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "Get recent agent events (rule triggers, actions taken). Returns the last N events from the trigger log.")]
+    async fn get_events(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=get_events");
+        match &self.agent {
+            Some(agent) => {
+                let events = agent.get_trigger_log().await;
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&events)
+                        .unwrap_or_else(|_| "{}".to_string()),
+                )]))
+            }
+            None => Ok(CallToolResult::success(vec![Content::text(
+                "Agent not available",
+            )])),
+        }
+    }
+
+    #[tool(description = "Test a rule's condition against sample data without executing the action. Returns whether the condition matches. Useful for debugging rules before deploying them.")]
+    async fn test_rule(
+        &self,
+        Parameters(req): Parameters<TestRuleRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=test_rule name={}", req.rule_name);
+        if let Err(e) = validation::validate_rule_name(&req.rule_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
+        match &self.agent {
+            Some(agent) => match agent.test_rule(&req.rule_name, &req.sample_data).await {
+                Ok(result) => Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&result).unwrap_or_default(),
+                )])),
+                Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Error: {}",
+                    e
+                ))])),
+            },
             None => Ok(CallToolResult::success(vec![Content::text(
                 "Agent not available",
             )])),

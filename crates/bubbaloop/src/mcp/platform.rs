@@ -764,6 +764,11 @@ mod tests {
             "list_commands",
             "list_agent_rules",
             "get_agent_status",
+            "get_stream_info",
+            "get_system_status",
+            "get_machine_info",
+            "get_node_schema",
+            "get_events",
         ];
         for tool in &viewer_tools {
             assert_eq!(
@@ -787,6 +792,7 @@ mod tests {
             "remove_rule",
             "update_rule",
             "get_node_logs",
+            "test_rule",
         ];
         for tool in &operator_tools {
             assert_eq!(
