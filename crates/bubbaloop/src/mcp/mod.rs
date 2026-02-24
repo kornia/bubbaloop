@@ -3,6 +3,8 @@
 //! Exposes bubbaloop node operations as MCP tools that any LLM can call.
 //! Runs as an HTTP server on port 8088 inside the daemon process.
 
+pub mod auth;
+
 use crate::agent::Agent;
 use crate::daemon::node_manager::NodeManager;
 use crate::schemas::daemon::v1::{CommandType, NodeCommand};
@@ -25,6 +27,8 @@ pub struct BubbaLoopMcpServer {
     session: Arc<Session>,
     node_manager: Arc<NodeManager>,
     agent: Option<Arc<Agent>>,
+    #[allow(dead_code)] // Used in Task 7 for call_tool() auth enforcement
+    auth_token: Option<String>,
     tool_router: ToolRouter<Self>,
     scope: String,
     machine_id: String,
@@ -82,6 +86,7 @@ impl BubbaLoopMcpServer {
         session: Arc<Session>,
         node_manager: Arc<NodeManager>,
         agent: Option<Arc<Agent>>,
+        auth_token: Option<String>,
         scope: String,
         machine_id: String,
     ) -> Self {
@@ -89,6 +94,7 @@ impl BubbaLoopMcpServer {
             session,
             node_manager,
             agent,
+            auth_token,
             tool_router: Self::tool_router(),
             scope,
             machine_id,
@@ -560,6 +566,11 @@ pub async fn run_mcp_server(
         session::local::LocalSessionManager, StreamableHttpService,
     };
 
+    // Load or generate auth token
+    let token = auth::load_or_generate_token()
+        .map_err(|e| format!("Failed to load MCP token: {}", e))?;
+    log::info!("MCP authentication enabled (token in ~/.bubbaloop/mcp-token)");
+
     let session_for_factory = session;
     let manager_for_factory = node_manager;
     let agent_for_factory = agent;
@@ -571,6 +582,7 @@ pub async fn run_mcp_server(
             session_for_factory.clone(),
             manager_for_factory.clone(),
             agent_for_factory.clone(),
+            Some(token.clone()),
             scope.clone(),
             machine_id.clone(),
         )),
