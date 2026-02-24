@@ -4,6 +4,7 @@
 //! Runs as an HTTP server on port 8088 inside the daemon process.
 
 pub mod auth;
+pub mod platform;
 pub mod rbac;
 
 use crate::agent::Agent;
