@@ -737,14 +737,15 @@ impl ServerHandler for BubbaLoopMcpServer {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Bubbaloop physical AI orchestration platform. Recommended workflow:\n\
-                 1) list_nodes — see all registered nodes with status\n\
-                 2) list_commands or get_node_manifest — discover a node's capabilities and commands\n\
-                 3) send_command — trigger actions on a node (command names from step 2)\n\
-                 4) query_zenoh — one-off sensor data reads from any Zenoh key expression\n\
-                 Node lifecycle: start_node, stop_node, restart_node, get_node_logs\n\
-                 Agent rules: get_agent_status, list_agent_rules, add_rule, remove_rule, update_rule\n\
-                 Fleet discovery: discover_nodes — find all self-describing nodes across machines"
+                "Bubbaloop MCP-first physical AI runtime. Controls physical sensor nodes via MCP.\n\n\
+                 **Discovery:** list_nodes → get_node_detail → get_node_schema → get_stream_info\n\
+                 **Lifecycle:** install_node, start_node, stop_node, restart_node, build_node\n\
+                 **Data:** read_sensor (one-shot), get_stream_info (returns Zenoh topic for streaming)\n\
+                 **Config:** get_node_config, set_node_config\n\
+                 **Automation:** list_rules, add_rule, remove_rule, test_rule, get_events\n\
+                 **System:** get_system_status, get_machine_info, doctor\n\n\
+                 Streaming data flows through Zenoh (not MCP). Use get_stream_info to get Zenoh connection params.\n\
+                 Auth: Bearer token required (see ~/.bubbaloop/mcp-token)."
                     .into(),
             ),
         }
