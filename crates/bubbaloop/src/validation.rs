@@ -40,6 +40,26 @@ pub fn validate_rule_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate a publish topic: must start with `bubbaloop/`, no wildcards, max 256 chars.
+pub fn validate_publish_topic(topic: &str) -> Result<(), String> {
+    if topic.is_empty() || topic.len() > 256 {
+        return Err(format!(
+            "Publish topic must be 1-256 characters, got {}",
+            topic.len()
+        ));
+    }
+    if !topic.starts_with("bubbaloop/") {
+        return Err("Publish topic must start with 'bubbaloop/'".to_string());
+    }
+    if topic.contains('*') {
+        return Err("Publish topic must not contain wildcards".to_string());
+    }
+    if !topic.chars().all(|c| c.is_alphanumeric() || "/-_.".contains(c)) {
+        return Err("Publish topic contains invalid characters".to_string());
+    }
+    Ok(())
+}
+
 /// Validate a trigger pattern: must start with `bubbaloop/`.
 pub fn validate_trigger_pattern(trigger: &str) -> Result<(), String> {
     if !trigger.starts_with("bubbaloop/") {
@@ -86,6 +106,20 @@ mod tests {
         assert!(validate_rule_name("").is_err());
         assert!(validate_rule_name("rule with spaces").is_err());
         assert!(validate_rule_name(&"x".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn test_validate_publish_topic_valid() {
+        assert!(validate_publish_topic("bubbaloop/local/jetson1/my-node/data").is_ok());
+        assert!(validate_publish_topic("bubbaloop/scope/machine/node/resource").is_ok());
+    }
+
+    #[test]
+    fn test_validate_publish_topic_invalid() {
+        assert!(validate_publish_topic("").is_err());
+        assert!(validate_publish_topic("other/topic").is_err());
+        assert!(validate_publish_topic("bubbaloop/**/all").is_err());
+        assert!(validate_publish_topic("bubbaloop/bad topic!").is_err());
     }
 
     #[test]

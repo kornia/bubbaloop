@@ -219,6 +219,10 @@ impl Action {
                 command,
                 params,
             } => {
+                if let Err(e) = crate::validation::validate_node_name(node) {
+                    log::warn!("[RULE] Invalid node name in command action: {}", e);
+                    return;
+                }
                 let key_expr = format!("bubbaloop/**/{}/**/command", node);
                 let payload = serde_json::json!({
                     "command": command,
@@ -263,6 +267,10 @@ impl Action {
                 }
             }
             Action::Publish { topic, payload } => {
+                if let Err(e) = crate::validation::validate_publish_topic(topic) {
+                    log::warn!("[RULE] Invalid publish topic in action: {}", e);
+                    return;
+                }
                 let payload_bytes = serde_json::to_vec(payload).unwrap_or_default();
                 if let Err(e) = session.put(topic, payload_bytes).await {
                     log::warn!("[RULE] Failed to publish to '{}': {}", topic, e);
