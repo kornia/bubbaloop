@@ -672,6 +672,44 @@ impl BubbaLoopMcpServer {
 
 }
 
+/// Run MCP server on stdio (stdin/stdout).
+///
+/// No authentication on stdio — process boundary provides implicit trust
+/// (per MCP spec: "STDIO transport SHOULD NOT use OAuth 2.1").
+/// Logs should be redirected to a file before calling this function to avoid
+/// corrupting the MCP JSON-RPC protocol on stdout/stderr.
+pub async fn run_mcp_stdio(
+    session: Arc<zenoh::Session>,
+    node_manager: Arc<crate::daemon::node_manager::NodeManager>,
+    agent: Option<Arc<Agent>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use rmcp::ServiceExt;
+
+    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+    let machine_id = crate::daemon::util::get_machine_id();
+
+    let platform = Arc::new(platform::DaemonPlatform {
+        node_manager,
+        session,
+        scope: scope.clone(),
+        machine_id: machine_id.clone(),
+    });
+
+    let server = BubbaLoopMcpServer::new(
+        platform,
+        agent,
+        None, // No auth token for stdio
+        scope,
+        machine_id,
+    );
+
+    // rmcp stdio transport: reads JSON-RPC from stdin, writes to stdout
+    let service = server.serve(rmcp::transport::io::stdio()).await?;
+    service.waiting().await?;
+
+    Ok(())
+}
+
 /// Start the MCP HTTP server on the given port.
 ///
 /// Mounts the StreamableHttpService at `/mcp` and blocks until shutdown.

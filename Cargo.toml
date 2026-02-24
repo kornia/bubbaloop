@@ -64,7 +64,7 @@ mime_guess = "2"
 tokio-tungstenite = "0.26"
 
 # MCP server
-rmcp = { version = "0.15", features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { version = "0.15", features = ["server", "macros", "transport-streamable-http-server", "transport-io"] }
 schemars = "1.0"
 
 # internal dependencies
