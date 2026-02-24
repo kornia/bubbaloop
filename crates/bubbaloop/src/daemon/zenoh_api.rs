@@ -314,6 +314,10 @@ impl ZenohApiService {
     /// Handle an incoming query by routing to the appropriate handler
     async fn handle_query(&self, query: &zenoh::query::Query) {
         let key_expr = query.key_expr().as_str();
+        log::warn!(
+            "DEPRECATED: Zenoh API queryable '{}' — use MCP tools instead",
+            key_expr
+        );
         log::info!("API query received on: {}", key_expr);
 
         // Try to parse path from either legacy or new format
