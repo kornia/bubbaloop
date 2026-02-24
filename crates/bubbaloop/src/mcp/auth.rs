@@ -45,9 +45,7 @@ pub fn load_or_generate_token() -> Result<String, std::io::Error> {
 
 /// Validate a bearer token from an Authorization header.
 pub fn validate_token(header_value: &str, expected: &str) -> bool {
-    let token = header_value
-        .strip_prefix("Bearer ")
-        .unwrap_or(header_value);
+    let token = header_value.strip_prefix("Bearer ").unwrap_or(header_value);
     constant_time_eq(token.as_bytes(), expected.as_bytes())
 }
 

@@ -129,9 +129,7 @@ impl Condition {
 /// Compare two JSON values for equality (type-coercing numbers).
 fn json_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
     match (a, b) {
-        (serde_json::Value::Number(a), serde_json::Value::Number(b)) => {
-            a.as_f64() == b.as_f64()
-        }
+        (serde_json::Value::Number(a), serde_json::Value::Number(b)) => a.as_f64() == b.as_f64(),
         (serde_json::Value::String(a), serde_json::Value::String(b)) => a == b,
         (serde_json::Value::Bool(a), serde_json::Value::Bool(b)) => a == b,
         _ => a == b,
@@ -139,10 +137,7 @@ fn json_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
 }
 
 /// Compare two JSON values for ordering (numbers only).
-fn json_cmp(
-    a: &serde_json::Value,
-    b: &serde_json::Value,
-) -> Option<std::cmp::Ordering> {
+fn json_cmp(a: &serde_json::Value, b: &serde_json::Value) -> Option<std::cmp::Ordering> {
     let a_f = a.as_f64()?;
     let b_f = b.as_f64()?;
     a_f.partial_cmp(&b_f)
@@ -208,14 +203,12 @@ impl Action {
     /// that target only the local machine, preventing cross-machine broadcast.
     pub async fn execute(&self, session: &zenoh::Session, scope: &str, machine_id: &str) {
         match self {
-            Action::Log { message, level } => {
-                match level.as_str() {
-                    "error" => log::error!("[RULE] {}", message),
-                    "warn" => log::warn!("[RULE] {}", message),
-                    "info" => log::info!("[RULE] {}", message),
-                    _ => log::debug!("[RULE] {}", message),
-                }
-            }
+            Action::Log { message, level } => match level.as_str() {
+                "error" => log::error!("[RULE] {}", message),
+                "warn" => log::warn!("[RULE] {}", message),
+                "info" => log::info!("[RULE] {}", message),
+                _ => log::debug!("[RULE] {}", message),
+            },
             Action::Command {
                 node,
                 command,
@@ -681,7 +674,11 @@ rules:
         assert!(!cond.evaluate(&cool));
 
         match &rule.action {
-            Action::Command { node, command, params } => {
+            Action::Command {
+                node,
+                command,
+                params,
+            } => {
                 assert_eq!(node, "sprinkler-controller");
                 assert_eq!(command, "activate");
                 assert_eq!(params["zone"], "garden");
@@ -724,7 +721,7 @@ rules:
         let cond1 = config.rules[1].condition.as_ref().unwrap();
 
         let data = json!({"temp": 85});
-        assert!(cond0.evaluate(&data));  // > 70
+        assert!(cond0.evaluate(&data)); // > 70
         assert!(!cond1.evaluate(&data)); // not > 90
 
         let critical_data = json!({"temp": 95});

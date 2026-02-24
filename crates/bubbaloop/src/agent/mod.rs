@@ -39,10 +39,7 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(
-        session: Arc<zenoh::Session>,
-        node_manager: Arc<NodeManager>,
-    ) -> Self {
+    pub fn new(session: Arc<zenoh::Session>, node_manager: Arc<NodeManager>) -> Self {
         let machine_id = crate::daemon::util::get_machine_id();
         let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
 
@@ -53,7 +50,11 @@ impl Agent {
                 r
             }
             Err(e) => {
-                log::warn!("Failed to load rules from {:?}: {}. Starting with empty rules.", rules_path(), e);
+                log::warn!(
+                    "Failed to load rules from {:?}: {}. Starting with empty rules.",
+                    rules_path(),
+                    e
+                );
                 Vec::new()
             }
         };
@@ -84,7 +85,9 @@ impl Agent {
 
     /// Persist rules to disk atomically (write-to-temp + rename).
     fn save_rules(rules: &[Rule]) -> Result<(), Box<dyn std::error::Error>> {
-        let config = RuleConfig { rules: rules.to_vec() };
+        let config = RuleConfig {
+            rules: rules.to_vec(),
+        };
         let yaml = serde_yaml::to_string(&config)?;
         let path = rules_path();
         if let Some(parent) = path.parent() {
@@ -170,7 +173,11 @@ impl Agent {
 
     /// Run the agent event loop. Blocks until shutdown.
     pub async fn run(self: Arc<Self>, mut shutdown_rx: watch::Receiver<()>) {
-        log::info!("Agent starting (machine_id={}, scope={})", self.machine_id, self.scope);
+        log::info!(
+            "Agent starting (machine_id={}, scope={})",
+            self.machine_id,
+            self.scope
+        );
 
         // Subscribe to human override namespace
         let override_key = format!(
@@ -190,23 +197,31 @@ impl Agent {
         };
 
         // Publish agent status queryable
-        let status_key = format!(
-            "bubbaloop/{}/{}/agent/status",
-            self.scope, self.machine_id
-        );
+        let status_key = format!("bubbaloop/{}/{}/agent/status", self.scope, self.machine_id);
         let status_agent = self.clone();
-        let _status_queryable = match self.session.declare_queryable(&status_key).callback(move |query| {
-            use zenoh::Wait;
-            let agent = status_agent.clone();
-            // We need to block here since callback is sync; use a small runtime
-            let status = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(agent.get_status())
-            });
-            let json = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
-            if let Err(e) = query.reply(query.key_expr(), zenoh::bytes::ZBytes::from(json.into_bytes())).wait() {
-                log::warn!("Failed to reply to agent status query: {}", e);
-            }
-        }).await {
+        let _status_queryable = match self
+            .session
+            .declare_queryable(&status_key)
+            .callback(move |query| {
+                use zenoh::Wait;
+                let agent = status_agent.clone();
+                // We need to block here since callback is sync; use a small runtime
+                let status = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(agent.get_status())
+                });
+                let json = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
+                if let Err(e) = query
+                    .reply(
+                        query.key_expr(),
+                        zenoh::bytes::ZBytes::from(json.into_bytes()),
+                    )
+                    .wait()
+                {
+                    log::warn!("Failed to reply to agent status query: {}", e);
+                }
+            })
+            .await
+        {
             Ok(q) => {
                 log::info!("Agent status queryable: {}", status_key);
                 Some(q)
@@ -292,8 +307,14 @@ impl Agent {
                     tokio::task::block_in_place(|| {
                         tokio::runtime::Handle::current().block_on(async {
                             Self::evaluate_rules_for_sample(
-                                &rules, &trigger_log, &overrides, &session, &sample, &pattern,
-                                &scope, &machine_id,
+                                &rules,
+                                &trigger_log,
+                                &overrides,
+                                &session,
+                                &sample,
+                                &pattern,
+                                &scope,
+                                &machine_id,
                             )
                             .await;
                         });
@@ -328,8 +349,7 @@ impl Agent {
         let key = sample.key_expr().to_string();
 
         // Try to parse payload as JSON
-        let json_value: Option<serde_json::Value> =
-            serde_json::from_slice(&payload).ok();
+        let json_value: Option<serde_json::Value> = serde_json::from_slice(&payload).ok();
 
         let rules = rules.read().await;
         for rule in rules.iter() {
@@ -343,7 +363,7 @@ impl Agent {
             // Evaluate condition
             let condition_met = match (&rule.condition, &json_value) {
                 (Some(cond), Some(json)) => cond.evaluate(json),
-                (None, _) => true, // No condition = always trigger
+                (None, _) => true,        // No condition = always trigger
                 (Some(_), None) => false, // Condition requires JSON but payload isn't JSON
             };
 
@@ -357,7 +377,8 @@ impl Agent {
                 if overrides.contains_key(target_node.as_str()) {
                     log::info!(
                         "Rule '{}' skipped: human override active for '{}'",
-                        rule.name, target_node
+                        rule.name,
+                        target_node
                     );
                     continue;
                 }

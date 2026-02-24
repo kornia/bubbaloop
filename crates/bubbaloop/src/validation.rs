@@ -54,7 +54,10 @@ pub fn validate_publish_topic(topic: &str) -> Result<(), String> {
     if topic.contains('*') {
         return Err("Publish topic must not contain wildcards".to_string());
     }
-    if !topic.chars().all(|c| c.is_alphanumeric() || "/-_.".contains(c)) {
+    if !topic
+        .chars()
+        .all(|c| c.is_alphanumeric() || "/-_.".contains(c))
+    {
         return Err("Publish topic contains invalid characters".to_string());
     }
     Ok(())
@@ -62,9 +65,17 @@ pub fn validate_publish_topic(topic: &str) -> Result<(), String> {
 
 /// Build a scoped key expression for a node resource.
 /// Uses scope + machine_id to prevent cross-machine broadcast.
-pub fn scoped_node_key(scope: &str, machine_id: &str, node_name: &str, resource: &str) -> Result<String, String> {
+pub fn scoped_node_key(
+    scope: &str,
+    machine_id: &str,
+    node_name: &str,
+    resource: &str,
+) -> Result<String, String> {
     validate_node_name(node_name)?;
-    Ok(format!("bubbaloop/{}/{}/{}/{}", scope, machine_id, node_name, resource))
+    Ok(format!(
+        "bubbaloop/{}/{}/{}/{}",
+        scope, machine_id, node_name, resource
+    ))
 }
 
 /// Validate a Zenoh key expression for query_zenoh.

@@ -540,9 +540,8 @@ impl ServerHandler for BubbaLoopMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         // RBAC authorization check
         let required = rbac::required_tier(&request.name);
-        // For now, all authenticated callers get operator tier.
-        // In Phase 1, extract tier from auth token (token:tier format).
-        let caller_tier = rbac::Tier::Operator;
+        // Single-user localhost: grant admin until token-based tiers (Phase 1).
+        let caller_tier = rbac::Tier::Admin;
         if !caller_tier.has_permission(required) {
             log::warn!(
                 "RBAC denied: tool '{}' requires {} tier, caller has {} tier",
@@ -550,10 +549,14 @@ impl ServerHandler for BubbaLoopMcpServer {
                 required,
                 caller_tier
             );
-            return Ok(CallToolResult::success(vec![Content::text(format!(
-                "Permission denied: tool '{}' requires {} tier, caller has {} tier",
-                request.name, required, caller_tier
-            ))]));
+            return Err(rmcp::model::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_REQUEST,
+                format!(
+                    "Permission denied: tool '{}' requires {} tier, caller has {} tier",
+                    request.name, required, caller_tier
+                ),
+                None,
+            ));
         }
 
         // Delegate to the tool router
@@ -724,18 +727,25 @@ pub async fn run_mcp_server(
         Default::default(),
     );
 
-    // Rate limiting: 100 requests per minute burst via tower-governor
+    // Rate limiting: burst of 100 requests, ~1 req/sec sustained replenishment
     let governor_conf = tower_governor::governor::GovernorConfigBuilder::default()
-        .per_second(60)
+        .per_second(1)
         .burst_size(100)
         .finish()
-        .unwrap();
+        .ok_or("Failed to configure rate limiter")?;
 
+    // Periodic cleanup of stale rate-limit entries (respects shutdown signal)
     let governor_limiter = governor_conf.limiter().clone();
-    let cleanup_interval = std::time::Duration::from_secs(60);
-    std::thread::spawn(move || loop {
-        std::thread::sleep(cleanup_interval);
-        governor_limiter.retain_recent();
+    let mut cleanup_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+                    governor_limiter.retain_recent();
+                }
+                _ = cleanup_shutdown.changed() => break,
+            }
+        }
     });
 
     let router = axum::Router::new()
@@ -745,7 +755,7 @@ pub async fn run_mcp_server(
     let bind_addr = format!("127.0.0.1:{}", port);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     log::info!(
-        "MCP server listening on http://{}/mcp (rate limit: 100 req/min)",
+        "MCP server listening on http://{}/mcp (rate limit: 100 burst, 1/sec sustained)",
         bind_addr
     );
 
