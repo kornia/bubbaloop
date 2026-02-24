@@ -26,6 +26,8 @@ pub struct BubbaLoopMcpServer {
     node_manager: Arc<NodeManager>,
     agent: Option<Arc<Agent>>,
     tool_router: ToolRouter<Self>,
+    scope: String,
+    machine_id: String,
 }
 
 // ── Tool parameter types ──────────────────────────────────────────
@@ -76,12 +78,20 @@ struct RuleNameRequest {
 
 #[tool_router]
 impl BubbaLoopMcpServer {
-    pub fn new(session: Arc<Session>, node_manager: Arc<NodeManager>, agent: Option<Arc<Agent>>) -> Self {
+    pub fn new(
+        session: Arc<Session>,
+        node_manager: Arc<NodeManager>,
+        agent: Option<Arc<Agent>>,
+        scope: String,
+        machine_id: String,
+    ) -> Self {
         Self {
             session,
             node_manager,
             agent,
             tool_router: Self::tool_router(),
+            scope,
+            machine_id,
         }
     }
 
@@ -144,7 +154,7 @@ impl BubbaLoopMcpServer {
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let result = self.zenoh_get_text(&format!("bubbaloop/**/{}/**/config", req.node_name)).await;
+        let result = self.zenoh_get_text(&format!("bubbaloop/{}/{}/{}/config", self.scope, self.machine_id, req.node_name)).await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -156,7 +166,7 @@ impl BubbaLoopMcpServer {
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let result = self.zenoh_get_text(&format!("bubbaloop/**/{}/**/manifest", req.node_name)).await;
+        let result = self.zenoh_get_text(&format!("bubbaloop/{}/{}/{}/manifest", self.scope, self.machine_id, req.node_name)).await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -168,7 +178,7 @@ impl BubbaLoopMcpServer {
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let manifest_text = self.zenoh_get_text(&format!("bubbaloop/**/{}/**/manifest", req.node_name)).await;
+        let manifest_text = self.zenoh_get_text(&format!("bubbaloop/{}/{}/{}/manifest", self.scope, self.machine_id, req.node_name)).await;
         // Try to parse the manifest and extract commands
         // The manifest text is formatted as "[key_expr] json_body" from zenoh_get_text
         let commands = manifest_text
@@ -202,7 +212,7 @@ impl BubbaLoopMcpServer {
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let key_expr = format!("bubbaloop/**/{}/**/command", req.node_name);
+        let key_expr = format!("bubbaloop/{}/{}/{}/command", self.scope, self.machine_id, req.node_name);
         let payload = serde_json::json!({
             "command": req.command,
             "params": req.params,
@@ -297,11 +307,17 @@ impl BubbaLoopMcpServer {
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Query any Zenoh key expression and return the response. Use this for reading sensor data or any custom queryable.")]
+    #[tool(description = "Query a Zenoh key expression (admin only). Key must start with 'bubbaloop/'. Returns up to 100 results.")]
     async fn query_zenoh(
         &self,
         Parameters(req): Parameters<QueryTopicRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = crate::validation::validate_query_key_expr(&req.key_expr) {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Validation error: {}",
+                e
+            ))]));
+        }
         let result = self.zenoh_get_text(&req.key_expr).await;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
@@ -547,9 +563,17 @@ pub async fn run_mcp_server(
     let session_for_factory = session;
     let manager_for_factory = node_manager;
     let agent_for_factory = agent;
+    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+    let machine_id = crate::daemon::util::get_machine_id();
 
     let mcp_service = StreamableHttpService::new(
-        move || Ok(BubbaLoopMcpServer::new(session_for_factory.clone(), manager_for_factory.clone(), agent_for_factory.clone())),
+        move || Ok(BubbaLoopMcpServer::new(
+            session_for_factory.clone(),
+            manager_for_factory.clone(),
+            agent_for_factory.clone(),
+            scope.clone(),
+            machine_id.clone(),
+        )),
         LocalSessionManager::default().into(),
         Default::default(),
     );

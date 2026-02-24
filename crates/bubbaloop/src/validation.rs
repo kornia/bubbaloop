@@ -60,6 +60,33 @@ pub fn validate_publish_topic(topic: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Build a scoped key expression for a node resource.
+/// Uses scope + machine_id to prevent cross-machine broadcast.
+pub fn scoped_node_key(scope: &str, machine_id: &str, node_name: &str, resource: &str) -> Result<String, String> {
+    validate_node_name(node_name)?;
+    Ok(format!("bubbaloop/{}/{}/{}/{}", scope, machine_id, node_name, resource))
+}
+
+/// Validate a Zenoh key expression for query_zenoh.
+/// Must start with `bubbaloop/`, no wildcard-only queries, max 512 chars.
+pub fn validate_query_key_expr(key_expr: &str) -> Result<(), String> {
+    if key_expr.is_empty() || key_expr.len() > 512 {
+        return Err(format!(
+            "Key expression must be 1-512 characters, got {}",
+            key_expr.len()
+        ));
+    }
+    if !key_expr.starts_with("bubbaloop/") {
+        return Err("Key expression must start with 'bubbaloop/'".to_string());
+    }
+    // Reject wildcard-only queries
+    let stripped = key_expr.trim_start_matches("bubbaloop/");
+    if stripped == "**" || stripped == "*" || stripped.is_empty() {
+        return Err("Key expression too broad — specify a more specific path".to_string());
+    }
+    Ok(())
+}
+
 /// Validate a trigger pattern: must start with `bubbaloop/`.
 pub fn validate_trigger_pattern(trigger: &str) -> Result<(), String> {
     if !trigger.starts_with("bubbaloop/") {
@@ -133,5 +160,33 @@ mod tests {
         assert!(validate_trigger_pattern("**").is_err());
         assert!(validate_trigger_pattern("other/namespace/topic").is_err());
         assert!(validate_trigger_pattern("").is_err());
+    }
+
+    #[test]
+    fn test_scoped_node_key() {
+        let key = scoped_node_key("local", "jetson1", "openmeteo", "command").unwrap();
+        assert_eq!(key, "bubbaloop/local/jetson1/openmeteo/command");
+        assert!(!key.contains("**"));
+    }
+
+    #[test]
+    fn test_scoped_node_key_rejects_invalid_name() {
+        assert!(scoped_node_key("local", "jetson1", "../bad", "command").is_err());
+    }
+
+    #[test]
+    fn test_validate_query_key_expr_valid() {
+        assert!(validate_query_key_expr("bubbaloop/local/jetson1/openmeteo/status").is_ok());
+        assert!(validate_query_key_expr("bubbaloop/**/telemetry/status").is_ok());
+        assert!(validate_query_key_expr("bubbaloop/local/**/health/*").is_ok());
+    }
+
+    #[test]
+    fn test_validate_query_key_expr_invalid() {
+        assert!(validate_query_key_expr("").is_err());
+        assert!(validate_query_key_expr("other/namespace/topic").is_err());
+        assert!(validate_query_key_expr("bubbaloop/**").is_err());
+        assert!(validate_query_key_expr("bubbaloop/*").is_err());
+        assert!(validate_query_key_expr("**").is_err());
     }
 }

@@ -204,7 +204,9 @@ impl Action {
     }
 
     /// Execute this action.
-    pub async fn execute(&self, session: &zenoh::Session) {
+    /// `scope` and `machine_id` are used to build scoped Zenoh key expressions
+    /// that target only the local machine, preventing cross-machine broadcast.
+    pub async fn execute(&self, session: &zenoh::Session, scope: &str, machine_id: &str) {
         match self {
             Action::Log { message, level } => {
                 match level.as_str() {
@@ -223,7 +225,7 @@ impl Action {
                     log::warn!("[RULE] Invalid node name in command action: {}", e);
                     return;
                 }
-                let key_expr = format!("bubbaloop/**/{}/**/command", node);
+                let key_expr = format!("bubbaloop/{}/{}/{}/command", scope, machine_id, node);
                 let payload = serde_json::json!({
                     "command": command,
                     "params": params,

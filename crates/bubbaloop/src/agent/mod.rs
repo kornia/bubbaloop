@@ -274,6 +274,8 @@ impl Agent {
             let overrides = self.overrides.clone();
             let session = self.session.clone();
             let pattern_for_cb = pattern.clone();
+            let scope_for_cb = self.scope.clone();
+            let machine_id_for_cb = self.machine_id.clone();
 
             match self
                 .session
@@ -284,11 +286,14 @@ impl Agent {
                     let overrides = overrides.clone();
                     let session = session.clone();
                     let pattern = pattern_for_cb.clone();
+                    let scope = scope_for_cb.clone();
+                    let machine_id = machine_id_for_cb.clone();
 
                     tokio::task::block_in_place(|| {
                         tokio::runtime::Handle::current().block_on(async {
                             Self::evaluate_rules_for_sample(
                                 &rules, &trigger_log, &overrides, &session, &sample, &pattern,
+                                &scope, &machine_id,
                             )
                             .await;
                         });
@@ -308,6 +313,7 @@ impl Agent {
     }
 
     /// Evaluate all matching rules for an incoming sample.
+    #[allow(clippy::too_many_arguments)]
     async fn evaluate_rules_for_sample(
         rules: &RwLock<Vec<Rule>>,
         trigger_log: &RwLock<HashMap<String, RuleTriggerLog>>,
@@ -315,6 +321,8 @@ impl Agent {
         session: &zenoh::Session,
         sample: &zenoh::sample::Sample,
         trigger_pattern: &str,
+        scope: &str,
+        machine_id: &str,
     ) {
         let payload = sample.payload().to_bytes();
         let key = sample.key_expr().to_string();
@@ -357,7 +365,7 @@ impl Agent {
 
             // Execute action
             log::info!("Rule '{}' triggered by {}", rule.name, key);
-            rule.action.execute(session).await;
+            rule.action.execute(session, scope, machine_id).await;
 
             // Log trigger
             let mut log = trigger_log.write().await;
