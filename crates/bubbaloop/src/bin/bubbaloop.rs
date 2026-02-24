@@ -131,8 +131,9 @@ async fn run_mcp_command(args: McpArgs) -> Result<(), Box<dyn std::error::Error>
     if args.stdio {
         // Redirect logs to file to avoid corrupting the MCP JSON-RPC protocol.
         // stdout/stderr must stay clean for JSON-RPC messages.
-        let bubbaloop_dir =
-            dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp")).join(".bubbaloop");
+        let bubbaloop_dir = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            .join(".bubbaloop");
         std::fs::create_dir_all(&bubbaloop_dir).ok();
         let log_path = bubbaloop_dir.join("mcp-stdio.log");
         let log_file = std::fs::OpenOptions::new()
@@ -145,7 +146,10 @@ async fn run_mcp_command(args: McpArgs) -> Result<(), Box<dyn std::error::Error>
                 .target(env_logger::Target::Pipe(Box::new(log_file)))
                 .try_init(),
         );
-        log::info!("MCP stdio server starting (logs redirected to {})", log_path.display());
+        log::info!(
+            "MCP stdio server starting (logs redirected to {})",
+            log_path.display()
+        );
     } else {
         // HTTP mode: logs to stderr at info level
         drop(

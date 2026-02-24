@@ -23,17 +23,30 @@ pub const MCP_PORT: u16 = 8088;
 
 /// Bubbaloop MCP server — wraps Zenoh operations as MCP tools.
 ///
-/// All node/Zenoh operations go through `DaemonPlatform` which implements
-/// `PlatformOperations`, enabling future mock-based contract testing.
-#[derive(Clone)]
-pub struct BubbaLoopMcpServer {
-    platform: Arc<platform::DaemonPlatform>,
+/// Generic over `P: PlatformOperations` so production uses `DaemonPlatform`
+/// and tests can plug in `MockPlatform`.
+pub struct BubbaLoopMcpServer<P: PlatformOperations = platform::DaemonPlatform> {
+    platform: Arc<P>,
     agent: Option<Arc<Agent>>,
     #[allow(dead_code)] // Used in Task 7 for call_tool() auth enforcement
     auth_token: Option<String>,
     tool_router: ToolRouter<Self>,
     scope: String,
     machine_id: String,
+}
+
+// Manual Clone impl: P doesn't need Clone because it's behind Arc.
+impl<P: PlatformOperations> Clone for BubbaLoopMcpServer<P> {
+    fn clone(&self) -> Self {
+        Self {
+            platform: self.platform.clone(),
+            agent: self.agent.clone(),
+            auth_token: self.auth_token.clone(),
+            tool_router: self.tool_router.clone(),
+            scope: self.scope.clone(),
+            machine_id: self.machine_id.clone(),
+        }
+    }
 }
 
 // ── Tool parameter types ──────────────────────────────────────────
@@ -91,9 +104,9 @@ struct TestRuleRequest {
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
-impl BubbaLoopMcpServer {
+impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     pub fn new(
-        platform: Arc<platform::DaemonPlatform>,
+        platform: Arc<P>,
         agent: Option<Arc<Agent>>,
         auth_token: Option<String>,
         scope: String,
@@ -130,8 +143,7 @@ impl BubbaLoopMcpServer {
                     })
                     .collect();
                 Ok(CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&json_nodes)
-                        .unwrap_or_else(|_| "[]".to_string()),
+                    serde_json::to_string_pretty(&json_nodes).unwrap_or_else(|_| "[]".to_string()),
                 )]))
             }
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
@@ -288,32 +300,12 @@ impl BubbaLoopMcpServer {
         });
         let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
 
-        // send_command needs a custom Zenoh query with payload, so we use
-        // the platform's public session field directly.
         match self
             .platform
-            .session
-            .get(&key_expr)
-            .payload(zenoh::bytes::ZBytes::from(payload_bytes))
-            .timeout(std::time::Duration::from_secs(5))
+            .send_zenoh_query(&key_expr, payload_bytes)
             .await
         {
-            Ok(replies) => {
-                let mut results = Vec::new();
-                while let Ok(reply) = replies.recv_async().await {
-                    match reply.result() {
-                        Ok(sample) => {
-                            let bytes = sample.payload().to_bytes();
-                            match String::from_utf8(bytes.to_vec()) {
-                                Ok(text) => results.push(text),
-                                Err(_) => results.push(format!("<{} bytes binary>", bytes.len())),
-                            }
-                        }
-                        Err(err) => {
-                            results.push(format!("Error: {:?}", err.payload().to_bytes()));
-                        }
-                    }
-                }
+            Ok(results) => {
                 if results.is_empty() {
                     Ok(CallToolResult::success(vec![Content::text(
                         "No response from node (is it running?)",
@@ -325,7 +317,7 @@ impl BubbaLoopMcpServer {
                 }
             }
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
-                "Zenoh query failed: {}",
+                "Error: {}",
                 e
             ))])),
         }
@@ -573,7 +565,9 @@ impl BubbaLoopMcpServer {
 
     // ── New tools (Task 15) ───────────────────────────────────────────
 
-    #[tool(description = "Get Zenoh connection parameters for subscribing to a node's data stream. Returns topic pattern, encoding, and endpoint. Use this to set up streaming data access outside MCP.")]
+    #[tool(
+        description = "Get Zenoh connection parameters for subscribing to a node's data stream. Returns topic pattern, encoding, and endpoint. Use this to set up streaming data access outside MCP."
+    )]
     async fn get_stream_info(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
@@ -593,7 +587,9 @@ impl BubbaLoopMcpServer {
         )]))
     }
 
-    #[tool(description = "Get overall system status including daemon health, node count, and Zenoh connection state.")]
+    #[tool(
+        description = "Get overall system status including daemon health, node count, and Zenoh connection state."
+    )]
     async fn get_system_status(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_system_status");
         let nodes = self.platform.list_nodes().await;
@@ -620,7 +616,9 @@ impl BubbaLoopMcpServer {
         )]))
     }
 
-    #[tool(description = "Get machine hardware and OS information: architecture, hostname, OS version.")]
+    #[tool(
+        description = "Get machine hardware and OS information: architecture, hostname, OS version."
+    )]
     async fn get_machine_info(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_machine_info");
         let info = serde_json::json!({
@@ -638,7 +636,9 @@ impl BubbaLoopMcpServer {
         )]))
     }
 
-    #[tool(description = "Trigger a build for a node. Builds the node's source code using its configured build command (Cargo, pixi, etc.). Admin only.")]
+    #[tool(
+        description = "Trigger a build for a node. Builds the node's source code using its configured build command (Cargo, pixi, etc.). Admin only."
+    )]
     async fn build_node(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
@@ -660,7 +660,9 @@ impl BubbaLoopMcpServer {
         }
     }
 
-    #[tool(description = "Get the protobuf schema of a node's data messages. Returns the schema in human-readable format if available.")]
+    #[tool(
+        description = "Get the protobuf schema of a node's data messages. Returns the schema in human-readable format if available."
+    )]
     async fn get_node_schema(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
@@ -682,15 +684,16 @@ impl BubbaLoopMcpServer {
         }
     }
 
-    #[tool(description = "Get recent agent events (rule triggers, actions taken). Returns the last N events from the trigger log.")]
+    #[tool(
+        description = "Get recent agent events (rule triggers, actions taken). Returns the last N events from the trigger log."
+    )]
     async fn get_events(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_events");
         match &self.agent {
             Some(agent) => {
                 let events = agent.get_trigger_log().await;
                 Ok(CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&events)
-                        .unwrap_or_else(|_| "{}".to_string()),
+                    serde_json::to_string_pretty(&events).unwrap_or_else(|_| "{}".to_string()),
                 )]))
             }
             None => Ok(CallToolResult::success(vec![Content::text(
@@ -699,7 +702,9 @@ impl BubbaLoopMcpServer {
         }
     }
 
-    #[tool(description = "Test a rule's condition against sample data without executing the action. Returns whether the condition matches. Useful for debugging rules before deploying them.")]
+    #[tool(
+        description = "Test a rule's condition against sample data without executing the action. Returns whether the condition matches. Useful for debugging rules before deploying them."
+    )]
     async fn test_rule(
         &self,
         Parameters(req): Parameters<TestRuleRequest>,
@@ -730,7 +735,7 @@ impl BubbaLoopMcpServer {
 // NOTE: We manually implement call_tool/list_tools/get_tool instead of using
 // #[tool_handler] so we can insert RBAC authorization before dispatching.
 
-impl ServerHandler for BubbaLoopMcpServer {
+impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
@@ -801,7 +806,7 @@ impl ServerHandler for BubbaLoopMcpServer {
 
 // ── Helper methods ────────────────────────────────────────────────
 
-impl BubbaLoopMcpServer {
+impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     /// Validate and parse an AddRuleRequest into a Rule.
     /// Returns Err(String) with a user-facing message on validation failure.
     fn parse_rule_request(req: AddRuleRequest) -> Result<crate::agent::Rule, String> {
@@ -831,7 +836,6 @@ impl BubbaLoopMcpServer {
             enabled: true,
         })
     }
-
 }
 
 /// Run MCP server on stdio (stdin/stdout).
@@ -858,11 +862,8 @@ pub async fn run_mcp_stdio(
     });
 
     let server = BubbaLoopMcpServer::new(
-        platform,
-        agent,
-        None, // No auth token for stdio
-        scope,
-        machine_id,
+        platform, agent, None, // No auth token for stdio
+        scope, machine_id,
     );
 
     // rmcp stdio transport: reads JSON-RPC from stdin, writes to stdout

@@ -82,9 +82,11 @@ tempfile = "3"
 default = ["dashboard"]
 dashboard = ["dep:axum", "dep:rust-embed", "dep:mime_guess", "dep:tokio-tungstenite"]
 mcp = ["dep:rmcp", "dep:schemars", "dep:axum", "dep:tower_governor"]
+test-harness = ["mcp", "rmcp/client"]
 
 [dev-dependencies]
 tempfile = "3"
+rmcp = { workspace = true, features = ["client", "server", "macros"] }
 
 [build-dependencies]
 prost-build.workspace = true

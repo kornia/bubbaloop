@@ -1,0 +1,519 @@
+//! Integration tests for the MCP server.
+//!
+//! Uses `MockPlatform` behind a real MCP client-server transport (in-process duplex)
+//! to exercise tool routing, RBAC, serialization, and response formatting end-to-end.
+//!
+//! Run with: `cargo test --features test-harness --test integration_mcp`
+#![cfg(feature = "test-harness")]
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use bubbaloop::mcp::platform::mock::MockPlatform;
+use bubbaloop::mcp::platform::NodeInfo;
+use bubbaloop::mcp::BubbaLoopMcpServer;
+
+use rmcp::model::{CallToolRequestParams, ClientInfo};
+use rmcp::{ClientHandler, ServiceExt};
+
+// ── Dummy client handler (required by rmcp) ──────────────────────────
+
+#[derive(Debug, Clone, Default)]
+struct TestClientHandler;
+
+impl ClientHandler for TestClientHandler {
+    fn get_info(&self) -> ClientInfo {
+        ClientInfo::default()
+    }
+}
+
+// ── Test harness ─────────────────────────────────────────────────────
+
+/// Harness that spins up a `BubbaLoopMcpServer<MockPlatform>` on an in-process
+/// duplex transport and returns an MCP client that can call tools.
+struct TestHarness {
+    client: rmcp::service::RunningService<rmcp::RoleClient, TestClientHandler>,
+    _server_handle: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+
+impl TestHarness {
+    /// Create a harness with the default MockPlatform (one "test-node").
+    async fn new() -> Self {
+        Self::with_mock(MockPlatform::new()).await
+    }
+
+    /// Create a harness with a custom MockPlatform.
+    async fn with_mock(mock: MockPlatform) -> Self {
+        let platform = Arc::new(mock);
+        let server = BubbaLoopMcpServer::new(
+            platform,
+            None, // no agent
+            None, // no auth token
+            "test".to_string(),
+            "test-machine".to_string(),
+        );
+
+        let (server_transport, client_transport) = tokio::io::duplex(8192);
+
+        let server_handle = tokio::spawn(async move {
+            server.serve(server_transport).await?.waiting().await?;
+            anyhow::Ok(())
+        });
+
+        let client = TestClientHandler
+            .serve(client_transport)
+            .await
+            .expect("client setup failed");
+
+        Self {
+            client,
+            _server_handle: server_handle,
+        }
+    }
+
+    /// Call a tool with no arguments.
+    async fn call(
+        &self,
+        tool_name: &str,
+    ) -> Result<rmcp::model::CallToolResult, rmcp::ServiceError> {
+        self.client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: tool_name.to_string().into(),
+                arguments: None,
+                task: None,
+            })
+            .await
+    }
+
+    /// Call a tool with JSON arguments.
+    async fn call_with_args(
+        &self,
+        tool_name: &str,
+        args: serde_json::Value,
+    ) -> Result<rmcp::model::CallToolResult, rmcp::ServiceError> {
+        self.client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: tool_name.to_string().into(),
+                arguments: Some(args.as_object().unwrap().clone()),
+                task: None,
+            })
+            .await
+    }
+
+    /// Shut down the client and server.
+    async fn shutdown(self) -> anyhow::Result<()> {
+        self.client.cancel().await?;
+        self._server_handle.await??;
+        Ok(())
+    }
+}
+
+/// Extract the text content from a CallToolResult.
+fn result_text(result: &rmcp::model::CallToolResult) -> String {
+    result
+        .content
+        .first()
+        .and_then(|c| c.raw.as_text())
+        .map(|t| t.text.clone())
+        .unwrap_or_default()
+}
+
+/// Parse the text content as JSON.
+fn result_json(result: &rmcp::model::CallToolResult) -> serde_json::Value {
+    let text = result_text(result);
+    match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => serde_json::Value::String(text),
+    }
+}
+
+// ── Helper: build a MockPlatform with custom nodes ───────────────────
+
+fn mock_with_nodes(nodes: Vec<NodeInfo>) -> MockPlatform {
+    MockPlatform {
+        nodes: Mutex::new(nodes),
+        configs: Mutex::new(HashMap::new()),
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Integration tests
+// ════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn list_tools_returns_expected_tools() {
+    let h = TestHarness::new().await;
+    let tools = h.client.list_tools(None).await.expect("list_tools failed");
+
+    let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
+
+    // Verify key tools exist
+    assert!(tool_names.contains(&"list_nodes".to_string()));
+    assert!(tool_names.contains(&"get_system_status".to_string()));
+    assert!(tool_names.contains(&"get_machine_info".to_string()));
+    assert!(tool_names.contains(&"get_node_health".to_string()));
+    assert!(tool_names.contains(&"start_node".to_string()));
+    assert!(tool_names.contains(&"stop_node".to_string()));
+    assert!(tool_names.contains(&"query_zenoh".to_string()));
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_nodes_default_mock() {
+    let h = TestHarness::new().await;
+    let result = h.call("list_nodes").await.unwrap();
+    let json = result_json(&result);
+
+    let nodes = json.as_array().expect("expected array");
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0]["name"], "test-node");
+    assert_eq!(nodes[0]["status"], "Running");
+    assert_eq!(nodes[0]["health"], "Healthy");
+    assert_eq!(nodes[0]["node_type"], "rust");
+    assert_eq!(nodes[0]["installed"], true);
+    assert_eq!(nodes[0]["is_built"], true);
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_nodes_empty() {
+    let h = TestHarness::with_mock(mock_with_nodes(vec![])).await;
+    let result = h.call("list_nodes").await.unwrap();
+    let json = result_json(&result);
+
+    let nodes = json.as_array().expect("expected array");
+    assert!(nodes.is_empty());
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_nodes_multiple() {
+    let nodes = vec![
+        NodeInfo {
+            name: "camera".to_string(),
+            status: "Running".to_string(),
+            health: "Healthy".to_string(),
+            node_type: "python".to_string(),
+            installed: true,
+            is_built: true,
+        },
+        NodeInfo {
+            name: "detector".to_string(),
+            status: "Stopped".to_string(),
+            health: "Unknown".to_string(),
+            node_type: "rust".to_string(),
+            installed: true,
+            is_built: false,
+        },
+    ];
+    let h = TestHarness::with_mock(mock_with_nodes(nodes)).await;
+    let result = h.call("list_nodes").await.unwrap();
+    let json = result_json(&result);
+
+    let arr = json.as_array().expect("expected array");
+    assert_eq!(arr.len(), 2);
+    assert_eq!(arr[0]["name"], "camera");
+    assert_eq!(arr[1]["name"], "detector");
+    assert_eq!(arr[1]["status"], "Stopped");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_system_status() {
+    let h = TestHarness::new().await;
+    let result = h.call("get_system_status").await.unwrap();
+    let json = result_json(&result);
+
+    assert_eq!(json["scope"], "test");
+    assert_eq!(json["machine_id"], "test-machine");
+    assert_eq!(json["nodes_total"], 1);
+    assert_eq!(json["nodes_running"], 1);
+    assert_eq!(json["nodes_healthy"], 1);
+    assert_eq!(json["mcp_server"], "running");
+    assert_eq!(json["agent_available"], false);
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_system_status_no_nodes() {
+    let h = TestHarness::with_mock(mock_with_nodes(vec![])).await;
+    let result = h.call("get_system_status").await.unwrap();
+    let json = result_json(&result);
+
+    assert_eq!(json["nodes_total"], 0);
+    assert_eq!(json["nodes_running"], 0);
+    assert_eq!(json["nodes_healthy"], 0);
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_machine_info() {
+    let h = TestHarness::new().await;
+    let result = h.call("get_machine_info").await.unwrap();
+    let json = result_json(&result);
+
+    assert_eq!(json["machine_id"], "test-machine");
+    assert_eq!(json["scope"], "test");
+    // arch and os are runtime values, just verify they exist
+    assert!(json["arch"].is_string());
+    assert!(json["os"].is_string());
+    assert!(json["hostname"].is_string());
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_node_health_existing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "get_node_health",
+            serde_json::json!({"node_name": "test-node"}),
+        )
+        .await
+        .unwrap();
+    let json = result_json(&result);
+
+    assert_eq!(json["name"], "test-node");
+    assert_eq!(json["status"], "Running");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_node_health_missing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "get_node_health",
+            serde_json::json!({"node_name": "nonexistent"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("not found"),
+        "Expected 'not found' in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_node_health_invalid_name() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "get_node_health",
+            serde_json::json!({"node_name": "../etc/passwd"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    // Validation should reject path traversal (message mentions allowed character set)
+    assert!(
+        text.contains("alphanumeric")
+            || text.contains("1-64 characters")
+            || text.contains("Invalid"),
+        "Expected validation error in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn start_node_existing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args("start_node", serde_json::json!({"node_name": "test-node"}))
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "mock: command executed");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stop_node_existing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args("stop_node", serde_json::json!({"node_name": "test-node"}))
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "mock: command executed");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn restart_node_existing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "restart_node",
+            serde_json::json!({"node_name": "test-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "mock: command executed");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_stream_info() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "get_stream_info",
+            serde_json::json!({"node_name": "test-node"}),
+        )
+        .await
+        .unwrap();
+    let json = result_json(&result);
+
+    assert!(json["zenoh_topic"].as_str().unwrap().contains("test-node"));
+    assert_eq!(json["encoding"], "protobuf");
+    assert_eq!(json["endpoint"], "tcp/localhost:7447");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn discover_nodes() {
+    let h = TestHarness::new().await;
+    let result = h.call("discover_nodes").await.unwrap();
+    let text = result_text(&result);
+
+    // MockPlatform returns "mock: query bubbaloop/**/manifest"
+    assert!(text.contains("mock: query"));
+    assert!(text.contains("manifest"));
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_agent_status_no_agent() {
+    let h = TestHarness::new().await;
+    let result = h.call("get_agent_status").await.unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "Agent not available");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_agent_rules_no_agent() {
+    let h = TestHarness::new().await;
+    let result = h.call("list_agent_rules").await.unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "Agent not available");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_events_no_agent() {
+    let h = TestHarness::new().await;
+    let result = h.call("get_events").await.unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "Agent not available");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn query_zenoh_valid() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "query_zenoh",
+            serde_json::json!({"key_expr": "bubbaloop/local/jetson1/openmeteo/status"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(text.contains("mock: query"));
+    assert!(text.contains("bubbaloop/local/jetson1/openmeteo/status"));
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn send_command_existing_node() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "send_command",
+            serde_json::json!({
+                "node_name": "test-node",
+                "command": "capture_frame",
+                "params": {"resolution": "1080p"}
+            }),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    // MockPlatform's send_zenoh_query returns "mock: zenoh_query <key_expr>"
+    assert!(
+        text.contains("mock: zenoh_query"),
+        "Expected mock zenoh_query response, got: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn build_node_existing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args("build_node", serde_json::json!({"node_name": "test-node"}))
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "mock: command executed");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_node_logs_existing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "get_node_logs",
+            serde_json::json!({"node_name": "test-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "mock: command executed");
+
+    h.shutdown().await.unwrap();
+}

@@ -47,7 +47,8 @@ pub enum NodeCommand {
 /// MCP tools call this trait instead of `Arc<NodeManager>` directly.
 /// This makes the MCP server testable with mock implementations.
 pub trait PlatformOperations: Send + Sync + 'static {
-    fn list_nodes(&self) -> impl std::future::Future<Output = PlatformResult<Vec<NodeInfo>>> + Send;
+    fn list_nodes(&self)
+        -> impl std::future::Future<Output = PlatformResult<Vec<NodeInfo>>> + Send;
     fn get_node_detail(
         &self,
         name: &str,
@@ -65,6 +66,15 @@ pub trait PlatformOperations: Send + Sync + 'static {
         &self,
         key_expr: &str,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Send a Zenoh query with a payload (e.g., for node commands).
+    ///
+    /// Returns the collected reply strings.
+    fn send_zenoh_query(
+        &self,
+        key_expr: &str,
+        payload: Vec<u8>,
+    ) -> impl std::future::Future<Output = PlatformResult<Vec<String>>> + Send;
 }
 
 // ── DaemonPlatform: real implementation backed by NodeManager + Zenoh ────
@@ -91,10 +101,9 @@ impl PlatformOperations for DaemonPlatform {
             .nodes
             .iter()
             .map(|n| {
-                let status = NodeStatus::try_from(n.status)
-                    .unwrap_or(NodeStatus::Unknown);
-                let health = HealthStatus::try_from(n.health_status)
-                    .unwrap_or(HealthStatus::Unknown);
+                let status = NodeStatus::try_from(n.status).unwrap_or(NodeStatus::Unknown);
+                let health =
+                    HealthStatus::try_from(n.health_status).unwrap_or(HealthStatus::Unknown);
                 NodeInfo {
                     name: n.name.clone(),
                     status: format!("{:?}", status),
@@ -111,10 +120,9 @@ impl PlatformOperations for DaemonPlatform {
     async fn get_node_detail(&self, name: &str) -> PlatformResult<Value> {
         match self.node_manager.get_node(name).await {
             Some(node) => {
-                let status = NodeStatus::try_from(node.status)
-                    .unwrap_or(NodeStatus::Unknown);
-                let health = HealthStatus::try_from(node.health_status)
-                    .unwrap_or(HealthStatus::Unknown);
+                let status = NodeStatus::try_from(node.status).unwrap_or(NodeStatus::Unknown);
+                let health =
+                    HealthStatus::try_from(node.health_status).unwrap_or(HealthStatus::Unknown);
                 let detail = serde_json::json!({
                     "name": node.name,
                     "status": format!("{:?}", status),
@@ -135,11 +143,7 @@ impl PlatformOperations for DaemonPlatform {
         }
     }
 
-    async fn execute_command(
-        &self,
-        name: &str,
-        cmd: NodeCommand,
-    ) -> PlatformResult<String> {
+    async fn execute_command(&self, name: &str, cmd: NodeCommand) -> PlatformResult<String> {
         let cmd_type = match cmd {
             NodeCommand::Start => CommandType::Start,
             NodeCommand::Stop => CommandType::Stop,
@@ -184,6 +188,43 @@ impl PlatformOperations for DaemonPlatform {
     async fn query_zenoh(&self, key_expr: &str) -> PlatformResult<String> {
         Ok(zenoh_get_text(&self.session, key_expr).await)
     }
+
+    async fn send_zenoh_query(
+        &self,
+        key_expr: &str,
+        payload: Vec<u8>,
+    ) -> PlatformResult<Vec<String>> {
+        match self
+            .session
+            .get(key_expr)
+            .payload(zenoh::bytes::ZBytes::from(payload))
+            .timeout(std::time::Duration::from_secs(5))
+            .await
+        {
+            Ok(replies) => {
+                let mut results = Vec::new();
+                while let Ok(reply) = replies.recv_async().await {
+                    match reply.result() {
+                        Ok(sample) => {
+                            let bytes = sample.payload().to_bytes();
+                            match String::from_utf8(bytes.to_vec()) {
+                                Ok(text) => results.push(text),
+                                Err(_) => results.push(format!("<{} bytes binary>", bytes.len())),
+                            }
+                        }
+                        Err(err) => {
+                            results.push(format!("Error: {:?}", err.payload().to_bytes()));
+                        }
+                    }
+                }
+                Ok(results)
+            }
+            Err(e) => Err(PlatformError::Internal(format!(
+                "Zenoh query failed: {}",
+                e
+            ))),
+        }
+    }
 }
 
 /// Query a Zenoh key expression and return text results.
@@ -203,11 +244,7 @@ async fn zenoh_get_text(session: &Session, key_expr: &str) -> String {
                         match String::from_utf8(bytes.to_vec()) {
                             Ok(text) => results.push(format!("[{}] {}", key, text)),
                             Err(_) => {
-                                results.push(format!(
-                                    "[{}] <{} bytes binary>",
-                                    key,
-                                    bytes.len()
-                                ))
+                                results.push(format!("[{}] <{} bytes binary>", key, bytes.len()))
                             }
                         }
                     }
@@ -235,7 +272,7 @@ fn now_ms() -> i64 {
 
 // ── MockPlatform for testing ─────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-harness"))]
 pub mod mock {
     use super::*;
     use std::collections::HashMap;
@@ -283,11 +320,7 @@ pub mod mock {
                 .ok_or_else(|| PlatformError::NodeNotFound(name.to_string()))
         }
 
-        async fn execute_command(
-            &self,
-            name: &str,
-            _cmd: NodeCommand,
-        ) -> PlatformResult<String> {
+        async fn execute_command(&self, name: &str, _cmd: NodeCommand) -> PlatformResult<String> {
             if self.nodes.lock().unwrap().iter().any(|n| n.name == name) {
                 Ok("mock: command executed".to_string())
             } else {
@@ -306,6 +339,14 @@ pub mod mock {
 
         async fn query_zenoh(&self, key_expr: &str) -> PlatformResult<String> {
             Ok(format!("mock: query {}", key_expr))
+        }
+
+        async fn send_zenoh_query(
+            &self,
+            key_expr: &str,
+            _payload: Vec<u8>,
+        ) -> PlatformResult<Vec<String>> {
+            Ok(vec![format!("mock: zenoh_query {}", key_expr)])
         }
     }
 }
@@ -551,10 +592,7 @@ mod tests {
     #[tokio::test]
     async fn query_zenoh_wildcard() {
         let mock = MockPlatform::new();
-        let result = mock
-            .query_zenoh("bubbaloop/**/manifest")
-            .await
-            .unwrap();
+        let result = mock.query_zenoh("bubbaloop/**/manifest").await.unwrap();
         assert!(result.contains("bubbaloop/**/manifest"));
     }
 
@@ -632,10 +670,9 @@ mod tests {
 
     #[test]
     fn validate_query_key_expr_valid_wildcard() {
-        assert!(crate::validation::validate_query_key_expr(
-            "bubbaloop/**/telemetry/status"
-        )
-        .is_ok());
+        assert!(
+            crate::validation::validate_query_key_expr("bubbaloop/**/telemetry/status").is_ok()
+        );
     }
 
     #[test]
@@ -691,14 +728,12 @@ mod tests {
 
     #[test]
     fn validate_trigger_pattern_valid() {
-        assert!(crate::validation::validate_trigger_pattern(
-            "bubbaloop/**/telemetry/status"
-        )
-        .is_ok());
-        assert!(crate::validation::validate_trigger_pattern(
-            "bubbaloop/local/node1/metrics"
-        )
-        .is_ok());
+        assert!(
+            crate::validation::validate_trigger_pattern("bubbaloop/**/telemetry/status").is_ok()
+        );
+        assert!(
+            crate::validation::validate_trigger_pattern("bubbaloop/local/node1/metrics").is_ok()
+        );
     }
 
     #[test]
@@ -722,10 +757,10 @@ mod tests {
 
     #[test]
     fn validate_publish_topic_valid() {
-        assert!(crate::validation::validate_publish_topic(
-            "bubbaloop/local/jetson1/my-node/data"
-        )
-        .is_ok());
+        assert!(
+            crate::validation::validate_publish_topic("bubbaloop/local/jetson1/my-node/data")
+                .is_ok()
+        );
     }
 
     #[test]
@@ -806,12 +841,7 @@ mod tests {
 
     #[test]
     fn rbac_all_admin_tools_mapped() {
-        let admin_tools = [
-            "query_zenoh",
-            "install_node",
-            "remove_node",
-            "build_node",
-        ];
+        let admin_tools = ["query_zenoh", "install_node", "remove_node", "build_node"];
         for tool in &admin_tools {
             assert_eq!(
                 super::super::rbac::required_tier(tool),
