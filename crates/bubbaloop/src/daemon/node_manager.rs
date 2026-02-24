@@ -22,6 +22,9 @@ const BUILD_TIMEOUT_SECS: u64 = 600;
 /// Health check timeout in milliseconds (30 seconds)
 const HEALTH_TIMEOUT_MS: i64 = 30_000;
 
+/// Absolute path to journalctl — never rely on PATH for system binaries.
+const JOURNALCTL_PATH: &str = "/usr/bin/journalctl";
+
 #[derive(Error, Debug)]
 pub enum NodeManagerError {
     #[error("Registry error: {0}")]
@@ -723,7 +726,7 @@ impl NodeManager {
         // Use _SYSTEMD_USER_UNIT filter for user services (logs are in system journal)
         // This works on systems where --user journal doesn't exist
         let unit_filter = format!("_SYSTEMD_USER_UNIT={}", service_name);
-        let journal_output = Command::new("journalctl")
+        let journal_output = Command::new(JOURNALCTL_PATH)
             .args([&unit_filter, "-n", "50", "--no-pager", "-o", "cat"])
             .output()
             .await?;
@@ -1551,5 +1554,10 @@ mod tests {
             config_override: None,
         };
         assert_eq!(node.effective_name(), "unknown");
+    }
+
+    #[test]
+    fn test_journalctl_uses_absolute_path() {
+        assert!(JOURNALCTL_PATH.starts_with('/'));
     }
 }
