@@ -4,6 +4,7 @@
 //! Runs as an HTTP server on port 8088 inside the daemon process.
 
 pub mod auth;
+pub mod rbac;
 
 use crate::agent::Agent;
 use crate::daemon::node_manager::NodeManager;
@@ -12,7 +13,7 @@ use crate::validation;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
-use rmcp::{tool, tool_handler, tool_router, ServerHandler};
+use rmcp::{tool, tool_router, ServerHandler};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -425,8 +426,10 @@ impl BubbaLoopMcpServer {
 }
 
 // ── ServerHandler implementation ──────────────────────────────────
+//
+// NOTE: We manually implement call_tool/list_tools/get_tool instead of using
+// #[tool_handler] so we can insert RBAC authorization before dispatching.
 
-#[tool_handler]
 impl ServerHandler for BubbaLoopMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -445,6 +448,51 @@ impl ServerHandler for BubbaLoopMcpServer {
                     .into(),
             ),
         }
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        // RBAC authorization check
+        let required = rbac::required_tier(&request.name);
+        // For now, all authenticated callers get operator tier.
+        // In Phase 1, extract tier from auth token (token:tier format).
+        let caller_tier = rbac::Tier::Operator;
+        if !caller_tier.has_permission(required) {
+            log::warn!(
+                "RBAC denied: tool '{}' requires {} tier, caller has {} tier",
+                request.name,
+                required,
+                caller_tier
+            );
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Permission denied: tool '{}' requires {} tier, caller has {} tier",
+                request.name, required, caller_tier
+            ))]));
+        }
+
+        // Delegate to the tool router
+        let tcc =
+            rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        Ok(ListToolsResult {
+            tools: self.tool_router.list_all(),
+            meta: None,
+            next_cursor: None,
+        })
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.tool_router.get(name).cloned()
     }
 }
 
