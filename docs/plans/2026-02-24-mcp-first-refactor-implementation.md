@@ -6,9 +6,19 @@
 
 **Architecture:** Dual-plane model — MCP handles control (discovery, lifecycle, config, rules), Zenoh handles data (streaming sensors). Security foundation first. 4 phases: security → MCP enhancement → dashboard migration → cleanup + ecosystem.
 
-**Tech Stack:** Rust, Zenoh, axum, rmcp, prost, zbus, tokio, argh, thiserror/anyhow, serde, tower (rate limiting)
+**Tech Stack:** Rust, Zenoh, axum, rmcp (v0.15→0.16+), prost, zbus, tokio, argh, thiserror/anyhow, serde, tower-governor (rate limiting)
 
 **Design Document:** `docs/plans/2026-02-24-mcp-first-refactor-design.md`
+
+### Research Corrections (2026-02-24)
+
+These findings from online research modify the original plan:
+
+1. **rmcp stdio transport** requires `transport-io` feature flag (add to `Cargo.toml`). Pattern: `service.serve(rmcp::transport::io::stdio()).await?.waiting().await?`
+2. **MCP auth: OAuth 2.1 is OPTIONAL** for HTTP. stdio has NO auth (implicit trust via process boundary). Bearer token for localhost HTTP is correct.
+3. **MCP spec has NO native per-tool authorization.** Must override `ServerHandler::call_tool()` to intercept tool name before dispatch to `tool_router`.
+4. **`tower::limit::RateLimitLayer` is BROKEN with axum** (clones don't share counts). Use `tower-governor` with `GovernorConfigBuilder` + custom `KeyExtractor` instead.
+5. **rmcp 0.16.0** adds task lifecycle (SEP-1686) — consider upgrading from v0.15.0 during Phase 1.
 
 ---
 
@@ -851,11 +861,29 @@ Expected: PASS (after adding `pub mod rbac;` to `mcp/mod.rs`)
 
 **Step 3: Integrate RBAC into auth middleware**
 
-This is deferred to implementation time — depends on how tool names can be extracted from MCP requests before they reach the handler. The two approaches:
-1. **Middleware approach:** Parse the MCP JSON-RPC request body to extract tool name pre-dispatch.
-2. **Per-tool approach:** Pass caller tier into each tool handler via request extensions.
+Override `ServerHandler::call_tool()` to check RBAC before dispatching:
 
-Choose approach at implementation time based on rmcp API.
+```rust
+// In the #[tool_handler] impl:
+async fn call_tool(
+    &self,
+    context: RequestContext<RoleServer>,
+    request: CallToolRequestParam,
+) -> Result<CallToolResult, McpError> {
+    let required = rbac::required_tier(&request.name);
+    // For now, all local callers get operator tier.
+    // In Phase 1, extract tier from auth token in context.
+    let caller_tier = rbac::Tier::Operator;
+    if !caller_tier.has_permission(required) {
+        return Ok(CallToolResult::success(vec![Content::text(
+            format!("Permission denied: tool '{}' requires {} tier", request.name, required)
+        )]));
+    }
+    self.tool_router.call_tool(self, context, request).await
+}
+```
+
+**Note:** The exact `call_tool` signature depends on rmcp version. Check `ServerHandler` trait docs at implementation time. The key insight from research: rmcp's `#[tool_handler]` macro generates a default `call_tool` that delegates to `tool_router` — we override this to add our check.
 
 **Step 4: Run check + test + clippy**
 
@@ -893,32 +921,43 @@ This is the simplest audit logging — caller identity can be enhanced once RBAC
 
 For now, log tool name + parameters (excluding sensitive data) to stderr via `log::info!`.
 
-**Step 2: Add rate limiting via tower**
+**Step 2: Add rate limiting via tower-governor**
 
-Check if `tower` is already available via `axum`. If not, add to `Cargo.toml`:
+**IMPORTANT:** Do NOT use `tower::limit::RateLimitLayer` — it's broken with axum (clones don't share counts). Use `tower-governor` instead.
+
+Add to `Cargo.toml`:
 
 ```toml
-tower = { version = "0.5", features = ["limit"], optional = true }
+tower-governor = { version = "0.4", optional = true }
 ```
 
 Add to `mcp` feature:
 
 ```toml
-mcp = ["dep:rmcp", "dep:schemars", "dep:axum", "dep:tower"]
+mcp = ["dep:rmcp", "dep:schemars", "dep:axum", "dep:tower-governor"]
 ```
 
 In `run_mcp_server()`, add rate limiting layer:
 
 ```rust
-use tower::limit::RateLimitLayer;
-use std::time::Duration;
+use tower_governor::{GovernorConfigBuilder, GovernorLayer};
+use std::sync::Arc;
+
+// 100 requests per minute, burst of 20
+let governor_conf = Arc::new(
+    GovernorConfigBuilder::default()
+        .per_second(60)   // replenish 1 token every 60 seconds
+        .burst_size(100)  // allow 100 requests in burst
+        .finish()
+        .unwrap()
+);
 
 let router = axum::Router::new()
     .nest_service("/mcp", mcp_service)
-    .layer(RateLimitLayer::new(100, Duration::from_secs(60))); // 100 req/min
+    .layer(GovernorLayer { config: governor_conf });
 ```
 
-**Note:** Exact rate limiting strategy depends on axum + rmcp compatibility. Per-tool rate limits may need to be implemented inside handlers rather than as middleware. Determine at implementation time.
+**Note:** `GovernorLayer` applies globally. For per-tool limits, check inside `call_tool()` override (Task 7). `into_make_service_with_connect_info::<SocketAddr>()` is needed for IP-based extraction but may conflict with rmcp — verify at implementation time.
 
 **Step 3: Run check + test**
 
@@ -1462,12 +1501,22 @@ struct McpArgs {
 
 **Step 2: Implement stdio MCP server**
 
-Add to `crates/bubbaloop/src/mcp/mod.rs`:
+First, add the `transport-io` feature to rmcp in `Cargo.toml`:
+
+```toml
+rmcp = { version = "0.15", features = ["server", "macros", "transport-streamable-http-server", "transport-io"] }
+```
+
+Then add to `crates/bubbaloop/src/mcp/mod.rs`:
 
 ```rust
+use rmcp::ServiceExt;
+
 /// Run MCP server on stdio (stdin/stdout).
 ///
 /// Logs go to a file (not stderr, which would corrupt the MCP protocol).
+/// No authentication on stdio — process boundary provides implicit trust
+/// (per MCP spec: "STDIO transport SHOULD NOT use OAuth 2.1").
 pub async fn run_mcp_stdio(
     session: Arc<Session>,
     node_manager: Arc<NodeManager>,
@@ -1480,15 +1529,15 @@ pub async fn run_mcp_stdio(
         session, node_manager, agent, scope, machine_id,
     );
 
-    // rmcp provides stdio transport
-    let transport = rmcp::transport::stdio();
-    server.serve(transport).await?;
+    // rmcp stdio transport: reads JSON-RPC from stdin, writes to stdout
+    let service = server.serve(rmcp::transport::io::stdio()).await?;
+    service.waiting().await?;
 
     Ok(())
 }
 ```
 
-**Note:** The exact rmcp stdio API needs verification at implementation time. Check rmcp docs for `StdioTransport` or similar.
+**Verified API:** `rmcp::transport::io::stdio()` returns `(Stdin, Stdout)`. The `.serve()` method comes from `rmcp::ServiceExt` trait. `.waiting()` blocks until the service shuts down.
 
 **Step 3: Wire up in main**
 
