@@ -30,13 +30,29 @@ import {
   savePanelOrder,
   generatePanelId,
 } from '../lib/storage';
+import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 
 interface DashboardProps {
   cameras: Array<{ name: string; topic: string }>;
   availableTopics?: Array<{ display: string; raw: string }>;
 }
 
-export function Dashboard({ cameras: initialCameras, availableTopics = [] }: DashboardProps) {
+export function Dashboard({ cameras: initialCameras, availableTopics: staticTopics = [] }: DashboardProps) {
+  const { getDiscoveredTopics } = useZenohSubscriptionContext();
+  const [discoveredTopics, setDiscoveredTopics] = useState<string[]>([]);
+
+  // Poll for discovered topics (they grow as messages arrive)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const topics = getDiscoveredTopics();
+      setDiscoveredTopics(topics);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [getDiscoveredTopics]);
+
+  // Combine static topics with discovered topics
+  const availableTopics = [...new Set([...staticTopics, ...discoveredTopics])].sort();
+
   // Initialize panels from localStorage or props
   const [panels, setPanels] = useState<PanelConfig[]>(() => {
     const stored = loadPanels();

@@ -53,7 +53,7 @@ impl TestHarness {
             "test-machine".to_string(),
         );
 
-        let (server_transport, client_transport) = tokio::io::duplex(8192);
+        let (server_transport, client_transport) = tokio::io::duplex(65536);
 
         let server_handle = tokio::spawn(async move {
             server.serve(server_transport).await?.waiting().await?;
@@ -96,7 +96,11 @@ impl TestHarness {
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: tool_name.to_string().into(),
-                arguments: Some(args.as_object().unwrap().clone()),
+                arguments: Some(
+                    args.as_object()
+                        .expect("call_with_args requires a JSON object")
+                        .clone(),
+                ),
                 task: None,
             })
             .await
