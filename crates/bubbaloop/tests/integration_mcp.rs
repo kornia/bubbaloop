@@ -521,3 +521,278 @@ async fn get_node_logs_existing() {
 
     h.shutdown().await.unwrap();
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Error / negative-path tests
+// ════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn start_node_nonexistent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "start_node",
+            serde_json::json!({"node_name": "ghost-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Error:") && text.contains("not found"),
+        "Expected 'Error:' + 'not found' in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stop_node_nonexistent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "stop_node",
+            serde_json::json!({"node_name": "ghost-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Error:") && text.contains("not found"),
+        "Expected 'Error:' + 'not found' in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn restart_node_nonexistent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "restart_node",
+            serde_json::json!({"node_name": "ghost-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Error:") && text.contains("not found"),
+        "Expected 'Error:' + 'not found' in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn build_node_nonexistent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "build_node",
+            serde_json::json!({"node_name": "ghost-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Error:") && text.contains("not found"),
+        "Expected 'Error:' + 'not found' in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn query_zenoh_invalid_key() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "query_zenoh",
+            serde_json::json!({"key_expr": "other/not-bubbaloop/path"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Validation error") && text.contains("bubbaloop/"),
+        "Expected validation error mentioning 'bubbaloop/' prefix in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn query_zenoh_wildcard_only_rejected() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "query_zenoh",
+            serde_json::json!({"key_expr": "bubbaloop/**"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Validation error") && text.contains("too broad"),
+        "Expected validation error about overly broad query in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_node_config_missing_config() {
+    // Default mock has "test-node" but no config for it
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "get_node_config",
+            serde_json::json!({"node_name": "test-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Error:") && text.contains("not found"),
+        "Expected 'Error:' + 'not found' when config is absent in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn get_node_manifest_existing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "get_node_manifest",
+            serde_json::json!({"node_name": "test-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    // MockPlatform.query_zenoh returns "mock: query <key_expr>"
+    assert!(
+        text.contains("mock: query") && text.contains("test-node") && text.contains("manifest"),
+        "Expected mock zenoh query with manifest key in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_commands_no_commands_available() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "list_commands",
+            serde_json::json!({"node_name": "test-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    // MockPlatform returns non-JSON manifest, so list_commands parses nothing
+    assert!(
+        text.contains("No commands available"),
+        "Expected 'No commands available' when manifest has no commands in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_rule_no_agent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "add_rule",
+            serde_json::json!({
+                "name": "test-rule",
+                "trigger": "bubbaloop/**/telemetry/status",
+                "action": {"type": "log", "message": "triggered"}
+            }),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "Agent not available");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn remove_rule_no_agent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "remove_rule",
+            serde_json::json!({"rule_name": "some-rule"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "Agent not available");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn update_rule_no_agent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "update_rule",
+            serde_json::json!({
+                "name": "test-rule",
+                "trigger": "bubbaloop/**/telemetry/status",
+                "action": {"type": "log", "message": "updated"}
+            }),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "Agent not available");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_rule_no_agent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "test_rule",
+            serde_json::json!({
+                "rule_name": "some-rule",
+                "sample_data": {"cpu_temp": 85}
+            }),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "Agent not available");
+
+    h.shutdown().await.unwrap();
+}
