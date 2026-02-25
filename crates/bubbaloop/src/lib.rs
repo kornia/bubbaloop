@@ -12,6 +12,7 @@ pub mod cli;
 pub mod daemon;
 
 /// TUI (Terminal User Interface)
+#[cfg(feature = "tui")]
 pub mod tui;
 
 /// Template processing for node creation

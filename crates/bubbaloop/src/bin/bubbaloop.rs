@@ -36,7 +36,10 @@ struct Args {
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum Command {
+    #[cfg(feature = "tui")]
     Tui(TuiArgs),
+    #[cfg(not(feature = "tui"))]
+    Tui(TuiStubArgs),
     Status(StatusArgs),
     Doctor(DoctorArgs),
     Daemon(DaemonArgs),
@@ -50,9 +53,16 @@ enum Command {
 }
 
 /// Launch the terminal user interface
+#[cfg(feature = "tui")]
 #[derive(FromArgs)]
 #[argh(subcommand, name = "tui")]
 struct TuiArgs {}
+
+/// Launch the terminal user interface (requires --features tui)
+#[cfg(not(feature = "tui"))]
+#[derive(FromArgs)]
+#[argh(subcommand, name = "tui")]
+struct TuiStubArgs {}
 
 /// Show services status (non-interactive)
 #[derive(FromArgs)]
@@ -233,8 +243,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("\nRun 'bubbaloop <command> --help' for more information.");
             return Ok(());
         }
+        #[cfg(feature = "tui")]
         Some(Command::Tui(_)) => {
             bubbaloop::tui::run().await?;
+        }
+        #[cfg(not(feature = "tui"))]
+        Some(Command::Tui(_)) => {
+            eprintln!("TUI is not enabled. Build with --features tui to use it.");
+            eprintln!("For monitoring, use the dashboard or MCP tools instead.");
+            std::process::exit(1);
         }
         Some(Command::Status(status_args)) => {
             bubbaloop::cli::status::run(&status_args.format).await?;
