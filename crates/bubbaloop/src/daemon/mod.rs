@@ -7,19 +7,16 @@
 //! - Maintains authoritative node state in memory
 //! - Communicates with systemd via D-Bus (native, no shell spawning)
 //! - Publishes state to Zenoh topics (protobuf-encoded)
-//! - Accepts commands via Zenoh queryables
-//! - Provides REST-like API via Zenoh queryables (JSON)
+//! - Provides MCP tools for external access
 //! - Runs as a systemd user service
 
 pub mod node_manager;
 pub mod registry;
 pub mod systemd;
 pub mod util;
-pub mod zenoh_api;
 pub mod zenoh_service;
 
 pub use node_manager::NodeManager;
-pub use zenoh_api::run_zenoh_api_server;
 pub use zenoh_service::{create_session, ZenohService};
 
 /// Run the daemon with the given configuration.
@@ -132,16 +129,6 @@ pub async fn run(
         log::warn!("Failed to start health monitor: {}", e);
     }
 
-    // Start Zenoh API service (REST-like queryables with JSON responses)
-    let api_manager = node_manager.clone();
-    let api_session = session.clone();
-    let api_shutdown = shutdown_rx.clone();
-    let api_task = tokio::spawn(async move {
-        if let Err(e) = run_zenoh_api_server(api_session, api_manager, api_shutdown).await {
-            log::error!("Zenoh API service error: {}", e);
-        }
-    });
-
     // Start agent rule engine
     let agent = Arc::new(crate::agent::Agent::new(
         session.clone(),
@@ -184,7 +171,6 @@ pub async fn run(
 
     log::info!("Bubbaloop daemon running. Press Ctrl+C to exit.");
     log::info!("  Zenoh pub/sub topics: bubbaloop/daemon/*");
-    log::info!("  Zenoh API queryables: bubbaloop/daemon/api/*");
     log::info!("  Agent rule engine: active");
     #[cfg(feature = "mcp")]
     log::info!(
@@ -199,7 +185,6 @@ pub async fn run(
     zenoh_service.run(shutdown_rx).await?;
 
     // Abort services
-    api_task.abort();
     agent_task.abort();
 
     // Abort MCP server
