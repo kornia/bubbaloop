@@ -643,10 +643,10 @@ async fn get_node_manifest_existing() {
         .unwrap();
     let text = result_text(&result);
 
-    // MockPlatform.query_zenoh returns "mock: query <key_expr>"
+    // get_node_manifest now reads from cached manifests via get_manifests()
     assert!(
-        text.contains("mock: query") && text.contains("test-node") && text.contains("manifest"),
-        "Expected mock zenoh query with manifest key in: {}",
+        text.contains("test-node") && text.contains("sensor"),
+        "Expected manifest with node name and capability in: {}",
         text
     );
 
