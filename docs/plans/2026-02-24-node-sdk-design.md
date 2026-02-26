@@ -1,7 +1,7 @@
 # Node SDK Design Document
 
 **Date:** 2026-02-24
-**Status:** Draft
+**Status:** Shipped (implemented at crates/bubbaloop-node-sdk/)
 **Authors:** Edgar Riba + Claude
 
 ## Goal

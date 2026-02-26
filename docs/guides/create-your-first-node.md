@@ -20,39 +20,54 @@ This creates:
 
 ```
 my-sensor/
-  Cargo.toml         # Standalone crate with bubbaloop-schemas dependency
+  Cargo.toml         # Depends on bubbaloop-node-sdk + bubbaloop-schemas
   node.yaml          # Node manifest
   pixi.toml          # Build environment
-  .cargo/config.toml # Local target directory
-  config.yaml        # Runtime configuration
+  config.yaml        # Runtime configuration (publish_topic, rate_hz)
+  build.rs           # Proto compilation
   src/
-    main.rs          # Entry point with CLI args and shutdown handling
-    node.rs          # Node logic (edit this)
+    main.rs          # Node trait impl + run_node() (edit this)
 ```
 
 ## Step 2: Implement Your Logic
 
-Edit `src/node.rs`. The generated scaffold provides a basic pub/sub structure.
-
-To use Bubbaloop protobuf types (e.g., for publishing camera-compatible messages):
+Edit `src/main.rs`. The generated scaffold uses the Node SDK — you only implement `init()` and `run()`:
 
 ```rust
-use bubbaloop_schemas::Header;
-use prost::Message;
+use bubbaloop_node_sdk::{Node, NodeContext};
 
-fn create_header(sequence: u64, node_name: &str) -> Header {
-    Header {
-        acq_time: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0),
-        pub_time: 0,
-        sequence,
-        frame_id: node_name.to_string(),
-        ..Default::default()
+#[async_trait::async_trait]
+impl Node for MySensorNode {
+    type Config = Config;
+    fn name() -> &'static str { "my-sensor" }
+    fn descriptor() -> &'static [u8] { DESCRIPTOR }
+
+    async fn init(ctx: &NodeContext, config: &Config) -> anyhow::Result<Self> {
+        let topic = ctx.topic(&format!("{}/{}", Self::name(), config.publish_topic));
+        let publisher = ctx.session.declare_publisher(&topic).await
+            .map_err(|e| anyhow::anyhow!("Publisher: {e}"))?;
+        Ok(Self { publisher, rate_hz: config.rate_hz })
+    }
+
+    async fn run(self, ctx: NodeContext) -> anyhow::Result<()> {
+        let mut shutdown_rx = ctx.shutdown_rx.clone();
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs_f64(1.0 / self.rate_hz));
+        loop {
+            tokio::select! {
+                biased;
+                _ = shutdown_rx.changed() => break,
+                _ = tick.tick() => {
+                    // YOUR SENSOR LOGIC HERE
+                    self.publisher.put(data).await.ok();
+                }
+            }
+        }
+        Ok(())
     }
 }
 ```
+
+The SDK automatically handles: Zenoh session, health heartbeat, schema queryable, config loading, signal handling, and logging. You focus on your sensor logic.
 
 Nodes publish using vanilla Zenoh topics with the standard format:
 
@@ -126,7 +141,8 @@ The `bubbaloop-schemas` crate provides these protobuf types:
 
 ## Next Steps
 
-- Add health heartbeats (publish to `bubbaloop/{scope}/{machine_id}/health/{node-name}`)
-- Add configuration via `config.yaml`
-- Add service dependencies in `node.yaml` with `depends_on`
+- The SDK handles health heartbeats automatically — no manual setup needed
+- Add custom protobuf messages in `protos/` and reference them in `run()`
+- Add node-specific config fields to your `Config` struct and `config.yaml`
+- See [Skillet Development Guide](../skillet-development.md) for the full SDK reference
 - See [Node Marketplace](node-marketplace.md) for publishing to the community

@@ -12,6 +12,7 @@ Physical AI orchestration built on Zenoh. Single binary: CLI + daemon + MCP serv
 
 ```
 crates/bubbaloop/          # Main binary (CLI + daemon + MCP server)
+crates/bubbaloop-node-sdk/ # Node SDK (standalone, NOT in workspace — batteries-included framework)
 crates/bubbaloop-schemas/  # Protobuf schemas (standalone, NOT in workspace — never add to workspace)
 dashboard/                 # React + Vite + TypeScript
 ```
@@ -25,6 +26,20 @@ Key source files in `crates/bubbaloop/src/`:
 - `registry.rs` — marketplace fetch/parse/cache, `find_curl()`
 - `mcp/mod.rs` — MCP tools, BubbaLoopMcpServer<P>, ServerHandler impl
 - `mcp/platform.rs` — PlatformOperations trait, DaemonPlatform, MockPlatform
+
+### Node SDK (`crates/bubbaloop-node-sdk/`)
+
+Batteries-included framework for writing nodes. Reduces boilerplate from ~300 to ~50 lines.
+- `lib.rs` — `Node` trait, `run_node()`, re-exports (zenoh, prost, tokio, anyhow, log)
+- `context.rs` — `NodeContext` (session, scope, machine_id, shutdown_rx, `topic()` helper)
+- `config.rs` — Generic YAML config loading
+- `zenoh_session.rs` — Client-mode Zenoh session (scouting disabled)
+- `health.rs` — Background health heartbeat (5s interval)
+- `schema.rs` — Schema queryable (FileDescriptorSet serving)
+- `shutdown.rs` — SIGINT/SIGTERM signal handling via watch channel
+
+Standalone crate (NOT in workspace). Nodes depend via git:
+`bubbaloop-node-sdk = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }`
 
 Nodes repo: [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official)
 

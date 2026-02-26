@@ -2,21 +2,27 @@
 
 Create custom nodes for Bubbaloop in Rust or Python. Nodes connect to the Zenoh pub/sub network to publish sensor data, process messages, or integrate with external services.
 
-## Quick Start
+## Quick Start (Recommended: Node SDK)
 
-### Option 1: Using CLI (Recommended)
+The Node SDK handles all boilerplate. You write ~50 lines of business logic:
 
 ```bash
+# Scaffold
 bubbaloop node init my-sensor --type rust -d "My custom sensor"
 cd my-sensor
-cargo build --release
+
+# Edit src/main.rs — implement Node trait (init + run)
+# Build and register
+pixi run build
 bubbaloop node add .
 bubbaloop node start my-sensor
 ```
 
-### Option 2: Manual Setup (This Guide)
+See the [Skillet Development Guide](skillet-development.md#node-sdk-recommended) for the full SDK reference.
 
-Create files manually following the patterns below.
+### Manual Setup (Advanced)
+
+For cases where you need full control over the Zenoh lifecycle:
 
 ---
 

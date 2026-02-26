@@ -14,6 +14,8 @@ A skillet is an autonomous process that:
 
 Skillets run as systemd user services managed by the bubbaloop daemon. They can run on any machine — the daemon scopes all topics by `scope` and `machine_id` for multi-machine deployments.
 
+> **Recommended:** Use the [Node SDK](#node-sdk-recommended) to create Rust skillets with ~50 lines of code. The manual approach below is for advanced use cases or Python nodes.
+
 ## Anatomy of a Skillet
 
 ### Required Components
@@ -997,9 +999,9 @@ if not (0.01 <= rate_hz <= 1000.0):
 - Never store secrets in `config.yaml` — use environment variables
 - Validate external endpoints (URL format, TLS certificates, timeout enforcement)
 
-## Future: Node SDK
+## Node SDK (Recommended)
 
-The planned `bubbaloop-node-sdk` crate will reduce Rust skillet boilerplate from ~300 lines to ~50 lines. It will provide:
+The `bubbaloop-node-sdk` crate reduces Rust skillet boilerplate from ~300 lines to ~50 lines. It provides:
 
 - Automatic Zenoh session creation (client mode, enforced)
 - Automatic health heartbeat publishing (5s interval)
@@ -1065,6 +1067,49 @@ impl Node for MySensor {
 async fn main() -> Result<()> {
     bubbaloop_node_sdk::run_node::<MySensor>().await
 }
+```
+
+### SDK Quick Start
+
+```bash
+# 1. Scaffold a new node
+bubbaloop node init my-sensor --type rust -d "My custom sensor"
+
+# 2. Edit src/main.rs — implement init() and run()
+#    The SDK handles everything else automatically
+
+# 3. Build and register
+pixi run build
+bubbaloop node add .
+bubbaloop node start my-sensor
+```
+
+### What the SDK Handles Automatically
+
+| Component | Lines saved | What it does |
+|-----------|-------------|--------------|
+| Zenoh session | ~15 lines | Client mode, endpoint resolution, scouting disabled |
+| Health heartbeat | ~15 lines | 5s interval publish to health topic |
+| Schema queryable | ~12 lines | Serves FileDescriptorSet, no `.complete(true)` |
+| Config loading | ~15 lines | YAML deserialization with clear errors |
+| Signal handling | ~8 lines | SIGINT/SIGTERM via watch channel |
+| CLI arguments | ~15 lines | `-c config.yaml -e endpoint` |
+| Scope resolution | ~6 lines | BUBBALOOP_SCOPE + BUBBALOOP_MACHINE_ID |
+| **Total saved** | **~86 lines** | Per node, automatically correct |
+
+### Cargo.toml for SDK-Based Nodes
+
+```toml
+[dependencies]
+bubbaloop-node-sdk = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
+bubbaloop-schemas = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
+prost = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+
+[build-dependencies]
+prost-build = "0.14"
+
+[workspace]
 ```
 
 **Current status:** Design document completed at `/home/nvidia/bubbaloop/docs/plans/2026-02-24-node-sdk-design.md`. Implementation pending.

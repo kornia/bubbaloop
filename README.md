@@ -47,8 +47,10 @@ bubbaloop node logs my-node -f        # Follow logs
 ## Node Lifecycle
 
 ```bash
-# 1. Create a new node
+# 1. Create a new node (generates SDK-based scaffold)
 bubbaloop node init my-sensor --node-type rust
+# Edit src/main.rs — implement Node trait (init + run)
+# The SDK handles Zenoh session, health, schema, config, shutdown
 
 # 2. Register with daemon
 bubbaloop node add ./my-sensor
