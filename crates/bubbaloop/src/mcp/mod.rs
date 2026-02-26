@@ -71,6 +71,13 @@ struct QueryTopicRequest {
     key_expr: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DiscoverCapabilitiesParams {
+    /// Filter by capability type: "sensor", "actuator", "processor", "gateway". Omit for all.
+    #[serde(default)]
+    capability: Option<String>,
+}
+
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
@@ -170,7 +177,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Get the manifest (self-description) of a node including its capabilities, published topics, commands, and hardware requirements."
+        description = "Get the full manifest for a node, including capabilities, published topics, commands, and hardware requirements."
     )]
     async fn get_node_manifest(
         &self,
@@ -180,12 +187,21 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
-        let key_expr = format!(
-            "bubbaloop/{}/{}/{}/manifest",
-            self.scope, self.machine_id, req.node_name
-        );
-        match self.platform.query_zenoh(&key_expr).await {
-            Ok(result) => Ok(CallToolResult::success(vec![Content::text(result)])),
+        match self.platform.get_manifests(None).await {
+            Ok(manifests) => {
+                let found = manifests
+                    .into_iter()
+                    .find(|(name, _)| name == &req.node_name);
+                match found {
+                    Some((_name, manifest)) => Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+                    )])),
+                    None => Ok(CallToolResult::success(vec![Content::text(format!(
+                        "No manifest found for node '{}'",
+                        req.node_name
+                    ))])),
+                }
+            }
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: {}",
                 e
@@ -418,6 +434,75 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
+    #[tool(
+        description = "Discover available node capabilities. Returns nodes grouped by capability type (sensor, actuator, processor, gateway). Optionally filter by a single capability type."
+    )]
+    async fn discover_capabilities(
+        &self,
+        Parameters(params): Parameters<DiscoverCapabilitiesParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=discover_capabilities filter={:?}",
+            params.capability
+        );
+        match self
+            .platform
+            .get_manifests(params.capability.as_deref())
+            .await
+        {
+            Ok(manifests) => {
+                // Group nodes by capability type
+                let mut grouped: std::collections::HashMap<String, Vec<serde_json::Value>> =
+                    std::collections::HashMap::new();
+
+                for (name, manifest) in &manifests {
+                    let capabilities = manifest
+                        .get("capabilities")
+                        .and_then(|c| c.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+
+                    if capabilities.is_empty() {
+                        grouped
+                            .entry("uncategorized".to_string())
+                            .or_default()
+                            .push(serde_json::json!({
+                                "name": name,
+                                "description": manifest.get("description").and_then(|d| d.as_str()).unwrap_or(""),
+                                "version": manifest.get("version").and_then(|v| v.as_str()).unwrap_or(""),
+                            }));
+                    } else {
+                        for cap in &capabilities {
+                            let cap_str = cap.as_str().unwrap_or("unknown").to_string();
+                            grouped
+                                .entry(cap_str)
+                                .or_default()
+                                .push(serde_json::json!({
+                                    "name": name,
+                                    "description": manifest.get("description").and_then(|d| d.as_str()).unwrap_or(""),
+                                    "version": manifest.get("version").and_then(|v| v.as_str()).unwrap_or(""),
+                                    "publishes": manifest.get("publishes").cloned().unwrap_or(serde_json::json!([])),
+                                    "commands": manifest.get("commands").cloned().unwrap_or(serde_json::json!([])),
+                                }));
+                        }
+                    }
+                }
+
+                let result = serde_json::json!({
+                    "total_nodes": manifests.len(),
+                    "capabilities": grouped,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()),
+                )]))
+            }
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
     // ── Additional tools ───────────────────────────────────────────
 
     #[tool(
@@ -552,11 +637,13 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
             server_info: Implementation::from_build_env(),
             instructions: Some(
                 "Bubbaloop skill runtime for AI agents. Controls physical sensor nodes via MCP.\n\n\
-                 **Discovery:** list_nodes → get_node_health → get_node_schema → get_stream_info\n\
+                 **Discovery:** list_nodes, get_node_health, get_node_schema, get_stream_info, discover_capabilities\n\
                  **Lifecycle:** start_node, stop_node, restart_node, build_node\n\
                  **Data:** send_command, get_stream_info (returns Zenoh topic for streaming)\n\
                  **Config:** get_node_config, get_node_manifest, list_commands\n\
                  **System:** get_system_status, get_machine_info, query_zenoh, discover_nodes\n\n\
+                 Use discover_capabilities to find nodes by capability (sensor, actuator, processor, gateway).\n\
+                 Use get_node_manifest for full node details including topics, commands, and requirements.\n\
                  Streaming data flows through Zenoh (not MCP). Use get_stream_info to get Zenoh connection params.\n\
                  Auth: Bearer token required (see ~/.bubbaloop/mcp-token)."
                     .into(),

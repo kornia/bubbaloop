@@ -610,6 +610,22 @@ impl NodeManager {
         }
     }
 
+    /// Get cached manifests from all registered nodes.
+    ///
+    /// Returns `(effective_name, NodeManifest)` for every node that has a manifest.
+    /// Uses the static manifests loaded from `node.yaml` at registration time.
+    pub async fn get_cached_manifests(&self) -> Vec<(String, NodeManifest)> {
+        let nodes = self.nodes.read().await;
+        nodes
+            .values()
+            .filter_map(|n| {
+                n.manifest
+                    .as_ref()
+                    .map(|m| (n.effective_name(), m.clone()))
+            })
+            .collect()
+    }
+
     /// Get a single node's state
     pub async fn get_node(&self, name: &str) -> Option<NodeState> {
         let nodes = self.nodes.read().await;

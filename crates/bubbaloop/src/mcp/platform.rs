@@ -75,6 +75,15 @@ pub trait PlatformOperations: Send + Sync + 'static {
         key_expr: &str,
         payload: Vec<u8>,
     ) -> impl std::future::Future<Output = PlatformResult<Vec<String>>> + Send;
+
+    /// Get cached manifests from registered nodes, optionally filtered by capability.
+    ///
+    /// Returns `(node_name, manifest_json)` pairs. When `capability_filter` is set,
+    /// only nodes whose manifest contains the matching capability are returned.
+    fn get_manifests(
+        &self,
+        capability_filter: Option<&str>,
+    ) -> impl std::future::Future<Output = PlatformResult<Vec<(String, Value)>>> + Send;
 }
 
 // ── DaemonPlatform: real implementation backed by NodeManager + Zenoh ────
@@ -225,6 +234,37 @@ impl PlatformOperations for DaemonPlatform {
             ))),
         }
     }
+
+    async fn get_manifests(
+        &self,
+        capability_filter: Option<&str>,
+    ) -> PlatformResult<Vec<(String, Value)>> {
+        let cached = self.node_manager.get_cached_manifests().await;
+        let results: Vec<(String, Value)> = cached
+            .into_iter()
+            .filter(|(_name, manifest)| {
+                if let Some(filter) = capability_filter {
+                    // Match capability by its serde-serialized snake_case name
+                    let filter_lower = filter.to_lowercase();
+                    manifest.capabilities.iter().any(|cap| {
+                        let cap_str =
+                            serde_json::to_value(cap)
+                                .ok()
+                                .and_then(|v| v.as_str().map(String::from));
+                        cap_str.map(|s| s == filter_lower).unwrap_or(false)
+                    })
+                } else {
+                    true
+                }
+            })
+            .filter_map(|(name, manifest)| {
+                serde_json::to_value(&manifest)
+                    .ok()
+                    .map(|v| (name, v))
+            })
+            .collect();
+        Ok(results)
+    }
 }
 
 /// Query a Zenoh key expression and return text results.
@@ -281,6 +321,7 @@ pub mod mock {
     pub struct MockPlatform {
         pub nodes: Mutex<Vec<NodeInfo>>,
         pub configs: Mutex<HashMap<String, Value>>,
+        pub manifests: Mutex<Vec<(String, Value)>>,
     }
 
     impl Default for MockPlatform {
@@ -301,6 +342,19 @@ pub mod mock {
                     is_built: true,
                 }]),
                 configs: Mutex::new(HashMap::new()),
+                manifests: Mutex::new(vec![(
+                    "test-node".to_string(),
+                    serde_json::json!({
+                        "name": "test-node",
+                        "version": "1.0.0",
+                        "type": "rust",
+                        "description": "A test node",
+                        "capabilities": ["sensor"],
+                        "publishes": [],
+                        "subscribes": [],
+                        "commands": [],
+                    }),
+                )]),
             }
         }
     }
@@ -348,6 +402,35 @@ pub mod mock {
         ) -> PlatformResult<Vec<String>> {
             Ok(vec![format!("mock: zenoh_query {}", key_expr)])
         }
+
+        async fn get_manifests(
+            &self,
+            capability_filter: Option<&str>,
+        ) -> PlatformResult<Vec<(String, Value)>> {
+            let all = self.manifests.lock().unwrap().clone();
+            let results = all
+                .into_iter()
+                .filter(|(_name, manifest)| {
+                    if let Some(filter) = capability_filter {
+                        let filter_lower = filter.to_lowercase();
+                        manifest
+                            .get("capabilities")
+                            .and_then(|c| c.as_array())
+                            .map(|caps| {
+                                caps.iter().any(|cap| {
+                                    cap.as_str()
+                                        .map(|s| s.to_lowercase() == filter_lower)
+                                        .unwrap_or(false)
+                                })
+                            })
+                            .unwrap_or(false)
+                    } else {
+                        true
+                    }
+                })
+                .collect();
+            Ok(results)
+        }
     }
 }
 
@@ -365,6 +448,7 @@ mod tests {
     fn mock_with_nodes(nodes: Vec<NodeInfo>) -> MockPlatform {
         MockPlatform {
             nodes: Mutex::new(nodes),
+            manifests: Mutex::new(Vec::new()),
             configs: Mutex::new(HashMap::new()),
         }
     }
@@ -801,6 +885,7 @@ mod tests {
             "get_system_status",
             "get_machine_info",
             "get_node_schema",
+            "discover_capabilities",
         ];
         for tool in &viewer_tools {
             assert_eq!(

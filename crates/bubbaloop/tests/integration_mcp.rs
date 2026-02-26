@@ -138,6 +138,7 @@ fn mock_with_nodes(nodes: Vec<NodeInfo>) -> MockPlatform {
     MockPlatform {
         nodes: Mutex::new(nodes),
         configs: Mutex::new(HashMap::new()),
+        manifests: Mutex::new(Vec::new()),
     }
 }
 

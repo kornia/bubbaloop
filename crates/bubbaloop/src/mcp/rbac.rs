@@ -53,7 +53,8 @@ pub fn required_tier(tool_name: &str) -> Tier {
         // Viewer tools (read-only)
         "list_nodes" | "get_node_health" | "get_node_schema" | "get_stream_info"
         | "list_topics" | "get_system_status" | "get_machine_info" | "doctor"
-        | "discover_nodes" | "get_node_manifest" | "list_commands" => Tier::Viewer,
+        | "discover_nodes" | "get_node_manifest" | "list_commands"
+        | "discover_capabilities" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
         "start_node" | "stop_node" | "restart_node" | "get_node_config" | "set_node_config"
