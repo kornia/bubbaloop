@@ -2,6 +2,51 @@
 
 > A "skillet" is a self-describing sensor or actuator capability in bubbaloop. Historically called "nodes", skillets are the core building blocks of the platform.
 
+## Where Nodes Live
+
+**Every node is its own Git repository.** Nodes are never embedded in the main bubbaloop repo.
+
+| Location | What | Who |
+|----------|------|-----|
+| `your-username/my-sensor` (GitHub) | Your node source code | You — any contributor |
+| [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official) | Official maintained nodes (rtsp-camera, openmeteo, etc.) | Kornia team |
+| `~/.bubbaloop/nodes/` (local) | Cloned/registered node source on your machine | `bubbaloop node add` |
+
+**Why separate repos?**
+
+- Nodes have their own release cadence — ship updates without waiting for bubbaloop releases
+- Each node declares its own dependencies (Cargo.toml) — no workspace coupling
+- Contributors fork/clone a single small repo, not the entire platform
+- The marketplace discovers nodes by GitHub repo — each repo = one installable node
+
+**What about `crates/bubbaloop-nodes/`?** That directory in the main repo contains only stale build artifacts from an earlier era when nodes were embedded. It is gitignored and will be removed. **Never put node source code there.**
+
+**Development workflow:**
+
+```bash
+# 1. Create a new node (anywhere on disk)
+mkdir ~/my-nodes && cd ~/my-nodes
+bubbaloop node init my-sensor --type rust -d "My sensor"
+cd my-sensor
+
+# 2. Develop locally
+# Edit src/main.rs — implement Node trait
+pixi run build
+pixi run run   # test against local zenohd
+
+# 3. Register with local daemon
+bubbaloop node add .
+bubbaloop node build my-sensor
+bubbaloop node start my-sensor
+
+# 4. Publish to GitHub
+git init && git add -A && git commit -m "Initial commit"
+gh repo create my-sensor --public --push --source .
+
+# 5. Others install your node
+bubbaloop node add your-username/my-sensor --build --install
+```
+
 ## What is a Skillet?
 
 A skillet is an autonomous process that:

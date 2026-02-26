@@ -389,4 +389,4 @@ bubbaloop debug topics       # List active topics
 
 - [Troubleshooting](troubleshooting.md) — Common issues and solutions
 - [Configuration](../getting-started/configuration.md) — Config file reference
-- [Node Marketplace](../guides/node-marketplace.md) — Marketplace guide
+- [Skillet Development](../skillet-development.md) — Node development and publishing guide

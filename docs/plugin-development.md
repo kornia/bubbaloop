@@ -7,12 +7,12 @@ Create custom nodes for Bubbaloop in Rust or Python. Nodes connect to the Zenoh 
 The Node SDK handles all boilerplate. You write ~50 lines of business logic:
 
 ```bash
-# Scaffold
+# Scaffold a new node (works from any directory - nodes are standalone repos)
 bubbaloop node init my-sensor --type rust -d "My custom sensor"
 cd my-sensor
 
 # Edit src/main.rs — implement Node trait (init + run)
-# Build and register
+# Build and register with bubbaloop
 pixi run build
 bubbaloop node add .
 bubbaloop node start my-sensor
@@ -327,24 +327,35 @@ mcp:
 
 ## Integration with Bubbaloop
 
+Nodes are developed as **standalone repositories** outside the bubbaloop tree. After building, register them with bubbaloop:
+
 ### Option 1: Run Standalone
 
 ```bash
 # Start Bubbaloop
 pixi run up
 
-# Run your plugin (separate terminal)
-./my-plugin -e tcp/localhost:7447
+# Run your node from its own directory (separate terminal)
+cd /path/to/my-node
+./target/release/my-node -e tcp/localhost:7447
 ```
 
-### Option 2: Add to Launch File
+### Option 2: Register with Bubbaloop
+
+```bash
+# From your node's directory
+bubbaloop node add .
+bubbaloop node start my-node
+```
+
+### Option 3: Add to Launch File
 
 ```yaml
 # launch/my-config.launch.yaml
 nodes:
   my_plugin:
-    external: ~/.bubbaloop/plugins/my-plugin
-    binary: my-plugin           # For Rust
+    external: /path/to/my-node
+    binary: my-node           # For Rust
     # type: python              # For Python
     # entry: main.py
     config: ./config.yaml

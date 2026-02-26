@@ -9,6 +9,17 @@ This guide walks you through creating a custom Bubbaloop node that publishes dat
 - `zenohd` running locally
 - `bubbaloop` CLI built and in your PATH
 
+## Where to Create Your Node
+
+**Every node is its own Git repository**, separate from the main bubbaloop repo. Create it anywhere on your filesystem:
+
+```bash
+# Pick any directory — your home, a projects folder, etc.
+mkdir ~/my-nodes && cd ~/my-nodes
+```
+
+Your node will depend on `bubbaloop-node-sdk` and `bubbaloop-schemas` via Git (not local paths). This means you can develop, build, and publish independently.
+
 ## Step 1: Scaffold
 
 ```bash
@@ -145,4 +156,4 @@ The `bubbaloop-schemas` crate provides these protobuf types:
 - Add custom protobuf messages in `protos/` and reference them in `run()`
 - Add node-specific config fields to your `Config` struct and `config.yaml`
 - See [Skillet Development Guide](../skillet-development.md) for the full SDK reference
-- See [Node Marketplace](node-marketplace.md) for publishing to the community
+- Push to GitHub and others can install with `bubbaloop node add your-username/my-sensor`
