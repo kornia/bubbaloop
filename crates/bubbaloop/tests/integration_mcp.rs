@@ -161,6 +161,8 @@ async fn list_tools_returns_expected_tools() {
     assert!(tool_names.contains(&"start_node".to_string()));
     assert!(tool_names.contains(&"stop_node".to_string()));
     assert!(tool_names.contains(&"query_zenoh".to_string()));
+    assert!(tool_names.contains(&"install_node".to_string()));
+    assert!(tool_names.contains(&"remove_node".to_string()));
 
     h.shutdown().await.unwrap();
 }
@@ -669,6 +671,168 @@ async fn list_commands_no_commands_available() {
     assert!(
         text.contains("No commands available"),
         "Expected 'No commands available' when manifest has no commands in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+// ── install_node tests ──────────────────────────────────────────────────
+
+#[tokio::test]
+async fn install_node_valid_source() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "install_node",
+            serde_json::json!({"source": "/path/to/my-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("installed") && text.contains("/path/to/my-node"),
+        "Expected mock install success in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn install_node_github_shorthand() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "install_node",
+            serde_json::json!({"source": "kornia/bubbaloop-nodes-official"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("installed"),
+        "Expected mock install success for GitHub shorthand in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn install_node_empty_source_rejected() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args("install_node", serde_json::json!({"source": ""}))
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Error") && text.contains("empty"),
+        "Expected empty source error in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn install_node_shell_metacharacters_rejected() {
+    let h = TestHarness::new().await;
+
+    for bad_source in &["foo;rm -rf /", "foo|bar", "foo&bar"] {
+        let result = h
+            .call_with_args(
+                "install_node",
+                serde_json::json!({"source": bad_source}),
+            )
+            .await
+            .unwrap();
+        let text = result_text(&result);
+
+        assert!(
+            text.contains("Error") && text.contains("invalid characters"),
+            "Expected invalid characters error for '{}' in: {}",
+            bad_source,
+            text
+        );
+    }
+
+    h.shutdown().await.unwrap();
+}
+
+// ── remove_node tests ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn remove_node_existing() {
+    let h = TestHarness::new().await;
+
+    // Default mock has "test-node" — remove it
+    let result = h
+        .call_with_args(
+            "remove_node",
+            serde_json::json!({"node_name": "test-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("removed") && text.contains("test-node"),
+        "Expected mock remove success in: {}",
+        text
+    );
+
+    // Verify node is actually gone from the mock
+    let list_result = h.call("list_nodes").await.unwrap();
+    let json = result_json(&list_result);
+    let nodes = json.as_array().expect("expected array");
+    assert!(nodes.is_empty(), "Expected no nodes after removal");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn remove_node_nonexistent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "remove_node",
+            serde_json::json!({"node_name": "no-such-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Error"),
+        "Expected error for nonexistent node in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn remove_node_invalid_name_rejected() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "remove_node",
+            serde_json::json!({"node_name": "../etc/passwd"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Node name may only contain")
+            || text.contains("Invalid")
+            || text.contains("Error"),
+        "Expected validation error for invalid node name in: {}",
         text
     );
 
