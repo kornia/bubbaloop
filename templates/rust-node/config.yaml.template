@@ -1,22 +1,8 @@
 # {{node_name}} node configuration
 
 # Topic suffix for published data (full topic: bubbaloop/{scope}/{machine_id}/{{node_name}}/{suffix})
+# Valid characters: a-z, A-Z, 0-9, /, _, -, .
 publish_topic: output
 
-# Topic to subscribe to (optional, comment out to disable)
-# subscribe_topic: /some/input/topic
-
-# Publishing rate in Hz
+# Publishing rate in Hz (valid range: 0.01-1000.0)
 rate_hz: 1.0
-
-# Data classification for security (internal, confidential, public)
-data_classification: internal
-
-# Clock source for timestamp correlation (system_realtime, hardware_clock, ntp_synced)
-clock_source: system_realtime
-
-# Timestamp field path in published messages (for multi-sensor correlation)
-timestamp_field: timestamp
-
-# Timestamp unit (nanoseconds, milliseconds, seconds, iso8601)
-timestamp_unit: milliseconds

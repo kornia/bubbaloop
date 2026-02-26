@@ -1,12 +1,14 @@
 # {{node_name}} node configuration
 
 # Topic suffix for published data (full topic: bubbaloop/{scope}/{machine_id}/{{node_name}}/{suffix})
+# Valid characters: a-z, A-Z, 0-9, /, _, -, .
 publish_topic: output
 
 # Topic to subscribe to (optional, set to null to disable)
+# Valid characters: a-z, A-Z, 0-9, /, _, -, .
 subscribe_topic: null
 
-# Publishing rate in Hz
+# Publishing rate in Hz (valid range: 0.01-1000.0)
 rate_hz: 1.0
 
 # --- Node Manifest (served at {prefix}/manifest) ---

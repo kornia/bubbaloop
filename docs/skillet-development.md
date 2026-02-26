@@ -18,7 +18,7 @@ Skillets run as systemd user services managed by the bubbaloop daemon. They can 
 
 ### Required Components
 
-1. **node.yaml** — Marketplace metadata (name, version, type, description, author, build, command)
+1. **node.yaml** — Marketplace metadata (name, version, type, description, author, build, command, capabilities, publishes, requires)
 2. **config.yaml** — Runtime instance parameters (publish_topic, rate_hz, node-specific fields)
 3. **protos/** — Protobuf schema definitions for messages
 4. **build system** — pixi.toml with build/run tasks
@@ -58,35 +58,26 @@ The manifest is a JSON document served via Zenoh queryable that describes the sk
 {
   "name": "network-monitor",
   "version": "0.2.0",
-  "language": "rust",
+  "type": "python",
   "description": "Network connectivity monitor",
-  "machine_id": "nvidia_orin00",
-  "scope": "local",
-  "capabilities": ["sensor", "health-check"],
-  "requires_hardware": ["network"],
+  "capabilities": ["sensor"],
   "publishes": [
     {
-      "topic_suffix": "network-monitor/status",
-      "full_topic": "bubbaloop/local/nvidia_orin00/network-monitor/status",
-      "message_type": "bubbaloop.network_monitor.NetworkStatus",
+      "suffix": "network-monitor/status",
+      "schema_type": "bubbaloop.network_monitor.NetworkStatus",
       "rate_hz": 0.1,
-      "qos": { "reliability": "best_effort", "durability": "volatile" }
+      "description": "Network health status"
     }
   ],
   "commands": [
     {
       "name": "ping_host",
-      "description": "Ping a specific host and return latency",
-      "parameters": { "host": "string", "count": "integer" },
-      "returns": "object"
+      "description": "Ping a specific host",
+      "parameters": {"host": "string", "count": "integer"}
     }
   ],
-  "schema_key": "bubbaloop/local/nvidia_orin00/network-monitor/schema",
-  "health_key": "bubbaloop/local/nvidia_orin00/network-monitor/health",
-  "config_key": "bubbaloop/local/nvidia_orin00/network-monitor/config",
-  "command_key": "bubbaloop/local/nvidia_orin00/network-monitor/command",
-  "security": {
-    "acl_prefix": "bubbaloop/*/nvidia_orin00/network-monitor/**"
+  "requires": {
+    "hardware": ["network"]
   }
 }
 ```
@@ -793,6 +784,22 @@ build: pixi run build  # Rust: compiles binary; Python: compiles protos
 command: ./target/release/my_sensor_node  # Rust binary path
 # OR for Python:
 # command: pixi run run  # Runs main.py via pixi
+
+# Skill capabilities
+capabilities:
+  - sensor
+
+# Topics this node publishes
+publishes:
+  - suffix: my-sensor/data
+    description: "Temperature and humidity readings"
+    schema_type: "bubbaloop.my_sensor.v1.SensorReading"
+    rate_hz: 1.0
+
+# Hardware/software requirements
+requires:
+  hardware:
+    - network
 ```
 
 **Required fields:**
@@ -803,6 +810,11 @@ command: ./target/release/my_sensor_node  # Rust binary path
 - `author` — Your name or team
 - `build` — Command to build the skillet
 - `command` — Command to run the skillet
+
+**Optional fields:**
+- `capabilities` — List of skill types: `sensor`, `actuator`, `processor`, `gateway`
+- `publishes` — List of topics with suffix, description, schema_type, rate_hz
+- `requires` — Hardware/software dependencies (hardware: network, camera, gpio, etc.)
 
 ## Best Practices
 
@@ -1065,6 +1077,9 @@ Before submitting a new skillet, verify ALL items:
 
 ### Structure
 - [ ] `node.yaml` exists with: name, version, type, description, author, build, command
+- [ ] `node.yaml` has `capabilities` field (sensor/actuator/processor/gateway)
+- [ ] `node.yaml` has `publishes` field with topic suffix, description, schema_type, rate
+- [ ] `node.yaml` has `requires` field for hardware/software dependencies
 - [ ] `config.yaml` exists with: publish_topic, rate_hz, and node-specific fields
 - [ ] `pixi.toml` exists with: build and run tasks
 - [ ] `protos/` directory with `header.proto` and node-specific `.proto` files
