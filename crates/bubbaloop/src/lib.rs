@@ -22,7 +22,6 @@ pub mod templates;
 pub mod registry;
 
 /// MCP server for AI agent integration
-#[cfg(feature = "mcp")]
 pub mod mcp;
 
 /// Agent logic layer — lightweight rule engine

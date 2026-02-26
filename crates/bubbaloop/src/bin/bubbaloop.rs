@@ -43,7 +43,6 @@ enum Command {
     Status(StatusArgs),
     Doctor(DoctorArgs),
     Daemon(DaemonArgs),
-    #[cfg(feature = "mcp")]
     Mcp(McpArgs),
     Node(NodeCommand),
     Launch(LaunchCommand),
@@ -113,7 +112,6 @@ struct DaemonArgs {
 }
 
 /// Run MCP server for AI agent integration
-#[cfg(feature = "mcp")]
 #[derive(FromArgs)]
 #[argh(subcommand, name = "mcp")]
 struct McpArgs {
@@ -134,7 +132,6 @@ struct McpArgs {
 ///
 /// In stdio mode, logs are redirected to ~/.bubbaloop/mcp-stdio.log to avoid
 /// corrupting the JSON-RPC protocol on stdout/stderr.
-#[cfg(feature = "mcp")]
 async fn run_mcp_command(args: McpArgs) -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::Arc;
 
@@ -267,7 +264,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             bubbaloop::daemon::run(args.zenoh_endpoint, args.strict).await?;
         }
-        #[cfg(feature = "mcp")]
         Some(Command::Mcp(args)) => {
             run_mcp_command(args).await?;
         }

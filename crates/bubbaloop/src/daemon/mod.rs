@@ -140,8 +140,7 @@ pub async fn run(
         agent_ref.run(agent_shutdown).await;
     });
 
-    // Start MCP server (HTTP on port 8088, feature-gated)
-    #[cfg(feature = "mcp")]
+    // Start MCP server (HTTP on port 8088)
     let mcp_task = {
         let mcp_session = session.clone();
         let mcp_manager = node_manager.clone();
@@ -172,7 +171,6 @@ pub async fn run(
     log::info!("Bubbaloop daemon running. Press Ctrl+C to exit.");
     log::info!("  Zenoh pub/sub topics: bubbaloop/daemon/*");
     log::info!("  Agent rule engine: active");
-    #[cfg(feature = "mcp")]
     log::info!(
         "  MCP server: http://127.0.0.1:{}/mcp",
         std::env::var("BUBBALOOP_MCP_PORT")
@@ -188,7 +186,6 @@ pub async fn run(
     agent_task.abort();
 
     // Abort MCP server
-    #[cfg(feature = "mcp")]
     mcp_task.abort();
 
     log::info!("Bubbaloop daemon stopped.");
