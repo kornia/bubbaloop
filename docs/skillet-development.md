@@ -47,6 +47,37 @@ gh repo create my-sensor --public --push --source .
 bubbaloop node add your-username/my-sensor --build --install
 ```
 
+### How `bubbaloop node install` Works
+
+When a user runs `bubbaloop node install rtsp-camera`, the CLI:
+
+1. Checks if the node is already registered with the daemon
+2. Searches marketplace registries (`nodes.yaml` files on GitHub)
+3. Tries to download a precompiled binary (fast path — binary + checksum from GitHub Releases)
+4. Falls back to `git clone` + `pixi run build` (slow path — full source build)
+5. Saves everything to `~/.bubbaloop/nodes/<repo>/<subdir>/`
+6. Registers the node path in `~/.bubbaloop/nodes.json`
+7. Creates a systemd user service
+
+**On-disk result:**
+
+```
+~/.bubbaloop/nodes/
+├── bubbaloop-nodes-official/     # Cloned repo (or symlink for dev)
+│   ├── rtsp-camera/
+│   │   ├── node.yaml             # Manifest (read by daemon)
+│   │   └── target/release/       # Built binary
+│   ├── openmeteo/
+│   └── system-telemetry/
+```
+
+For local development, you can symlink your working copy instead of having the CLI clone a separate copy:
+
+```bash
+ln -s ~/my-nodes/my-sensor ~/.bubbaloop/nodes/my-sensor
+bubbaloop node add ~/.bubbaloop/nodes/my-sensor
+```
+
 ## What is a Skillet?
 
 A skillet is an autonomous process that:
