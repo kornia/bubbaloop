@@ -22,7 +22,7 @@ See the [Skillet Development Guide](skillet-development.md#node-sdk-recommended)
 
 ### Manual Setup (Advanced)
 
-For cases where you need full control over the Zenoh lifecycle:
+For full control over the Zenoh lifecycle, see the [Skillet Development Guide](skillet-development.md) which documents the raw Zenoh + argh + ctrlc pattern used by production nodes.
 
 ---
 
@@ -34,7 +34,9 @@ For cases where you need full control over the Zenoh lifecycle:
 my-node/
 ├── Cargo.toml
 ├── node.yaml        # Node manifest
-├── configs/         # Configuration files
+├── config.yaml      # Runtime configuration
+├── build.rs         # Proto compilation
+├── protos/          # Protobuf definitions
 └── src/
     └── main.rs
 ```
@@ -52,169 +54,34 @@ name = "my_node"
 path = "src/main.rs"
 
 [dependencies]
-# Bubbaloop SDK - provides BubbleNode trait
-bubbaloop = { path = "../../bubbaloop" }
-
-# Required
+bubbaloop-schemas = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
+zenoh = "1.7"
 tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+prost = "0.14"
+argh = "0.1"
 log = "0.4"
+env_logger = "0.11"
+ctrlc = "3.4"
+anyhow = "1"
+hostname = "0.4"
+
+[build-dependencies]
+prost-build = "0.14"
+
+[workspace]
 ```
 
 ### Step 2: src/main.rs
 
-```rust
-//! my-node - A Bubbaloop node
+For the manual implementation pattern, see the [Skillet Development Guide](skillet-development.md#manual-implementation-raw-zenoh) which shows the complete pattern:
+- Zenoh client session creation
+- argh CLI parsing
+- ctrlc signal handling
+- Publish/subscribe loops with proper shutdown
 
-use bubbaloop::prelude::*;
-use serde::Serialize;
-use std::time::Duration;
-
-// ============================================================================
-// CONFIGURATION - Edit this to add config options
-// ============================================================================
-
-#[derive(Debug, Deserialize)]
-pub struct Config {
-    #[serde(default = "default_topic")]
-    pub topic: String,
-
-    #[serde(default = "default_interval")]
-    pub interval_secs: u64,
-
-    // Add your config fields here:
-    // pub api_key: String,
-    // pub sensor_address: String,
-}
-
-fn default_topic() -> String { "my-node/data".to_string() }
-fn default_interval() -> u64 { 60 }
-
-// ============================================================================
-// DATA FORMAT - Edit this to define your message structure
-// ============================================================================
-
-#[derive(Debug, Serialize)]
-struct NodeData {
-    value: f64,
-    timestamp: u64,
-    // Add your fields here:
-    // temperature: f64,
-    // humidity: f64,
-    // status: String,
-}
-
-// ============================================================================
-// NODE IMPLEMENTATION - Edit run() to add your logic
-// ============================================================================
-
-pub struct MyNode {
-    ctx: Arc<ZContext>,
-    config: Config,
-}
-
-#[async_trait]
-impl BubbleNode for MyPluginNode {
-    type Config = Config;
-
-    fn metadata() -> BubbleMetadata {
-        BubbleMetadata {
-            name: "my-plugin",
-            version: "0.1.0",
-            description: "My custom plugin",
-            topics_published: &["my-plugin/data"],
-            topics_subscribed: &[],
-        }
-    }
-
-    fn new(ctx: Arc<ZContext>, config: Self::Config) -> Result<Self, NodeError> {
-        info!("Initializing my-plugin");
-        Ok(Self { ctx, config })
-    }
-
-    async fn run(self, mut shutdown: watch::Receiver<()>) -> Result<(), NodeError> {
-        // Get Zenoh session for pub/sub
-        let session = self.ctx.session();
-
-        // Create publisher
-        let publisher = session
-            .declare_publisher(&self.config.topic)
-            .await
-            .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-
-        info!("Publishing to: {}", self.config.topic);
-
-        let interval = Duration::from_secs(self.config.interval_secs);
-
-        loop {
-            tokio::select! {
-                // Graceful shutdown
-                _ = shutdown.changed() => {
-                    info!("Shutdown signal received");
-                    break;
-                }
-
-                // Your main logic
-                _ = tokio::time::sleep(interval) => {
-                    // ========================================
-                    // EDIT HERE: Your plugin logic
-                    // ========================================
-                    let data = PluginData {
-                        value: 42.0,
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                    };
-
-                    // Publish as JSON
-                    let json = serde_json::to_string(&data)
-                        .map_err(|e| NodeError::Runtime(e.to_string()))?;
-
-                    publisher.put(json.as_bytes()).await
-                        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-
-                    debug!("Published: {:?}", data);
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-// ============================================================================
-// MAIN - No changes needed
-// ============================================================================
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    run_node::<MyPluginNode>().await
-}
-```
-
-### Step 3: config.yaml
-
-```yaml
-# Topic to publish to
-topic: "my-plugin/data"
-
-# Publish interval in seconds
-interval_secs: 60
-
-# Add your config here:
-# api_key: "your-key"
-# sensor_address: "/dev/ttyUSB0"
-```
-
-### Step 4: Build & Run
-
-```bash
-cargo build --release
-./target/release/my-plugin -c config.yaml -e tcp/localhost:7447
-```
+The skillet guide includes working examples with health heartbeats, schema queryables, and protobuf encoding.
 
 ---
 
@@ -395,110 +262,15 @@ python main.py -c config.yaml -e tcp/localhost:7447
 
 ## Common Patterns
 
-### Subscribe to Topics
+For common patterns including subscribing to topics, using protobuf messages, health heartbeats, and multiple publishers, see the [Skillet Development Guide](skillet-development.md#common-patterns) which documents:
 
-**Rust:**
-```rust
-async fn run(self, mut shutdown: watch::Receiver<()>) -> Result<(), NodeError> {
-    let session = self.ctx.session();
+- **Subscribe to topics**: Raw Zenoh subscriber patterns with proper shutdown handling
+- **Protobuf encoding/decoding**: Using `bubbaloop-schemas` with prost
+- **Health heartbeats**: Publishing periodic health status
+- **Schema queryables**: Serving FileDescriptorSet for dynamic protobuf decoding
+- **Multiple publishers**: Managing multiple Zenoh publishers in one node
 
-    // Subscribe
-    let subscriber = session
-        .declare_subscriber("other/topic")
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-
-    loop {
-        tokio::select! {
-            _ = shutdown.changed() => break,
-
-            // Handle incoming messages
-            sample = subscriber.recv_async() => {
-                if let Ok(sample) = sample {
-                    let payload = sample.payload().to_bytes();
-                    let data: serde_json::Value = serde_json::from_slice(&payload)?;
-                    info!("Received: {:?}", data);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-```
-
-**Python:**
-```python
-def run(self, shutdown_event):
-    subscriber = self.session.declare_subscriber("other/topic")
-
-    while not shutdown_event.is_set():
-        sample = subscriber.try_recv()
-        if sample:
-            data = json.loads(sample.payload.to_bytes())
-            logger.info(f"Received: {data}")
-
-        shutdown_event.wait(timeout=0.1)
-```
-
-### Use Protobuf Messages
-
-**Rust:**
-```rust
-use bubbaloop::schemas::CurrentWeather;
-use prost::Message;
-
-// Publish protobuf
-let weather = CurrentWeather {
-    temperature_2m: 22.5,
-    ..Default::default()
-};
-let bytes = weather.encode_to_vec();
-publisher.put(bytes).await?;
-
-// Subscribe and decode
-let payload = sample.payload().to_bytes();
-let weather = CurrentWeather::decode(payload.as_ref())?;
-```
-
-**Python:**
-```python
-# Generate Python protobuf code first:
-# protoc --python_out=. weather.proto
-
-from weather_pb2 import CurrentWeather
-
-# Publish
-weather = CurrentWeather(temperature_2m=22.5)
-publisher.put(weather.SerializeToString())
-
-# Receive
-weather = CurrentWeather()
-weather.ParseFromString(sample.payload.to_bytes())
-```
-
-### Add Multiple Publishers
-
-```rust
-async fn run(self, mut shutdown: watch::Receiver<()>) -> Result<(), NodeError> {
-    let session = self.ctx.session();
-
-    let temp_pub = session.declare_publisher("sensors/temperature").await?;
-    let humidity_pub = session.declare_publisher("sensors/humidity").await?;
-    let status_pub = session.declare_publisher("sensors/status").await?;
-
-    loop {
-        tokio::select! {
-            _ = shutdown.changed() => break,
-            _ = tokio::time::sleep(interval) => {
-                temp_pub.put(json!({"value": 22.5}).to_string()).await?;
-                humidity_pub.put(json!({"value": 65.0}).to_string()).await?;
-                status_pub.put(json!({"online": true}).to_string()).await?;
-            }
-        }
-    }
-    Ok(())
-}
-```
+All examples use the actual Zenoh API (not phantom types) and follow the argh + ctrlc pattern used by production nodes
 
 ---
 

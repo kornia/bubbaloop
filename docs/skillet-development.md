@@ -1112,9 +1112,9 @@ prost-build = "0.14"
 [workspace]
 ```
 
-**Current status:** Design document completed at `/home/nvidia/bubbaloop/docs/plans/2026-02-24-node-sdk-design.md`. Implementation pending.
+**Status:** Shipped. See `crates/bubbaloop-node-sdk/` in the bubbaloop repo.
 
-**Migration path:** Existing skillets will continue to work. New skillets should use the SDK once released. The SDK will be published as a standalone crate outside the cargo workspace, following the same pattern as `bubbaloop-schemas`.
+**Migration path:** Existing skillets continue to work unchanged. New Rust skillets should use the SDK. The SDK is a standalone crate (not in workspace), depended on via git, following the same pattern as `bubbaloop-schemas`.
 
 ## Complete Skillet Checklist
 
