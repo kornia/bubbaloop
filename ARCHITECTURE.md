@@ -42,8 +42,8 @@ If it's app-layer complexity → reject it. If it strengthens skillets (nodes) �
 └──────────────────────────┬──────────────────────────────────────┘
                            │ MCP (http://127.0.0.1:8088 or stdio)
 ╔══════════════════════════╧══════════════════════════════════════╗
-║  LAYER 4: MCP GATEWAY (daemon core — always enabled)           ║
-║  24 tools │ RBAC (Viewer/Operator/Admin) │ Bearer token auth   ║
+║  LAYER 4: MCP GATEWAY (daemon core — passive skill runtime)    ║
+║  RBAC (Viewer/Operator/Admin) │ Bearer token auth               ║
 ║  PlatformOperations trait │ Rate limiting (tower-governor)      ║
 ║                                                                 ║
 ║  Discovery: list_nodes, get_node_detail, get_node_schema,      ║
@@ -53,10 +53,9 @@ If it's app-layer complexity → reject it. If it strengthens skillets (nodes) �
 ║             build_node                                          ║
 ║  Data:      read_sensor, send_command, query_zenoh             ║
 ║  Config:    get_node_config, set_node_config                   ║
-║  Automation: list_agent_rules, add_rule, remove_rule,          ║
-║              update_rule, test_rule, get_events,               ║
-║              get_agent_status                                   ║
 ║  System:    get_system_status, get_machine_info, doctor        ║
+║                                                                 ║
+║  External AI agents control via MCP — no autonomous decisions.  ║
 ╚══════════════════════════╤══════════════════════════════════════╝
                            │
 ╔══════════════════════════╧══════════════════════════════════════╗
@@ -85,9 +84,10 @@ If it's app-layer complexity → reject it. If it strengthens skillets (nodes) �
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
-│  LAYER 1: LIFECYCLE (thin scaffolding)                          │
+│  LAYER 1: LIFECYCLE (thin scaffolding — passive runtime)        │
 │  Daemon: install │ start │ stop │ update │ build queue          │
 │  (systemd/zbus integration, marketplace, node registry)         │
+│  Role: Skill runtime, not autonomous agent.                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -372,22 +372,23 @@ Bubbaloop serves as the **physical AI foundation** for OpenClaw and other AI age
 **Default for stdio:** Admin role (assumes local user is trusted).
 **Default for HTTP:** Viewer role (must upgrade via config for remote clients).
 
-### Rule Engine for Automation
+### Automation Pattern
 
-AI agents can program reactive behaviors via the rule engine. Three trigger types:
+The daemon is a **passive skill runtime** — it does not have an autonomous rule engine. AI agents can program reactive behaviors by:
 
-1. **Event-based** — React to skillet events (e.g., health change, command result)
-2. **Periodic** — Execute on cron schedule (e.g., "every 5 minutes")
-3. **Data-based** — React to Zenoh data patterns (e.g., "temperature > 80°C")
+1. **Direct MCP calls** — Agent continuously monitors state and executes MCP tools
+2. **External orchestrators** — OpenClaw, n8n, Home Assistant, etc. subscribe to Zenoh topics and call MCP
+3. **Node-level logic** — Skillets can implement local reactive behavior (e.g., camera node auto-adjusts exposure)
 
-**Example:** Auto-restart failed skillets:
-```json
-{
-  "name": "auto-restart-failed",
-  "trigger": "event",
-  "conditions": [{"field": "event_type", "op": "eq", "value": "health_check_failed"}],
-  "actions": [{"type": "restart_node", "node": "$event.node_name"}]
-}
+**Example:** Auto-restart failed skillets via external agent:
+```python
+# OpenClaw workflow
+while True:
+    status = mcp_call("get_system_status")
+    for node in status["nodes"]:
+        if node["health"] == "unhealthy":
+            mcp_call("restart_node", {"node_name": node["name"]})
+    await asyncio.sleep(60)
 ```
 
 ### Streaming Data Access
@@ -402,13 +403,13 @@ AI agents can program reactive behaviors via the rule engine. Three trigger type
 
 ### Tool Design Philosophy
 
-**Generic tools, not per-node tools.** The daemon exposes 24 tools across 6 categories. AI tool selection degrades above ~40 tools, so per-skillet tools would create a combinatorial explosion.
+**Generic tools, not per-node tools.** The daemon exposes tools across categories (Discovery, Lifecycle, Data, Config, System). AI tool selection degrades above ~40 tools, so per-skillet tools would create a combinatorial explosion.
 
 Instead:
 - Skillets self-describe via manifests
 - `send_command` dispatches to any skillet's command interface
 - Agent reads manifest to know which commands exist
-- Keeps MCP tool count manageable (~24 vs. ~240 for 10 skillets × 24 commands each)
+- Keeps MCP tool count manageable (generic tools vs. per-skillet proliferation)
 
 ---
 
@@ -431,6 +432,7 @@ Instead:
 
 **Removed technologies:**
 - **Zenoh API queryables (zenoh_api.rs deleted)** — All external access now goes through MCP. The daemon no longer exposes `bubbaloop/api/**` queryables. Zenoh is the data plane only; MCP is the control plane.
+- **Agent rule engine** — Daemon is a passive skill runtime. External AI agents (OpenClaw, etc.) implement automation logic via MCP.
 
 **Feature flags:**
 - **TUI** (`--features tui`) — Terminal UI is optional. Most deployments use headless daemon + MCP.

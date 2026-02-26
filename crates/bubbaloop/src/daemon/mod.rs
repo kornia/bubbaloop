@@ -1,13 +1,16 @@
-//! Bubbaloop Daemon
+//! Bubbaloop Skill Runtime
 //!
-//! Central service for managing bubbaloop nodes.
+//! Lightweight daemon for managing sensor/actuator nodes as discoverable skills.
 //!
-//! # Features
+//! # Architecture
 //!
-//! - Maintains authoritative node state in memory
-//! - Communicates with systemd via D-Bus (native, no shell spawning)
-//! - Provides MCP tools for external access
-//! - Runs as a systemd user service
+//! - Registry: tracks installed nodes in ~/.bubbaloop/nodes.json
+//! - Lifecycle: start/stop/restart via systemd D-Bus (zbus)
+//! - Health: monitors node heartbeats via Zenoh pub/sub
+//! - MCP Gateway: exposes all operations as MCP tools for AI agents
+//!
+//! External AI agents (OpenClaw, Claude, etc.) interact exclusively through MCP.
+//! The daemon never makes autonomous decisions — it's a passive skill runtime.
 
 pub mod node_manager;
 pub mod registry;
@@ -146,46 +149,10 @@ pub async fn run(
         .await
         .map_err(|e| e as Box<dyn std::error::Error>)?;
 
-    // Check for duplicate daemon instances
-    log::info!("Checking for duplicate daemon instances...");
-    match session
-        .get("bubbaloop/daemon/api/health")
-        .timeout(std::time::Duration::from_secs(1))
-        .await
-    {
-        Ok(replies) => {
-            // Try to get a reply
-            let mut has_response = false;
-            while let Ok(reply) = replies.recv_async().await {
-                match reply.result() {
-                    Ok(_) => {
-                        has_response = true;
-                        break;
-                    }
-                    Err(_) => continue,
-                }
-            }
-
-            if has_response {
-                log::warn!("Another daemon is already running!");
-                log::warn!("Multiple daemons will cause conflicting queryables and 'Query not found' errors.");
-                log::warn!(
-                    "To prevent this, use the --strict flag to exit when a duplicate is detected."
-                );
-
-                if strict {
-                    return Err("Another daemon is already running (strict mode)".into());
-                }
-            } else {
-                log::info!("No existing daemon detected, proceeding with startup.");
-            }
-        }
-        Err(e) => {
-            log::debug!(
-                "Health check query failed (this is expected if no daemon is running): {}",
-                e
-            );
-        }
+    // Note: Duplicate daemon detection via Zenoh queryable removed.
+    // MCP server will bind to port and fail if already in use.
+    if strict {
+        log::warn!("--strict flag is deprecated (duplicate detection now uses MCP port binding)");
     }
 
     // Start health monitor for Zenoh heartbeats
@@ -216,14 +183,15 @@ pub async fn run(
         })
     };
 
-    log::info!("Bubbaloop daemon running. Press Ctrl+C to exit.");
-    log::info!(
-        "  MCP server: http://127.0.0.1:{}/mcp",
-        std::env::var("BUBBALOOP_MCP_PORT")
-            .ok()
-            .and_then(|p| p.parse::<u16>().ok())
-            .unwrap_or(crate::mcp::MCP_PORT)
-    );
+    let port = std::env::var("BUBBALOOP_MCP_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(crate::mcp::MCP_PORT);
+
+    log::info!("Bubbaloop skill runtime started.");
+    log::info!("  MCP server: http://127.0.0.1:{}/mcp", port);
+    log::info!("  Nodes: {} registered", initial_list.nodes.len());
+    log::info!("  Health monitor: active (Zenoh heartbeats)");
 
     // Wait for shutdown signal
     let mut shutdown_wait = shutdown_rx.clone();

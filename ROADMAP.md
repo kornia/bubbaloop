@@ -208,15 +208,15 @@ curl -sSL https://get.bubbaloop.com | bash
 **Goal:** Make bubbaloop the physical AI layer for OpenClaw and other AI agents.
 
 **Deliverables:**
-- [x] MCP server with ~15 generic tools (list_nodes, send_command, etc.)
-- [x] Agent rule engine with YAML-based rules
+- [x] MCP server with generic tools (list_nodes, send_command, etc.)
 - [x] `list_commands` MCP tool for easy command discovery
-- [x] Rule management via MCP (add_rule, remove_rule, update_rule)
 - [x] Enriched MCP instructions for AI agent workflow guidance
 - [x] Optional `mcp:` section in node.yaml for richer tool descriptions
+- [x] Simplified daemon to pure skill runtime (removed agent rule engine)
+- [x] Updated architecture docs to reflect passive runtime model
 - [ ] MCP authentication for remote agent access
 
-**Design decision:** Enhanced Option B — daemon-only MCP, no per-node MCP tools. Manifest-driven discovery + generic `send_command` dispatcher. See `.omc/plans/openclaw-foundation.md`.
+**Design decision:** Enhanced Option B — daemon-only MCP, no per-node MCP tools. Manifest-driven discovery + generic `send_command` dispatcher. Daemon is a passive skill runtime; external AI agents implement automation logic. See `.omc/plans/openclaw-foundation.md`.
 
 ---
 

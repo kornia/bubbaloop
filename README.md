@@ -156,37 +156,24 @@ bubbaloop daemon
 | `get_node_logs` | Read node service logs |
 | `discover_nodes` | Fleet-wide manifest discovery |
 | `query_zenoh` | Query any Zenoh key expression |
-| `get_agent_status` | View agent rule engine status |
-| `list_agent_rules` | List active automation rules |
-
 Configure Claude Code to use it via `.mcp.json` (already in project root).
 
-## Agent Rule Engine
+## Automation via External Agents
 
-The daemon includes a lightweight rule engine for autonomous sensor-to-action automation. Define rules in `~/.bubbaloop/rules.yaml`:
+The daemon is a **passive skill runtime** — it does not include an autonomous rule engine. Instead, external AI agents (OpenClaw, Claude Code, n8n, Home Assistant, etc.) can program automation logic by:
 
-```yaml
-rules:
-  - name: "high-temp-alert"
-    trigger: "bubbaloop/**/telemetry/status"
-    condition:
-      field: "cpu_temp"
-      operator: ">"
-      value: 80.0
-    action:
-      type: "log"
-      message: "CPU temperature exceeds 80C"
+1. **Continuously monitoring** node status via `get_system_status` MCP tool
+2. **Reacting to events** by subscribing to Zenoh topics (e.g., `bubbaloop/**/health/*`)
+3. **Taking actions** via MCP tools (e.g., `restart_node`, `send_command`)
 
-  - name: "capture-on-motion"
-    trigger: "bubbaloop/**/motion/detected"
-    condition:
-      field: "confidence"
-      operator: ">="
-      value: 0.8
-    action:
-      type: "command"
-      node: "rtsp-camera"
-      command: "capture_frame"
+**Example:** Auto-restart failed nodes via OpenClaw:
+```python
+while True:
+    status = mcp_call("get_system_status")
+    for node in status["nodes"]:
+        if node["health"] == "unhealthy":
+            mcp_call("restart_node", {"node_name": node["name"]})
+    await asyncio.sleep(60)
       params:
         resolution: "1080p"
 ```

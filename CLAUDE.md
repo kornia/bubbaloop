@@ -18,18 +18,21 @@ dashboard/                 # React + Vite + TypeScript
 
 Key source files in `crates/bubbaloop/src/`:
 - `cli/node.rs` (88KB) — node CRUD, install, precompiled binary download
+- `daemon/mod.rs` — skill runtime: registry + lifecycle + health + MCP
 - `daemon/node_manager.rs` (57KB) — node lifecycle, build queue, health
 - `daemon/systemd.rs` (38KB) — D-Bus/zbus integration
 - `daemon/registry.rs` — `~/.bubbaloop/nodes.json` management
 - `registry.rs` — marketplace fetch/parse/cache, `find_curl()`
-- `mcp/mod.rs` — 24 MCP tools, BubbaLoopMcpServer<P>, ServerHandler impl
+- `mcp/mod.rs` — MCP tools, BubbaLoopMcpServer<P>, ServerHandler impl
 - `mcp/platform.rs` — PlatformOperations trait, DaemonPlatform, MockPlatform
 
 Nodes repo: [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official)
 
 ## MCP Server (Core)
 
-MCP is core (not feature-gated). 24 tools, 3-tier RBAC, bearer token auth. Run: `bubbaloop mcp --stdio` or daemon HTTP on :8088.
+MCP is core (not feature-gated). 3-tier RBAC, bearer token auth. Run: `bubbaloop mcp --stdio` or daemon HTTP on :8088.
+
+The daemon is a **passive skill runtime** — AI agents (OpenClaw, Claude, etc.) interact exclusively through MCP. No autonomous decision-making.
 
 Key files in `crates/bubbaloop/src/mcp/`: `mod.rs` (tools, BubbaLoopMcpServer), `platform.rs` (PlatformOperations trait), `rbac.rs`, `auth.rs`.
 
@@ -69,11 +72,11 @@ cargo test --features test-harness --test integration_mcp  # 35 integration test
 - Bind localhost only, never `0.0.0.0`
 
 **MCP:**
-- 24 tools across 6 categories (Discovery, Lifecycle, Data, Config, Automation, System)
 - RBAC: Viewer/Operator/Admin tiers, unknown tools default to Admin
 - All tool handlers include audit logging: `log::info!("[MCP] tool=...")`
 - PlatformOperations trait for clean daemon/MCP separation
 - `test-harness` feature enables integration tests with MockPlatform
+- Daemon is a passive skill runtime (no agent rule engine, no autonomous decisions)
 
 ## DO / DON'T
 
