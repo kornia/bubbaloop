@@ -24,9 +24,6 @@ pub mod registry;
 /// MCP server for AI agent integration
 pub mod mcp;
 
-/// Agent logic layer — lightweight rule engine
-pub mod agent;
-
 /// Shared input validation for trust boundaries
 pub mod validation;
 

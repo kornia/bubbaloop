@@ -52,14 +52,12 @@ pub fn required_tier(tool_name: &str) -> Tier {
     match tool_name {
         // Viewer tools (read-only)
         "list_nodes" | "get_node_health" | "get_node_schema" | "get_stream_info"
-        | "list_topics" | "get_system_status" | "get_machine_info" | "list_agent_rules"
-        | "get_agent_status" | "get_events" | "doctor" | "discover_nodes" | "get_node_manifest"
-        | "list_commands" => Tier::Viewer,
+        | "list_topics" | "get_system_status" | "get_machine_info" | "doctor"
+        | "discover_nodes" | "get_node_manifest" | "list_commands" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
         "start_node" | "stop_node" | "restart_node" | "get_node_config" | "set_node_config"
-        | "read_sensor" | "send_command" | "add_rule" | "remove_rule" | "update_rule"
-        | "test_rule" | "get_node_logs" => Tier::Operator,
+        | "read_sensor" | "send_command" | "get_node_logs" => Tier::Operator,
 
         // Admin tools (system modification)
         "install_node"
@@ -108,7 +106,7 @@ mod tests {
     #[test]
     fn test_required_tier_operator_tools() {
         assert_eq!(required_tier("start_node"), Tier::Operator);
-        assert_eq!(required_tier("add_rule"), Tier::Operator);
+        assert_eq!(required_tier("send_command"), Tier::Operator);
     }
 
     #[test]

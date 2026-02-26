@@ -47,7 +47,6 @@ impl TestHarness {
         let platform = Arc::new(mock);
         let server = BubbaLoopMcpServer::new(
             platform,
-            None, // no agent
             None, // no auth token
             "test".to_string(),
             "test-machine".to_string(),
@@ -240,7 +239,6 @@ async fn get_system_status() {
     assert_eq!(json["nodes_running"], 1);
     assert_eq!(json["nodes_healthy"], 1);
     assert_eq!(json["mcp_server"], "running");
-    assert_eq!(json["agent_available"], false);
 
     h.shutdown().await.unwrap();
 }
@@ -415,39 +413,6 @@ async fn discover_nodes() {
 }
 
 #[tokio::test]
-async fn get_agent_status_no_agent() {
-    let h = TestHarness::new().await;
-    let result = h.call("get_agent_status").await.unwrap();
-    let text = result_text(&result);
-
-    assert_eq!(text, "Agent not available");
-
-    h.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn list_agent_rules_no_agent() {
-    let h = TestHarness::new().await;
-    let result = h.call("list_agent_rules").await.unwrap();
-    let text = result_text(&result);
-
-    assert_eq!(text, "Agent not available");
-
-    h.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn get_events_no_agent() {
-    let h = TestHarness::new().await;
-    let result = h.call("get_events").await.unwrap();
-    let text = result_text(&result);
-
-    assert_eq!(text, "Agent not available");
-
-    h.shutdown().await.unwrap();
-}
-
-#[tokio::test]
 async fn query_zenoh_valid() {
     let h = TestHarness::new().await;
     let result = h
@@ -530,10 +495,7 @@ async fn get_node_logs_existing() {
 async fn start_node_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args(
-            "start_node",
-            serde_json::json!({"node_name": "ghost-node"}),
-        )
+        .call_with_args("start_node", serde_json::json!({"node_name": "ghost-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -551,10 +513,7 @@ async fn start_node_nonexistent() {
 async fn stop_node_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args(
-            "stop_node",
-            serde_json::json!({"node_name": "ghost-node"}),
-        )
+        .call_with_args("stop_node", serde_json::json!({"node_name": "ghost-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -593,10 +552,7 @@ async fn restart_node_nonexistent() {
 async fn build_node_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args(
-            "build_node",
-            serde_json::json!({"node_name": "ghost-node"}),
-        )
+        .call_with_args("build_node", serde_json::json!({"node_name": "ghost-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -714,85 +670,6 @@ async fn list_commands_no_commands_available() {
         "Expected 'No commands available' when manifest has no commands in: {}",
         text
     );
-
-    h.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn add_rule_no_agent() {
-    let h = TestHarness::new().await;
-    let result = h
-        .call_with_args(
-            "add_rule",
-            serde_json::json!({
-                "name": "test-rule",
-                "trigger": "bubbaloop/**/telemetry/status",
-                "action": {"type": "log", "message": "triggered"}
-            }),
-        )
-        .await
-        .unwrap();
-    let text = result_text(&result);
-
-    assert_eq!(text, "Agent not available");
-
-    h.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn remove_rule_no_agent() {
-    let h = TestHarness::new().await;
-    let result = h
-        .call_with_args(
-            "remove_rule",
-            serde_json::json!({"rule_name": "some-rule"}),
-        )
-        .await
-        .unwrap();
-    let text = result_text(&result);
-
-    assert_eq!(text, "Agent not available");
-
-    h.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn update_rule_no_agent() {
-    let h = TestHarness::new().await;
-    let result = h
-        .call_with_args(
-            "update_rule",
-            serde_json::json!({
-                "name": "test-rule",
-                "trigger": "bubbaloop/**/telemetry/status",
-                "action": {"type": "log", "message": "updated"}
-            }),
-        )
-        .await
-        .unwrap();
-    let text = result_text(&result);
-
-    assert_eq!(text, "Agent not available");
-
-    h.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn test_rule_no_agent() {
-    let h = TestHarness::new().await;
-    let result = h
-        .call_with_args(
-            "test_rule",
-            serde_json::json!({
-                "rule_name": "some-rule",
-                "sample_data": {"cpu_temp": 85}
-            }),
-        )
-        .await
-        .unwrap();
-    let text = result_text(&result);
-
-    assert_eq!(text, "Agent not available");
 
     h.shutdown().await.unwrap();
 }

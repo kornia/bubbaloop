@@ -420,7 +420,9 @@ impl NodeCommand {
                 send_command(&args.name, "start").await
             }
             Some(NodeAction::Stop(args)) => {
-                log::warn!("Note: 'bubbaloop node stop' is deprecated. Use MCP tool 'stop_node' instead.");
+                log::warn!(
+                    "Note: 'bubbaloop node stop' is deprecated. Use MCP tool 'stop_node' instead."
+                );
                 send_command(&args.name, "stop").await
             }
             Some(NodeAction::Restart(args)) => {

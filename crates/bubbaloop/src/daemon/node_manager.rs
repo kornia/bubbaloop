@@ -1294,10 +1294,7 @@ mod tests {
                 version: "0.1.0".to_string(),
                 description: "RTSP camera node".to_string(),
                 node_type: "rust".to_string(),
-                author: None,
-                build: None,
-                command: None,
-                depends_on: vec![],
+                ..Default::default()
             }),
             status: NodeStatus::Stopped,
             installed: false,
@@ -1325,10 +1322,7 @@ mod tests {
                 version: "0.1.0".to_string(),
                 description: "Weather node".to_string(),
                 node_type: "rust".to_string(),
-                author: None,
-                build: None,
-                command: None,
-                depends_on: vec![],
+                ..Default::default()
             }),
             status: NodeStatus::Running,
             installed: true,
@@ -1357,10 +1351,9 @@ mod tests {
             version: "0.2.0".to_string(),
             description: "RTSP camera node".to_string(),
             node_type: "rust".to_string(),
-            author: None,
             build: Some("cargo build --release".to_string()),
             command: Some("./target/release/cameras_node".to_string()),
-            depends_on: vec![],
+            ..Default::default()
         };
 
         let instances = vec![
@@ -1422,10 +1415,7 @@ mod tests {
                 version: "0.1.0".to_string(),
                 description: "Weather".to_string(),
                 node_type: "rust".to_string(),
-                author: None,
-                build: None,
-                command: None,
-                depends_on: vec![],
+                ..Default::default()
             }),
             status: NodeStatus::Running,
             installed: true,
@@ -1490,10 +1480,7 @@ mod tests {
                 version: "0.1.0".to_string(),
                 description: "RTSP camera node".to_string(),
                 node_type: "rust".to_string(),
-                author: None,
-                build: None,
-                command: None,
-                depends_on: vec![],
+                ..Default::default()
             }),
             status: NodeStatus::Stopped,
             installed: false,
@@ -1518,10 +1505,7 @@ mod tests {
                 version: "0.1.0".to_string(),
                 description: "Weather".to_string(),
                 node_type: "rust".to_string(),
-                author: None,
-                build: None,
-                command: None,
-                depends_on: vec![],
+                ..Default::default()
             }),
             status: NodeStatus::Running,
             installed: true,

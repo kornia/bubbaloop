@@ -7,7 +7,6 @@ pub mod auth;
 pub mod platform;
 pub mod rbac;
 
-use crate::agent::Agent;
 use crate::validation;
 use platform::PlatformOperations;
 use rmcp::handler::server::tool::ToolRouter;
@@ -27,7 +26,6 @@ pub const MCP_PORT: u16 = 8088;
 /// and tests can plug in `MockPlatform`.
 pub struct BubbaLoopMcpServer<P: PlatformOperations = platform::DaemonPlatform> {
     platform: Arc<P>,
-    agent: Option<Arc<Agent>>,
     #[allow(dead_code)] // Used in Task 7 for call_tool() auth enforcement
     auth_token: Option<String>,
     tool_router: ToolRouter<Self>,
@@ -40,7 +38,6 @@ impl<P: PlatformOperations> Clone for BubbaLoopMcpServer<P> {
     fn clone(&self) -> Self {
         Self {
             platform: self.platform.clone(),
-            agent: self.agent.clone(),
             auth_token: self.auth_token.clone(),
             tool_router: self.tool_router.clone(),
             scope: self.scope.clone(),
@@ -74,47 +71,18 @@ struct QueryTopicRequest {
     key_expr: String,
 }
 
-#[derive(Deserialize, JsonSchema)]
-struct AddRuleRequest {
-    /// Rule name (unique identifier)
-    name: String,
-    /// Zenoh key expression pattern to subscribe to (e.g., "bubbaloop/**/telemetry/status")
-    trigger: String,
-    /// Optional condition: JSON object with "field", "operator" (==, !=, >, <, >=, <=, contains), "value"
-    #[serde(default)]
-    condition: Option<serde_json::Value>,
-    /// Action: JSON object with "type" (log/command/publish) and type-specific fields
-    action: serde_json::Value,
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct RuleNameRequest {
-    /// Name of the rule to remove or look up
-    rule_name: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct TestRuleRequest {
-    /// Name of the rule to test
-    rule_name: String,
-    /// Sample data to evaluate the rule condition against (JSON object)
-    sample_data: serde_json::Value,
-}
-
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
 impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     pub fn new(
         platform: Arc<P>,
-        agent: Option<Arc<Agent>>,
         auth_token: Option<String>,
         scope: String,
         machine_id: String,
     ) -> Self {
         Self {
             platform,
-            agent,
             auth_token,
             tool_router: Self::tool_router(),
             scope,
@@ -450,120 +418,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(
-        description = "Get the agent's current status including active rules, recent triggers, and human overrides."
-    )]
-    async fn get_agent_status(&self) -> Result<CallToolResult, rmcp::ErrorData> {
-        log::info!("[MCP] tool=get_agent_status");
-        match &self.agent {
-            Some(agent) => {
-                let status = agent.get_status().await;
-                Ok(CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string()),
-                )]))
-            }
-            None => Ok(CallToolResult::success(vec![Content::text(
-                "Agent not available",
-            )])),
-        }
-    }
-
-    #[tool(description = "List all agent rules with their triggers, conditions, and actions.")]
-    async fn list_agent_rules(&self) -> Result<CallToolResult, rmcp::ErrorData> {
-        log::info!("[MCP] tool=list_agent_rules");
-        match &self.agent {
-            Some(agent) => {
-                let rules = agent.get_rules().await;
-                Ok(CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&rules).unwrap_or_else(|_| "[]".to_string()),
-                )]))
-            }
-            None => Ok(CallToolResult::success(vec![Content::text(
-                "Agent not available",
-            )])),
-        }
-    }
-
-    #[tool(
-        description = "Add a new rule to the agent rule engine. Rules trigger actions when sensor data matches conditions. Example: trigger=\"bubbaloop/**/telemetry/status\", condition={\"field\": \"cpu_temp\", \"operator\": \">\", \"value\": 80}, action={\"type\": \"log\", \"message\": \"CPU too hot!\"}"
-    )]
-    async fn add_rule(
-        &self,
-        Parameters(req): Parameters<AddRuleRequest>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        log::info!("[MCP] tool=add_rule name={}", req.name);
-        match &self.agent {
-            Some(agent) => {
-                let rule = match Self::parse_rule_request(req) {
-                    Ok(r) => r,
-                    Err(msg) => return Ok(CallToolResult::success(vec![Content::text(msg)])),
-                };
-                match agent.add_rule(rule).await {
-                    Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
-                    Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
-                        "Error: {}",
-                        e
-                    ))])),
-                }
-            }
-            None => Ok(CallToolResult::success(vec![Content::text(
-                "Agent not available",
-            )])),
-        }
-    }
-
-    #[tool(description = "Remove a rule from the agent rule engine by name.")]
-    async fn remove_rule(
-        &self,
-        Parameters(req): Parameters<RuleNameRequest>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        log::info!("[MCP] tool=remove_rule name={}", req.rule_name);
-        if let Err(e) = validation::validate_rule_name(&req.rule_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
-        match &self.agent {
-            Some(agent) => match agent.remove_rule(&req.rule_name).await {
-                Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
-                Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Error: {}",
-                    e
-                ))])),
-            },
-            None => Ok(CallToolResult::success(vec![Content::text(
-                "Agent not available",
-            )])),
-        }
-    }
-
-    #[tool(
-        description = "Update an existing rule in the agent rule engine. Provide the full rule definition — it replaces the rule with the same name."
-    )]
-    async fn update_rule(
-        &self,
-        Parameters(req): Parameters<AddRuleRequest>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        log::info!("[MCP] tool=update_rule name={}", req.name);
-        match &self.agent {
-            Some(agent) => {
-                let rule = match Self::parse_rule_request(req) {
-                    Ok(r) => r,
-                    Err(msg) => return Ok(CallToolResult::success(vec![Content::text(msg)])),
-                };
-                match agent.update_rule(rule).await {
-                    Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
-                    Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
-                        "Error: {}",
-                        e
-                    ))])),
-                }
-            }
-            None => Ok(CallToolResult::success(vec![Content::text(
-                "Agent not available",
-            )])),
-        }
-    }
-
-    // ── New tools (Task 15) ───────────────────────────────────────────
+    // ── Additional tools ───────────────────────────────────────────
 
     #[tool(
         description = "Get Zenoh connection parameters for subscribing to a node's data stream. Returns topic pattern, encoding, and endpoint. Use this to set up streaming data access outside MCP."
@@ -609,7 +464,6 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             "nodes_running": running,
             "nodes_healthy": healthy,
             "mcp_server": "running",
-            "agent_available": self.agent.is_some(),
         });
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&status).unwrap_or_default(),
@@ -683,51 +537,6 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             ))])),
         }
     }
-
-    #[tool(
-        description = "Get recent agent events (rule triggers, actions taken). Returns the last N events from the trigger log."
-    )]
-    async fn get_events(&self) -> Result<CallToolResult, rmcp::ErrorData> {
-        log::info!("[MCP] tool=get_events");
-        match &self.agent {
-            Some(agent) => {
-                let events = agent.get_trigger_log().await;
-                Ok(CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&events).unwrap_or_else(|_| "{}".to_string()),
-                )]))
-            }
-            None => Ok(CallToolResult::success(vec![Content::text(
-                "Agent not available",
-            )])),
-        }
-    }
-
-    #[tool(
-        description = "Test a rule's condition against sample data without executing the action. Returns whether the condition matches. Useful for debugging rules before deploying them."
-    )]
-    async fn test_rule(
-        &self,
-        Parameters(req): Parameters<TestRuleRequest>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        log::info!("[MCP] tool=test_rule name={}", req.rule_name);
-        if let Err(e) = validation::validate_rule_name(&req.rule_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
-        match &self.agent {
-            Some(agent) => match agent.test_rule(&req.rule_name, &req.sample_data).await {
-                Ok(result) => Ok(CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&result).unwrap_or_default(),
-                )])),
-                Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Error: {}",
-                    e
-                ))])),
-            },
-            None => Ok(CallToolResult::success(vec![Content::text(
-                "Agent not available",
-            )])),
-        }
-    }
 }
 
 // ── ServerHandler implementation ──────────────────────────────────
@@ -742,13 +551,12 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Bubbaloop MCP-first physical AI runtime. Controls physical sensor nodes via MCP.\n\n\
-                 **Discovery:** list_nodes → get_node_detail → get_node_schema → get_stream_info\n\
-                 **Lifecycle:** install_node, start_node, stop_node, restart_node, build_node\n\
-                 **Data:** read_sensor (one-shot), get_stream_info (returns Zenoh topic for streaming)\n\
-                 **Config:** get_node_config, set_node_config\n\
-                 **Automation:** list_rules, add_rule, remove_rule, test_rule, get_events\n\
-                 **System:** get_system_status, get_machine_info, doctor\n\n\
+                "Bubbaloop skill runtime for AI agents. Controls physical sensor nodes via MCP.\n\n\
+                 **Discovery:** list_nodes → get_node_health → get_node_schema → get_stream_info\n\
+                 **Lifecycle:** start_node, stop_node, restart_node, build_node\n\
+                 **Data:** send_command, get_stream_info (returns Zenoh topic for streaming)\n\
+                 **Config:** get_node_config, get_node_manifest, list_commands\n\
+                 **System:** get_system_status, get_machine_info, query_zenoh, discover_nodes\n\n\
                  Streaming data flows through Zenoh (not MCP). Use get_stream_info to get Zenoh connection params.\n\
                  Auth: Bearer token required (see ~/.bubbaloop/mcp-token)."
                     .into(),
@@ -804,40 +612,6 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
     }
 }
 
-// ── Helper methods ────────────────────────────────────────────────
-
-impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
-    /// Validate and parse an AddRuleRequest into a Rule.
-    /// Returns Err(String) with a user-facing message on validation failure.
-    fn parse_rule_request(req: AddRuleRequest) -> Result<crate::agent::Rule, String> {
-        validation::validate_rule_name(&req.name)?;
-        validation::validate_trigger_pattern(&req.trigger)?;
-        let condition = match req.condition {
-            Some(v) => Some(serde_json::from_value(v).map_err(|e| {
-                format!(
-                    "Invalid condition format: {}. Use {{\"field\": \"...\", \"operator\": \">\", \"value\": ...}}",
-                    e
-                )
-            })?),
-            None => None,
-        };
-        let action: crate::agent::Action =
-            serde_json::from_value(req.action).map_err(|e| {
-                format!(
-                    "Invalid action format: {}. Use {{\"type\": \"log\", \"message\": \"...\"}} or {{\"type\": \"command\", \"node\": \"...\", \"command\": \"...\"}}",
-                    e
-                )
-            })?;
-        Ok(crate::agent::Rule {
-            name: req.name,
-            trigger: req.trigger,
-            condition,
-            action,
-            enabled: true,
-        })
-    }
-}
-
 /// Run MCP server on stdio (stdin/stdout).
 ///
 /// No authentication on stdio — process boundary provides implicit trust
@@ -847,7 +621,6 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
 pub async fn run_mcp_stdio(
     session: Arc<zenoh::Session>,
     node_manager: Arc<crate::daemon::node_manager::NodeManager>,
-    agent: Option<Arc<Agent>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use rmcp::ServiceExt;
 
@@ -862,7 +635,7 @@ pub async fn run_mcp_stdio(
     });
 
     let server = BubbaLoopMcpServer::new(
-        platform, agent, None, // No auth token for stdio
+        platform, None, // No auth token for stdio
         scope, machine_id,
     );
 
@@ -879,7 +652,6 @@ pub async fn run_mcp_stdio(
 pub async fn run_mcp_server(
     session: Arc<zenoh::Session>,
     node_manager: Arc<crate::daemon::node_manager::NodeManager>,
-    agent: Option<Arc<Agent>>,
     port: u16,
     mut shutdown_rx: tokio::sync::watch::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -902,13 +674,10 @@ pub async fn run_mcp_server(
         machine_id: machine_id.clone(),
     });
 
-    let agent_for_factory = agent;
-
     let mcp_service = StreamableHttpService::new(
         move || {
             Ok(BubbaLoopMcpServer::new(
                 platform.clone(),
-                agent_for_factory.clone(),
                 Some(token.clone()),
                 scope.clone(),
                 machine_id.clone(),

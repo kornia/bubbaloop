@@ -133,8 +133,6 @@ struct McpArgs {
 /// In stdio mode, logs are redirected to ~/.bubbaloop/mcp-stdio.log to avoid
 /// corrupting the JSON-RPC protocol on stdout/stderr.
 async fn run_mcp_command(args: McpArgs) -> Result<(), Box<dyn std::error::Error>> {
-    use std::sync::Arc;
-
     if args.stdio {
         // Redirect logs to file to avoid corrupting the MCP JSON-RPC protocol.
         // stdout/stderr must stay clean for JSON-RPC messages.
@@ -167,27 +165,23 @@ async fn run_mcp_command(args: McpArgs) -> Result<(), Box<dyn std::error::Error>
 
     // Create Zenoh session
     log::info!("Connecting to Zenoh...");
-    let session = bubbaloop::daemon::create_session(args.zenoh_endpoint.as_deref()).await?;
+    let session = bubbaloop::daemon::create_session(args.zenoh_endpoint.as_deref())
+        .await
+        .map_err(|e| e as Box<dyn std::error::Error>)?;
 
     // Create node manager
     log::info!("Initializing node manager...");
     let node_manager = bubbaloop::daemon::NodeManager::new().await?;
 
-    // Create agent
-    let agent = Arc::new(bubbaloop::agent::Agent::new(
-        session.clone(),
-        node_manager.clone(),
-    ));
-
     if args.stdio {
         log::info!("Starting MCP server in stdio mode...");
-        bubbaloop::mcp::run_mcp_stdio(session, node_manager, Some(agent))
+        bubbaloop::mcp::run_mcp_stdio(session, node_manager)
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
     } else {
         log::info!("Starting MCP server on HTTP port {}...", args.port);
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
-        bubbaloop::mcp::run_mcp_server(session, node_manager, Some(agent), args.port, shutdown_rx)
+        bubbaloop::mcp::run_mcp_server(session, node_manager, args.port, shutdown_rx)
             .await
             .map_err(|e| e as Box<dyn std::error::Error>)?;
     }

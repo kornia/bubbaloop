@@ -9,15 +9,6 @@ publish_topic: output
 # Publishing rate in Hz
 rate_hz: 1.0
 
-# --- Node Manifest (served at {prefix}/manifest) ---
-# Capabilities this node provides (e.g., sensor, actuator, health-check, network, compute)
-capabilities:
-  - sensor
-
-# Hardware requirements (e.g., camera, gpio, network, gpu, serial)
-requires_hardware:
-  - network
-
 # Data classification for security (internal, confidential, public)
 data_classification: internal
 

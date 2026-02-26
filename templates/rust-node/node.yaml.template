@@ -6,13 +6,28 @@ author: {{author}}
 build: "pixi run build"
 command: "./target/release/{{node_name}}_node"
 
-# Optional: MCP tool metadata for AI agent integration (planned).
-# When supported, the daemon will read this to enrich MCP tool descriptions.
-# For now, the daemon auto-discovers commands from the node's manifest queryable.
-# mcp:
-#   tools:
-#     - name: "example_command"
-#       description: "Detailed description for AI agents"
-#       examples:
-#         - params: {key: "value"}
-#           description: "Example usage"
+# Skill capabilities — what this node provides to AI agents
+capabilities:
+  - sensor
+
+# Topics this node publishes
+publishes:
+  - suffix: output
+    description: "Primary data output"
+    # schema_type: "bubbaloop.header.v1.Header"  # Uncomment when using protobuf
+    # rate_hz: 1.0
+
+# Topics this node subscribes to (uncomment if needed)
+# subscribes:
+#   - suffix: input
+#     description: "Input data"
+
+# Commands this node accepts (uncomment if needed)
+# commands:
+#   - name: reset
+#     description: "Reset the node state"
+
+# Hardware/software requirements
+requires:
+  hardware:
+    - network
