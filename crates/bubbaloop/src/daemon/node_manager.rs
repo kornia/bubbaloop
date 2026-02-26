@@ -618,11 +618,7 @@ impl NodeManager {
         let nodes = self.nodes.read().await;
         nodes
             .values()
-            .filter_map(|n| {
-                n.manifest
-                    .as_ref()
-                    .map(|m| (n.effective_name(), m.clone()))
-            })
+            .filter_map(|n| n.manifest.as_ref().map(|m| (n.effective_name(), m.clone())))
             .collect()
     }
 

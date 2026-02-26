@@ -84,6 +84,19 @@ pub trait PlatformOperations: Send + Sync + 'static {
         &self,
         capability_filter: Option<&str>,
     ) -> impl std::future::Future<Output = PlatformResult<Vec<(String, Value)>>> + Send;
+
+    /// Install a node from a source path (local directory or GitHub user/repo).
+    /// Returns the name of the installed node.
+    fn install_node(
+        &self,
+        source: &str,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Remove a registered node. Stops it first if running.
+    fn remove_node(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
 }
 
 // ── DaemonPlatform: real implementation backed by NodeManager + Zenoh ────
@@ -247,23 +260,58 @@ impl PlatformOperations for DaemonPlatform {
                     // Match capability by its serde-serialized snake_case name
                     let filter_lower = filter.to_lowercase();
                     manifest.capabilities.iter().any(|cap| {
-                        let cap_str =
-                            serde_json::to_value(cap)
-                                .ok()
-                                .and_then(|v| v.as_str().map(String::from));
+                        let cap_str = serde_json::to_value(cap)
+                            .ok()
+                            .and_then(|v| v.as_str().map(String::from));
                         cap_str.map(|s| s == filter_lower).unwrap_or(false)
                     })
                 } else {
                     true
                 }
             })
-            .filter_map(|(name, manifest)| {
-                serde_json::to_value(&manifest)
-                    .ok()
-                    .map(|v| (name, v))
-            })
+            .filter_map(|(name, manifest)| serde_json::to_value(&manifest).ok().map(|v| (name, v)))
             .collect();
         Ok(results)
+    }
+
+    async fn install_node(&self, source: &str) -> PlatformResult<String> {
+        let proto_cmd = ProtoNodeCommand {
+            command: CommandType::AddNode as i32,
+            node_name: String::new(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: now_ms(),
+            source_machine: "mcp-platform".to_string(),
+            target_machine: String::new(),
+            node_path: source.to_string(),
+            name_override: String::new(),
+            config_override: String::new(),
+        };
+        let result = self.node_manager.execute_command(proto_cmd).await;
+        if result.success {
+            Ok(result.message)
+        } else {
+            Err(PlatformError::CommandFailed(result.message))
+        }
+    }
+
+    async fn remove_node(&self, name: &str) -> PlatformResult<String> {
+        let proto_cmd = ProtoNodeCommand {
+            command: CommandType::RemoveNode as i32,
+            node_name: name.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: now_ms(),
+            source_machine: "mcp-platform".to_string(),
+            target_machine: String::new(),
+            node_path: String::new(),
+            name_override: String::new(),
+            config_override: String::new(),
+        };
+        let result = self.node_manager.execute_command(proto_cmd).await;
+        if result.success {
+            Ok(result.message)
+        } else {
+            Err(PlatformError::CommandFailed(result.message))
+        }
     }
 }
 
@@ -430,6 +478,21 @@ pub mod mock {
                 })
                 .collect();
             Ok(results)
+        }
+
+        async fn install_node(&self, source: &str) -> PlatformResult<String> {
+            Ok(format!("mock: installed node from {}", source))
+        }
+
+        async fn remove_node(&self, name: &str) -> PlatformResult<String> {
+            let mut nodes = self.nodes.lock().unwrap();
+            let before = nodes.len();
+            nodes.retain(|n| n.name != name);
+            if nodes.len() < before {
+                Ok(format!("mock: removed node {}", name))
+            } else {
+                Err(PlatformError::NodeNotFound(name.to_string()))
+            }
         }
     }
 }

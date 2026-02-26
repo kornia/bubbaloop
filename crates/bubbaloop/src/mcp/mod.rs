@@ -71,6 +71,12 @@ struct QueryTopicRequest {
     key_expr: String,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct InstallNodeRequest {
+    /// Source path: local directory path or GitHub "user/repo" format
+    source: String,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct DiscoverCapabilitiesParams {
     /// Filter by capability type: "sensor", "actuator", "processor", "gateway". Omit for all.
@@ -600,6 +606,54 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        description = "Install a node from a local path or GitHub repository. Accepts either a local directory path (e.g., '/path/to/my-node') or GitHub format (e.g., 'user/repo'). The node source is cloned/registered with the daemon. Admin only."
+    )]
+    async fn install_node(
+        &self,
+        Parameters(req): Parameters<InstallNodeRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=install_node source={}", req.source);
+        // Basic validation: non-empty, no shell metacharacters
+        if req.source.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "Error: source path cannot be empty",
+            )]));
+        }
+        if req.source.contains(';') || req.source.contains('|') || req.source.contains('&') {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "Error: source path contains invalid characters",
+            )]));
+        }
+        match self.platform.install_node(&req.source).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Remove a registered node. Stops the node first if it is running, then removes it from the daemon registry. Admin only."
+    )]
+    async fn remove_node(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=remove_node node={}", req.node_name);
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
+        match self.platform.remove_node(&req.node_name).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
         description = "Get the protobuf schema of a node's data messages. Returns the schema in human-readable format if available."
     )]
     async fn get_node_schema(
@@ -638,7 +692,7 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
             instructions: Some(
                 "Bubbaloop skill runtime for AI agents. Controls physical sensor nodes via MCP.\n\n\
                  **Discovery:** list_nodes, get_node_health, get_node_schema, get_stream_info, discover_capabilities\n\
-                 **Lifecycle:** start_node, stop_node, restart_node, build_node\n\
+                 **Lifecycle:** start_node, stop_node, restart_node, build_node, install_node, remove_node\n\
                  **Data:** send_command, get_stream_info (returns Zenoh topic for streaming)\n\
                  **Config:** get_node_config, get_node_manifest, list_commands\n\
                  **System:** get_system_status, get_machine_info, query_zenoh, discover_nodes\n\n\

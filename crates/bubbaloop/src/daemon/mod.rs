@@ -93,10 +93,7 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>, zeno
 /// Run the daemon with the given configuration.
 ///
 /// This is the main entry point called by `bubbaloop daemon`.
-pub async fn run(
-    zenoh_endpoint: Option<String>,
-    strict: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     use tokio::sync::watch;
 
     log::info!("Starting bubbaloop daemon...");
@@ -151,9 +148,6 @@ pub async fn run(
 
     // Note: Duplicate daemon detection via Zenoh queryable removed.
     // MCP server will bind to port and fail if already in use.
-    if strict {
-        log::warn!("--strict flag is deprecated (duplicate detection now uses MCP port binding)");
-    }
 
     // Start health monitor for Zenoh heartbeats
     log::info!("Starting health monitor...");

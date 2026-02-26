@@ -10,8 +10,6 @@ use zenoh::Session;
 use crate::schemas::{NodeList, NodeStatus};
 use crate::tui::app::NodeInfo;
 
-#[allow(dead_code)]
-const API_PREFIX: &str = "bubbaloop/daemon/api";
 const API_HEALTH: &str = "bubbaloop/daemon/api/health";
 const API_NODES: &str = "bubbaloop/daemon/api/nodes";
 const API_NODES_ADD: &str = "bubbaloop/daemon/api/nodes/add";

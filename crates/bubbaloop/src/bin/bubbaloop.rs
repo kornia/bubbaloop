@@ -105,10 +105,6 @@ struct DaemonArgs {
     /// zenoh endpoint to connect to (default: auto-discover local zenohd)
     #[argh(option, short = 'z')]
     zenoh_endpoint: Option<String>,
-
-    /// exit with error if another daemon is already running
-    #[argh(switch)]
-    strict: bool,
 }
 
 /// Run MCP server for AI agent integration
@@ -256,7 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
                     .try_init(),
             );
-            bubbaloop::daemon::run(args.zenoh_endpoint, args.strict).await?;
+            bubbaloop::daemon::run(args.zenoh_endpoint).await?;
         }
         Some(Command::Mcp(args)) => {
             run_mcp_command(args).await?;

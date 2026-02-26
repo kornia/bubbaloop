@@ -51,22 +51,23 @@ impl std::str::FromStr for Tier {
 pub fn required_tier(tool_name: &str) -> Tier {
     match tool_name {
         // Viewer tools (read-only)
-        "list_nodes" | "get_node_health" | "get_node_schema" | "get_stream_info"
-        | "list_topics" | "get_system_status" | "get_machine_info" | "doctor"
-        | "discover_nodes" | "get_node_manifest" | "list_commands"
+        "list_nodes"
+        | "get_node_health"
+        | "get_node_schema"
+        | "get_stream_info"
+        | "get_system_status"
+        | "get_machine_info"
+        | "discover_nodes"
+        | "get_node_manifest"
+        | "list_commands"
         | "discover_capabilities" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
-        "start_node" | "stop_node" | "restart_node" | "get_node_config" | "set_node_config"
-        | "read_sensor" | "send_command" | "get_node_logs" => Tier::Operator,
+        "start_node" | "stop_node" | "restart_node" | "get_node_config" | "send_command"
+        | "get_node_logs" => Tier::Operator,
 
         // Admin tools (system modification)
-        "install_node"
-        | "remove_node"
-        | "build_node"
-        | "create_node_instance"
-        | "set_system_config"
-        | "query_zenoh" => Tier::Admin,
+        "install_node" | "remove_node" | "build_node" | "query_zenoh" => Tier::Admin,
 
         // Unknown tools default to admin (principle of least privilege)
         _ => Tier::Admin,
