@@ -745,10 +745,7 @@ async fn install_node_shell_metacharacters_rejected() {
 
     for bad_source in &["foo;rm -rf /", "foo|bar", "foo&bar"] {
         let result = h
-            .call_with_args(
-                "install_node",
-                serde_json::json!({"source": bad_source}),
-            )
+            .call_with_args("install_node", serde_json::json!({"source": bad_source}))
             .await
             .unwrap();
         let text = result_text(&result);
@@ -772,10 +769,7 @@ async fn remove_node_existing() {
 
     // Default mock has "test-node" — remove it
     let result = h
-        .call_with_args(
-            "remove_node",
-            serde_json::json!({"node_name": "test-node"}),
-        )
+        .call_with_args("remove_node", serde_json::json!({"node_name": "test-node"}))
         .await
         .unwrap();
     let text = result_text(&result);

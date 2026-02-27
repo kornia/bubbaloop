@@ -98,7 +98,7 @@ mod tests {
         let token = load_or_generate_token_at(&path).unwrap();
         assert!(token.starts_with("bb_"));
         assert_eq!(token.len(), 35); // "bb_" + 32 hex chars
-        // Verify file was created and is readable
+                                     // Verify file was created and is readable
         let loaded = load_or_generate_token_at(&path).unwrap();
         assert_eq!(loaded, token); // Same token on second load
     }

@@ -615,7 +615,8 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         log::info!("[MCP] tool=install_node source={}", req.source);
         if let Err(e) = validation::validate_install_source(&req.source) {
             return Ok(CallToolResult::success(vec![Content::text(format!(
-                "Error: {}", e
+                "Error: {}",
+                e
             ))]));
         }
         match self.platform.install_node(&req.source).await {
