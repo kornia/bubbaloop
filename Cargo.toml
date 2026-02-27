@@ -40,10 +40,6 @@ ctrlc = "3.4"
 # Error handling
 thiserror = "2.0"
 
-# TUI
-ratatui = "0.30"
-crossterm = "0.28"
-
 # Directories
 dirs = "6"
 

@@ -916,6 +916,8 @@ pub async fn run_mcp_server(
     let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = crate::daemon::util::get_machine_id();
 
+    let health_manager = node_manager.clone();
+
     let platform = Arc::new(platform::DaemonPlatform {
         node_manager,
         session,
@@ -958,6 +960,27 @@ pub async fn run_mcp_server(
     });
 
     let router = axum::Router::new()
+        .route(
+            "/health",
+            axum::routing::get(move || {
+                let mgr = health_manager.clone();
+                async move {
+                    use crate::schemas::NodeStatus;
+                    let node_list = mgr.get_node_list().await;
+                    let running = node_list
+                        .nodes
+                        .iter()
+                        .filter(|n| NodeStatus::try_from(n.status) == Ok(NodeStatus::Running))
+                        .count();
+                    axum::Json(serde_json::json!({
+                        "status": "ok",
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "nodes_total": node_list.nodes.len(),
+                        "nodes_running": running,
+                    }))
+                }
+            }),
+        )
         .nest_service("/mcp", mcp_service)
         .layer(tower_governor::GovernorLayer::new(governor_conf));
 

@@ -36,10 +36,6 @@ log.workspace = true
 env_logger.workspace = true
 walkdir = "2"
 
-# TUI framework (optional)
-ratatui = { workspace = true, optional = true }
-crossterm = { workspace = true, optional = true }
-
 # Zenoh for daemon communication
 zenoh.workspace = true
 
@@ -81,7 +77,6 @@ tower_governor = "0.8"
 
 [features]
 default = ["dashboard"]
-tui = ["dep:ratatui", "dep:crossterm"]
 dashboard = ["dep:rust-embed", "dep:mime_guess", "dep:tokio-tungstenite"]
 test-harness = ["rmcp/client"]
 

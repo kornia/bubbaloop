@@ -1,7 +1,6 @@
 //! Bubbaloop CLI - Unified command-line interface
 //!
 //! Usage:
-//!   bubbaloop tui                      # Launch TUI
 //!   bubbaloop status [-f format]       # Show services status
 //!   bubbaloop doctor                   # Run all system diagnostics
 //!   bubbaloop doctor -c zenoh          # Check Zenoh connectivity only
@@ -36,10 +35,6 @@ struct Args {
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum Command {
-    #[cfg(feature = "tui")]
-    Tui(TuiArgs),
-    #[cfg(not(feature = "tui"))]
-    Tui(TuiStubArgs),
     Status(StatusArgs),
     Doctor(DoctorArgs),
     Daemon(DaemonArgs),
@@ -50,18 +45,6 @@ enum Command {
     Debug(DebugCommand),
     InitTls(InitTlsArgs),
 }
-
-/// Launch the terminal user interface
-#[cfg(feature = "tui")]
-#[derive(FromArgs)]
-#[argh(subcommand, name = "tui")]
-struct TuiArgs {}
-
-/// Launch the terminal user interface (requires --features tui)
-#[cfg(not(feature = "tui"))]
-#[derive(FromArgs)]
-#[argh(subcommand, name = "tui")]
-struct TuiStubArgs {}
 
 /// Show services status (non-interactive)
 #[derive(FromArgs)]
@@ -187,7 +170,7 @@ async fn run_mcp_command(args: McpArgs) -> Result<(), Box<dyn std::error::Error>
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging (stderr to avoid interfering with TUI)
+    // Initialize logging
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
         .target(env_logger::Target::Stderr)
         .init();
@@ -206,7 +189,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Bubbaloop - AI-native orchestration for Physical AI\n");
             eprintln!("Usage: bubbaloop <command>\n");
             eprintln!("Commands:");
-            eprintln!("  tui       Launch the terminal user interface");
             eprintln!("  status    Show services status (non-interactive)");
             eprintln!("  doctor    Run system diagnostics and health checks");
             eprintln!("              --json: Output as JSON");
@@ -229,16 +211,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("  init-tls  Print TLS/mTLS certificate generation guide");
             eprintln!("\nRun 'bubbaloop <command> --help' for more information.");
             return Ok(());
-        }
-        #[cfg(feature = "tui")]
-        Some(Command::Tui(_)) => {
-            bubbaloop::tui::run().await?;
-        }
-        #[cfg(not(feature = "tui"))]
-        Some(Command::Tui(_)) => {
-            eprintln!("TUI is not enabled. Build with --features tui to use it.");
-            eprintln!("For monitoring, use the dashboard or MCP tools instead.");
-            std::process::exit(1);
         }
         Some(Command::Status(status_args)) => {
             bubbaloop::cli::status::run(&status_args.format).await?;
