@@ -29,6 +29,9 @@ pub mod validation;
 /// YAML skill loader — driver catalog and config parsing
 pub mod skills;
 
+/// Agent layer: Claude API chat, SQLite memory, scheduling
+pub mod agent;
+
 /// Protobuf schemas for bubbaloop
 pub mod schemas {
     pub mod header {
