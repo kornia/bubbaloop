@@ -47,8 +47,10 @@ bubbaloop node logs my-node -f        # Follow logs
 ## Node Lifecycle
 
 ```bash
-# 1. Create a new node
+# 1. Create a new node (generates SDK-based scaffold)
 bubbaloop node init my-sensor --node-type rust
+# Edit src/main.rs — implement Node trait (init + run)
+# The SDK handles Zenoh session, health, schema, config, shutdown
 
 # 2. Register with daemon
 bubbaloop node add ./my-sensor
@@ -132,22 +134,90 @@ Common issues:
 - **Agent guidelines**: See [CLAUDE.md](CLAUDE.md) for architecture and coding standards
 - **CLI reference**: `bubbaloop --help` or `bubbaloop node --help`
 
+## AI Agent Integration (MCP)
+
+Bubbaloop includes an MCP (Model Context Protocol) server that lets any LLM control your sensor nodes via natural language. Build with `--features mcp` to enable.
+
+```bash
+# Build with MCP support
+cargo build --release --features mcp
+
+# The daemon starts the MCP server on port 8088
+bubbaloop daemon
+# → MCP server: http://127.0.0.1:8088/mcp
+```
+
+**Available MCP tools:**
+
+| Tool | Description |
+|------|-------------|
+| `list_nodes` | List all nodes with status |
+| `get_node_manifest` | Get a node's capabilities and topics |
+| `send_command` | Send a command to a node |
+| `start_node` / `stop_node` | Control node lifecycle |
+| `get_node_logs` | Read node service logs |
+| `discover_nodes` | Fleet-wide manifest discovery |
+| `query_zenoh` | Query any Zenoh key expression |
+Configure Claude Code to use it via `.mcp.json` (already in project root).
+
+## Automation via External Agents
+
+The daemon is a **passive skill runtime** — it does not include an autonomous rule engine. Instead, external AI agents (OpenClaw, Claude Code, n8n, Home Assistant, etc.) can program automation logic by:
+
+1. **Continuously monitoring** node status via `get_system_status` MCP tool
+2. **Reacting to events** by subscribing to Zenoh topics (e.g., `bubbaloop/**/health/*`)
+3. **Taking actions** via MCP tools (e.g., `restart_node`, `send_command`)
+
+**Example:** Auto-restart failed nodes via OpenClaw:
+```python
+while True:
+    status = mcp_call("get_system_status")
+    for node in status["nodes"]:
+        if node["health"] == "unhealthy":
+            mcp_call("restart_node", {"node_name": node["name"]})
+    await asyncio.sleep(60)
+      params:
+        resolution: "1080p"
+```
+
+Rules support: `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains` operators. Actions: `log`, `command` (send to node), `publish` (to Zenoh topic). Human overrides via `bubbaloop/{scope}/{machine_id}/human/override/**` topic.
+
+## Node Contract
+
+Every node is self-describing with standard queryables:
+
+```
+{node}/schema      → Protobuf FileDescriptorSet (binary)
+{node}/manifest    → Capabilities, topics, commands (JSON)
+{node}/health      → Status and uptime (JSON)
+{node}/config      → Current configuration (JSON)
+{node}/command     → Imperative actions (JSON request/response)
+```
+
+AI agents discover nodes via `bubbaloop/**/manifest` wildcard query, then interact through commands and data subscriptions.
+
 ## Architecture
 
 ```
-Dashboard (React) ─┬─ WebSocket ─── zenoh-bridge ─┬─ Zenoh pub/sub
-TUI (ratatui) ─────┤                              │
-CLI ───────────────┘                              │
-                                                  │
-Daemon ───────────────────────────────────────────┤
-  ├─ Node Manager (lifecycle, builds)            │
-  ├─ Registry (~/.bubbaloop/nodes.json)          │
-  └─ Systemd D-Bus (zbus)                        │
-                                                  │
-Nodes ────────────────────────────────────────────┘
-  ├─ rtsp-camera (RTSP → H264 → Zenoh)
-  ├─ openmeteo (weather API → Zenoh)
-  └─ custom nodes...
+                    ┌──────────────────────────────────┐
+                    │   AI Agent (Claude via MCP)       │
+                    │   http://127.0.0.1:8088/mcp      │
+                    └──────────────┬───────────────────┘
+                                   │
+Dashboard (React) ─┬─ WebSocket ───┤─── Zenoh pub/sub
+TUI (ratatui) ─────┤               │
+CLI ───────────────┘               │
+                                   │
+Daemon ────────────────────────────┤
+  ├─ Node Manager (lifecycle)      │
+  ├─ Agent Rule Engine (rules.yaml)│
+  ├─ MCP Server (feature-gated)   │
+  └─ Systemd D-Bus (zbus)         │
+                                   │
+Nodes (self-describing) ───────────┘
+  ├─ rtsp-camera  [schema|manifest|health|config|command]
+  ├─ openmeteo    [schema|manifest|health|config|command]
+  └─ custom...    [schema|manifest|health|config|command]
 ```
 
 ## License

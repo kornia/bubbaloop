@@ -1,6 +1,6 @@
 # Topics
 
-Bubbaloop uses ROS-Z topic conventions for all message routing.
+Bubbaloop uses vanilla Zenoh key expressions for all message routing.
 
 ## Topic Naming
 
@@ -131,7 +131,7 @@ const subscriber = session.declareSubscriber("0/camera%**");
 
 ## Topic Namespacing
 
-The `0/` prefix is the ROS-Z namespace. Future versions may support:
+The `bubbaloop/` prefix is the project namespace. Scopes support:
 
 | Prefix | Purpose |
 |--------|---------|

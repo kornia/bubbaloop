@@ -1,35 +1,111 @@
-//! Bubbaloop Daemon
+//! Bubbaloop Skill Runtime
 //!
-//! Central service for managing bubbaloop nodes via Zenoh.
+//! Lightweight daemon for managing sensor/actuator nodes as discoverable skills.
 //!
-//! # Features
+//! # Architecture
 //!
-//! - Maintains authoritative node state in memory
-//! - Communicates with systemd via D-Bus (native, no shell spawning)
-//! - Publishes state to Zenoh topics (protobuf-encoded)
-//! - Accepts commands via Zenoh queryables
-//! - Provides REST-like API via Zenoh queryables (JSON)
-//! - Runs as a systemd user service
+//! - Registry: tracks installed nodes in ~/.bubbaloop/nodes.json
+//! - Lifecycle: start/stop/restart via systemd D-Bus (zbus)
+//! - Health: monitors node heartbeats via Zenoh pub/sub
+//! - MCP Gateway: exposes all operations as MCP tools for AI agents
+//!
+//! External AI agents (OpenClaw, Claude, etc.) interact exclusively through MCP.
+//! The daemon never makes autonomous decisions — it's a passive skill runtime.
 
 pub mod node_manager;
 pub mod registry;
 pub mod systemd;
 pub mod util;
-pub mod zenoh_api;
-pub mod zenoh_service;
 
 pub use node_manager::NodeManager;
-pub use zenoh_api::run_zenoh_api_server;
-pub use zenoh_service::{create_session, ZenohService};
+
+use std::sync::Arc;
+use std::time::Duration;
+use zenoh::Session;
+
+/// Create a Zenoh session with optional endpoint configuration
+///
+/// Endpoint resolution order:
+/// 1. Explicit `endpoint` parameter (if Some)
+/// 2. `BUBBALOOP_ZENOH_ENDPOINT` environment variable
+/// 3. Default: `tcp/127.0.0.1:7447`
+///
+/// For distributed deployments, set `BUBBALOOP_ZENOH_ENDPOINT` to point to the local router.
+pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>, zenoh::Error> {
+    // Configure Zenoh session
+    let mut config = zenoh::Config::default();
+
+    // Peer mode — allows direct connections from co-located nodes
+    config
+        .insert_json5("mode", "\"peer\"")
+        .expect("Failed to set Zenoh mode");
+
+    // Resolve endpoint: parameter > env var > default
+    let env_endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT").ok();
+    let ep = endpoint
+        .or(env_endpoint.as_deref())
+        .unwrap_or("tcp/127.0.0.1:7447");
+
+    log::info!("Connecting to Zenoh router at: {}", ep);
+
+    config
+        .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
+        .expect("Failed to set Zenoh endpoint");
+
+    // Disable all scouting to prevent connecting to remote peers via Tailscale/VPN
+    config
+        .insert_json5("scouting/multicast/enabled", "false")
+        .expect("Failed to disable multicast scouting");
+    config
+        .insert_json5("scouting/gossip/enabled", "false")
+        .expect("Failed to disable gossip scouting");
+
+    // Disable shared memory — bridge doesn't participate in the SHM segment
+    config
+        .insert_json5("transport/shared_memory/enabled", "false")
+        .expect("Failed to disable shared memory");
+
+    // Retry loop with exponential backoff (max 30 attempts ≈ 15 min with 30s cap)
+    let max_backoff = Duration::from_secs(30);
+    let max_attempts = 30u32;
+    let mut backoff = Duration::from_secs(1);
+    let mut attempt = 0u32;
+
+    loop {
+        attempt += 1;
+        match zenoh::open(config.clone()).await {
+            Ok(session) => {
+                if attempt > 1 {
+                    log::info!("Zenoh session established after {} attempts", attempt);
+                }
+                return Ok(Arc::new(session));
+            }
+            Err(e) => {
+                if attempt >= max_attempts {
+                    log::error!(
+                        "Zenoh connection failed after {} attempts, giving up",
+                        max_attempts
+                    );
+                    return Err(e);
+                }
+                log::warn!(
+                    "Zenoh connection attempt {}/{} failed: {}. Retrying in {:?}...",
+                    attempt,
+                    max_attempts,
+                    e,
+                    backoff
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(max_backoff);
+            }
+        }
+    }
+}
 
 /// Run the daemon with the given configuration.
 ///
 /// This is the main entry point called by `bubbaloop daemon`.
-pub async fn run(
-    zenoh_endpoint: Option<String>,
-    strict: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use std::sync::Arc;
+pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     use tokio::sync::watch;
 
     log::info!("Starting bubbaloop daemon...");
@@ -78,49 +154,12 @@ pub async fn run(
 
     // Create shared Zenoh session
     log::info!("Connecting to Zenoh...");
-    let session = create_session(zenoh_endpoint.as_deref()).await?;
-
-    // Check for duplicate daemon instances
-    log::info!("Checking for duplicate daemon instances...");
-    match session
-        .get("bubbaloop/daemon/api/health")
-        .timeout(std::time::Duration::from_secs(1))
+    let session = create_session(zenoh_endpoint.as_deref())
         .await
-    {
-        Ok(replies) => {
-            // Try to get a reply
-            let mut has_response = false;
-            while let Ok(reply) = replies.recv_async().await {
-                match reply.result() {
-                    Ok(_) => {
-                        has_response = true;
-                        break;
-                    }
-                    Err(_) => continue,
-                }
-            }
+        .map_err(|e| e as Box<dyn std::error::Error>)?;
 
-            if has_response {
-                log::warn!("Another daemon is already running!");
-                log::warn!("Multiple daemons will cause conflicting queryables and 'Query not found' errors.");
-                log::warn!(
-                    "To prevent this, use the --strict flag to exit when a duplicate is detected."
-                );
-
-                if strict {
-                    return Err("Another daemon is already running (strict mode)".into());
-                }
-            } else {
-                log::info!("No existing daemon detected, proceeding with startup.");
-            }
-        }
-        Err(e) => {
-            log::debug!(
-                "Health check query failed (this is expected if no daemon is running): {}",
-                e
-            );
-        }
-    }
+    // Note: Duplicate daemon detection via Zenoh queryable removed.
+    // MCP server will bind to port and fail if already in use.
 
     // Start health monitor for Zenoh heartbeats
     log::info!("Starting health monitor...");
@@ -132,70 +171,35 @@ pub async fn run(
         log::warn!("Failed to start health monitor: {}", e);
     }
 
-    // Start Zenoh API service (REST-like queryables with JSON responses)
-    let api_manager = node_manager.clone();
-    let api_session = session.clone();
-    let api_shutdown = shutdown_rx.clone();
-    let api_task = tokio::spawn(async move {
-        if let Err(e) = run_zenoh_api_server(api_session, api_manager, api_shutdown).await {
-            log::error!("Zenoh API service error: {}", e);
-        }
-    });
+    // Start MCP server (HTTP on port 8088)
+    let mcp_port: u16 = std::env::var("BUBBALOOP_MCP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(crate::mcp::MCP_PORT);
 
-    // Start agent rule engine
-    let agent = Arc::new(crate::agent::Agent::new(
-        session.clone(),
-        node_manager.clone(),
-    ));
-    let agent_shutdown = shutdown_rx.clone();
-    let agent_ref = agent.clone();
-    let agent_task = tokio::spawn(async move {
-        agent_ref.run(agent_shutdown).await;
-    });
-
-    // Start MCP server (HTTP on port 8088, feature-gated)
-    #[cfg(feature = "mcp")]
     let mcp_task = {
         let mcp_session = session.clone();
         let mcp_manager = node_manager.clone();
-        let mcp_agent = Some(agent.clone());
         let mcp_shutdown = shutdown_rx.clone();
-        let mcp_port = std::env::var("BUBBALOOP_MCP_PORT")
-            .ok()
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(crate::mcp::MCP_PORT);
         tokio::spawn(async move {
             if let Err(e) =
-                crate::mcp::run_mcp_server(mcp_session, mcp_manager, mcp_agent, mcp_port, mcp_shutdown).await
+                crate::mcp::run_mcp_server(mcp_session, mcp_manager, mcp_port, mcp_shutdown).await
             {
                 log::error!("MCP server error: {}", e);
             }
         })
     };
 
-    // Create and run Zenoh service (pub/sub with protobuf)
-    let zenoh_service = ZenohService::new(session, node_manager);
+    log::info!("Bubbaloop skill runtime started.");
+    log::info!("  MCP server: http://127.0.0.1:{}/mcp", mcp_port);
+    log::info!("  Nodes: {} registered", initial_list.nodes.len());
+    log::info!("  Health monitor: active (Zenoh heartbeats)");
 
-    log::info!("Bubbaloop daemon running. Press Ctrl+C to exit.");
-    log::info!("  Zenoh pub/sub topics: bubbaloop/daemon/*");
-    log::info!("  Zenoh API queryables: bubbaloop/daemon/api/*");
-    log::info!("  Agent rule engine: active");
-    #[cfg(feature = "mcp")]
-    log::info!("  MCP server: http://127.0.0.1:{}/mcp",
-        std::env::var("BUBBALOOP_MCP_PORT")
-            .ok()
-            .and_then(|p| p.parse::<u16>().ok())
-            .unwrap_or(crate::mcp::MCP_PORT));
-
-    // Run the Zenoh service (blocks until shutdown)
-    zenoh_service.run(shutdown_rx).await?;
-
-    // Abort services
-    api_task.abort();
-    agent_task.abort();
+    // Wait for shutdown signal
+    let mut shutdown_wait = shutdown_rx.clone();
+    shutdown_wait.changed().await.ok();
 
     // Abort MCP server
-    #[cfg(feature = "mcp")]
     mcp_task.abort();
 
     log::info!("Bubbaloop daemon stopped.");

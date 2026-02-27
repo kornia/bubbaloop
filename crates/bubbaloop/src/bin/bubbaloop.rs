@@ -36,10 +36,14 @@ struct Args {
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum Command {
+    #[cfg(feature = "tui")]
     Tui(TuiArgs),
+    #[cfg(not(feature = "tui"))]
+    Tui(TuiStubArgs),
     Status(StatusArgs),
     Doctor(DoctorArgs),
     Daemon(DaemonArgs),
+    Mcp(McpArgs),
     Node(NodeCommand),
     Launch(LaunchCommand),
     Marketplace(MarketplaceCommand),
@@ -48,9 +52,16 @@ enum Command {
 }
 
 /// Launch the terminal user interface
+#[cfg(feature = "tui")]
 #[derive(FromArgs)]
 #[argh(subcommand, name = "tui")]
 struct TuiArgs {}
+
+/// Launch the terminal user interface (requires --features tui)
+#[cfg(not(feature = "tui"))]
+#[derive(FromArgs)]
+#[argh(subcommand, name = "tui")]
+struct TuiStubArgs {}
 
 /// Show services status (non-interactive)
 #[derive(FromArgs)]
@@ -94,10 +105,84 @@ struct DaemonArgs {
     /// zenoh endpoint to connect to (default: auto-discover local zenohd)
     #[argh(option, short = 'z')]
     zenoh_endpoint: Option<String>,
+}
 
-    /// exit with error if another daemon is already running
+/// Run MCP server for AI agent integration
+#[derive(FromArgs)]
+#[argh(subcommand, name = "mcp")]
+struct McpArgs {
+    /// run in stdio mode (reads JSON-RPC from stdin, writes to stdout)
     #[argh(switch)]
-    strict: bool,
+    stdio: bool,
+
+    /// HTTP port (only used without --stdio, default: 8088)
+    #[argh(option, short = 'p', default = "8088")]
+    port: u16,
+
+    /// zenoh endpoint to connect to (default: auto-discover local zenohd)
+    #[argh(option, short = 'z')]
+    zenoh_endpoint: Option<String>,
+}
+
+/// Run the MCP server (stdio or HTTP mode).
+///
+/// In stdio mode, logs are redirected to ~/.bubbaloop/mcp-stdio.log to avoid
+/// corrupting the JSON-RPC protocol on stdout/stderr.
+async fn run_mcp_command(args: McpArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if args.stdio {
+        // Redirect logs to file to avoid corrupting the MCP JSON-RPC protocol.
+        // stdout/stderr must stay clean for JSON-RPC messages.
+        let bubbaloop_dir = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            .join(".bubbaloop");
+        std::fs::create_dir_all(&bubbaloop_dir).ok();
+        let log_path = bubbaloop_dir.join("mcp-stdio.log");
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map_err(|e| format!("Failed to open log file {}: {}", log_path.display(), e))?;
+        drop(
+            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+                .target(env_logger::Target::Pipe(Box::new(log_file)))
+                .try_init(),
+        );
+        log::info!(
+            "MCP stdio server starting (logs redirected to {})",
+            log_path.display()
+        );
+    } else {
+        // HTTP mode: logs to stderr at info level
+        drop(
+            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+                .try_init(),
+        );
+    }
+
+    // Create Zenoh session
+    log::info!("Connecting to Zenoh...");
+    let session = bubbaloop::daemon::create_session(args.zenoh_endpoint.as_deref())
+        .await
+        .map_err(|e| e as Box<dyn std::error::Error>)?;
+
+    // Create node manager
+    log::info!("Initializing node manager...");
+    let node_manager = bubbaloop::daemon::NodeManager::new().await?;
+
+    if args.stdio {
+        log::info!("Starting MCP server in stdio mode...");
+        bubbaloop::mcp::run_mcp_stdio(session, node_manager)
+            .await
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
+    } else {
+        log::info!("Starting MCP server on HTTP port {}...", args.port);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+        bubbaloop::mcp::run_mcp_server(session, node_manager, args.port, shutdown_rx)
+            .await
+            .map_err(|e| e as Box<dyn std::error::Error>)?;
+    }
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -128,6 +213,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              -c, --check <type>: all|zenoh|daemon (default: all)");
             eprintln!("              --fix: Auto-fix issues");
             eprintln!("  daemon    Run the daemon (node manager service)");
+            eprintln!("  mcp       Run MCP server for AI agent integration:");
+            eprintln!("              --stdio: JSON-RPC over stdin/stdout");
+            eprintln!("              -p, --port <port>: HTTP mode (default: 8088)");
             eprintln!("  node      Manage nodes:");
             eprintln!("              init, validate, list, add, remove");
             eprintln!("              install, uninstall, start, stop, restart");
@@ -142,8 +230,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("\nRun 'bubbaloop <command> --help' for more information.");
             return Ok(());
         }
+        #[cfg(feature = "tui")]
         Some(Command::Tui(_)) => {
             bubbaloop::tui::run().await?;
+        }
+        #[cfg(not(feature = "tui"))]
+        Some(Command::Tui(_)) => {
+            eprintln!("TUI is not enabled. Build with --features tui to use it.");
+            eprintln!("For monitoring, use the dashboard or MCP tools instead.");
+            std::process::exit(1);
         }
         Some(Command::Status(status_args)) => {
             bubbaloop::cli::status::run(&status_args.format).await?;
@@ -157,7 +252,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
                     .try_init(),
             );
-            bubbaloop::daemon::run(args.zenoh_endpoint, args.strict).await?;
+            bubbaloop::daemon::run(args.zenoh_endpoint).await?;
+        }
+        Some(Command::Mcp(args)) => {
+            run_mcp_command(args).await?;
         }
         Some(Command::Node(cmd)) => {
             cmd.run()

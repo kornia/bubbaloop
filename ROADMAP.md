@@ -19,7 +19,7 @@
 2. The daemon is scaffolding — useful today, replaceable by AI agents tomorrow
 3. Self-describing nodes are AI-native — discovery without documentation
 4. Data access rights are the moat — who controls the sensors controls the value
-5. Rust + Zenoh + ros-z — memory safety, decentralized pub/sub, schema introspection
+5. Rust + Zenoh + Protobuf — memory safety, decentralized pub/sub, schema introspection
 
 ## Vision
 
@@ -115,7 +115,7 @@ Building a self-describing, decentralized sensor architecture where nodes are au
 - [x] Define manifest JSON schema with `publishes`, `commands`, `requires_hardware`
 - [x] Add manifest queryable to Rust + Python templates
 - [x] Add command queryable to Rust + Python templates
-- [ ] Add ros-z liveliness tokens for decentralized presence detection (Python blocked on zenoh-python)
+- [ ] Add Zenoh liveliness tokens for decentralized presence detection (Python blocked on zenoh-python)
 - [x] Dashboard wildcard query `bubbaloop/**/manifest` for discovery
 - [ ] Update official nodes: network-monitor, system-telemetry, openmeteo, camera
 
@@ -200,6 +200,23 @@ curl -sSL https://get.bubbaloop.com | bash
 - [ ] Chat panel in dashboard
 - [ ] Natural language execution: "Start the camera"
 - [ ] Device discovery + auto-install tools
+
+---
+
+#### Phase B4b: OpenClaw Foundation (In Progress)
+
+**Goal:** Make bubbaloop the physical AI layer for OpenClaw and other AI agents.
+
+**Deliverables:**
+- [x] MCP server with generic tools (list_nodes, send_command, etc.)
+- [x] `list_commands` MCP tool for easy command discovery
+- [x] Enriched MCP instructions for AI agent workflow guidance
+- [x] Optional `mcp:` section in node.yaml for richer tool descriptions
+- [x] Simplified daemon to pure skill runtime (removed agent rule engine)
+- [x] Updated architecture docs to reflect passive runtime model
+- [ ] MCP authentication for remote agent access
+
+**Design decision:** Enhanced Option B — daemon-only MCP, no per-node MCP tools. Manifest-driven discovery + generic `send_command` dispatcher. Daemon is a passive skill runtime; external AI agents implement automation logic. See `.omc/plans/openclaw-foundation.md`.
 
 ---
 

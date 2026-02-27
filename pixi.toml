@@ -1,7 +1,7 @@
 [workspace]
 name = "bubbaloop"
 version = "0.0.1"
-description = "Multi-camera RTSP streaming with ROS-Z"
+description = "Physical AI orchestration built on Zenoh"
 authors = ["Edgar Riba <edgar.riba@gmail.com>"]
 channels = ["conda-forge"]
 platforms = ["linux-64", "linux-aarch64"]
@@ -34,12 +34,6 @@ docs-build = "mkdocs build"
 # Daemon manages all nodes via systemd and Zenoh
 daemon = "RUST_LOG=info cargo run --bin bubbaloop --package bubbaloop --release -- daemon"
 
-# Cameras connects to local zenohd by default (tcp/127.0.0.1:7447)
-# Override with: pixi run cameras -- -z tcp/other:7447
-cameras = "RUST_LOG=info cargo run --bin cameras_node --package rtsp_camera --release --"
-inference = "RUST_LOG=debug cargo run --bin inference_node --package inference --release"
-openmeteo = "RUST_LOG=info cargo run --bin openmeteo_node --package openmeteo --release --"
-
 # Dashboard
 dashboard-install = "cd dashboard && npm install"
 dashboard-proto = { cmd = "cd dashboard && npm run proto", depends-on = ["dashboard-install"] }
@@ -54,10 +48,6 @@ build-release = { cmd = "cargo build --release", depends-on = ["dashboard-build"
 
 # TUI (Rust)
 tui = "RUST_LOG=info cargo run --bin bubbaloop --package bubbaloop --release -- tui"
-
-# TUI (Legacy Ink - deprecated)
-bubbaloop-legacy-install = "cd bubbaloop-tui && npm install"
-bubbaloop-legacy = { cmd = "cd bubbaloop-tui && npm run dev", depends-on = ["bubbaloop-legacy-install"] }
 
 # Zenoh bridge (for dashboard WebSocket connection)
 bridge-clone = "test -d zenoh-ts || git clone https://github.com/eclipse-zenoh/zenoh-ts.git"

@@ -1,0 +1,28 @@
+[package]
+name = "bubbaloop-node-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Batteries-included SDK for writing bubbaloop nodes"
+license = "Apache-2.0"
+
+[dependencies]
+zenoh = "1.7"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+log = "0.4"
+env_logger = "0.11"
+argh = "0.1"
+ctrlc = "3.4"
+anyhow = "1"
+thiserror = "2.0"
+hostname = "0.4"
+prost = "0.14"
+async-trait = "0.1"
+bubbaloop-schemas = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
+
+[dev-dependencies]
+tempfile = "3"
+
+# Opt out of the parent bubbaloop workspace
+[workspace]

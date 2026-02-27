@@ -292,7 +292,7 @@ describe('JsonView decodePayload chain', () => {
     const msgType = registry.lookupType('bubbaloop.weather.v1.CurrentWeather')!;
     const encoded = msgType.encode({ temperature: 25.0, humidity: 60.0 }).finish();
 
-    const topic = '0/bubbaloop%local%m1%weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_abc';
+    const topic = 'bubbaloop/local/m1/weather/current';
     const result = decodePayload(encoded, topic, registry);
 
     expect(result.schema).toBe('bubbaloop.weather.v1.CurrentWeather');
@@ -332,7 +332,7 @@ describe('JsonView decodePayload chain', () => {
     const largeBytes = new Uint8Array(2000).fill(0x42);
     const encoded = msgType.encode({ payload: largeBytes, name: 'test' }).finish();
 
-    const topic = '0/test%topic/test.v1.BigData/RIHS01_xyz';
+    const topic = 'bubbaloop/local/m1/test/topic';
     const result = decodePayload(encoded, topic, registry);
 
     expect(result.schemaSource).toBe('dynamic');
@@ -675,35 +675,12 @@ describe('Built-in decoder round-trip', () => {
 });
 
 describe('Topic parsing integration', () => {
-  it('extractSchemaFromTopic with ros-z camera topic', () => {
-    const topic = '0/bubbaloop%local%m1%camera%entrance%compressed/bubbaloop.camera.v1.CompressedImage/RIHS01_abc123';
-    const schema = extractSchemaFromTopic(topic);
-    expect(schema).toBe('bubbaloop.camera.v1.CompressedImage');
-  });
-
-  it('extractSchemaFromTopic with ros-z weather topic', () => {
-    const topic = '0/bubbaloop%local%m1%weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_xyz';
-    const schema = extractSchemaFromTopic(topic);
-    expect(schema).toBe('bubbaloop.weather.v1.CurrentWeather');
-  });
-
-  it('extractSchemaFromTopic with ros-z telemetry topic', () => {
-    const topic = '0/bubbaloop%local%nvidia_orin00%system_telemetry%metrics/bubbaloop.system_telemetry.v1.SystemMetrics/RIHS01_hash';
-    const schema = extractSchemaFromTopic(topic);
-    expect(schema).toBe('bubbaloop.system_telemetry.v1.SystemMetrics');
-  });
-
-  it('extractSchemaFromTopic returns null for vanilla topic', () => {
+  it('extractSchemaFromTopic always returns null for vanilla zenoh topics', () => {
     expect(extractSchemaFromTopic('bubbaloop/local/m1/daemon/nodes')).toBeNull();
     expect(extractSchemaFromTopic('bubbaloop/local/m1/weather/current')).toBeNull();
     expect(extractSchemaFromTopic('bubbaloop/local/m1/system-telemetry/metrics')).toBeNull();
-  });
-
-  it('extractSchemaFromTopic does not return RIHS hash segment', () => {
-    const topic = '0/topic/bubbaloop.test.v1.Msg/RIHS01_deadbeef';
-    const schema = extractSchemaFromTopic(topic);
-    expect(schema).toBe('bubbaloop.test.v1.Msg');
-    expect(schema).not.toContain('RIHS');
+    expect(extractSchemaFromTopic('bubbaloop/local/m1/camera/entrance/compressed')).toBeNull();
+    expect(extractSchemaFromTopic('bubbaloop/local/m1/network-monitor/status')).toBeNull();
   });
 
   it('extractTopicPrefix with scoped topic returns 4-segment prefix', () => {
@@ -713,13 +690,6 @@ describe('Topic parsing integration', () => {
       .toBe('bubbaloop/local/nvidia_orin00/camera');
     expect(extractTopicPrefix('bubbaloop/local/m1/network-monitor/status'))
       .toBe('bubbaloop/local/m1/network-monitor');
-  });
-
-  it('extractTopicPrefix with ros-z topic decodes %-encoded prefix', () => {
-    expect(extractTopicPrefix('0/bubbaloop%local%m1%weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_xyz'))
-      .toBe('bubbaloop/local/m1/weather');
-    expect(extractTopicPrefix('0/bubbaloop%local%nvidia_orin00%camera%entrance%compressed/Type/Hash'))
-      .toBe('bubbaloop/local/nvidia_orin00/camera');
   });
 
   it('extractTopicPrefix returns null for short topics', () => {
@@ -734,7 +704,7 @@ describe('Topic parsing integration', () => {
     expect(extractTopicPrefix('zenoh/admin/status/check')).toBeNull();
   });
 
-  it('combined: topic -> extract schema -> decode -> verify fields', () => {
+  it('combined: topic -> guess type -> decode -> verify fields', () => {
     const registry = new SchemaRegistry();
     const root = new protobuf.Root();
     const ns = root.define('bubbaloop.weather.v1');
@@ -750,18 +720,79 @@ describe('Topic parsing integration', () => {
     const msgType = root.lookupType('bubbaloop.weather.v1.CurrentWeather');
     const encoded = msgType.encode({ temperature: 22.5, wind_speed: 5.3, humidity: 72.0 }).finish();
 
-    // Full pipeline: extract schema from topic, then decode
-    const topic = '0/bubbaloop%local%m1%weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_abc';
-    const schemaName = extractSchemaFromTopic(topic);
-    expect(schemaName).toBe('bubbaloop.weather.v1.CurrentWeather');
-
-    const result = registry.decode(schemaName!, encoded);
+    // Full pipeline: use tryDecodeForTopic which guesses type from topic
+    const topic = 'bubbaloop/local/m1/weather/current';
+    const result = registry.tryDecodeForTopic(topic, encoded);
     expect(result).not.toBeNull();
     expect(result!.source).toBe('openmeteo');
+    expect(result!.typeName).toBe('bubbaloop.weather.v1.CurrentWeather');
     const data = result!.data as Record<string, number>;
     expect(data.temperature).toBeCloseTo(22.5);
     expect(data.windSpeed).toBeCloseTo(5.3); // snake_case -> camelCase
     expect(data.humidity).toBeCloseTo(72.0);
+  });
+});
+
+describe('decodePayload with various vanilla Zenoh topic patterns', () => {
+  let registry: SchemaRegistry;
+
+  beforeEach(() => {
+    registry = new SchemaRegistry();
+
+    const root = new protobuf.Root();
+    const weatherNs = root.define('bubbaloop.weather.v1');
+    const currentWeather = new protobuf.Type('CurrentWeather');
+    currentWeather.add(new protobuf.Field('temperature', 1, 'float'));
+    currentWeather.add(new protobuf.Field('humidity', 2, 'float'));
+    weatherNs.add(currentWeather);
+
+    const hourlyForecast = new protobuf.Type('HourlyForecast');
+    hourlyForecast.add(new protobuf.Field('temperature', 1, 'float', 'repeated'));
+    weatherNs.add(hourlyForecast);
+
+    root.resolveAll();
+    injectSchema(registry, root, 'weather', 'openmeteo');
+  });
+
+  it('decodes weather from production scope topic', () => {
+    const msgType = registry.lookupType('bubbaloop.weather.v1.CurrentWeather')!;
+    const encoded = msgType.encode({ temperature: 18.5, humidity: 80.0 }).finish();
+    const result = decodePayload(encoded, 'bubbaloop/production/orin_02/weather/current', registry);
+    expect(result.schemaSource).toBe('dynamic');
+    expect(result.schema).toBe('bubbaloop.weather.v1.CurrentWeather');
+  });
+
+  it('decodes weather from staging scope topic', () => {
+    const msgType = registry.lookupType('bubbaloop.weather.v1.CurrentWeather')!;
+    const encoded = msgType.encode({ temperature: 25.0, humidity: 55.0 }).finish();
+    const result = decodePayload(encoded, 'bubbaloop/staging/test01/weather/current', registry);
+    expect(result.schemaSource).toBe('dynamic');
+    expect(result.schema).toBe('bubbaloop.weather.v1.CurrentWeather');
+  });
+
+  it('decodes weather from dev scope topic', () => {
+    const msgType = registry.lookupType('bubbaloop.weather.v1.CurrentWeather')!;
+    const encoded = msgType.encode({ temperature: 30.0, humidity: 40.0 }).finish();
+    const result = decodePayload(encoded, 'bubbaloop/dev/orin_dev01/weather/current', registry);
+    expect(result.schemaSource).toBe('dynamic');
+    const data = result.data as Record<string, number>;
+    expect(data.temperature).toBeCloseTo(30.0);
+  });
+
+  it('falls back to hex for unknown binary on vanilla zenoh topic', () => {
+    const binary = new Uint8Array([0x00, 0x01, 0x02, 0x03]);
+    const result = decodePayload(binary, 'bubbaloop/local/m1/unknown-service/data', registry);
+    expect(result.schema).toBe('Binary');
+    expect(result.schemaSource).toBe('raw');
+  });
+
+  it('decodes JSON payload regardless of vanilla zenoh topic', () => {
+    const json = JSON.stringify({ status: 'ok', uptime: 12345 });
+    const payload = new TextEncoder().encode(json);
+    const result = decodePayload(payload, 'bubbaloop/local/m1/any-node/health', registry);
+    expect(result.schema).toBe('JSON');
+    expect(result.schemaSource).toBe('builtin');
+    expect((result.data as Record<string, unknown>).status).toBe('ok');
   });
 });
 

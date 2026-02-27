@@ -71,7 +71,6 @@ function decodePayload(payload: Uint8Array, topic: string, registry?: SchemaRegi
   }
 
   // 3. Built-in decoders as fallback (when SchemaRegistry is not yet loaded)
-  // Daemon topics (vanilla zenoh, no ros-z schema hint)
   if (topic.includes('daemon/nodes')) {
     const msg = decodeNodeList(payload);
     if (msg) {
@@ -337,7 +336,13 @@ export function RawDataViewPanel({
             ))}
           </select>
         ) : (
-          <span className="topic mono">{topic || 'No topic selected'}</span>
+          <input
+            type="text"
+            className="topic-input"
+            value={topic}
+            onChange={(e) => onTopicChange?.(e.target.value)}
+            placeholder="Enter topic (e.g., 0/weather%current)"
+          />
         )}
       </div>
 
@@ -600,6 +605,27 @@ export function RawDataViewPanel({
         .topic-select:focus {
           outline: none;
           border-color: var(--accent-primary);
+        }
+
+        .topic-input {
+          width: 100%;
+          padding: 6px 8px;
+          background: var(--bg-primary);
+          border: 1px solid var(--border-color);
+          border-radius: 4px;
+          color: var(--text-primary);
+          font-size: 11px;
+          font-family: 'JetBrains Mono', monospace;
+          box-sizing: border-box;
+        }
+
+        .topic-input:focus {
+          outline: none;
+          border-color: var(--accent-primary);
+        }
+
+        .topic-input::placeholder {
+          color: var(--text-muted);
         }
 
         .topic {

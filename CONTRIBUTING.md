@@ -52,7 +52,7 @@ Before adding any new process/skill/automation, ask:
 
 1. Check argh conventions in CLAUDE.md (`#[derive(FromArgs)]`, `#[argh(subcommand)]`)
 2. Write command + unit tests (co-located `#[cfg(test)] mod tests`)
-3. Verify 240+ Rust tests pass
+3. Verify 325+ Rust tests pass
 4. Interactive CLI testing (verify help text, errors, flags)
 5. Zero warnings enforced
 
@@ -62,10 +62,10 @@ Before adding any new process/skill/automation, ask:
 
 1. Map proto → Rust → JSON API → TypeScript → templates → UI
 2. Update proto + rebuild BOTH descriptor pipelines (`bubbaloop-schemas` AND `bubbaloop`)
-3. Update Rust structs (`daemon/zenoh_api.rs`), add serde tests
+3. Update MCP tool handlers in `mcp/mod.rs`, add integration tests
 4. Update dashboard types, add tests in `schema-registry-decode.test.ts`
 5. Update node templates if topics/fields change
-6. Full system check (240 Rust + 210 dashboard tests)
+6. Full system check (325+ Rust + 490+ dashboard tests)
 7. Gemini cross-review
 
 **Critical**: Proto changes require rebuilding both descriptor pipelines.
@@ -121,7 +121,8 @@ Run these at the right time to avoid wasted cycles:
 | Command | When | Why |
 |---------|------|-----|
 | `pixi run check` | After every Rust change | Fast compilation check |
-| `cargo test --lib -p bubbaloop` | Before commits | 240+ Rust tests must pass |
+| `cargo test --lib -p bubbaloop` | Before commits | 325+ Rust tests must pass |
+| `cargo test --features test-harness --test integration_mcp` | After MCP changes | 35 integration tests |
 | `cd dashboard && npm test -- --run` | After dashboard changes | 490+ tests, no deletions allowed |
 | `pixi run clippy` | Before PRs | Zero warnings enforced (`-D warnings`) |
 | `./scripts/validate.sh` | Before final commit | Full system check (10 phases) |
@@ -137,7 +138,8 @@ Available skills (see `.claude/skills/` for implementation):
 
 | Skill | Purpose | When to Use |
 |-------|---------|-------------|
-| `/validate` | Full system validation (Rust + dashboard + clippy + templates) | After any code change, before commits |
+| `/validate` | Full system validation (Rust + dashboard + clippy + templates + MCP tests) | After any code change, before commits |
+| `/validate --smoke` | MCP stdio smoke test against real binary | After MCP changes, quick sanity check |
 | `/validate --quick` | Rust-only validation (skip dashboard) | Quick iteration on daemon code |
 | `/validate --gemini` | Full validation + Gemini CLI review | Before PR submission |
 | `/debug-dashboard` | Diagnose dashboard data pipeline issues | When panels show no data |
@@ -174,6 +176,8 @@ See `CLAUDE.md` for full conventions. Critical rules:
 
 **Rust**: `argh` (NOT clap), `log` (NOT tracing), `thiserror`/`anyhow`, `zbus` (NEVER spawn `systemctl`), 100% safe (no `unsafe`)
 
+**MCP**: All tools use `PlatformOperations` trait for testability. RBAC tiers in `rbac.rs` (Viewer/Operator/Admin). All handlers audit-logged.
+
 **Zenoh API**: NEVER `.complete(true)` on queryables (blocks wildcards). Python: `query.key_expr` is property NOT method.
 
 **Security**: `find_curl()` searches `/usr/bin`,`/usr/local/bin`,`/bin` only. Node names `[a-zA-Z0-9_-]{1,64}`. Bind localhost only.
@@ -185,7 +189,8 @@ See `CLAUDE.md` for full conventions. Critical rules:
 ## Pull Request Checklist
 
 **All PRs**:
-- [ ] `/validate` passes (240+ Rust, 210+ dashboard tests)
+- [ ] `/validate` passes (325+ Rust, 490+ dashboard tests)
+- [ ] MCP integration tests pass (`cargo test --features test-harness --test integration_mcp`)
 - [ ] `pixi run clippy` zero warnings
 - [ ] `/validate --gemini` completed, real bugs fixed
 - [ ] `CLAUDE.md` updated if conventions changed

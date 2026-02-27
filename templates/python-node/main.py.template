@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import sys
@@ -23,6 +24,31 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+TOPIC_RE = re.compile(r"^[a-zA-Z0-9/_\-\.]+$")
+
+
+def validate_config(config: dict) -> None:
+    """Validate node configuration.
+
+    Args:
+        config: Configuration dictionary to validate.
+
+    Raises:
+        ValueError: If configuration is invalid.
+    """
+    rate_hz = config.get("rate_hz", 1.0)
+    if not (0.01 <= rate_hz <= 1000.0):
+        raise ValueError(f"rate_hz {rate_hz} out of range (0.01-1000.0)")
+
+    topic = config.get("publish_topic", "")
+    if not topic or not TOPIC_RE.match(topic):
+        raise ValueError(f"publish_topic '{topic}' is invalid")
+
+    # Validate subscribe_topic if present
+    subscribe_topic = config.get("subscribe_topic")
+    if subscribe_topic and not TOPIC_RE.match(subscribe_topic):
+        raise ValueError(f"subscribe_topic '{subscribe_topic}' is invalid")
 
 
 def _get_machine_id() -> str:
@@ -70,6 +96,9 @@ class {{node_name_pascal}}Node:
                 "timestamp_unit": "milliseconds",
             }
 
+        # Validate configuration
+        validate_config(self.config)
+
         # Resolve scoped topic prefix
         self._machine_id = _get_machine_id()
         self._scope = _get_scope()
@@ -103,6 +132,11 @@ class {{node_name_pascal}}Node:
         publish_topic = f"{self._topic_prefix}/{publish_suffix}"
         self.publisher = self.session.declare_publisher(publish_topic)
         logger.info(f"Publishing to: {publish_topic}")
+
+        # Setup health heartbeat publisher
+        health_topic = f"bubbaloop/{self._scope}/{self._machine_id}/health/{{{{node_name}}}}"
+        self.health_publisher = self.session.declare_publisher(health_topic)
+        logger.info(f"Health heartbeat: {health_topic}")
 
         # Declare schema queryable so the dashboard can fetch our protobuf schemas
         self._descriptor_bytes = _load_descriptor_set()
@@ -148,9 +182,10 @@ class {{node_name_pascal}}Node:
         )
         logger.info(f"Command queryable declared on {command_key}")
 
-        # TODO: Zenoh liveliness tokens (requires zenoh-python with liveliness support)
-        # liveliness_key = f"bubbaloop/{self._scope}/{self._machine_id}/{self._node_name}"
-        # self._liveliness_token = self.session.liveliness().declare_token(liveliness_key)
+        # Declare liveliness token for presence detection
+        liveliness_key = f"bubbaloop/{self._scope}/{self._machine_id}/{self._node_name}/liveliness"
+        self._liveliness_token = self.session.liveliness().declare_token(liveliness_key)
+        logger.info(f"Liveliness token: {liveliness_key}")
 
         # Setup subscriber (optional)
         self.subscriber = None
@@ -292,11 +327,20 @@ class {{node_name_pascal}}Node:
         interval = 1.0 / rate_hz
         logger.info(f"{{node_name}} node started (rate: {rate_hz} Hz)")
 
+        # Track last health publish time
+        last_health = time.monotonic()
+
         while self.running:
             # Publish output
             output = self.process()
             self.publisher.put(output)
             self.sequence += 1
+
+            # Health heartbeat (every 5 seconds)
+            now = time.monotonic()
+            if now - last_health >= 5.0:
+                self.health_publisher.put(b"alive")
+                last_health = now
 
             time.sleep(interval)
 
@@ -324,6 +368,7 @@ class {{node_name_pascal}}Node:
         if self.subscriber:
             self.subscriber.undeclare()
         self.publisher.undeclare()
+        self.health_publisher.undeclare()
         self.session.close()
 
 
@@ -363,3 +408,87 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# --- Tests ---
+# Run with: python -m pytest main.py
+
+def test_config_defaults():
+    """Test that default configuration is valid."""
+    config = {
+        "publish_topic": "test/output",
+        "rate_hz": 1.0,
+    }
+    validate_config(config)  # Should not raise
+
+
+def test_config_rate_hz_bounds():
+    """Test rate_hz boundary validation."""
+    import pytest
+
+    # Too low
+    config = {"publish_topic": "test/output", "rate_hz": 0.001}
+    with pytest.raises(ValueError, match="rate_hz.*out of range"):
+        validate_config(config)
+
+    # Too high
+    config = {"publish_topic": "test/output", "rate_hz": 1001.0}
+    with pytest.raises(ValueError, match="rate_hz.*out of range"):
+        validate_config(config)
+
+    # Valid lower bound
+    config = {"publish_topic": "test/output", "rate_hz": 0.01}
+    validate_config(config)  # Should not raise
+
+    # Valid upper bound
+    config = {"publish_topic": "test/output", "rate_hz": 1000.0}
+    validate_config(config)  # Should not raise
+
+
+def test_topic_validation():
+    """Test topic name validation."""
+    import pytest
+
+    # Invalid characters
+    config = {"publish_topic": "invalid topic!@#", "rate_hz": 1.0}
+    with pytest.raises(ValueError, match="publish_topic.*is invalid"):
+        validate_config(config)
+
+    # Empty topic
+    config = {"publish_topic": "", "rate_hz": 1.0}
+    with pytest.raises(ValueError, match="publish_topic.*is invalid"):
+        validate_config(config)
+
+    # Valid topic
+    config = {"publish_topic": "valid/topic-name_123.test", "rate_hz": 1.0}
+    validate_config(config)  # Should not raise
+
+
+def test_subscribe_topic_validation():
+    """Test subscribe_topic validation."""
+    import pytest
+
+    # Invalid subscribe_topic
+    config = {
+        "publish_topic": "test/output",
+        "subscribe_topic": "invalid!@#",
+        "rate_hz": 1.0,
+    }
+    with pytest.raises(ValueError, match="subscribe_topic.*is invalid"):
+        validate_config(config)
+
+    # Valid subscribe_topic
+    config = {
+        "publish_topic": "test/output",
+        "subscribe_topic": "valid/input-topic",
+        "rate_hz": 1.0,
+    }
+    validate_config(config)  # Should not raise
+
+    # None subscribe_topic (optional)
+    config = {
+        "publish_topic": "test/output",
+        "subscribe_topic": None,
+        "rate_hz": 1.0,
+    }
+    validate_config(config)  # Should not raise

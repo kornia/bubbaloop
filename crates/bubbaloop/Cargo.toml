@@ -30,18 +30,15 @@ serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 
-# ROS-Z
-ros-z.workspace = true
-
 # CLI
 argh.workspace = true
 log.workspace = true
 env_logger.workspace = true
 walkdir = "2"
 
-# TUI framework
-ratatui.workspace = true
-crossterm.workspace = true
+# TUI framework (optional)
+ratatui = { workspace = true, optional = true }
+crossterm = { workspace = true, optional = true }
 
 # Zenoh for daemon communication
 zenoh.workspace = true
@@ -75,17 +72,20 @@ rust-embed = { workspace = true, optional = true }
 mime_guess = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
 
-# MCP server (optional)
-rmcp = { workspace = true, optional = true }
-schemars = { workspace = true, optional = true }
+# MCP server (core)
+rmcp.workspace = true
+schemars.workspace = true
+tower_governor = "0.8"
 
 [features]
 default = ["dashboard"]
+tui = ["dep:ratatui", "dep:crossterm"]
 dashboard = ["dep:axum", "dep:rust-embed", "dep:mime_guess", "dep:tokio-tungstenite"]
-mcp = ["dep:rmcp", "dep:schemars", "dep:axum"]
+test-harness = ["rmcp/client"]
 
 [dev-dependencies]
 tempfile = "3"
+rmcp = { workspace = true, features = ["client", "server", "macros"] }
 
 [build-dependencies]
 prost-build.workspace = true

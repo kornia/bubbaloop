@@ -134,13 +134,11 @@ bubbaloop daemon [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `-z, --zenoh <endpoint>` | Zenoh endpoint (default: tcp/127.0.0.1:7447) |
-| `--strict` | Exit if another daemon is running |
 
 **Examples:**
 ```bash
 bubbaloop daemon                        # Default
 bubbaloop daemon -z tcp/192.168.1.50:7447  # Remote Zenoh
-bubbaloop daemon --strict               # Fail if duplicate
 ```
 
 ### bubbaloop node init
@@ -389,4 +387,4 @@ bubbaloop debug topics       # List active topics
 
 - [Troubleshooting](troubleshooting.md) — Common issues and solutions
 - [Configuration](../getting-started/configuration.md) — Config file reference
-- [Node Marketplace](../guides/node-marketplace.md) — Marketplace guide
+- [Skillet Development](../skillet-development.md) — Node development and publishing guide

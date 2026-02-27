@@ -1,0 +1,16 @@
+{
+  "agents": {
+    "main": {
+      "mcpServers": [
+        {
+          "name": "bubbaloop",
+          "command": "bubbaloop",
+          "args": ["mcp", "--stdio"],
+          "env": {
+            "BUBBALOOP_ZENOH_ENDPOINT": "tcp/127.0.0.1:7447"
+          }
+        }
+      ]
+    }
+  }
+}
