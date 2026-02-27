@@ -76,7 +76,6 @@ tokio-tungstenite = { workspace = true, optional = true }
 rmcp.workspace = true
 schemars.workspace = true
 tower_governor = "0.8"
-tempfile = "3"
 
 [features]
 default = ["dashboard"]

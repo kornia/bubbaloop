@@ -109,6 +109,34 @@ pub fn validate_trigger_pattern(trigger: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate an install source path or GitHub reference.
+///
+/// Accepts local directory paths (e.g., `/path/to/my-node`) or GitHub format
+/// (e.g., `user/repo` or `https://github.com/user/repo`).
+/// Uses allowlist: alphanumeric + `-_./:\@` only. Max 256 chars.
+pub fn validate_install_source(source: &str) -> Result<(), String> {
+    if source.is_empty() {
+        return Err("Source path cannot be empty".to_string());
+    }
+    if source.len() > 256 {
+        return Err(format!(
+            "Source path too long (max 256 chars, got {})",
+            source.len()
+        ));
+    }
+    // Allowlist: alphanumeric, hyphens, underscores, dots, slashes, colons, at-signs
+    if !source
+        .chars()
+        .all(|c| c.is_alphanumeric() || "-_./:\\@".contains(c))
+    {
+        return Err(
+            "Source path contains invalid characters (only alphanumeric, -_./:\\@ allowed)"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +227,27 @@ mod tests {
         assert!(validate_query_key_expr("bubbaloop/**").is_err());
         assert!(validate_query_key_expr("bubbaloop/*").is_err());
         assert!(validate_query_key_expr("**").is_err());
+    }
+
+    #[test]
+    fn test_validate_install_source_valid() {
+        assert!(validate_install_source("kornia/bubbaloop-nodes").is_ok());
+        assert!(validate_install_source("/home/user/my-node").is_ok());
+        assert!(validate_install_source("https://github.com/user/repo").is_ok());
+        assert!(validate_install_source("user/repo").is_ok());
+        assert!(validate_install_source("./local-node").is_ok());
+    }
+
+    #[test]
+    fn test_validate_install_source_invalid() {
+        assert!(validate_install_source("").is_err());
+        assert!(validate_install_source(&"a".repeat(257)).is_err());
+        assert!(validate_install_source("path;rm -rf /").is_err());
+        assert!(validate_install_source("path|cat /etc/passwd").is_err());
+        assert!(validate_install_source("path&malicious").is_err());
+        assert!(validate_install_source("`rm -rf /`").is_err());
+        assert!(validate_install_source("$(evil)").is_err());
+        assert!(validate_install_source("path\nnewline").is_err());
+        assert!(validate_install_source("path with spaces").is_err());
     }
 }

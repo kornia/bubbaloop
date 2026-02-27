@@ -1,8 +1,7 @@
 //! Role-Based Access Control for MCP tools.
 //!
 //! Three tiers: viewer (read-only), operator (day-to-day), admin (system).
-//! Token file format: `<token>:<tier>` (e.g., `bb_abc123:admin`).
-//! Default tier if unspecified: `operator`.
+//! TODO(phase-2): Parse tier from token file. Currently all callers get Admin on localhost.
 
 use serde::{Deserialize, Serialize};
 

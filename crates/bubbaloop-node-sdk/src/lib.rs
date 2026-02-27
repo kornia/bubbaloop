@@ -122,7 +122,7 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
     log::info!("Scope: {}, Machine ID: {}", scope, machine_id);
 
     // 5. Setup shutdown channel
-    let (shutdown_tx, _shutdown_rx) = shutdown::setup_shutdown()?;
+    let (shutdown_tx, _) = shutdown::setup_shutdown()?;
 
     // 6. Open Zenoh session (client mode, enforced)
     let session = zenoh_session::open_zenoh_session(&args.endpoint).await?;

@@ -26,7 +26,7 @@ pub const MCP_PORT: u16 = 8088;
 /// and tests can plug in `MockPlatform`.
 pub struct BubbaLoopMcpServer<P: PlatformOperations = platform::DaemonPlatform> {
     platform: Arc<P>,
-    #[allow(dead_code)] // Used in Task 7 for call_tool() auth enforcement
+    #[allow(dead_code)] // TODO(phase-2): Enforce in call_tool(). Currently single-user localhost.
     auth_token: Option<String>,
     tool_router: ToolRouter<Self>,
     scope: String,
@@ -613,16 +613,10 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<InstallNodeRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=install_node source={}", req.source);
-        // Basic validation: non-empty, no shell metacharacters
-        if req.source.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "Error: source path cannot be empty",
-            )]));
-        }
-        if req.source.contains(';') || req.source.contains('|') || req.source.contains('&') {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "Error: source path contains invalid characters",
-            )]));
+        if let Err(e) = validation::validate_install_source(&req.source) {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}", e
+            ))]));
         }
         match self.platform.install_node(&req.source).await {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
@@ -712,7 +706,7 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         // RBAC authorization check
         let required = rbac::required_tier(&request.name);
-        // Single-user localhost: grant admin until token-based tiers (Phase 1).
+        // TODO(phase-2): Extract tier from auth token. Currently single-user localhost grants admin.
         let caller_tier = rbac::Tier::Admin;
         if !caller_tier.has_permission(required) {
             log::warn!(
@@ -804,6 +798,7 @@ pub async fn run_mcp_server(
     let token =
         auth::load_or_generate_token().map_err(|e| format!("Failed to load MCP token: {}", e))?;
     log::info!("MCP authentication enabled (token in ~/.bubbaloop/mcp-token)");
+    log::warn!("RBAC not yet enforced — all callers granted admin tier (single-user localhost)");
 
     let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = crate::daemon::util::get_machine_id();

@@ -422,9 +422,9 @@ pub mod mock {
                 .ok_or_else(|| PlatformError::NodeNotFound(name.to_string()))
         }
 
-        async fn execute_command(&self, name: &str, _cmd: NodeCommand) -> PlatformResult<String> {
+        async fn execute_command(&self, name: &str, cmd: NodeCommand) -> PlatformResult<String> {
             if self.nodes.lock().unwrap().iter().any(|n| n.name == name) {
-                Ok("mock: command executed".to_string())
+                Ok(format!("mock: {:?} executed", cmd))
             } else {
                 Err(PlatformError::NodeNotFound(name.to_string()))
             }
@@ -631,7 +631,7 @@ mod tests {
             .execute_command("test-node", NodeCommand::Start)
             .await
             .unwrap();
-        assert_eq!(msg, "mock: command executed");
+        assert_eq!(msg, "mock: Start executed");
     }
 
     #[tokio::test]
@@ -641,7 +641,7 @@ mod tests {
             .execute_command("test-node", NodeCommand::Stop)
             .await
             .unwrap();
-        assert_eq!(msg, "mock: command executed");
+        assert_eq!(msg, "mock: Stop executed");
     }
 
     #[tokio::test]
@@ -651,7 +651,7 @@ mod tests {
             .execute_command("test-node", NodeCommand::Restart)
             .await
             .unwrap();
-        assert_eq!(msg, "mock: command executed");
+        assert_eq!(msg, "mock: Restart executed");
     }
 
     #[tokio::test]
@@ -661,7 +661,7 @@ mod tests {
             .execute_command("test-node", NodeCommand::Build)
             .await
             .unwrap();
-        assert_eq!(msg, "mock: command executed");
+        assert_eq!(msg, "mock: Build executed");
     }
 
     #[tokio::test]
@@ -671,7 +671,7 @@ mod tests {
             .execute_command("test-node", NodeCommand::GetLogs)
             .await
             .unwrap();
-        assert_eq!(msg, "mock: command executed");
+        assert_eq!(msg, "mock: GetLogs executed");
     }
 
     #[tokio::test]

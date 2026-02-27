@@ -13,14 +13,22 @@ pub fn token_path() -> PathBuf {
         .join("mcp-token")
 }
 
-/// Load or generate the MCP authentication token.
+/// Load or generate the MCP authentication token from the default path.
 pub fn load_or_generate_token() -> Result<String, std::io::Error> {
-    let path = token_path();
-    if path.exists() {
-        let token = std::fs::read_to_string(&path)?.trim().to_string();
-        if !token.is_empty() {
-            return Ok(token);
+    load_or_generate_token_at(&token_path())
+}
+
+/// Load or generate the MCP authentication token at the given path.
+pub fn load_or_generate_token_at(path: &std::path::Path) -> Result<String, std::io::Error> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let token = content.trim().to_string();
+            if !token.is_empty() {
+                return Ok(token);
+            }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
 
     // Generate a new token
@@ -31,14 +39,23 @@ pub fn load_or_generate_token() -> Result<String, std::io::Error> {
         std::fs::create_dir_all(parent)?;
     }
 
-    std::fs::write(&path, &token)?;
-
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?;
+        write!(file, "{}", token)?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, &token)?;
     }
 
+    // SECURITY: Never log the token value itself
     log::info!("Generated MCP token at {:?}", path);
     Ok(token)
 }
@@ -51,6 +68,9 @@ pub fn validate_token(header_value: &str, expected: &str) -> bool {
 
 /// Constant-time byte comparison.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    // NOTE: Length comparison is not constant-time. This leaks the token length,
+    // which is acceptable because the token format (bb_ + UUID = 35 chars) is
+    // publicly known. For truly secret-length tokens, use the `subtle` crate.
     if a.len() != b.len() {
         return false;
     }
@@ -75,11 +95,23 @@ mod tests {
     fn test_load_or_generate_creates_token() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mcp-token");
-        let token = format!("bb_{}", uuid::Uuid::new_v4().as_simple());
-        std::fs::write(&path, &token).unwrap();
-        let loaded = std::fs::read_to_string(&path).unwrap().trim().to_string();
-        assert_eq!(loaded, token);
-        assert!(loaded.starts_with("bb_"));
+        let token = load_or_generate_token_at(&path).unwrap();
+        assert!(token.starts_with("bb_"));
+        assert_eq!(token.len(), 35); // "bb_" + 32 hex chars
+        // Verify file was created and is readable
+        let loaded = load_or_generate_token_at(&path).unwrap();
+        assert_eq!(loaded, token); // Same token on second load
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_token_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp-token");
+        let _token = load_or_generate_token_at(&path).unwrap();
+        let perms = std::fs::metadata(&path).unwrap().permissions();
+        assert_eq!(perms.mode() & 0o777, 0o600);
     }
 
     #[test]

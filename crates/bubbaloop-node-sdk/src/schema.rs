@@ -20,7 +20,9 @@ pub async fn declare_schema_queryable(
             let descriptor = descriptor.to_vec();
             move |query| {
                 log::debug!("Schema query received");
-                let _ = query.reply(&query.key_expr().clone(), descriptor.as_slice());
+                if let Err(e) = query.reply(&query.key_expr().clone(), descriptor.as_slice()) {
+                    log::warn!("Failed to reply to schema query: {}", e);
+                }
             }
         })
         .await

@@ -347,7 +347,7 @@ async fn start_node_existing() {
         .unwrap();
     let text = result_text(&result);
 
-    assert_eq!(text, "mock: command executed");
+    assert_eq!(text, "mock: Start executed");
 
     h.shutdown().await.unwrap();
 }
@@ -361,7 +361,7 @@ async fn stop_node_existing() {
         .unwrap();
     let text = result_text(&result);
 
-    assert_eq!(text, "mock: command executed");
+    assert_eq!(text, "mock: Stop executed");
 
     h.shutdown().await.unwrap();
 }
@@ -378,7 +378,7 @@ async fn restart_node_existing() {
         .unwrap();
     let text = result_text(&result);
 
-    assert_eq!(text, "mock: command executed");
+    assert_eq!(text, "mock: Restart executed");
 
     h.shutdown().await.unwrap();
 }
@@ -468,7 +468,7 @@ async fn build_node_existing() {
         .unwrap();
     let text = result_text(&result);
 
-    assert_eq!(text, "mock: command executed");
+    assert_eq!(text, "mock: Build executed");
 
     h.shutdown().await.unwrap();
 }
@@ -485,7 +485,7 @@ async fn get_node_logs_existing() {
         .unwrap();
     let text = result_text(&result);
 
-    assert_eq!(text, "mock: command executed");
+    assert_eq!(text, "mock: GetLogs executed");
 
     h.shutdown().await.unwrap();
 }

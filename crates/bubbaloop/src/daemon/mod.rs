@@ -35,8 +35,10 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>, zeno
     // Configure Zenoh session
     let mut config = zenoh::Config::default();
 
-    // Run as peer mode - connect to router but can also accept connections for shared memory
-    config.insert_json5("mode", "\"peer\"").ok();
+    // Peer mode — allows direct connections from co-located nodes
+    config
+        .insert_json5("mode", "\"peer\"")
+        .expect("Failed to set Zenoh mode");
 
     // Resolve endpoint: parameter > env var > default
     let env_endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT").ok();
@@ -48,22 +50,24 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>, zeno
 
     config
         .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
-        .ok();
+        .expect("Failed to set Zenoh endpoint");
 
     // Disable all scouting to prevent connecting to remote peers via Tailscale/VPN
     config
         .insert_json5("scouting/multicast/enabled", "false")
-        .ok();
-    config.insert_json5("scouting/gossip/enabled", "false").ok();
+        .expect("Failed to disable multicast scouting");
+    config
+        .insert_json5("scouting/gossip/enabled", "false")
+        .expect("Failed to disable gossip scouting");
 
-    // Disable shared memory - it prevents the bridge from receiving larger payloads
-    // because the bridge doesn't participate in the SHM segment
+    // Disable shared memory — bridge doesn't participate in the SHM segment
     config
         .insert_json5("transport/shared_memory/enabled", "false")
-        .ok();
+        .expect("Failed to disable shared memory");
 
-    // Retry loop with exponential backoff
+    // Retry loop with exponential backoff (max 30 attempts ≈ 15 min with 30s cap)
     let max_backoff = Duration::from_secs(30);
+    let max_attempts = 30u32;
     let mut backoff = Duration::from_secs(1);
     let mut attempt = 0u32;
 
@@ -77,9 +81,17 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>, zeno
                 return Ok(Arc::new(session));
             }
             Err(e) => {
+                if attempt >= max_attempts {
+                    log::error!(
+                        "Zenoh connection failed after {} attempts, giving up",
+                        max_attempts
+                    );
+                    return Err(e);
+                }
                 log::warn!(
-                    "Zenoh connection attempt {} failed: {}. Retrying in {:?}...",
+                    "Zenoh connection attempt {}/{} failed: {}. Retrying in {:?}...",
                     attempt,
+                    max_attempts,
                     e,
                     backoff
                 );
@@ -160,14 +172,15 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
     }
 
     // Start MCP server (HTTP on port 8088)
+    let mcp_port: u16 = std::env::var("BUBBALOOP_MCP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(crate::mcp::MCP_PORT);
+
     let mcp_task = {
         let mcp_session = session.clone();
         let mcp_manager = node_manager.clone();
         let mcp_shutdown = shutdown_rx.clone();
-        let mcp_port = std::env::var("BUBBALOOP_MCP_PORT")
-            .ok()
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(crate::mcp::MCP_PORT);
         tokio::spawn(async move {
             if let Err(e) =
                 crate::mcp::run_mcp_server(mcp_session, mcp_manager, mcp_port, mcp_shutdown).await
@@ -177,13 +190,8 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         })
     };
 
-    let port = std::env::var("BUBBALOOP_MCP_PORT")
-        .ok()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(crate::mcp::MCP_PORT);
-
     log::info!("Bubbaloop skill runtime started.");
-    log::info!("  MCP server: http://127.0.0.1:{}/mcp", port);
+    log::info!("  MCP server: http://127.0.0.1:{}/mcp", mcp_port);
     log::info!("  Nodes: {} registered", initial_list.nodes.len());
     log::info!("  Health monitor: active (Zenoh heartbeats)");
 
