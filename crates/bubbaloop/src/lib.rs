@@ -26,6 +26,9 @@ pub mod mcp;
 /// Shared input validation for trust boundaries
 pub mod validation;
 
+/// YAML skill loader — driver catalog and config parsing
+pub mod skills;
+
 /// Protobuf schemas for bubbaloop
 pub mod schemas {
     pub mod header {

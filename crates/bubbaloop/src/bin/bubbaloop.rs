@@ -19,7 +19,7 @@
 
 use argh::FromArgs;
 use bubbaloop::cli::launch::LaunchCommand;
-use bubbaloop::cli::{DebugCommand, MarketplaceCommand, NodeCommand};
+use bubbaloop::cli::{DebugCommand, MarketplaceCommand, NodeCommand, UpCommand};
 
 /// Bubbaloop - AI-native orchestration for Physical AI
 #[derive(FromArgs)]
@@ -43,6 +43,7 @@ enum Command {
     Launch(LaunchCommand),
     Marketplace(MarketplaceCommand),
     Debug(DebugCommand),
+    Up(UpCommand),
     InitTls(InitTlsArgs),
 }
 
@@ -206,6 +207,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              (default: ~/.bubbaloop/launch.yaml)");
             eprintln!("  marketplace  Manage marketplace sources:");
             eprintln!("              list, add, remove, enable, disable");
+            eprintln!("  up        Load skills and ensure sensor nodes are running:");
+            eprintln!("              -s, --skills-dir <path>: Skills directory");
+            eprintln!("              --dry-run: Show what would be done");
             eprintln!("  debug     Debug Zenoh connectivity:");
             eprintln!("              info, topics, query, subscribe");
             eprintln!("  init-tls  Print TLS/mTLS certificate generation guide");
@@ -247,6 +251,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Debug(cmd)) => {
             cmd.run()
                 .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        }
+        Some(Command::Up(cmd)) => {
+            cmd.run()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         }
         Some(Command::InitTls(args)) => {
