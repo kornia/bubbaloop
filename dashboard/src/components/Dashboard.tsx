@@ -50,8 +50,18 @@ export function Dashboard({ cameras: initialCameras, availableTopics: staticTopi
     return () => clearInterval(interval);
   }, [getDiscoveredTopics]);
 
-  // Combine static topics with discovered topics
-  const availableTopics = [...new Set([...staticTopics, ...discoveredTopics])].sort();
+  // Combine static topics with discovered topics, dedup by raw key
+  const availableTopics = (() => {
+    const seen = new Set(staticTopics.map(t => t.raw));
+    const merged = [...staticTopics];
+    for (const raw of discoveredTopics) {
+      if (!seen.has(raw)) {
+        seen.add(raw);
+        merged.push({ display: raw, raw });
+      }
+    }
+    return merged.sort((a, b) => a.display.localeCompare(b.display));
+  })();
 
   // Initialize panels from localStorage or props
   const [panels, setPanels] = useState<PanelConfig[]>(() => {
