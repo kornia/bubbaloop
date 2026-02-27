@@ -197,6 +197,7 @@ curl -sSL https://get.bubbaloop.com | bash
 **Deliverables:**
 - [x] MCP server in daemon (tools: list/start/stop/restart/logs/config/manifest/command/query/discover)
 - [x] `.mcp.json` for Claude Code integration
+- [x] Full node lifecycle via MCP: install (marketplace + path), uninstall, clean, enable/disable autostart
 - [ ] Chat panel in dashboard
 - [ ] Natural language execution: "Start the camera"
 - [ ] Device discovery + auto-install tools
@@ -214,6 +215,9 @@ curl -sSL https://get.bubbaloop.com | bash
 - [x] Optional `mcp:` section in node.yaml for richer tool descriptions
 - [x] Simplified daemon to pure skill runtime (removed agent rule engine)
 - [x] Updated architecture docs to reflect passive runtime model
+- [x] Marketplace install via MCP (`install_node` with simple names like `"rtsp-camera"`)
+- [x] Full lifecycle MCP tools: `uninstall_node`, `clean_node`, `enable_autostart`, `disable_autostart`
+- [x] Shared `marketplace.rs` module for precompiled binary downloads (CLI + MCP)
 - [ ] MCP authentication for remote agent access
 
 **Design decision:** Enhanced Option B — daemon-only MCP, no per-node MCP tools. Manifest-driven discovery + generic `send_command` dispatcher. Daemon is a passive skill runtime; external AI agents implement automation logic. See `.omc/plans/openclaw-foundation.md`.
@@ -225,10 +229,10 @@ curl -sSL https://get.bubbaloop.com | bash
 **Goal:** Install nodes from any GitHub repo (`bubbaloop install github.com/user/node`)
 
 **Deliverables:**
-- [ ] `install_node_from_url` MCP tool
+- [x] `install_node` MCP tool accepts marketplace names, local paths, and GitHub `user/repo` format
+- [x] Register + create systemd service in one step (AddNode + Install chain)
 - [ ] Auto-detect project type (Rust/Python, with/without manifest)
 - [ ] Auto-generate `node.yaml` if missing
-- [ ] Register systemd service
 
 ---
 
