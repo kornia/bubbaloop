@@ -288,16 +288,17 @@ curl -sSL https://get.bubbaloop.com | bash
 - [ ] Conversation loop with multi-turn tool use
 - [ ] HTTP chat API endpoint (for dashboard/mobile integration later)
 
-#### Phase C3: LanceDB Memory
+#### Phase C3: SQLite Memory
 
-**Goal:** Sensor-native memory. "What happened at the front door yesterday?"
+**Goal:** Sensor-native memory. "What happened at the front door yesterday?" Binary size budget: +1-2MB only.
 
 **Deliverables:**
-- [ ] LanceDB embedded database (`~/.bubbaloop/memory.lance`)
-- [ ] `conversations` table: chat history with vector embeddings
+- [ ] SQLite embedded database (`~/.bubbaloop/memory.db`) via `rusqlite` (static)
+- [ ] `conversations` table: chat history with FTS5 full-text search
 - [ ] `sensor_events` table: health changes, anomalies, alerts with timestamps
-- [ ] Daemon event hook: write events to LanceDB as they happen
-- [ ] Vector search: semantic queries across conversations and events
+- [ ] `schedules` table: active jobs + execution history
+- [ ] Daemon event hook: write events to SQLite as they happen
+- [ ] Time-based + node-name queries (vector search deferred — add `sqlite-vec` later if needed)
 - [ ] Context injection: relevant history included in agent system prompt
 
 #### Phase C4: Scheduling

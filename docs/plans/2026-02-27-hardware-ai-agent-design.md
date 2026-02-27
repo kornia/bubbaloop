@@ -17,7 +17,7 @@ Bubbaloop becomes a **self-contained Hardware AI Agent** — like OpenClaw, but 
 |---|---|---|
 | Talks to | Messaging platforms | Physical sensors & actuators |
 | Skills | Text behaviors (5,705 in ClawHub) | Sensor drivers (YAML configs) |
-| Memory | Markdown files | LanceDB (vector, sensor-native) |
+| Memory | Markdown files | SQLite (embedded, sensor-native) |
 | Language | TypeScript | Rust |
 | Edge-ready | No (needs Mac/desktop) | Yes (Jetson, RPi, any Linux) |
 | Data plane | None | Zenoh (zero-copy, real-time) |
@@ -43,7 +43,7 @@ Bubbaloop becomes a **self-contained Hardware AI Agent** — like OpenClaw, but 
 │  └──────────────────────┬─────────────────────────────┘  │
 │                          │                                │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  Memory (LanceDB — embedded, no external server)    │  │
+│  │  Memory (SQLite — embedded, no external server)    │  │
 │  │  Conversations | Sensor events | Schedules          │  │
 │  │  Vector search for "what happened yesterday?"       │  │
 │  └──────────────────────┬─────────────────────────────┘  │
@@ -103,7 +103,7 @@ User message (or scheduled trigger)
 └──────┬──────┘
        │
        ▼
-  Response displayed + Memory updated (LanceDB)
+  Response displayed + Memory updated (SQLite)
 ```
 
 **System prompt injection:** On every turn, current sensor inventory is injected:
@@ -123,7 +123,7 @@ You have 1 scheduled job:
 |----------|-------------|
 | Conversation loop (Claude API) | Multi-agent orchestration |
 | Tool dispatch to internal MCP | Multi-channel (WhatsApp, Discord) |
-| LanceDB memory | Streaming media through the agent |
+| SQLite memory | Streaming media through the agent |
 | Terminal chat + HTTP API | Skill marketplace / ClawHub equivalent |
 | Scheduler (cron-like) | Plugin system |
 | YAML skill loader | |
@@ -170,7 +170,7 @@ Built-in actions for Tier 1 (no LLM needed):
 | `capture_frame` | Send capture command to camera node |
 | `start_node` / `stop_node` | Node lifecycle |
 | `send_command` | Generic command dispatch to any node |
-| `log_event` | Write to LanceDB sensor_events table |
+| `log_event` | Write to SQLite sensor_events table |
 | `store_event` | Log + vector embed for semantic search |
 | `notify` | Print to terminal / write to notification queue |
 
@@ -203,66 +203,89 @@ Agent: (creates a scheduled job internally)
 
 ---
 
-## 5. Memory with LanceDB
+## 5. Memory with SQLite
 
-Three tables in a single embedded database:
+**Constraint: binary size.** Current bubbaloop is 11MB. Memory layer must add minimal weight.
+
+| Option considered | Binary cost | Verdict |
+|-------------------|-------------|---------|
+| SQLite (Arrow + DataFusion) | +20-50MB | **Rejected** — triples binary size |
+| SQLite (rusqlite, static) | +1-2MB | **Selected** — battle-tested, 12-13MB total |
+| redb (pure Rust KV) | +300KB | Considered for future if SQLite too heavy |
+
+Three tables in a single SQLite database:
 
 ```
-LanceDB (~/.bubbaloop/memory.lance)
-├── conversations    — chat history with vector embeddings
+SQLite (~/.bubbaloop/memory.db)
+├── conversations    — chat history (text search via FTS5)
 ├── sensor_events    — timestamped events (health, anomalies, alerts)
 └── schedules        — active scheduled jobs + execution history
 ```
 
-### Conversations Table
+### Schema
 
-| Column | Type | Purpose |
-|--------|------|---------|
-| id | uuid | Primary key |
-| timestamp | datetime | When the message was sent |
-| role | string | "user" / "assistant" / "tool" |
-| content | string | Message text |
-| embedding | vector(1024) | Semantic embedding for search |
-| tool_calls | json | Tool calls and results (if any) |
+```sql
+-- Chat history
+CREATE TABLE conversations (
+    id          TEXT PRIMARY KEY,
+    timestamp   TEXT NOT NULL,
+    role        TEXT NOT NULL,  -- 'user' / 'assistant' / 'tool'
+    content     TEXT NOT NULL,
+    tool_calls  TEXT            -- JSON, nullable
+);
+CREATE INDEX idx_conv_ts ON conversations(timestamp);
 
-### Sensor Events Table
+-- Sensor events (health changes, crashes, alerts)
+CREATE TABLE sensor_events (
+    id          TEXT PRIMARY KEY,
+    timestamp   TEXT NOT NULL,
+    node_name   TEXT NOT NULL,
+    event_type  TEXT NOT NULL,  -- 'health_change' / 'started' / 'crashed' / 'alert'
+    details     TEXT            -- JSON
+);
+CREATE INDEX idx_events_node_ts ON sensor_events(node_name, timestamp);
 
-| Column | Type | Purpose |
-|--------|------|---------|
-| id | uuid | Primary key |
-| timestamp | datetime | When the event occurred |
-| node_name | string | Which sensor/node |
-| event_type | string | "health_change" / "started" / "crashed" / "config_update" / "alert" |
-| details | json | Event-specific data |
-| embedding | vector(1024) | Semantic embedding for "what happened?" queries |
-
-### Schedules Table
-
-| Column | Type | Purpose |
-|--------|------|---------|
-| id | uuid | Primary key |
-| name | string | Human-readable name |
-| cron | string | Cron expression |
-| actions | json | Action chain (Tier 1) or prompt (Tier 2) |
-| tier | int | 1 (no LLM) or 2 (LLM needed) |
-| last_run | datetime | Last execution time |
-| next_run | datetime | Next scheduled execution |
-| created_by | string | "yaml" (from skill file) or "conversation" (from chat) |
+-- Scheduled jobs (Tier 1 + Tier 2)
+CREATE TABLE schedules (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    cron        TEXT NOT NULL,
+    actions     TEXT NOT NULL,  -- JSON action chain
+    tier        INTEGER NOT NULL DEFAULT 1,
+    last_run    TEXT,
+    next_run    TEXT,
+    created_by  TEXT NOT NULL   -- 'yaml' or 'conversation'
+);
+```
 
 ### Example Queries
 
+```sql
+-- "Has the garage camera been reliable this week?"
+SELECT event_type, timestamp, details FROM sensor_events
+WHERE node_name = 'garage-camera'
+  AND timestamp > datetime('now', '-7 days')
+ORDER BY timestamp DESC;
+
+-- "What did we talk about last time?"
+SELECT role, content FROM conversations
+ORDER BY timestamp DESC LIMIT 20;
+
+-- "Show me all scheduled jobs"
+SELECT name, cron, tier, last_run FROM schedules;
 ```
-"Has the garage camera been reliable this week?"
-→ Vector search sensor_events for garage-camera, last 7 days
-→ Returns: 3 drops on Tuesday, stable since Wednesday
 
-"What did I ask you to do last time?"
-→ Vector search conversations, recent, role=user
-→ Returns: last conversation context
+**Future: vector search.** If semantic search becomes needed, add `sqlite-vec` extension (~200KB). For v1, time-based + node-name queries are sufficient — the agent can summarize results via Claude.
 
-"Show me all scheduled jobs"
-→ Direct query on schedules table
-→ Returns: health-patrol (15min), timelapse (hourly), morning-summary (8am)
+### Size Budget
+
+```
+Current binary:     11 MB
++ rusqlite:          1-2 MB  (static libsqlite3)
++ reqwest:           0 MB    (already in dep tree via zenoh)
++ cron parser:       ~50 KB
+─────────────────────────────
+Target:             ~12-13 MB
 ```
 
 ---
@@ -398,7 +421,7 @@ bubbaloop agent
 | Component | Est. Lines | Module |
 |-----------|-----------|--------|
 | Agent loop (Claude API + tool dispatch) | 500-800 | `agent/mod.rs`, `agent/loop.rs` |
-| LanceDB memory | 300-500 | `agent/memory.rs` |
+| SQLite memory | 300-500 | `agent/memory.rs` |
 | Scheduler (cron executor) | 200-400 | `agent/scheduler.rs` |
 | YAML skill loader | 200-300 | `agent/skills.rs` |
 | Driver → node mapper | 100-200 | `agent/drivers.rs` |
@@ -409,9 +432,11 @@ bubbaloop agent
 
 | Crate | Purpose | Size Impact |
 |-------|---------|-------------|
-| `lancedb` | Embedded vector database | Medium (Rust-native) |
-| `anthropic-sdk` or raw `reqwest` | Claude API client | Small |
-| `cron` | Cron expression parsing | Tiny |
+| `rusqlite` (static) | Embedded database for memory | +1-2MB |
+| `reqwest` | Claude API client | 0 (already in dep tree) |
+| `cron` | Cron expression parsing | ~50KB |
+
+**Total binary size target: ~12-13MB** (up from 11MB). No heavy frameworks (Arrow, DataFusion, etc.).
 
 ---
 
@@ -429,11 +454,11 @@ bubbaloop agent
 
 ### Agent-specific security
 
-- Claude API key: environment variable only (`ANTHROPIC_API_KEY`), never written to LanceDB or logs
+- Claude API key: environment variable only (`ANTHROPIC_API_KEY`), never persisted to disk or logs
 - Tool permissions: agent uses same RBAC as external MCP clients (Admin for local)
 - Scheduled actions: Tier 1 actions are a closed set (cannot execute arbitrary code)
 - Tier 2 schedules: rate-limited to prevent runaway API costs (configurable max calls/day)
-- LanceDB: file permissions 0600, stored in `~/.bubbaloop/memory.lance`
+- SQLite: file permissions 0600, stored in `~/.bubbaloop/memory.db`
 
 ---
 
