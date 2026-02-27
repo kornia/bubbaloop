@@ -60,15 +60,17 @@ Transform Bubbaloop from a local daemon into a **complete platform** where users
 ┌───────────────────────────────────────────────────────────────────────┐
 │                        Bubbaloop Agent                                 │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │  Cloud Connector          │  MCP Server (Chat)                  │  │
+│  │  Cloud Connector          │  MCP Server (sole control)          │  │
 │  │  - OAuth tokens           │  - Natural language commands        │  │
-│  │  - Heartbeat to registry  │  - Tools: start/stop/build/logs     │  │
-│  │  - Relay connection       │  - Resources: nodes, metrics        │  │
-│  │  - GitHub sync            │  - Prompts: policies                │  │
+│  │  - Heartbeat to registry  │  - Tools: list/start/stop/restart/  │  │
+│  │  - Relay connection       │    logs/config/manifest/command/    │  │
+│  │  - GitHub sync            │    query/discover/install/uninstall │  │
+│  │                           │    /clean/autostart                 │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │  Daemon Core (existing)                                         │  │
-│  │  HTTP :8088 │ Zenoh :7447 │ Node Manager │ systemd D-Bus        │  │
+│  │  Daemon Core (passive skill runtime)                            │  │
+│  │  MCP :8088 (sole control) │ Zenoh :7447 (data pub/sub only)    │  │
+│  │  Node Manager │ systemd D-Bus                                   │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
 │  │  Local Dashboard :5173 (works offline)                          │  │
@@ -82,6 +84,10 @@ Transform Bubbaloop from a local daemon into a **complete platform** where users
         │   Node   │           │   Node   │           │   Node   │
         └──────────┘           └──────────┘           └──────────┘
 ```
+
+> **As of v0.0.5:** The daemon removed all Zenoh queryables for node control. MCP on port 8088 is now
+> the sole control interface. Zenoh (:7447) remains exclusively for node-to-node data pub/sub.
+> The daemon is a passive skill runtime — AI agents (Claude, OpenClaw, etc.) drive all automation via MCP.
 
 ---
 
@@ -134,14 +140,16 @@ Building a self-describing, decentralized sensor architecture where nodes are au
 
 ---
 
-#### Phase A4: Thin Daemon
+#### Phase A4: Thin Daemon — Partially Complete
 
 **Goal:** Remove daemon as single point of failure for discovery. Nodes serve their own schemas.
 
 **Deliverables:**
-- [ ] Remove schema serving from daemon (nodes do it)
+- [x] Remove Zenoh queryables for daemon control (done — MCP is sole control interface)
+- [x] MCP on :8088 is sole control interface; no Zenoh control plane in daemon
+- [ ] Dashboard migration: dashboard no longer calls daemon API for discovery
+- [ ] Zenoh liveliness-based node presence detection (replaces polling)
 - [ ] Remove node state tracking (liveliness + manifests replace it)
-- [ ] Dashboard no longer calls daemon API for discovery
 - [ ] Daemon retains: install, start, stop, update, compositions
 
 ---
@@ -190,14 +198,15 @@ curl -sSL https://get.bubbaloop.com | bash
 
 ---
 
-#### Phase B4: MCP Integration (Week 4-5) — In Progress
+#### Phase B4: MCP Integration — Mostly Complete
 
 **Goal:** Natural language control via MCP
 
 **Deliverables:**
-- [x] MCP server in daemon (tools: list/start/stop/restart/logs/config/manifest/command/query/discover)
+- [x] MCP server in daemon (tools: list/start/stop/restart/logs/config/manifest/command/query/discover/install/uninstall/clean/autostart)
 - [x] `.mcp.json` for Claude Code integration
 - [x] Full node lifecycle via MCP: install (marketplace + path), uninstall, clean, enable/disable autostart
+- [x] MCP is sole control interface — all Zenoh queryables for control removed from daemon
 - [ ] Chat panel in dashboard
 - [ ] Natural language execution: "Start the camera"
 - [ ] Device discovery + auto-install tools
