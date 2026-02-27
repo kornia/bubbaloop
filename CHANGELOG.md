@@ -11,10 +11,22 @@
 * **marketplace:** new `marketplace.rs` module — shared precompiled binary download logic (extracted from CLI, reused by MCP)
 * **rbac:** new tool-to-tier mappings — `uninstall_node`/`clean_node` → Admin, `enable_autostart`/`disable_autostart` → Operator
 
+### Refactors
+
+* **tui:** remove TUI module entirely (ratatui/crossterm) — codebase simplified from ~20K to ~14K lines ([f3b54cb](https://github.com/kornia/bubbaloop/commit/f3b54cb))
+* **cli:** split monolithic `cli/node.rs` (2,655 lines) into 4 submodules: `mod.rs`, `install.rs`, `lifecycle.rs`, `build.rs`
+* **cleanup:** remove dead code, unused imports, stale feature flags
+
+### Docs
+
+* Hardware AI Agent design document (`docs/plans/2026-02-27-hardware-ai-agent-design.md`)
+* Rewritten ROADMAP with 5-phase implementation plan (YAML skills → Agent → SQLite → Scheduling → Polish)
+* Updated ARCHITECTURE.md, CONTRIBUTING.md, CLAUDE.md to match new vision
+
 ### Tests
 
 * 12 new MCP integration tests (47 total, up from 35)
-* 300 unit tests passing
+* 298 unit tests passing
 
 ## [0.0.5](https://github.com/kornia/bubbaloop/compare/v0.0.4...v0.0.5) (2026-02-27)
 

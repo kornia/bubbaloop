@@ -1,7 +1,6 @@
 # Contributing to Bubbaloop
 
-<!-- LIVING DOCUMENT: Update when workflows change or new skills are added.
-     For architecture decisions, see ARCHITECTURE.md. For timeline, see ROADMAP.md. -->
+<!-- LIVING DOCUMENT: Update when workflows change. See ARCHITECTURE.md for design, ROADMAP.md for timeline. -->
 
 Bubbaloop is built for **agentic engineering** — developers AND AI agents working together. This guide defines workflows that serve sensor nodes, contracts, and tests.
 
@@ -16,57 +15,44 @@ Bubbaloop is built for **agentic engineering** — developers AND AI agents work
 
 If a workflow only improves the workflow itself, **delete it**. The sensor nodes are the product. Everything else is scaffolding.
 
-Before adding any new process/skill/automation, ask:
-- Does this help build better sensor nodes? ✅
-- Does this strengthen data contracts? ✅
-- Does this improve test coverage? ✅
-- Does this only improve the workflow? ❌ **Delete**
-
 ---
 
 ## Development Workflows
 
-### 1. Rust Feature: `/ralplan` → `/ralph` → `/validate` → `/validate --gemini` → `/code-review`
+### 1. Rust Feature: Plan → Execute → Validate → Review
 
-1. Plan with Planner + Critic (acceptance criteria + files)
+1. Plan with acceptance criteria + files
 2. Execute with executor agents (parallel file changes)
-3. Validate: `pixi run check`, `cargo test`, `npm test`, `clippy`
-4. Gemini cross-review (list max 3 bugs only)
-5. Architect verifies implementation
+3. Validate: `pixi run check`, `cargo test`, `pixi run clippy`
+4. Architect verifies implementation
 
 **NEVER skip step 3**. Run `pixi run check` after every Rust change.
 
-### 2. Dashboard Feature: `/plan` → `/tdd` (tests first) → designer builds UI → `npm test` → `/debug-dashboard`
+### 2. Dashboard Feature: Plan → Tests First → Build UI → Verify
 
 1. Define component + test strategy
-2. Write tests FIRST (vitest + jsdom) — test behavior, not implementation
-3. Designer agent builds UI (React + TypeScript + Tailwind)
-4. All 490+ tests must pass (NO test deletion)
-5. Live verification (data flows to browser)
+2. Write tests FIRST (vitest + jsdom)
+3. Build UI (React + TypeScript + Tailwind)
+4. All tests must pass (NO test deletion)
 
-**Test-first is non-negotiable**. Dashboard test count only goes up.
+**Schema-ready gating**: New view components that decode protobuf MUST use `useSchemaReady()` to gate their `useZenohSubscription` callback.
 
-**Schema-ready gating**: New view components that decode protobuf MUST use `useSchemaReady()` to gate their `useZenohSubscription` callback. Pass `schemaReady ? handleSample : undefined` to avoid dropping messages during schema loading. See `CameraView.tsx` for reference pattern.
-
-### 3. CLI Command: Check argh conventions → write + test → `cargo test` → `/qa-tester` (tmux) → `clippy`
+### 3. CLI Command: Check argh conventions → Write + Test → Clippy
 
 1. Check argh conventions in CLAUDE.md (`#[derive(FromArgs)]`, `#[argh(subcommand)]`)
 2. Write command + unit tests (co-located `#[cfg(test)] mod tests`)
-3. Verify 325+ Rust tests pass
-4. Interactive CLI testing (verify help text, errors, flags)
-5. Zero warnings enforced
+3. Verify 298+ Rust tests pass
+4. Zero clippy warnings enforced
 
 **Security**: Node names `[a-zA-Z0-9_-]{1,64}`, no null bytes.
 
-### 4. Cross-Component Contract: Identify surfaces → update proto → Rust → TS → templates → `/validate` → `/validate --gemini`
+### 4. Cross-Component Contract: Proto → Rust → TS → Templates → Validate
 
 1. Map proto → Rust → JSON API → TypeScript → templates → UI
 2. Update proto + rebuild BOTH descriptor pipelines (`bubbaloop-schemas` AND `bubbaloop`)
 3. Update MCP tool handlers in `mcp/mod.rs`, add integration tests
-4. Update dashboard types, add tests in `schema-registry-decode.test.ts`
-5. Update node templates if topics/fields change
-6. Full system check (325+ Rust + 490+ dashboard tests)
-7. Gemini cross-review
+4. Update dashboard types if applicable
+5. Full system check (298+ Rust + 47 MCP integration tests)
 
 **Critical**: Proto changes require rebuilding both descriptor pipelines.
 
@@ -84,89 +70,21 @@ Start at the lowest tier. Escalate only on failure. Haiku costs ~10x less than O
 | Write tests | `tdd-guide` (Sonnet) | Needs codebase understanding |
 | Debug race condition | `architect` (Opus) | Deep reasoning required |
 | Review architecture | `critic` (Opus) | Judgment call, needs experience |
-| Quick security scan | `security-reviewer-low` (Haiku) | Pattern matching |
-| Full security audit | `security-reviewer` (Opus) | Deep analysis |
 
 **Rule**: Don't waste Opus on lookups. Don't waste Haiku on architecture.
 
 ---
 
-## Two-Critic Loop
-
-Use both Claude and Gemini for non-trivial changes:
-
-1. Claude writes code
-2. `/validate` — automated checks (fast)
-3. `/validate --gemini` — Gemini reviews changed files
-4. If Gemini finds **real bug** → Claude fixes → re-validate
-5. If Gemini suggests **improvement** → evaluate: does it serve sensor nodes?
-   - **Yes** → implement
-   - **No** → it's the agentic trap, skip it
-
-**Gemini CLI command** (Jetson-safe):
-```bash
-NODE_OPTIONS="--max-old-space-size=4096" gemini -p \
-  "Review this Rust file briefly. List max 3 actionable bugs or security issues only. Skip style suggestions." \
-  < path/to/file.rs
-```
-
-Fix real bugs. Skip style bikeshedding.
-
----
-
 ## Validation Checklist
-
-Run these at the right time to avoid wasted cycles:
 
 | Command | When | Why |
 |---------|------|-----|
 | `pixi run check` | After every Rust change | Fast compilation check |
-| `cargo test --lib -p bubbaloop` | Before commits | 325+ Rust tests must pass |
-| `cargo test --features test-harness --test integration_mcp` | After MCP changes | 35 integration tests |
-| `cd dashboard && npm test -- --run` | After dashboard changes | 490+ tests, no deletions allowed |
-| `pixi run clippy` | Before PRs | Zero warnings enforced (`-D warnings`) |
-| `./scripts/validate.sh` | Before final commit | Full system check (10 phases) |
-| `./scripts/validate.sh --gemini` | Before PR submission | AI cross-review |
+| `cargo test --lib -p bubbaloop` | Before commits | 298+ Rust tests |
+| `cargo test --features test-harness --test integration_mcp` | After MCP changes | 47 integration tests |
+| `pixi run clippy` | Before PRs | Zero warnings (`-D warnings`) |
 
 **Jetson constraint**: Do NOT run parallel cargo/pixi commands. ARM64 is too slow. Run sequentially.
-
----
-
-## Skills Reference
-
-Available skills (see `.claude/skills/` for implementation):
-
-| Skill | Purpose | When to Use |
-|-------|---------|-------------|
-| `/validate` | Full system validation (Rust + dashboard + clippy + templates + MCP tests) | After any code change, before commits |
-| `/validate --smoke` | MCP stdio smoke test against real binary | After MCP changes, quick sanity check |
-| `/validate --quick` | Rust-only validation (skip dashboard) | Quick iteration on daemon code |
-| `/validate --gemini` | Full validation + Gemini CLI review | Before PR submission |
-| `/debug-dashboard` | Diagnose dashboard data pipeline issues | When panels show no data |
-
-**Planned** (not yet implemented):
-
-| Skill | Purpose | Trigger |
-|-------|---------|---------|
-| `/test-node` | End-to-end node test: start → publish → dashboard receives | After node template changes |
-| `/test-contract` | Verify cross-component contracts (machine ID, topics, API fields) | After schema/API changes |
-| `/audit-security` | Run Zenoh ACL + mTLS + input validation checks | Before releases |
-| `/upgrade-node` | Graduate Python node to Rust with tests | When node is production-ready |
-
-Add new skills when they directly improve sensor nodes, contracts, or tests.
-
----
-
-## CLAUDE.md Maintenance
-
-Keep under 100 lines. Update only when:
-
-1. **Conventions change** — Project migrates (e.g., argh → clap)
-2. **Pitfall earned** — Real bug in real PR (no hypotheticals)
-3. **Architecture change** — New pattern emerges (e.g., Zenoh API rules)
-4. **Security constraint** — Vulnerability found
-
-Conventions are immutable unless tech stack changes. Pitfalls are earned, not predicted. Reference skills, don't duplicate.
 
 ---
 
@@ -176,44 +94,36 @@ See `CLAUDE.md` for full conventions. Critical rules:
 
 **Rust**: `argh` (NOT clap), `log` (NOT tracing), `thiserror`/`anyhow`, `zbus` (NEVER spawn `systemctl`), 100% safe (no `unsafe`)
 
-**MCP**: All tools use `PlatformOperations` trait for testability. RBAC tiers in `rbac.rs` (Viewer/Operator/Admin). All handlers audit-logged.
+**MCP**: All tools use `PlatformOperations` trait. RBAC tiers (Viewer/Operator/Admin). All handlers audit-logged.
 
-**Zenoh API**: NEVER `.complete(true)` on queryables (blocks wildcards). Python: `query.key_expr` is property NOT method.
+**Zenoh API**: NEVER `.complete(true)` on queryables. Python: `query.key_expr` is property NOT method. ALL nodes MUST use `mode: "client"`.
 
 **Security**: `find_curl()` searches `/usr/bin`,`/usr/local/bin`,`/bin` only. Node names `[a-zA-Z0-9_-]{1,64}`. Bind localhost only.
 
-**Commits**: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`. Never commit `target/`, `node_modules/`, `.env`. Always commit `Cargo.lock`, `pixi.lock`, `package-lock.json`.
+**Commits**: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`. Never commit `target/`, `node_modules/`, `.env`. Always commit `Cargo.lock`, `pixi.lock`.
 
 ---
 
 ## Pull Request Checklist
 
-**All PRs**:
-- [ ] `/validate` passes (325+ Rust, 490+ dashboard tests)
-- [ ] MCP integration tests pass (`cargo test --features test-harness --test integration_mcp`)
+- [ ] `pixi run check` passes
+- [ ] `cargo test --lib -p bubbaloop` (298+ tests)
+- [ ] `cargo test --features test-harness --test integration_mcp` (47 tests)
 - [ ] `pixi run clippy` zero warnings
-- [ ] `/validate --gemini` completed, real bugs fixed
 - [ ] `CLAUDE.md` updated if conventions changed
-- [ ] PR summary (1-3 bullets) + test plan + references
+- [ ] PR summary (1-3 bullets) + test plan
 
-**Dashboard PRs**: Tests added, none deleted, count ≥ previous
-
-**Contract PRs**: All 5 surfaces updated (proto → Rust → JSON → TS → templates), backward compat verified
+**Contract PRs**: All surfaces updated (proto → Rust → JSON → TS → templates), backward compat verified.
 
 ---
 
 ## Maintaining This Document
 
-**Update when**:
-- New workflows established
-- New skills added to `.claude/skills/`
-- Agent tiers change (cost optimization)
-- Validation checks added to `scripts/validate.sh`
+**Update when**: New workflows established, agent tiers change, validation checks added.
 
-**Keep under 250 lines** — AI agents have limited context.
+**Keep under 150 lines** — AI agents have limited context.
 
 **Related files**:
 - `CLAUDE.md` — Conventions, pitfalls, DO/DON'T
-- `ARCHITECTURE.md` — Design decisions, Steinberger Principle
-- `ROADMAP.md` — Timeline, migration phases
-- `.claude/skills/` — Executable workflows
+- `ARCHITECTURE.md` — Design decisions, layer model, security
+- `ROADMAP.md` — Implementation phases

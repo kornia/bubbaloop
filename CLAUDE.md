@@ -5,7 +5,7 @@ Physical AI orchestration built on Zenoh. Single binary: CLI + daemon + MCP serv
 ## Living Documents (update these as architecture evolves)
 
 - **ARCHITECTURE.md** — Layer model, node contract, security, open-core boundary
-- **ROADMAP.md** — Migration phases (Track A: sensor-centric, Track B: cloud), checkboxes
+- **ROADMAP.md** — Implementation phases (YAML skills, agent, SQLite memory, scheduling)
 - **CONTRIBUTING.md** — Agentic workflows, agent tiers, validation, two-critic loop
 
 ## Structure
@@ -18,7 +18,10 @@ dashboard/                 # React + Vite + TypeScript
 ```
 
 Key source files in `crates/bubbaloop/src/`:
-- `cli/node.rs` (88KB) — node CRUD, install, precompiled binary download
+- `cli/node/mod.rs` — node CRUD, validation, list/add/remove
+- `cli/node/install.rs` — install, precompiled binary download, GitHub clone
+- `cli/node/lifecycle.rs` — start, stop, restart, logs
+- `cli/node/build.rs` — build node
 - `daemon/mod.rs` — skill runtime: registry + lifecycle + health + MCP
 - `daemon/node_manager.rs` (57KB) — node lifecycle, build queue, health
 - `daemon/systemd.rs` (38KB) — D-Bus/zbus integration
@@ -61,7 +64,7 @@ Testing: `cargo test --features test-harness --test integration_mcp` (47 tests)
 ```bash
 pixi run check     # cargo check (fast — run after every change)
 pixi run clippy    # zero warnings enforced (-D warnings)
-pixi run test      # cargo test (300 unit tests)
+pixi run test      # cargo test (298 unit tests)
 pixi run fmt       # cargo fmt --all
 pixi run build     # cargo build --release (slow on ARM64)
 cargo test --features test-harness --test integration_mcp  # 47 integration tests
@@ -100,7 +103,7 @@ cargo test --features test-harness --test integration_mcp  # 47 integration test
 
 **DO:** `pixi run check` after changes | `pixi run fmt && pixi run clippy` before commits | tests with every PR | validate user input | `--` in git clone | verify both `bubbaloop-schemas` and `bubbaloop` compile after proto changes
 
-**DON'T:** run `bubbaloop tui` (needs TTY) | edit `target/`/`OUT_DIR` | commit `.env`/credentials/`target/` | add `bubbaloop-schemas` to workspace | combine `git`+`path` in Cargo deps | `git push --force` to main
+**DON'T:** edit `target/`/`OUT_DIR` | commit `.env`/credentials/`target/` | add `bubbaloop-schemas` to workspace | combine `git`+`path` in Cargo deps | `git push --force` to main
 
 ## Zenoh API Rules (templates & nodes)
 
@@ -133,7 +136,7 @@ Exception: views with their own fallback decode chain (like JsonView) don't need
 - ARM64 release builds are slow — use `pixi run check` first
 - Proto changes require rebuilding both `bubbaloop-schemas/` and `bubbaloop` (descriptor.bin is compiled in)
 - MCP is core — rmcp, schemars, tower_governor are unconditional deps
-- TUI is behind `tui` feature flag (not in default build)
-- Logs must go to stderr to avoid corrupting TUI
+- TUI was removed in v0.0.6 — codebase simplified to ~14K lines
+- Logs must go to stderr (convention: never pollute stdout)
 - Zenoh session: MUST use `"client"` mode for router routing; check `BUBBALOOP_ZENOH_ENDPOINT` env var
 - Dashboard schema race: subscriptions start before schemas load — always use `useSchemaReady()` gating
