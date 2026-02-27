@@ -24,6 +24,7 @@ Key source files in `crates/bubbaloop/src/`:
 - `daemon/systemd.rs` (38KB) — D-Bus/zbus integration
 - `daemon/registry.rs` — `~/.bubbaloop/nodes.json` management
 - `registry.rs` — marketplace fetch/parse/cache, `find_curl()`
+- `marketplace.rs` — shared precompiled binary download logic (used by CLI and MCP)
 - `mcp/mod.rs` — MCP tools, BubbaLoopMcpServer<P>, ServerHandler impl
 - `mcp/platform.rs` — PlatformOperations trait, DaemonPlatform, MockPlatform
 
@@ -51,17 +52,19 @@ The daemon is a **passive skill runtime** — AI agents (OpenClaw, Claude, etc.)
 
 Key files in `crates/bubbaloop/src/mcp/`: `mod.rs` (tools, BubbaLoopMcpServer), `platform.rs` (PlatformOperations trait), `rbac.rs`, `auth.rs`.
 
-Testing: `cargo test --features test-harness --test integration_mcp` (35 tests)
+MCP tools: `install_node` accepts marketplace names (e.g., `"rtsp-camera"`), local paths, or GitHub `user/repo`. Full lifecycle: `install_node`, `uninstall_node`, `clean_node`, `enable_autostart`, `disable_autostart`.
+
+Testing: `cargo test --features test-harness --test integration_mcp` (47 tests)
 
 ## Build & Verify
 
 ```bash
 pixi run check     # cargo check (fast — run after every change)
 pixi run clippy    # zero warnings enforced (-D warnings)
-pixi run test      # cargo test (325 unit tests)
+pixi run test      # cargo test (300 unit tests)
 pixi run fmt       # cargo fmt --all
 pixi run build     # cargo build --release (slow on ARM64)
-cargo test --features test-harness --test integration_mcp  # 35 integration tests
+cargo test --features test-harness --test integration_mcp  # 47 integration tests
 ```
 
 ## Conventions — MUST follow
@@ -80,7 +83,7 @@ cargo test --features test-harness --test integration_mcp  # 35 integration test
 - Zenoh queries: 3 retries, 1s timeout, `QueryTarget::BestMatching`
 
 **Security:**
-- `find_curl()` searches `/usr/bin`, `/usr/local/bin`, `/bin` only (no PATH)
+- `find_curl()` in `marketplace.rs` and `registry.rs` searches `/usr/bin`, `/usr/local/bin`, `/bin` only (no PATH)
 - Build commands: allowlist prefixes only (cargo, pixi, npm, make, python, pip)
 - Node names: 1-64 chars, `[a-zA-Z0-9_-]`, no null bytes
 - Git clone: always use `--` separator
