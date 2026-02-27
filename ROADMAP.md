@@ -1,9 +1,8 @@
-# Bubbaloop Platform Roadmap
+# Bubbaloop Roadmap
 
-<!-- LIVING DOCUMENT: Claude and contributors should update checkboxes as work completes.
-     Check off items when PRs merge. See ARCHITECTURE.md for design details. -->
+<!-- LIVING DOCUMENT: Update checkboxes as work completes. See ARCHITECTURE.md for design details. -->
 
-> AI-Native Cloud Orchestration for Physical AI
+> The open-source AI agent that talks to your cameras, sensors, and robots.
 
 ---
 
@@ -15,306 +14,243 @@
 **The Steinberger Test**: Does this make the sensor/hardware layer stronger, or does it add app-layer complexity that AI agents will replace?
 
 **Principles**:
-1. Sensor nodes are the product — not the daemon, not the dashboard
-2. The daemon is scaffolding — useful today, replaceable by AI agents tomorrow
-3. Self-describing nodes are AI-native — discovery without documentation
-4. Data access rights are the moat — who controls the sensors controls the value
-5. Rust + Zenoh + Protobuf — memory safety, decentralized pub/sub, schema introspection
+1. **Sensor drivers are the product** — not the daemon, not the dashboard
+2. **As small as possible** — single Rust binary, ~12-13MB, runs on Jetson/RPi/any Linux
+3. **YAML, not code** — common sensors configured in 5 lines, no programming required
+4. **MCP-native** — AI agents discover and control hardware via MCP tools
+5. **Offline-first** — scheduled actions run without LLM or internet
+6. **Secure by default** — Rust, sandboxed nodes, no skill injection vectors
 
 ## Vision
 
-Transform Bubbaloop from a local daemon into a **complete platform** where users can:
-1. Install with one command on any machine (computer, robot, Jetson)
-2. Login from phone with Google/Apple/GitHub
-3. See all their machines in one dashboard
-4. Control everything via chat (MCP)
-5. Work offline (local-first), sync when connected
-6. Plug in new hardware and let Claude figure it out
-7. Install nodes from any GitHub repo
+```bash
+# Install
+curl -sSL https://get.bubbaloop.com | bash
+
+# Configure a sensor
+cat > ~/.bubbaloop/skills/camera.yaml << 'EOF'
+name: front-door
+driver: rtsp
+config:
+  url: rtsp://192.168.1.100/stream
+EOF
+
+# Talk to your hardware
+bubbaloop agent
+
+> What sensors do I have?
+> Check the camera every 15 minutes and restart if it goes down
+> Alert me if anyone's at the front door
+```
+
+**Five minutes from install to natural-language hardware control.**
 
 ---
 
 ## Architecture
 
 ```
-                              CLOUD (Cloudflare + fly.io)
-┌──────────────────────────────────────────────────────────────────────────┐
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │ Auth Service │  │   Machine    │  │    Zenoh     │  │     Web      │  │
-│  │   (OAuth)    │  │   Registry   │  │    Relay     │  │  Dashboard   │  │
-│  │ Google/Apple │  │   (D1/SQL)   │  │  (fly.io)    │  │   (Pages)    │  │
-│  │ GitHub login │  │ User→Machine│  │ Remote pub/  │  │ Mobile-first │  │
-│  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘  │
-└────────────────────────────────┬─────────────────────────────────────────┘
-                                 │
-        ┌────────────────────────┼────────────────────────┐
-        ▼                        ▼                        ▼
-   ┌─────────┐              ┌─────────┐              ┌─────────┐
-   │Machine A│              │Machine B│              │Machine C│
-   │ (Jetson)│              │(Desktop)│              │ (Robot) │
-   └────┬────┘              └────┬────┘              └────┬────┘
-        ▼                        ▼                        ▼
-
-========================= LOCAL MACHINE =================================
-
-┌───────────────────────────────────────────────────────────────────────┐
-│                        Bubbaloop Agent                                 │
-│  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │  Cloud Connector          │  MCP Server (sole control)          │  │
-│  │  - OAuth tokens           │  - Natural language commands        │  │
-│  │  - Heartbeat to registry  │  - Tools: list/start/stop/restart/  │  │
-│  │  - Relay connection       │    logs/config/manifest/command/    │  │
-│  │  - GitHub sync            │    query/discover/install/uninstall │  │
-│  │                           │    /clean/autostart                 │  │
-│  └─────────────────────────────────────────────────────────────────┘  │
-│  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │  Daemon Core (passive skill runtime)                            │  │
-│  │  MCP :8088 (sole control) │ Zenoh :7447 (data pub/sub only)    │  │
-│  │  Node Manager │ systemd D-Bus                                   │  │
-│  └─────────────────────────────────────────────────────────────────┘  │
-│  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │  Local Dashboard :5173 (works offline)                          │  │
-│  └─────────────────────────────────────────────────────────────────┘  │
-└───────────────────────────────────────────────────────────────────────┘
-                                     │
-              ┌──────────────────────┼──────────────────────┐
-              ▼                      ▼                      ▼
-        ┌──────────┐           ┌──────────┐           ┌──────────┐
-        │  Camera  │           │ Weather  │           │Inference │
-        │   Node   │           │   Node   │           │   Node   │
-        └──────────┘           └──────────┘           └──────────┘
+┌─────────────────────────────────────────────────────────┐
+│  BUBBALOOP  (single binary, ~12-13 MB)                   │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  Agent Layer                                        │  │
+│  │  Claude API | Chat | Scheduler (offline Tier 1)     │  │
+│  └──────────────────────┬─────────────────────────────┘  │
+│  ┌──────────────────────┴─────────────────────────────┐  │
+│  │  Memory (SQLite, +1-2 MB)                           │  │
+│  │  Conversations | Sensor events | Schedules          │  │
+│  └──────────────────────┬─────────────────────────────┘  │
+│  ┌──────────────────────┴─────────────────────────────┐  │
+│  │  MCP Server (23+ tools) — sole control interface    │  │
+│  └──────────────────────┬─────────────────────────────┘  │
+│  ┌──────────────────────┴─────────────────────────────┐  │
+│  │  Daemon (passive skill runtime)                     │  │
+│  │  Node manager | systemd/D-Bus | Marketplace         │  │
+│  └──────────────────────┬─────────────────────────────┘  │
+│  ┌──────────────────────┴─────────────────────────────┐  │
+│  │  Zenoh Data Plane (zero-copy, real-time)            │  │
+│  └──────┬───────────┬───────────┬─────────────────────┘  │
+└─────────┼───────────┼───────────┼────────────────────────┘
+          │           │           │
+     ┌────┴───┐  ┌────┴───┐  ┌───┴────┐
+     │ Camera │  │  IMU   │  │ Motor  │   Sensor drivers (nodes)
+     └────────┘  └────────┘  └────────┘
 ```
 
-> **As of v0.0.5:** The daemon removed all Zenoh queryables for node control. MCP on port 8088 is now
-> the sole control interface. Zenoh (:7447) remains exclusively for node-to-node data pub/sub.
-> The daemon is a passive skill runtime — AI agents (Claude, OpenClaw, etc.) drive all automation via MCP.
+**Two entry points, same core:**
+- `bubbaloop agent` — self-contained hardware AI agent
+- `bubbaloop mcp --stdio` — MCP server for Claude Code / OpenClaw
 
 ---
 
-## Implementation Tracks
+## What's Built (Foundation)
 
-### Track A: Sensor-Centric Foundation
+### v0.0.1–v0.0.6: MCP-Native Sensor Runtime
 
-Building a self-describing, decentralized sensor architecture where nodes are autonomous and AI-discoverable.
+- [x] Single binary: CLI + daemon + MCP server
+- [x] 23 MCP tools (discovery, lifecycle, data, config, system)
+- [x] MCP is sole control interface — Zenoh for data only
+- [x] Marketplace with precompiled binaries (ARM64 + x86_64)
+- [x] Full node lifecycle via MCP: install, uninstall, start, stop, restart, autostart
+- [x] Self-describing nodes: manifest, schema, health, config, command queryables
+- [x] Node SDK: 50-line Rust nodes with `bubbaloop-node-sdk`
+- [x] Protobuf schema discovery via `bubbaloop/**/schema` wildcard
+- [x] 3-tier RBAC (Viewer/Operator/Admin) + bearer token auth
+- [x] systemd integration via D-Bus (zbus)
+- [x] Dashboard (React + Vite)
+- [x] 298 unit tests + 47 MCP integration tests
+- [x] TUI removed — codebase simplified to ~14K lines
 
-#### Phase A1: Contract Enforcement (Complete)
-
-**Goal:** Establish consistent machine ID, scoped topics, and complete API contracts across all components.
-
-**Deliverables:**
-- [x] Deduplicate `get_machine_id()` to shared Rust module
-- [x] Inject `BUBBALOOP_MACHINE_ID` + `BUBBALOOP_SCOPE` via systemd
-- [x] Scope all template topics to `bubbaloop/{scope}/{machine_id}/...`
-- [x] Complete JSON API with 6 missing fields (machine_id, health timestamps, etc.)
-- [x] Status enum cross-validation tests
-- [x] Proto copy at install/create time
-
-**Status:** Merged in PR #33.
-
----
-
-#### Phase A2: Self-Describing Nodes (Mostly Complete)
-
-**Goal:** Nodes declare their own capabilities via manifest queryables. Dashboard discovers without daemon dependency.
-
-**Deliverables:**
-- [x] Define manifest JSON schema with `publishes`, `commands`, `requires_hardware`
-- [x] Add manifest queryable to Rust + Python templates
-- [x] Add command queryable to Rust + Python templates
-- [ ] Add Zenoh liveliness tokens for decentralized presence detection (Python blocked on zenoh-python)
-- [x] Dashboard wildcard query `bubbaloop/**/manifest` for discovery
-- [ ] Update official nodes: network-monitor, system-telemetry, openmeteo, camera
+**Binary size: 11 MB.** Runs on NVIDIA Jetson, Raspberry Pi, any Linux ARM64/x86_64.
 
 ---
 
-#### Phase A3: Security Hardening
+## What's Next
 
-**Goal:** mTLS, per-node ACLs, Python sandboxing, and security audit tooling.
+### Phase 1: YAML Skill Loader + Driver Mapping
 
-**Deliverables:**
-- [ ] Enable Zenoh mTLS for multi-machine deployments
-- [ ] Configure per-node ACL rules (sandboxed to own key prefix)
-- [ ] Application-level encryption for sensitive sensor data (camera feeds)
-- [ ] Python node sandbox: localhost-only, limited key access
-- [ ] `bubbaloop doctor` command for security posture audit
+**Goal:** Zero-code sensor configuration. Write 5 lines of YAML, not a Rust project.
 
----
-
-#### Phase A4: Thin Daemon — Partially Complete
-
-**Goal:** Remove daemon as single point of failure for discovery. Nodes serve their own schemas.
-
-**Deliverables:**
-- [x] Remove Zenoh queryables for daemon control (done — MCP is sole control interface)
-- [x] MCP on :8088 is sole control interface; no Zenoh control plane in daemon
-- [ ] Dashboard migration: dashboard no longer calls daemon API for discovery
-- [ ] Zenoh liveliness-based node presence detection (replaces polling)
-- [ ] Remove node state tracking (liveliness + manifests replace it)
-- [ ] Daemon retains: install, start, stop, update, compositions
-
----
-
-### Track B: Cloud Platform
-
-Multi-machine fleet management, OAuth login, cloud sync, and mobile-first dashboard.
-
-#### Phase B1: Installation & Agent (Week 1-2)
-
-**Goal:** One-liner install, agent with cloud connector
-
-```bash
-curl -sSL https://get.bubbaloop.com | bash
+```yaml
+# ~/.bubbaloop/skills/front-camera.yaml
+name: front-door
+driver: rtsp
+config:
+  url: rtsp://192.168.1.100/stream
+  decoder: auto
 ```
 
 **Deliverables:**
-- [ ] `scripts/install.sh` - Platform detection, binary download, systemd setup
-- [ ] `crates/bubbaloop-agent/` with cloud connector modules
-- [ ] `bubbaloop login` command - OAuth flow
-- [ ] Agent registers with cloud on login
-
----
-
-#### Phase B2: Cloud Infrastructure (Week 2-3)
-
-**Goal:** Auth service, machine registry, Zenoh relay
-
-**Deliverables:**
-- [ ] OAuth login (Google, Apple, GitHub)
-- [ ] Machine registry (Cloudflare D1)
-- [ ] Zenoh relay with auth (fly.io)
-- [ ] Cloud workers: auth + API (Cloudflare Workers)
-
----
-
-#### Phase B3: Cloud Dashboard (Week 3-4)
-
-**Goal:** Dual-mode dashboard (local + cloud), mobile-first
-
-**Deliverables:**
-- [ ] Same dashboard works locally AND in cloud
-- [ ] OAuth login + machine selector
-- [ ] Responsive mobile-first styling
-- [ ] Chat panel integration
-
----
-
-#### Phase B4: MCP Integration — Mostly Complete
-
-**Goal:** Natural language control via MCP
-
-**Deliverables:**
-- [x] MCP server in daemon (tools: list/start/stop/restart/logs/config/manifest/command/query/discover/install/uninstall/clean/autostart)
-- [x] `.mcp.json` for Claude Code integration
-- [x] Full node lifecycle via MCP: install (marketplace + path), uninstall, clean, enable/disable autostart
-- [x] MCP is sole control interface — all Zenoh queryables for control removed from daemon
-- [ ] Chat panel in dashboard
-- [ ] Natural language execution: "Start the camera"
-- [ ] Device discovery + auto-install tools
-
----
-
-#### Phase B4b: OpenClaw Foundation (In Progress)
-
-**Goal:** Make bubbaloop the physical AI layer for OpenClaw and other AI agents.
-
-**Deliverables:**
-- [x] MCP server with generic tools (list_nodes, send_command, etc.)
-- [x] `list_commands` MCP tool for easy command discovery
-- [x] Enriched MCP instructions for AI agent workflow guidance
-- [x] Optional `mcp:` section in node.yaml for richer tool descriptions
-- [x] Simplified daemon to pure skill runtime (removed agent rule engine)
-- [x] Updated architecture docs to reflect passive runtime model
-- [x] Marketplace install via MCP (`install_node` with simple names like `"rtsp-camera"`)
-- [x] Full lifecycle MCP tools: `uninstall_node`, `clean_node`, `enable_autostart`, `disable_autostart`
-- [x] Shared `marketplace.rs` module for precompiled binary downloads (CLI + MCP)
-- [ ] MCP authentication for remote agent access
-
-**Design decision:** Enhanced Option B — daemon-only MCP, no per-node MCP tools. Manifest-driven discovery + generic `send_command` dispatcher. Daemon is a passive skill runtime; external AI agents implement automation logic. See `.omc/plans/openclaw-foundation.md`.
-
----
-
-#### Phase B5: GitHub Integration (Week 5-6)
-
-**Goal:** Install nodes from any GitHub repo (`bubbaloop install github.com/user/node`)
-
-**Deliverables:**
-- [x] `install_node` MCP tool accepts marketplace names, local paths, and GitHub `user/repo` format
-- [x] Register + create systemd service in one step (AddNode + Install chain)
-- [ ] Auto-detect project type (Rust/Python, with/without manifest)
-- [ ] Auto-generate `node.yaml` if missing
-
----
-
-#### Phase B6: Hardware Discovery (Week 6-7)
-
-**Goal:** Plug in hardware, AI discovers and suggests nodes
-
-**Deliverables:**
-- [ ] USB device enumeration (udev)
-- [ ] Network device scanning (mDNS, IP scan)
-- [ ] Camera detection (V4L2, RTSP)
-- [ ] Hardware → Node mapping database
-- [ ] Auto-suggestion flow via MCP
-
----
-
-### Phase C: Hardware AI Agent
-
-**Goal:** Transform bubbaloop from infrastructure into a self-contained Hardware AI Agent — like OpenClaw but for sensors, cameras, and robots.
-
-**Design:** See `docs/plans/2026-02-27-hardware-ai-agent-design.md`
-
-#### Phase C1: YAML Skill Loader + Driver Mapping
-
-**Goal:** Sensors configured via 5-line YAML, not code. Zero-code for common hardware.
-
-**Deliverables:**
-- [ ] `~/.bubbaloop/skills/*.yaml` loader — parse driver + config
+- [ ] `~/.bubbaloop/skills/*.yaml` loader — parse driver + config at startup
 - [ ] Driver registry: map `driver: rtsp` → marketplace node `rtsp-camera`
-- [ ] Auto-install: download precompiled binary if not present
-- [ ] Config injection: YAML config → node env vars / config file
+- [ ] Auto-install: download precompiled binary if driver not present
+- [ ] Config injection: YAML config → node env vars / config.yaml
 - [ ] `bubbaloop up` command: load all skills, ensure nodes running
-- [ ] Built-in driver catalog (v1): rtsp, v4l2, serial, gpio, http-poll, mqtt, modbus, system
+- [ ] Built-in driver catalog (v1):
 
-#### Phase C2: Agent Loop (Claude API)
+| Driver | Marketplace Node | Use Case |
+|--------|-----------------|----------|
+| `rtsp` | rtsp-camera | IP cameras, NVRs |
+| `v4l2` | v4l2-camera | USB webcams, CSI cameras |
+| `serial` | serial-bridge | Arduino, UART, RS-485 |
+| `gpio` | gpio-controller | Buttons, LEDs, relays |
+| `http-poll` | http-sensor | REST APIs, weather services |
+| `mqtt` | mqtt-bridge | Home automation, industrial |
+| `modbus` | modbus-bridge | Industrial IoT, PLCs |
+| `system` | system-telemetry | CPU, RAM, disk, temperature |
 
-**Goal:** Natural language control of hardware. `bubbaloop agent` starts a chat.
+**New deps:** None. **New code:** ~300-500 lines.
+
+---
+
+### Phase 2: Agent Loop (Claude API)
+
+**Goal:** Natural language hardware control. `bubbaloop agent` starts a chat.
+
+```
+> What sensors do I have?
+  front-door (RTSP camera, running, 30fps)
+  system-telemetry (running, CPU 42C)
+
+> Start recording from the front door
+  [calls send_command("front-door", "start_recording")]
+  Recording started.
+```
 
 **Deliverables:**
 - [ ] `bubbaloop agent` CLI command (terminal chat interface)
-- [ ] Claude API integration (tool_use for MCP tools)
+- [ ] Claude API integration via `reqwest` (tool_use for MCP tools)
 - [ ] Internal MCP tool dispatch (call tools without HTTP round-trip)
 - [ ] System prompt injection: sensor inventory, node status, active schedules
-- [ ] Conversation loop with multi-turn tool use
-- [ ] HTTP chat API endpoint (for dashboard/mobile integration later)
+- [ ] Multi-turn conversation loop with tool use
+- [ ] HTTP chat endpoint for future dashboard integration
 
-#### Phase C3: SQLite Memory
+**New deps:** None (`reqwest` already in dep tree). **New code:** ~500-800 lines.
 
-**Goal:** Sensor-native memory. "What happened at the front door yesterday?" Binary size budget: +1-2MB only.
+---
+
+### Phase 3: SQLite Memory
+
+**Goal:** "What happened at the front door yesterday?" — sensor-native memory.
+
+**Constraint:** +1-2 MB binary size only. No Arrow, no DataFusion, no heavy frameworks.
+
+```sql
+-- Three tables, one embedded database
+conversations (id, timestamp, role, content, tool_calls)
+sensor_events (id, timestamp, node_name, event_type, details)
+schedules     (id, name, cron, actions, tier, last_run, next_run)
+```
 
 **Deliverables:**
-- [ ] SQLite embedded database (`~/.bubbaloop/memory.db`) via `rusqlite` (static)
-- [ ] `conversations` table: chat history with FTS5 full-text search
-- [ ] `sensor_events` table: health changes, anomalies, alerts with timestamps
+- [ ] SQLite via `rusqlite` (static libsqlite3) at `~/.bubbaloop/memory.db`
+- [ ] `conversations` table with FTS5 full-text search
+- [ ] `sensor_events` table: health changes, crashes, alerts with timestamps
 - [ ] `schedules` table: active jobs + execution history
-- [ ] Daemon event hook: write events to SQLite as they happen
-- [ ] Time-based + node-name queries (vector search deferred — add `sqlite-vec` later if needed)
-- [ ] Context injection: relevant history included in agent system prompt
+- [ ] Daemon event hook: write sensor events as they happen (no polling)
+- [ ] Context injection: recent events included in agent system prompt
+- [ ] Future: add `sqlite-vec` (~200KB) for vector search if needed
 
-#### Phase C4: Scheduling
+**New deps:** `rusqlite` (+1-2 MB). **New code:** ~300-500 lines.
 
-**Goal:** Autonomous hardware management. Health patrols, timelapse, periodic checks — without always-on LLM.
+**Size budget:**
+```
+Current binary:     11 MB
++ rusqlite:          1-2 MB
++ cron parser:       ~50 KB
+─────────────────────────────
+Target:             ~12-13 MB
+```
+
+---
+
+### Phase 4: Scheduling
+
+**Goal:** Autonomous hardware management without always-on LLM.
+
+**Key insight:** OpenClaw keeps the LLM running 24/7 (~$5-10/day). Bubbaloop's Tier 1 schedules run offline with zero LLM calls.
+
+#### Tier 1: Declarative (no LLM, works offline)
+
+```yaml
+# In skill files
+schedule: "*/15 * * * *"
+actions:
+  - check_all_health
+  - if_unhealthy: restart
+  - log_event: "health check completed"
+```
+
+Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, `stop_node`, `send_command`, `log_event`, `store_event`, `notify`.
+
+#### Tier 2: Conversational (LLM on-demand)
+
+```
+> Every morning at 8am, summarize overnight camera activity
+  Created job "morning-summary" (Tier 2, 1 Claude call/day).
+```
 
 **Deliverables:**
-- [ ] Tier 1 scheduler: cron-based, pre-resolved actions (no LLM needed, works offline)
-- [ ] Built-in actions: check_health, restart, capture_frame, send_command, notify, log_event
-- [ ] YAML schedule syntax in skill files (`schedule: "*/15 * * * *"`)
-- [ ] Tier 2 scheduler: conversational schedules stored in LanceDB, escalate to Claude
-- [ ] Rate limiting: configurable max LLM calls/day for Tier 2
-- [ ] Execution history: logged in LanceDB schedules table
-- [ ] `bubbaloop jobs` CLI: list, pause, resume, delete scheduled jobs
+- [ ] Tier 1 cron executor with built-in action set (offline, no LLM)
+- [ ] YAML `schedule:` + `actions:` syntax in skill files
+- [ ] Tier 2 conversational schedules stored in SQLite
+- [ ] Rate limiting: configurable max LLM calls/day
+- [ ] `bubbaloop jobs` CLI: list, pause, resume, delete
+- [ ] Execution history logged in SQLite
 
-#### Phase C5: Polish + "5 Minutes to Magic"
+| | OpenClaw | Bubbaloop |
+|---|---|---|
+| Health check every 15min | 96 LLM calls/day | 0 (Tier 1) |
+| Morning summary | 1 call/day | 1 call/day (Tier 2) |
+| Crash recovery | Always-on LLM | 0 (Tier 1) |
+| **Daily cost** | ~$5-10 | ~$0.05 |
+
+**New deps:** `cron` crate (~50KB). **New code:** ~200-400 lines.
+
+---
+
+### Phase 5: Polish + "5 Minutes to Magic"
 
 **Goal:** Install → configure → chat in under 5 minutes.
 
@@ -322,67 +258,38 @@ curl -sSL https://get.bubbaloop.com | bash
 - [ ] `curl -sSL https://get.bubbaloop.com | bash` install script
 - [ ] First-run wizard: detect hardware, suggest skills, set up API key
 - [ ] `bubbaloop agent` auto-loads skills, auto-installs drivers, starts chat
-- [ ] Natural language sensor discovery: "What cameras are available?"
 - [ ] AI-assisted skill creation: "Add my garage camera at rtsp://..."
 - [ ] Conversational scheduling: "Check cameras every hour"
 
 ---
 
-## Open-Core Business Model
+## Future (Not in v1)
 
-| Tier | Price | Machine Limit | Key Features |
-|------|-------|---------------|--------------|
-| **Free** | $0 | 10 machines | CLI, daemon, TUI, local dashboard, community marketplace, node templates |
-| **Startup** | $99/mo | 50 machines | Multi-machine fleet dashboard, cloud time-series sync, basic OTA updates, 48h support |
-| **Team** | $499/mo | 500 machines | Canary deployments, enterprise ACLs, mTLS auto-rotation, anomaly detection, 24h support |
-| **Enterprise** | Custom | Unlimited | On-premise deployment, dedicated engineer, white-label marketplace, SLA guarantees |
+These are out of scope but represent natural evolution:
 
-**The Steinberger Boundary**: Sensor nodes and local runtime are free (the product). Fleet operations and cloud services are paid.
-
-**Academic/Research**: Always free (Foxglove model).
+- **Local LLM** — Ollama support for fully offline agent operation
+- **Hardware discovery** — USB/V4L2/mDNS auto-detection of connected sensors
+- **Multi-channel** — WhatsApp/Telegram/Discord (via OpenClaw bridge or native)
+- **Fleet** — Cloud sync of memory and schedules across machines
+- **Voice** — Speech-to-text for hands-free robot control
+- **Visual** — Camera frame analysis in Claude conversations (multimodal)
+- **Security hardening** — Zenoh mTLS, per-node ACLs, Python sandboxing
 
 ---
 
-## Simplified Node Format
+## Comparison
 
-### Minimal `node.yaml`
-```yaml
-name: my-node
-type: rust  # or python
-```
-
-Everything else auto-detected from `Cargo.toml` or `pyproject.toml`.
-
-### Full `node.yaml`
-```yaml
-name: my-camera-node
-version: "1.2.0"
-type: rust
-description: "Custom camera integration"
-
-# Optional - auto-detected if omitted
-build: "cargo build --release"
-command: "./target/release/my_camera_node"
-
-# Hardware hints for auto-discovery
-hardware:
-  usb_vendor: "046d"
-  usb_product: "0825"
-  device_type: "camera"
-
-# Zenoh topics (documentation)
-topics:
-  publishes:
-    - "/camera/{name}/compressed"
-  subscribes:
-    - "/config/{name}"
-
-# MCP tools this node exposes
-mcp:
-  tools:
-    - name: "capture_frame"
-      description: "Capture a single frame"
-```
+| | OpenClaw | NanoClaw | PicoClaw | **Bubbaloop** |
+|---|---|---|---|---|
+| **Language** | TypeScript | Python | Go | **Rust** |
+| **Binary** | ~200 MB (Node.js) | ~50 MB (Python) | ~10 MB | **~12-13 MB** |
+| **Focus** | General agent | Container security | Ultra-light edge | **Sensors/hardware** |
+| **MCP role** | Client (consumes) | Client | Planned | **Server (provides)** |
+| **Data plane** | None | None | None | **Zenoh (zero-copy)** |
+| **Hardware** | None | None | Runs on $10 hw | **Drives hardware** |
+| **Scheduling** | LLM-dependent | LLM-dependent | Basic cron | **Tier 1 offline + Tier 2 LLM** |
+| **Memory** | Markdown files | Markdown files | SQLite | **SQLite (sensor-native)** |
+| **Edge-ready** | No | Docker only | Yes | **Yes (Jetson, RPi)** |
 
 ---
 
@@ -390,92 +297,20 @@ mcp:
 
 | Component | Technology | Why |
 |-----------|------------|-----|
-| Agent | Rust + Tokio | Performance, existing codebase |
-| Cloud Auth | Cloudflare Workers | Serverless, global edge |
-| Database | Cloudflare D1 | Serverless SQLite |
-| Zenoh Relay | fly.io | Persistent connections |
-| Dashboard | React + Vite + Cloudflare Pages | Fast, free hosting |
-| MCP Server | Rust + rmcp | Native Rust SDK |
-| Install | Bash + curl | Universal |
+| Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
+| Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
+| Schemas | Protobuf + prost | Self-describing, runtime introspection |
+| Control | MCP (rmcp) | Standard AI agent interface, 23+ tools |
+| Memory | SQLite (rusqlite) | Embedded, +1-2 MB, battle-tested everywhere |
+| CLI | argh | Minimal, fast compile |
+| Logging | log + env_logger | Simple, stderr-only |
+| systemd | zbus (D-Bus) | No subprocess spawning, safe |
+| LLM | Claude API (reqwest) | Best tool-use, zero new deps |
 
 ---
 
-## What Makes This Novel
+## Design Documents
 
-1. **MCP-first architecture** - AI control is primary, not bolted-on
-2. **Local-first** - Works offline, cloud enhances rather than requires
-3. **Phone-first UX** - Control robots from your pocket
-4. **One-liner install** - No Docker, no complex setup
-5. **Multi-machine from day one** - Designed for fleets
-6. **Chat as primary interface** - Natural language, not CLI flags
-7. **Self-extending** - Claude can integrate new hardware
-8. **GitHub-native nodes** - Install from any repo URL
-
----
-
-## Priority Order
-
-1. `scripts/install.sh` - One-liner that downloads agent binary
-2. `crates/bubbaloop-agent/` - Enhanced daemon with MCP server
-3. Cloud auth - Google OAuth on Cloudflare Workers
-4. Extend dashboard - Add login + machine selector + chat
-5. `install_node_from_url` tool - GitHub cloning + auto-build
-6. `discover_devices` tool - USB/network scanning
-
----
-
-## Claude Code Integration
-
-Once implemented, configure `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "bubbaloop": {
-      "type": "sse",
-      "url": "http://localhost:8088/mcp/sse"
-    }
-  }
-}
-```
-
-Example session:
-```
-User: List my nodes
-
-Claude: [calls list_nodes]
-You have 3 nodes:
-- rtsp-camera (running)
-- openmeteo (stopped)
-- inference (not installed)
-
-User: I just plugged in a USB camera
-
-Claude: [calls discover_devices]
-Found: Logitech C920
-
-[calls install_node_from_url("github.com/bubbaloop/v4l2-camera-node")]
-Installing... Done.
-
-[calls start_node("v4l2-camera")]
-Camera streaming to /camera/usb/compressed
-```
-
----
-
-## Maintaining This Document
-
-**Update when:**
-- Phases complete → check off items
-- New phases added → document goals and deliverables
-- Priorities shift → reorder or add urgency notes
-
-**How to update:**
-- Check off items when PRs merge to main
-- Mark phases as "In Progress" when work starts
-- Add new checkboxes for sub-deliverables as they emerge
-
-**Related files:**
-- `ARCHITECTURE.md` — Design details and technical decisions
-- `CONTRIBUTING.md` — Contribution workflows and PR guidelines
-- `CLAUDE.md` — Coding conventions and constraints
+- `docs/plans/2026-02-27-hardware-ai-agent-design.md` — Full agent design (architecture, memory, scheduling, security)
+- `ARCHITECTURE.md` — Layer model, node contract, security, technology choices
+- `CONTRIBUTING.md` — Agentic workflows, agent tiers, validation
