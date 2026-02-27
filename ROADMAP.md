@@ -258,16 +258,72 @@ curl -sSL https://get.bubbaloop.com | bash
 
 ---
 
-### Phase C: AI-Agent Interface (Convergence)
+### Phase C: Hardware AI Agent
 
-**Goal:** MCP server exposing node manifests as tools. Natural language sensor discovery and control.
+**Goal:** Transform bubbaloop from infrastructure into a self-contained Hardware AI Agent — like OpenClaw but for sensors, cameras, and robots.
+
+**Design:** See `docs/plans/2026-02-27-hardware-ai-agent-design.md`
+
+#### Phase C1: YAML Skill Loader + Driver Mapping
+
+**Goal:** Sensors configured via 5-line YAML, not code. Zero-code for common hardware.
 
 **Deliverables:**
-- [ ] MCP server exposes node manifests as tools
+- [ ] `~/.bubbaloop/skills/*.yaml` loader — parse driver + config
+- [ ] Driver registry: map `driver: rtsp` → marketplace node `rtsp-camera`
+- [ ] Auto-install: download precompiled binary if not present
+- [ ] Config injection: YAML config → node env vars / config file
+- [ ] `bubbaloop up` command: load all skills, ensure nodes running
+- [ ] Built-in driver catalog (v1): rtsp, v4l2, serial, gpio, http-poll, mqtt, modbus, system
+
+#### Phase C2: Agent Loop (Claude API)
+
+**Goal:** Natural language control of hardware. `bubbaloop agent` starts a chat.
+
+**Deliverables:**
+- [ ] `bubbaloop agent` CLI command (terminal chat interface)
+- [ ] Claude API integration (tool_use for MCP tools)
+- [ ] Internal MCP tool dispatch (call tools without HTTP round-trip)
+- [ ] System prompt injection: sensor inventory, node status, active schedules
+- [ ] Conversation loop with multi-turn tool use
+- [ ] HTTP chat API endpoint (for dashboard/mobile integration later)
+
+#### Phase C3: LanceDB Memory
+
+**Goal:** Sensor-native memory. "What happened at the front door yesterday?"
+
+**Deliverables:**
+- [ ] LanceDB embedded database (`~/.bubbaloop/memory.lance`)
+- [ ] `conversations` table: chat history with vector embeddings
+- [ ] `sensor_events` table: health changes, anomalies, alerts with timestamps
+- [ ] Daemon event hook: write events to LanceDB as they happen
+- [ ] Vector search: semantic queries across conversations and events
+- [ ] Context injection: relevant history included in agent system prompt
+
+#### Phase C4: Scheduling
+
+**Goal:** Autonomous hardware management. Health patrols, timelapse, periodic checks — without always-on LLM.
+
+**Deliverables:**
+- [ ] Tier 1 scheduler: cron-based, pre-resolved actions (no LLM needed, works offline)
+- [ ] Built-in actions: check_health, restart, capture_frame, send_command, notify, log_event
+- [ ] YAML schedule syntax in skill files (`schedule: "*/15 * * * *"`)
+- [ ] Tier 2 scheduler: conversational schedules stored in LanceDB, escalate to Claude
+- [ ] Rate limiting: configurable max LLM calls/day for Tier 2
+- [ ] Execution history: logged in LanceDB schedules table
+- [ ] `bubbaloop jobs` CLI: list, pause, resume, delete scheduled jobs
+
+#### Phase C5: Polish + "5 Minutes to Magic"
+
+**Goal:** Install → configure → chat in under 5 minutes.
+
+**Deliverables:**
+- [ ] `curl -sSL https://get.bubbaloop.com | bash` install script
+- [ ] First-run wizard: detect hardware, suggest skills, set up API key
+- [ ] `bubbaloop agent` auto-loads skills, auto-installs drivers, starts chat
 - [ ] Natural language sensor discovery: "What cameras are available?"
-- [ ] AI-assisted node creation: "Create a node that monitors CPU temperature"
-- [ ] Composition orchestration via AI: "Track that person"
-- [ ] Context-aware responses with hardware constraints
+- [ ] AI-assisted skill creation: "Add my garage camera at rtsp://..."
+- [ ] Conversational scheduling: "Check cameras every hour"
 
 ---
 

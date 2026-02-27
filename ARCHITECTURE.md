@@ -435,8 +435,9 @@ Instead:
 - **Agent rule engine** — Daemon is a passive skill runtime. External AI agents (OpenClaw, etc.) implement automation logic via MCP.
 
 **Feature flags:**
-- **TUI** (`--features tui`) — Terminal UI is optional. Most deployments use headless daemon + MCP.
 - **Dashboard** (`dashboard` feature) — Embeds React dashboard via `rust-embed` and `axum`.
+
+**Planned:** Hardware AI Agent layer (Phase C) — Claude API + LanceDB memory + YAML skill loader + scheduler. See `docs/plans/2026-02-27-hardware-ai-agent-design.md`.
 
 ---
 
