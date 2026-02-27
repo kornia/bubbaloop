@@ -63,10 +63,11 @@ pub fn required_tier(tool_name: &str) -> Tier {
 
         // Operator tools (day-to-day operations)
         "start_node" | "stop_node" | "restart_node" | "get_node_config" | "send_command"
-        | "get_node_logs" => Tier::Operator,
+        | "get_node_logs" | "enable_autostart" | "disable_autostart" => Tier::Operator,
 
         // Admin tools (system modification)
-        "install_node" | "remove_node" | "build_node" | "query_zenoh" => Tier::Admin,
+        "install_node" | "remove_node" | "build_node" | "query_zenoh" | "uninstall_node"
+        | "clean_node" => Tier::Admin,
 
         // Unknown tools default to admin (principle of least privilege)
         _ => Tier::Admin,

@@ -1335,180 +1335,17 @@ pub(crate) async fn send_command(name: &str, command: &str) -> Result<()> {
     Err(last_error.unwrap_or_else(|| NodeError::Zenoh("No response from daemon".into())))
 }
 
-/// Detect the current CPU architecture and return the GitHub release arch suffix.
-fn detect_arch() -> Result<&'static str> {
-    match std::env::consts::ARCH {
-        "x86_64" => Ok("amd64"),
-        "aarch64" => Ok("arm64"),
-        other => Err(NodeError::CommandFailed(format!(
-            "Unsupported architecture: {}",
-            other
-        ))),
-    }
-}
-
-/// Find curl in standard system paths to avoid PATH hijacking.
-fn find_curl() -> Option<PathBuf> {
-    for dir in &["/usr/bin", "/usr/local/bin", "/bin"] {
-        let path = Path::new(dir).join("curl");
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    None
-}
-
-/// Download a file from a URL to a local path using curl.
-fn download_file(url: &str, dest: &Path) -> Result<()> {
-    let curl = find_curl()
-        .ok_or_else(|| NodeError::CommandFailed("curl not found in standard paths".into()))?;
-
-    let output = Command::new(curl)
-        .args([
-            "-sSfL",
-            "--connect-timeout",
-            "10",
-            "--max-time",
-            "300",
-            "-o",
-            &dest.to_string_lossy(),
-            "--",
-            url,
-        ])
-        .output()?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(NodeError::CommandFailed(format!(
-            "Download failed: {}",
-            stderr
-        )))
-    }
-}
-
-/// Download a small text file (e.g., checksum) and return its contents.
-fn download_text(url: &str) -> Result<String> {
-    let curl = find_curl()
-        .ok_or_else(|| NodeError::CommandFailed("curl not found in standard paths".into()))?;
-
-    let output = Command::new(curl)
-        .args([
-            "-sSfL",
-            "--connect-timeout",
-            "10",
-            "--max-time",
-            "30",
-            "--",
-            url,
-        ])
-        .output()?;
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(NodeError::CommandFailed(format!(
-            "Download failed: {}",
-            stderr
-        )))
-    }
-}
-
-/// Verify that a file matches an expected SHA256 checksum.
-///
-/// The `expected` string should be in the format output by `sha256sum`:
-/// `<hex_hash>  <filename>\n` or just `<hex_hash>`.
-fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
-    let output = Command::new("sha256sum")
-        .arg(path)
-        .output()
-        .map_err(|e| NodeError::CommandFailed(format!("sha256sum not found: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(NodeError::CommandFailed("sha256sum failed".into()));
-    }
-
-    let actual_line = String::from_utf8_lossy(&output.stdout);
-    let actual_hash = actual_line.split_whitespace().next().unwrap_or("");
-    let expected_hash = expected.split_whitespace().next().unwrap_or("");
-
-    if actual_hash == expected_hash {
-        Ok(())
-    } else {
-        Err(NodeError::CommandFailed(format!(
-            "Checksum mismatch: expected {}, got {}",
-            expected_hash, actual_hash
-        )))
-    }
-}
-
-/// Set a file as executable (chmod 755).
-fn set_executable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let perms = std::fs::Permissions::from_mode(0o755);
-    std::fs::set_permissions(path, perms)?;
-    Ok(())
-}
-
 /// Attempt to download a precompiled binary for a registry node.
 ///
 /// Returns the node directory path on success. On failure, the caller should
 /// fall back to cloning and building from source.
+///
+/// Delegates to `crate::marketplace::download_precompiled` for the actual
+/// download logic (shared with MCP).
 fn try_download_precompiled(entry: &registry::RegistryNode) -> Result<String> {
-    let binary_name = entry
-        .binary
-        .as_ref()
-        .ok_or_else(|| NodeError::CommandFailed("No binary field in registry entry".into()))?;
-
-    if entry.node_type != "rust" {
-        return Err(NodeError::CommandFailed("Not a Rust node".into()));
-    }
-
-    let arch = detect_arch()?;
-
-    let url = registry::precompiled_url(entry, arch)
-        .ok_or_else(|| NodeError::CommandFailed("Cannot construct download URL".into()))?;
-    let checksum_url = format!("{}.sha256", url);
-
-    // Create node directory: ~/.bubbaloop/nodes/<repo-name>/<subdir>/
-    let repo_name = entry
-        .repo
-        .rsplit('/')
-        .next()
-        .unwrap_or("bubbaloop-nodes-official");
-    let node_dir = crate::daemon::registry::get_bubbaloop_home()
-        .join("nodes")
-        .join(repo_name)
-        .join(&entry.subdir);
-    let binary_dir = node_dir.join("target").join("release");
-    std::fs::create_dir_all(&binary_dir)?;
-
-    // Write a minimal node.yaml so the daemon can read it
-    let node_yaml = format!(
-        "name: {}\nversion: {}\ntype: {}\ndescription: \"{}\"\ncommand: \"./target/release/{}\"\n",
-        entry.name, entry.version, entry.node_type, entry.description, binary_name
-    );
-    std::fs::write(node_dir.join("node.yaml"), node_yaml)?;
-
-    // Download checksum first (fast fail if release doesn't exist)
-    log::info!("Downloading checksum from {}", checksum_url);
-    let expected_checksum = download_text(&checksum_url)?;
-
-    // Download binary
-    let binary_path = binary_dir.join(binary_name);
-    log::info!("Downloading binary from {}", url);
     println!("Downloading precompiled binary...");
-    download_file(&url, &binary_path)?;
-
-    // Verify checksum
-    verify_sha256(&binary_path, &expected_checksum)?;
-
-    // Make executable
-    set_executable(&binary_path)?;
-
-    Ok(node_dir.to_string_lossy().to_string())
+    crate::marketplace::download_precompiled(entry)
+        .map_err(|e| NodeError::CommandFailed(e.to_string()))
 }
 
 /// Handle `node install`: if the node is already registered with the daemon,
@@ -2614,7 +2451,7 @@ mod tests {
 
     #[test]
     fn test_detect_arch() {
-        let arch = detect_arch();
+        let arch = crate::marketplace::detect_arch();
         assert!(arch.is_ok());
         let arch = arch.unwrap();
         #[cfg(target_arch = "x86_64")]
@@ -2671,7 +2508,7 @@ mod tests {
         let output = Command::new("sha256sum").arg(&file_path).output().unwrap();
         let expected = String::from_utf8_lossy(&output.stdout).to_string();
 
-        let result = verify_sha256(&file_path, &expected);
+        let result = crate::marketplace::verify_sha256(&file_path, &expected);
         assert!(result.is_ok());
     }
 
@@ -2683,7 +2520,7 @@ mod tests {
 
         let wrong_checksum =
             "0000000000000000000000000000000000000000000000000000000000000000  test_binary";
-        let result = verify_sha256(&file_path, wrong_checksum);
+        let result = crate::marketplace::verify_sha256(&file_path, wrong_checksum);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -2698,7 +2535,7 @@ mod tests {
         let file_path = dir.path().join("test_bin");
         std::fs::write(&file_path, b"#!/bin/sh\necho hi").unwrap();
 
-        set_executable(&file_path).unwrap();
+        crate::marketplace::set_executable(&file_path).unwrap();
         let perms = std::fs::metadata(&file_path).unwrap().permissions();
         assert_eq!(perms.mode() & 0o777, 0o755);
     }
@@ -2718,7 +2555,11 @@ mod tests {
         };
         let result = try_download_precompiled(&entry);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No binary field"));
+        // MarketplaceError::NoBinary: "No precompiled binary available for 'test'"
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No precompiled binary"));
     }
 
     #[test]
@@ -2736,7 +2577,11 @@ mod tests {
         };
         let result = try_download_precompiled(&entry);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Not a Rust node"));
+        // MarketplaceError::NoBinary includes type info: "only rust nodes have precompiled binaries"
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("precompiled binary"));
     }
 
     #[test]

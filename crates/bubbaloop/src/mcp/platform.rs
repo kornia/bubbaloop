@@ -40,6 +40,11 @@ pub enum NodeCommand {
     Restart,
     Build,
     GetLogs,
+    Install,
+    Uninstall,
+    Clean,
+    EnableAutostart,
+    DisableAutostart,
 }
 
 /// Abstraction over daemon internals.
@@ -94,6 +99,15 @@ pub trait PlatformOperations: Send + Sync + 'static {
 
     /// Remove a registered node. Stops it first if running.
     fn remove_node(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Install a node from the marketplace by name.
+    ///
+    /// Fetches the registry, downloads the precompiled binary, registers
+    /// the node with the daemon, and creates the systemd service.
+    fn install_from_marketplace(
         &self,
         name: &str,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
@@ -172,6 +186,11 @@ impl PlatformOperations for DaemonPlatform {
             NodeCommand::Restart => CommandType::Restart,
             NodeCommand::Build => CommandType::Build,
             NodeCommand::GetLogs => CommandType::GetLogs,
+            NodeCommand::Install => CommandType::Install,
+            NodeCommand::Uninstall => CommandType::Uninstall,
+            NodeCommand::Clean => CommandType::Clean,
+            NodeCommand::EnableAutostart => CommandType::EnableAutostart,
+            NodeCommand::DisableAutostart => CommandType::DisableAutostart,
         };
 
         let proto_cmd = ProtoNodeCommand {
@@ -275,7 +294,8 @@ impl PlatformOperations for DaemonPlatform {
     }
 
     async fn install_node(&self, source: &str) -> PlatformResult<String> {
-        let proto_cmd = ProtoNodeCommand {
+        // Step 1: Register the node with AddNode
+        let add_cmd = ProtoNodeCommand {
             command: CommandType::AddNode as i32,
             node_name: String::new(),
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -286,11 +306,125 @@ impl PlatformOperations for DaemonPlatform {
             name_override: String::new(),
             config_override: String::new(),
         };
-        let result = self.node_manager.execute_command(proto_cmd).await;
-        if result.success {
-            Ok(result.message)
+        let add_result = self.node_manager.execute_command(add_cmd).await;
+        if !add_result.success {
+            return Err(PlatformError::CommandFailed(add_result.message));
+        }
+
+        // Step 2: Parse node name from "Added node: <name>" message
+        let node_name = add_result
+            .message
+            .strip_prefix("Added node: ")
+            .unwrap_or(&add_result.message)
+            .trim()
+            .to_string();
+
+        // Step 3: Create systemd service via Install command
+        let install_cmd = ProtoNodeCommand {
+            command: CommandType::Install as i32,
+            node_name: node_name.clone(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: now_ms(),
+            source_machine: "mcp-platform".to_string(),
+            target_machine: String::new(),
+            node_path: String::new(),
+            name_override: String::new(),
+            config_override: String::new(),
+        };
+        let install_result = self.node_manager.execute_command(install_cmd).await;
+        if install_result.success {
+            Ok(format!(
+                "Registered and installed node '{}' from {}",
+                node_name, source
+            ))
         } else {
-            Err(PlatformError::CommandFailed(result.message))
+            // Node was added but install failed — report both
+            Err(PlatformError::CommandFailed(format!(
+                "Node '{}' registered but install failed: {}",
+                node_name, install_result.message
+            )))
+        }
+    }
+
+    async fn install_from_marketplace(&self, name: &str) -> PlatformResult<String> {
+        let marketplace_name = name.to_string();
+
+        // Steps 1-3: Refresh registry, find node, download binary (all blocking I/O)
+        let node_dir = tokio::task::spawn_blocking(move || {
+            // Refresh the marketplace cache
+            crate::registry::refresh_cache().map_err(|e| {
+                PlatformError::CommandFailed(format!("Registry refresh failed: {}", e))
+            })?;
+
+            // Load and find the node
+            let nodes = crate::registry::load_cached_registry();
+            let entry =
+                crate::registry::find_by_name(&nodes, &marketplace_name).ok_or_else(|| {
+                    PlatformError::CommandFailed(format!(
+                        "Node '{}' not found in marketplace registry",
+                        marketplace_name
+                    ))
+                })?;
+
+            // Download the precompiled binary
+            crate::marketplace::download_precompiled(&entry).map_err(|e| {
+                PlatformError::CommandFailed(format!(
+                    "Download failed for '{}': {}",
+                    marketplace_name, e
+                ))
+            })
+        })
+        .await
+        .map_err(|e| PlatformError::Internal(format!("Task join error: {}", e)))??;
+
+        // Step 4: Register with daemon via AddNode
+        let add_cmd = ProtoNodeCommand {
+            command: CommandType::AddNode as i32,
+            node_name: String::new(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: now_ms(),
+            source_machine: "mcp-platform".to_string(),
+            target_machine: String::new(),
+            node_path: node_dir,
+            name_override: String::new(),
+            config_override: String::new(),
+        };
+        let add_result = self.node_manager.execute_command(add_cmd).await;
+        if !add_result.success {
+            return Err(PlatformError::CommandFailed(add_result.message));
+        }
+
+        // Step 5: Parse node name from result
+        let node_name = add_result
+            .message
+            .strip_prefix("Added node: ")
+            .unwrap_or(&add_result.message)
+            .trim()
+            .to_string();
+
+        // Step 6: Create systemd service via Install
+        let install_cmd = ProtoNodeCommand {
+            command: CommandType::Install as i32,
+            node_name: node_name.clone(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: now_ms(),
+            source_machine: "mcp-platform".to_string(),
+            target_machine: String::new(),
+            node_path: String::new(),
+            name_override: String::new(),
+            config_override: String::new(),
+        };
+        let install_result = self.node_manager.execute_command(install_cmd).await;
+        if install_result.success {
+            Ok(format!(
+                "Installed '{}' from marketplace (registered + systemd service created)",
+                node_name
+            ))
+        } else {
+            Err(PlatformError::CommandFailed(format!(
+                "Node '{}' registered but service install failed: {}",
+                node_name, install_result.message
+            )))
         }
     }
 
@@ -484,6 +618,10 @@ pub mod mock {
             Ok(format!("mock: installed node from {}", source))
         }
 
+        async fn install_from_marketplace(&self, name: &str) -> PlatformResult<String> {
+            Ok(format!("mock: installed '{}' from marketplace", name))
+        }
+
         async fn remove_node(&self, name: &str) -> PlatformResult<String> {
             let mut nodes = self.nodes.lock().unwrap();
             let before = nodes.len();
@@ -672,6 +810,64 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(msg, "mock: GetLogs executed");
+    }
+
+    #[tokio::test]
+    async fn execute_command_install() {
+        let mock = MockPlatform::new();
+        let msg = mock
+            .execute_command("test-node", NodeCommand::Install)
+            .await
+            .unwrap();
+        assert_eq!(msg, "mock: Install executed");
+    }
+
+    #[tokio::test]
+    async fn execute_command_uninstall() {
+        let mock = MockPlatform::new();
+        let msg = mock
+            .execute_command("test-node", NodeCommand::Uninstall)
+            .await
+            .unwrap();
+        assert_eq!(msg, "mock: Uninstall executed");
+    }
+
+    #[tokio::test]
+    async fn execute_command_clean() {
+        let mock = MockPlatform::new();
+        let msg = mock
+            .execute_command("test-node", NodeCommand::Clean)
+            .await
+            .unwrap();
+        assert_eq!(msg, "mock: Clean executed");
+    }
+
+    #[tokio::test]
+    async fn execute_command_enable_autostart() {
+        let mock = MockPlatform::new();
+        let msg = mock
+            .execute_command("test-node", NodeCommand::EnableAutostart)
+            .await
+            .unwrap();
+        assert_eq!(msg, "mock: EnableAutostart executed");
+    }
+
+    #[tokio::test]
+    async fn execute_command_disable_autostart() {
+        let mock = MockPlatform::new();
+        let msg = mock
+            .execute_command("test-node", NodeCommand::DisableAutostart)
+            .await
+            .unwrap();
+        assert_eq!(msg, "mock: DisableAutostart executed");
+    }
+
+    #[tokio::test]
+    async fn install_from_marketplace_mock() {
+        let mock = MockPlatform::new();
+        let msg = mock.install_from_marketplace("rtsp-camera").await.unwrap();
+        assert!(msg.contains("rtsp-camera"));
+        assert!(msg.contains("marketplace"));
     }
 
     #[tokio::test]
@@ -969,6 +1165,8 @@ mod tests {
             "get_node_config",
             "send_command",
             "get_node_logs",
+            "enable_autostart",
+            "disable_autostart",
         ];
         for tool in &operator_tools {
             assert_eq!(
@@ -982,7 +1180,14 @@ mod tests {
 
     #[test]
     fn rbac_all_admin_tools_mapped() {
-        let admin_tools = ["query_zenoh", "install_node", "remove_node", "build_node"];
+        let admin_tools = [
+            "query_zenoh",
+            "install_node",
+            "remove_node",
+            "build_node",
+            "uninstall_node",
+            "clean_node",
+        ];
         for tool in &admin_tools {
             assert_eq!(
                 super::super::rbac::required_tier(tool),
@@ -1064,15 +1269,20 @@ mod tests {
 
     #[test]
     fn node_command_all_variants_exist() {
-        // Ensure all five command variants are constructible and debug-printable
+        // Ensure all ten command variants are constructible and debug-printable
         let cmds = vec![
             NodeCommand::Start,
             NodeCommand::Stop,
             NodeCommand::Restart,
             NodeCommand::Build,
             NodeCommand::GetLogs,
+            NodeCommand::Install,
+            NodeCommand::Uninstall,
+            NodeCommand::Clean,
+            NodeCommand::EnableAutostart,
+            NodeCommand::DisableAutostart,
         ];
-        assert_eq!(cmds.len(), 5);
+        assert_eq!(cmds.len(), 10);
         for cmd in &cmds {
             let debug = format!("{:?}", cmd);
             assert!(!debug.is_empty());

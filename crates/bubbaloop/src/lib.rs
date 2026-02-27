@@ -21,6 +21,9 @@ pub mod templates;
 /// Shared node registry for marketplace operations
 pub mod registry;
 
+/// Marketplace download logic for precompiled node binaries
+pub mod marketplace;
+
 /// MCP server for AI agent integration
 pub mod mcp;
 

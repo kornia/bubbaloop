@@ -832,3 +832,254 @@ async fn remove_node_invalid_name_rejected() {
 
     h.shutdown().await.unwrap();
 }
+
+// ── uninstall_node tests ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn uninstall_node_existing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "uninstall_node",
+            serde_json::json!({"node_name": "test-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "mock: Uninstall executed");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn uninstall_node_nonexistent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "uninstall_node",
+            serde_json::json!({"node_name": "ghost-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Error:") && text.contains("not found"),
+        "Expected error for nonexistent node in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn uninstall_node_invalid_name_rejected() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "uninstall_node",
+            serde_json::json!({"node_name": "../etc/passwd"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("alphanumeric") || text.contains("Invalid") || text.contains("Error"),
+        "Expected validation error in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+// ── clean_node tests ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn clean_node_existing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args("clean_node", serde_json::json!({"node_name": "test-node"}))
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "mock: Clean executed");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn clean_node_nonexistent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args("clean_node", serde_json::json!({"node_name": "ghost-node"}))
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Error:") && text.contains("not found"),
+        "Expected error for nonexistent node in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+// ── enable_autostart tests ───────────────────────────────────────────
+
+#[tokio::test]
+async fn enable_autostart_existing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "enable_autostart",
+            serde_json::json!({"node_name": "test-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "mock: EnableAutostart executed");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn enable_autostart_nonexistent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "enable_autostart",
+            serde_json::json!({"node_name": "ghost-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Error:") && text.contains("not found"),
+        "Expected error for nonexistent node in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+// ── disable_autostart tests ──────────────────────────────────────────
+
+#[tokio::test]
+async fn disable_autostart_existing() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "disable_autostart",
+            serde_json::json!({"node_name": "test-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert_eq!(text, "mock: DisableAutostart executed");
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn disable_autostart_nonexistent() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "disable_autostart",
+            serde_json::json!({"node_name": "ghost-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    assert!(
+        text.contains("Error:") && text.contains("not found"),
+        "Expected error for nonexistent node in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+// ── install_node marketplace routing tests ───────────────────────────
+
+#[tokio::test]
+async fn install_node_marketplace_name() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args("install_node", serde_json::json!({"source": "rtsp-camera"}))
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    // MockPlatform.install_from_marketplace returns "mock: installed 'rtsp-camera' from marketplace"
+    assert!(
+        text.contains("marketplace") && text.contains("rtsp-camera"),
+        "Expected marketplace install for simple name in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn install_node_path_still_works() {
+    let h = TestHarness::new().await;
+    let result = h
+        .call_with_args(
+            "install_node",
+            serde_json::json!({"source": "/path/to/my-node"}),
+        )
+        .await
+        .unwrap();
+    let text = result_text(&result);
+
+    // MockPlatform.install_node returns "mock: installed node from /path/to/my-node"
+    assert!(
+        text.contains("installed") && text.contains("/path/to/my-node"),
+        "Expected path install for absolute path in: {}",
+        text
+    );
+
+    h.shutdown().await.unwrap();
+}
+
+// ── list_tools includes new tools ────────────────────────────────────
+
+#[tokio::test]
+async fn list_tools_includes_new_tools() {
+    let h = TestHarness::new().await;
+    let tools = h.client.list_tools(None).await.expect("list_tools failed");
+
+    let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
+
+    assert!(
+        tool_names.contains(&"uninstall_node".to_string()),
+        "Missing uninstall_node in: {:?}",
+        tool_names
+    );
+    assert!(
+        tool_names.contains(&"clean_node".to_string()),
+        "Missing clean_node in: {:?}",
+        tool_names
+    );
+    assert!(
+        tool_names.contains(&"enable_autostart".to_string()),
+        "Missing enable_autostart in: {:?}",
+        tool_names
+    );
+    assert!(
+        tool_names.contains(&"disable_autostart".to_string()),
+        "Missing disable_autostart in: {:?}",
+        tool_names
+    );
+
+    h.shutdown().await.unwrap();
+}

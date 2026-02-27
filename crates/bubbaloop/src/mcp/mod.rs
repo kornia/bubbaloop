@@ -606,20 +606,34 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Install a node from a local path or GitHub repository. Accepts either a local directory path (e.g., '/path/to/my-node') or GitHub format (e.g., 'user/repo'). The node source is cloned/registered with the daemon. Admin only."
+        description = "Install a node from the marketplace, a local path, or GitHub repository. Accepts a marketplace name (e.g., 'rtsp-camera'), a local directory path (e.g., '/path/to/my-node'), or GitHub format (e.g., 'user/repo'). Downloads precompiled binaries when available, registers the node with the daemon, and creates the systemd service. Admin only."
     )]
     async fn install_node(
         &self,
         Parameters(req): Parameters<InstallNodeRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=install_node source={}", req.source);
-        if let Err(e) = validation::validate_install_source(&req.source) {
-            return Ok(CallToolResult::success(vec![Content::text(format!(
-                "Error: {}",
-                e
-            ))]));
-        }
-        match self.platform.install_node(&req.source).await {
+
+        // Route based on source format:
+        // - Simple name (no `/`, no `.` prefix, valid node name) → marketplace
+        // - Path/URL → existing install_node flow
+        let is_marketplace_name = !req.source.contains('/')
+            && !req.source.starts_with('.')
+            && validation::validate_node_name(&req.source).is_ok();
+
+        let result = if is_marketplace_name {
+            self.platform.install_from_marketplace(&req.source).await
+        } else {
+            if let Err(e) = validation::validate_install_source(&req.source) {
+                return Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Error: {}",
+                    e
+                ))]));
+            }
+            self.platform.install_node(&req.source).await
+        };
+
+        match result {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: {}",
@@ -640,6 +654,102 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
         match self.platform.remove_node(&req.node_name).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Uninstall a node's systemd service. Stops the node if running and removes the systemd service file, but keeps the node registered. Admin only."
+    )]
+    async fn uninstall_node(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=uninstall_node node={}", req.node_name);
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
+        match self
+            .platform
+            .execute_command(&req.node_name, platform::NodeCommand::Uninstall)
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Clean a node's build artifacts and cached data. Useful for forcing a rebuild. Admin only."
+    )]
+    async fn clean_node(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=clean_node node={}", req.node_name);
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
+        match self
+            .platform
+            .execute_command(&req.node_name, platform::NodeCommand::Clean)
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Enable autostart for a node. The node's systemd service will start automatically on boot."
+    )]
+    async fn enable_autostart(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=enable_autostart node={}", req.node_name);
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
+        match self
+            .platform
+            .execute_command(&req.node_name, platform::NodeCommand::EnableAutostart)
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Disable autostart for a node. The node's systemd service will no longer start automatically on boot."
+    )]
+    async fn disable_autostart(
+        &self,
+        Parameters(req): Parameters<NodeNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=disable_autostart node={}", req.node_name);
+        if let Err(e) = validation::validate_node_name(&req.node_name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
+        match self
+            .platform
+            .execute_command(&req.node_name, platform::NodeCommand::DisableAutostart)
+            .await
+        {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: {}",
@@ -687,10 +797,12 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
             instructions: Some(
                 "Bubbaloop skill runtime for AI agents. Controls physical sensor nodes via MCP.\n\n\
                  **Discovery:** list_nodes, get_node_health, get_node_schema, get_stream_info, discover_capabilities\n\
-                 **Lifecycle:** start_node, stop_node, restart_node, build_node, install_node, remove_node\n\
+                 **Lifecycle:** start_node, stop_node, restart_node, build_node, install_node, remove_node, uninstall_node, clean_node\n\
+                 **Autostart:** enable_autostart, disable_autostart\n\
                  **Data:** send_command, get_stream_info (returns Zenoh topic for streaming)\n\
                  **Config:** get_node_config, get_node_manifest, list_commands\n\
                  **System:** get_system_status, get_machine_info, query_zenoh, discover_nodes\n\n\
+                 install_node accepts marketplace names (e.g., 'rtsp-camera'), local paths, or GitHub 'user/repo' format.\n\
                  Use discover_capabilities to find nodes by capability (sensor, actuator, processor, gateway).\n\
                  Use get_node_manifest for full node details including topics, commands, and requirements.\n\
                  Streaming data flows through Zenoh (not MCP). Use get_stream_info to get Zenoh connection params.\n\
