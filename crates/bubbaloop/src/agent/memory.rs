@@ -738,6 +738,7 @@ mod tests {
             crate::skills::SkillConfig {
                 name: "entrance-cam".into(),
                 driver: "rtsp".into(),
+                enabled: true,
                 config: Default::default(),
                 schedule: None,
                 actions: Vec::new(),
@@ -746,6 +747,7 @@ mod tests {
             crate::skills::SkillConfig {
                 name: "weather-station".into(),
                 driver: "http-poll".into(),
+                enabled: true,
                 config: Default::default(),
                 schedule: None,
                 actions: Vec::new(),

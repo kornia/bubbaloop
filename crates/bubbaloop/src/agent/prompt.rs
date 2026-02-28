@@ -243,6 +243,7 @@ mod tests {
         let skills = vec![SkillConfig {
             name: "entrance-cam".into(),
             driver: "rtsp".into(),
+            enabled: true,
             config: Default::default(),
             schedule: None,
             actions: Vec::new(),
@@ -260,6 +261,7 @@ mod tests {
         let skills = vec![SkillConfig {
             name: "legacy-cam".into(),
             driver: "rtsp".into(),
+            enabled: true,
             config: Default::default(),
             schedule: None,
             actions: Vec::new(),

@@ -25,6 +25,8 @@ pub enum UpError {
     Io(#[from] std::io::Error),
     #[error("Registry error: {0}")]
     Registry(String),
+    #[error("Daemon error: {0}")]
+    Daemon(#[from] crate::cli::daemon_client::DaemonClientError),
 }
 
 pub type Result<T> = std::result::Result<T, UpError>;
@@ -43,8 +45,7 @@ pub struct UpCommand {
 }
 
 impl UpCommand {
-    pub fn run(&self) -> Result<()> {
-        // 1. Resolve skills directory
+    pub async fn run(&self) -> Result<()> {
         let skills_dir = match &self.skills_dir {
             Some(p) => PathBuf::from(p),
             None => get_bubbaloop_home().join("skills"),
@@ -62,16 +63,28 @@ impl UpCommand {
             println!("[dry-run] No changes will be made.");
         }
 
-        // 2. Load all YAML skills
         let skill_configs = skills::load_skills(&skills_dir)?;
         if skill_configs.is_empty() {
             println!("No skills found in {}", skills_dir.display());
             return Ok(());
         }
 
-        println!("Found {} skill(s)", skill_configs.len());
+        // Filter to enabled skills only
+        let active_skills: Vec<_> = skill_configs.iter().filter(|s| s.enabled).collect();
+        let disabled_count = skill_configs.len() - active_skills.len();
+        println!(
+            "Found {} skill(s) ({} active, {} disabled)",
+            skill_configs.len(),
+            active_skills.len(),
+            disabled_count
+        );
 
-        // 3. Load marketplace registry (refresh cache if empty)
+        if active_skills.is_empty() {
+            println!("No active skills to process.");
+            return Ok(());
+        }
+
+        // Load marketplace registry
         let mut registry_nodes = registry::load_cached_registry();
         if registry_nodes.is_empty() {
             log::info!("Registry cache empty, refreshing from upstream...");
@@ -79,83 +92,136 @@ impl UpCommand {
             registry_nodes = registry::load_cached_registry();
         }
 
-        // 4. Process each skill
-        let mut installed_count: usize = 0;
-        let mut already_installed: usize = 0;
+        let client = crate::cli::daemon_client::DaemonClient::new();
+
+        let mut started_count: usize = 0;
+        let mut already_running: usize = 0;
         let mut skipped_count: usize = 0;
 
-        for skill in &skill_configs {
+        for skill in &active_skills {
             println!("\n  skill:  {}", skill.name);
             println!("  driver: {}", skill.driver);
 
-            // Resolve driver name → DriverEntry (marketplace node + description)
             let driver_entry = match skills::resolve_driver(&skill.driver) {
                 Some(d) => d,
                 None => {
-                    println!("  [warn] Unknown driver '{}', skipping", skill.driver);
+                    println!("  [skip] Unknown driver '{}'", skill.driver);
                     skipped_count += 1;
                     continue;
                 }
             };
 
-            let marketplace_node = &driver_entry.marketplace_node;
+            let marketplace_node = driver_entry.marketplace_node;
             println!("  node:   {}", marketplace_node);
 
-            // Find the registry entry for this node
             let registry_node = match registry::find_by_name(&registry_nodes, marketplace_node) {
                 Some(n) => n,
                 None => {
-                    println!(
-                        "  [warn] Node '{}' not in registry, skipping",
-                        marketplace_node
-                    );
+                    println!("  [skip] Node '{}' not in registry", marketplace_node);
                     skipped_count += 1;
                     continue;
                 }
             };
 
-            // Check installation status and install if needed
-            if is_node_installed(marketplace_node) {
-                println!("  [ok] Already installed");
-                already_installed += 1;
+            // Step 1: Download if not installed locally
+            let node_dir = if is_node_installed(marketplace_node) {
+                resolve_node_dir(&registry_node)
             } else if self.dry_run {
                 println!("  [dry-run] Would install {}", marketplace_node);
+                skipped_count += 1;
+                continue;
             } else {
                 println!("  Installing {}...", marketplace_node);
-                let node_dir = marketplace::download_precompiled(&registry_node)?;
-                println!("  Installed to {}", node_dir);
-                installed_count += 1;
+                let dir = marketplace::download_precompiled(&registry_node)?;
+                println!("  Downloaded to {}", dir);
+                PathBuf::from(&dir)
+            };
+
+            // Step 2: Write per-skill config (each skill gets its own file)
+            let config_path = if !skill.config.is_empty() && !self.dry_run {
+                let cfg_dir = get_bubbaloop_home().join("skills-config").join(&skill.name);
+                match write_node_config(&cfg_dir, &skill.config) {
+                    Ok(()) => {
+                        let p = cfg_dir.join("config.yaml");
+                        println!("  Config written to {}", p.display());
+                        Some(p.display().to_string())
+                    }
+                    Err(e) => {
+                        println!("  [warn] Config write failed: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            if self.dry_run {
+                println!("  [dry-run] Would register + start {}", skill.name);
+                continue;
             }
 
-            // Inject skill config into node directory
-            if !skill.config.is_empty() {
-                let node_dir = resolve_node_dir(&registry_node);
-                if self.dry_run {
-                    println!("  [dry-run] Would write config to {}", node_dir.display());
-                } else {
-                    match write_node_config(&node_dir, &skill.config) {
-                        Ok(()) => {
-                            println!("  Config written to {}", node_dir.display())
-                        }
-                        Err(e) => println!("  [warn] Config write failed: {}", e),
-                    }
+            // Step 3: Register with daemon as a named instance
+            // Each skill becomes its own node instance (e.g. "entrance-cam" backed by rtsp-camera binary)
+            let node_path = node_dir.display().to_string();
+            let instance_name = &skill.name;
+            match client
+                .add_node(&node_path, Some(instance_name), config_path.as_deref())
+                .await
+            {
+                Ok(resp) if resp.success => {
+                    log::debug!("Registered {}: {}", instance_name, resp.message);
+                }
+                Ok(resp) => {
+                    // Already registered or other non-fatal issue
+                    log::debug!("add_node {}: {}", instance_name, resp.message);
+                }
+                Err(e) => {
+                    println!("  [warn] Could not register with daemon: {}", e);
+                    skipped_count += 1;
+                    continue;
                 }
             }
 
-            // Print start hint (full systemd integration wired in by daemon)
-            if !self.dry_run {
-                println!("  Hint: bubbaloop node start {}", marketplace_node);
+            // Step 4: Install systemd service
+            match client.send_command(instance_name, "install").await {
+                Ok(resp) if resp.success => {
+                    log::debug!("Installed service for {}", instance_name);
+                }
+                Ok(_) | Err(_) => {
+                    log::debug!(
+                        "Service install for {} (may already exist)",
+                        instance_name
+                    );
+                }
+            }
+
+            // Step 5: Start the node
+            match client.send_command(instance_name, "start").await {
+                Ok(resp) if resp.success => {
+                    println!("  [ok] Started");
+                    started_count += 1;
+                }
+                Ok(resp) => {
+                    // Might already be running
+                    if resp.message.contains("already") || resp.message.contains("Running") {
+                        println!("  [ok] Already running");
+                        already_running += 1;
+                    } else {
+                        println!("  [warn] Start: {}", resp.message);
+                        skipped_count += 1;
+                    }
+                }
+                Err(e) => {
+                    println!("  [err] Failed to start: {}", e);
+                    skipped_count += 1;
+                }
             }
         }
 
-        // 5. Summary
         println!();
         println!(
-            "Done: {} skill(s) loaded | {} installed | {} already present | {} skipped",
-            skill_configs.len(),
-            installed_count,
-            already_installed,
-            skipped_count
+            "Done: {} started | {} already running | {} skipped | {} disabled",
+            started_count, already_running, skipped_count, disabled_count
         );
 
         // 6. Register skill schedules in memory DB

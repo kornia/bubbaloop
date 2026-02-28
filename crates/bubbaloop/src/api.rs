@@ -50,6 +50,8 @@ struct AddNodeRequest {
     source: String,
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    config: Option<String>,
 }
 
 /// Request body for the marketplace install endpoint.
@@ -146,7 +148,15 @@ async fn add_node<P: PlatformOperations>(
         }
     }
 
-    command_response(platform.install_node(&req.source).await)
+    command_response(
+        platform
+            .add_node(
+                &req.source,
+                req.name.as_deref(),
+                req.config.as_deref(),
+            )
+            .await,
+    )
 }
 
 async fn install_marketplace<P: PlatformOperations>(

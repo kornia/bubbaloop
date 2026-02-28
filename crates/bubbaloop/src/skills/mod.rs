@@ -40,15 +40,25 @@ pub struct SkillConfig {
     pub name: String,
     /// Driver identifier (e.g. `rtsp`, `v4l2`, `serial`).
     pub driver: String,
+    /// Whether this skill is active. Defaults to true; set false to skip on `bubbaloop up`.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     /// Driver-specific key/value parameters.
     #[serde(default)]
     pub config: HashMap<String, serde_yaml::Value>,
     /// Optional cron-style schedule (Phase 4 placeholder).
     #[serde(default)]
     pub schedule: Option<String>,
+    /// Free-form agent-readable instructions (optional).
+    #[serde(default)]
+    pub body: String,
     /// Declarative actions list (Phase 4 placeholder).
     #[serde(default)]
     pub actions: Vec<serde_yaml::Value>,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 /// Maps a driver name to the corresponding marketplace node.
@@ -198,6 +208,7 @@ actions:
         let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(skill.name, "my-camera");
         assert_eq!(skill.driver, "rtsp");
+        assert!(skill.enabled); // defaults to true
         assert_eq!(
             skill.config["url"],
             serde_yaml::Value::String("rtsp://192.168.1.10/stream".into())
@@ -212,9 +223,17 @@ actions:
         let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(skill.name, "webcam");
         assert_eq!(skill.driver, "v4l2");
+        assert!(skill.enabled); // defaults to true
         assert!(skill.config.is_empty());
         assert!(skill.schedule.is_none());
         assert!(skill.actions.is_empty());
+    }
+
+    #[test]
+    fn parse_disabled_skill() {
+        let yaml = "name: webcam\ndriver: v4l2\nenabled: false\n";
+        let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(!skill.enabled);
     }
 
     #[test]
@@ -266,7 +285,9 @@ actions:
         let skill = SkillConfig {
             name: "my-camera".into(),
             driver: "rtsp".into(),
+            enabled: true,
             config: HashMap::new(),
+            body: String::new(),
             schedule: None,
             actions: Vec::new(),
         };
@@ -278,7 +299,9 @@ actions:
         let skill = SkillConfig {
             name: "bad name!".into(),
             driver: "rtsp".into(),
+            enabled: true,
             config: HashMap::new(),
+            body: String::new(),
             schedule: None,
             actions: Vec::new(),
         };
@@ -293,7 +316,9 @@ actions:
         let skill = SkillConfig {
             name: "".into(),
             driver: "rtsp".into(),
+            enabled: true,
             config: HashMap::new(),
+            body: String::new(),
             schedule: None,
             actions: Vec::new(),
         };
@@ -308,7 +333,9 @@ actions:
         let skill = SkillConfig {
             name: "my-sensor".into(),
             driver: "unknown-driver".into(),
+            enabled: true,
             config: HashMap::new(),
+            body: String::new(),
             schedule: None,
             actions: Vec::new(),
         };

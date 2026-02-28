@@ -97,6 +97,15 @@ pub trait PlatformOperations: Send + Sync + 'static {
         source: &str,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
 
+    /// Register a node with optional name and config overrides.
+    /// Used by `bubbaloop up` to create per-skill instances of the same node type.
+    fn add_node(
+        &self,
+        source: &str,
+        name_override: Option<&str>,
+        config_override: Option<&str>,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
     /// Remove a registered node. Stops it first if running.
     fn remove_node(
         &self,
@@ -343,6 +352,31 @@ impl PlatformOperations for DaemonPlatform {
                 "Node '{}' registered but install failed: {}",
                 node_name, install_result.message
             )))
+        }
+    }
+
+    async fn add_node(
+        &self,
+        source: &str,
+        name_override: Option<&str>,
+        config_override: Option<&str>,
+    ) -> PlatformResult<String> {
+        let cmd = ProtoNodeCommand {
+            command: CommandType::AddNode as i32,
+            node_name: String::new(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            timestamp_ms: now_ms(),
+            source_machine: "mcp-platform".to_string(),
+            target_machine: String::new(),
+            node_path: source.to_string(),
+            name_override: name_override.unwrap_or_default().to_string(),
+            config_override: config_override.unwrap_or_default().to_string(),
+        };
+        let result = self.node_manager.execute_command(cmd).await;
+        if result.success {
+            Ok(result.message)
+        } else {
+            Err(PlatformError::CommandFailed(result.message))
         }
     }
 
@@ -616,6 +650,16 @@ pub mod mock {
 
         async fn install_node(&self, source: &str) -> PlatformResult<String> {
             Ok(format!("mock: installed node from {}", source))
+        }
+
+        async fn add_node(
+            &self,
+            source: &str,
+            name_override: Option<&str>,
+            _config_override: Option<&str>,
+        ) -> PlatformResult<String> {
+            let name = name_override.unwrap_or(source);
+            Ok(format!("mock: added node {}", name))
         }
 
         async fn install_from_marketplace(&self, name: &str) -> PlatformResult<String> {

@@ -305,6 +305,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Command::Up(cmd)) => {
             cmd.run()
+                .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         }
         Some(Command::InitTls(args)) => {
