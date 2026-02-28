@@ -19,7 +19,7 @@
 
 use argh::FromArgs;
 use bubbaloop::cli::launch::LaunchCommand;
-use bubbaloop::cli::{DebugCommand, MarketplaceCommand, NodeCommand, UpCommand};
+use bubbaloop::cli::{AgentCommand, DebugCommand, MarketplaceCommand, NodeCommand, UpCommand};
 
 /// Bubbaloop - AI-native orchestration for Physical AI
 #[derive(FromArgs)]
@@ -35,6 +35,7 @@ struct Args {
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum Command {
+    Agent(AgentCommand),
     Status(StatusArgs),
     Doctor(DoctorArgs),
     Daemon(DaemonArgs),
@@ -207,6 +208,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              (default: ~/.bubbaloop/launch.yaml)");
             eprintln!("  marketplace  Manage marketplace sources:");
             eprintln!("              list, add, remove, enable, disable");
+            eprintln!("  agent     Chat with your hardware via Claude AI:");
+            eprintln!("              -m, --model <model>: Claude model");
+            eprintln!("              -z, --zenoh-endpoint <endpoint>: Zenoh endpoint");
             eprintln!("  up        Load skills and ensure sensor nodes are running:");
             eprintln!("              -s, --skills-dir <path>: Skills directory");
             eprintln!("              --dry-run: Show what would be done");
@@ -252,6 +256,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.run()
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        }
+        Some(Command::Agent(cmd)) => {
+            drop(
+                env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+                    .try_init(),
+            );
+            log::info!("Connecting to Zenoh...");
+            let session = bubbaloop::daemon::create_session(cmd.zenoh_endpoint.as_deref())
+                .await
+                .map_err(|e| e as Box<dyn std::error::Error>)?;
+            log::info!("Initializing node manager...");
+            let node_manager = bubbaloop::daemon::NodeManager::new().await?;
+            bubbaloop::agent::run_agent(
+                bubbaloop::agent::AgentConfig { model: cmd.model },
+                session,
+                node_manager,
+            )
+            .await?;
         }
         Some(Command::Up(cmd)) => {
             cmd.run()
