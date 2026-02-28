@@ -9,8 +9,9 @@ use crate::agent::memory::Memory;
 use crate::mcp::platform::{NodeCommand, PlatformOperations};
 use serde::Deserialize;
 use serde_json::Value;
+use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
 /// Errors from scheduler operations.
@@ -109,10 +110,13 @@ fn normalize_cron_expr(expr: &str) -> String {
 }
 
 /// Execute a single Tier 1 action.
+///
+/// Memory is wrapped in a `Mutex` and locked only for the brief
+/// synchronous calls that need it, never held across `.await` points.
 pub async fn execute_tier1_action<P: PlatformOperations>(
     action: &Tier1Action,
     platform: &P,
-    memory: &Memory,
+    memory: &Mutex<Memory>,
     scope: &str,
     machine_id: &str,
 ) -> Result<()> {
@@ -122,6 +126,9 @@ pub async fn execute_tier1_action<P: PlatformOperations>(
                 .list_nodes()
                 .await
                 .map_err(|e| SchedulerError::Action(e.to_string()))?;
+            let mem = memory
+                .lock()
+                .map_err(|e| SchedulerError::Action(format!("memory lock poisoned: {}", e)))?;
             for node in &nodes {
                 log::info!(
                     "[Scheduler] health check: node={} status={} health={}",
@@ -133,7 +140,7 @@ pub async fn execute_tier1_action<P: PlatformOperations>(
                     r#"{{"status":"{}","health":"{}"}}"#,
                     node.status, node.health
                 );
-                if let Err(e) = memory.log_event(&node.name, "health_check", Some(&details)) {
+                if let Err(e) = mem.log_event(&node.name, "health_check", Some(&details)) {
                     log::warn!("[Scheduler] failed to log health event: {}", e);
                 }
             }
@@ -217,8 +224,10 @@ pub async fn execute_tier1_action<P: PlatformOperations>(
         }
 
         Tier1Action::LogEvent { message } => {
-            memory
-                .log_event("scheduler", "log_event", Some(message))
+            let mem = memory
+                .lock()
+                .map_err(|e| SchedulerError::Action(format!("memory lock poisoned: {}", e)))?;
+            mem.log_event("scheduler", "log_event", Some(message))
                 .map_err(SchedulerError::Memory)?;
             log::info!("[Scheduler] logged event: {}", message);
             Ok(())
@@ -235,14 +244,25 @@ pub async fn execute_tier1_action<P: PlatformOperations>(
 /// Run the scheduler background loop.
 ///
 /// Ticks every 60 seconds, checking for due Tier 1 schedules.
+/// Opens its own SQLite connection from `memory_path`. The `Memory`
+/// is wrapped in a `Mutex` so the future is `Send` (rusqlite
+/// `Connection` is `Send` but not `Sync`).
 /// Exits cleanly when the shutdown signal fires.
 pub async fn run_scheduler<P: PlatformOperations>(
-    memory: Arc<Memory>,
+    memory_path: PathBuf,
     platform: Arc<P>,
     scope: String,
     machine_id: String,
     mut shutdown: watch::Receiver<()>,
 ) {
+    let memory = match Memory::open(&memory_path) {
+        Ok(m) => Arc::new(Mutex::new(m)),
+        Err(e) => {
+            log::error!("[Scheduler] failed to open memory DB: {}", e);
+            return;
+        }
+    };
+
     log::info!("[Scheduler] starting background loop (60s interval)");
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -264,9 +284,70 @@ pub async fn run_scheduler<P: PlatformOperations>(
     }
 }
 
+/// Collect due schedules from the memory DB (sync, under lock).
+fn collect_due_schedules(
+    memory: &Mutex<Memory>,
+    now_secs: u64,
+) -> Result<Vec<crate::agent::memory::Schedule>> {
+    let mem = memory
+        .lock()
+        .map_err(|e| SchedulerError::Action(format!("memory lock poisoned: {}", e)))?;
+    let schedules = mem.list_schedules()?;
+    Ok(schedules
+        .into_iter()
+        .filter(|s| {
+            if s.tier != 1 {
+                return false;
+            }
+            match &s.next_run {
+                Some(next_run_str) => {
+                    let next_run: u64 = next_run_str.parse().unwrap_or(0);
+                    next_run <= now_secs
+                }
+                None => true,
+            }
+        })
+        .collect())
+}
+
+/// Update schedule run timestamps in the memory DB (sync, under lock).
+fn update_schedule_after_run(
+    memory: &Mutex<Memory>,
+    name: &str,
+    now_secs: u64,
+    cron_expr: &str,
+) {
+    let last_run = format!("{}", now_secs);
+    match next_run_after(cron_expr, now_secs) {
+        Ok(next) => {
+            let next_run = format!("{}", next);
+            let mem = match memory.lock() {
+                Ok(m) => m,
+                Err(e) => {
+                    log::error!("[Scheduler] memory lock poisoned: {}", e);
+                    return;
+                }
+            };
+            if let Err(e) = mem.update_schedule_run(name, &last_run, &next_run) {
+                log::error!("[Scheduler] failed to update schedule '{}': {}", name, e);
+            }
+        }
+        Err(e) => {
+            log::error!(
+                "[Scheduler] failed to compute next run for '{}': {}",
+                name,
+                e
+            );
+        }
+    }
+}
+
 /// Check all schedules and execute due Tier 1 jobs.
+///
+/// Memory access is done synchronously under a `Mutex` lock, ensuring
+/// the lock is not held across `.await` points.
 async fn tick<P: PlatformOperations>(
-    memory: &Memory,
+    memory: &Mutex<Memory>,
     platform: &P,
     scope: &str,
     machine_id: &str,
@@ -276,27 +357,9 @@ async fn tick<P: PlatformOperations>(
         .unwrap_or_default()
         .as_secs();
 
-    let schedules = memory.list_schedules()?;
+    let due_schedules = collect_due_schedules(memory, now_secs)?;
 
-    for sched in &schedules {
-        // Only process Tier 1 schedules
-        if sched.tier != 1 {
-            continue;
-        }
-
-        // Determine if this schedule is due
-        let due = match &sched.next_run {
-            Some(next_run_str) => {
-                let next_run: u64 = next_run_str.parse().unwrap_or(0);
-                next_run <= now_secs
-            }
-            None => true, // Never run before — run now
-        };
-
-        if !due {
-            continue;
-        }
-
+    for sched in &due_schedules {
         log::info!("[Scheduler] executing schedule: {}", sched.name);
 
         // Parse actions JSON into Vec<Tier1Action>
@@ -307,9 +370,10 @@ async fn tick<P: PlatformOperations>(
             ))
         })?;
 
-        // Execute each action
+        // Execute each action — memory is locked briefly inside each action
         for action in &actions {
-            if let Err(e) = execute_tier1_action(action, platform, memory, scope, machine_id).await
+            if let Err(e) =
+                execute_tier1_action(action, platform, memory, scope, machine_id).await
             {
                 log::error!(
                     "[Scheduler] action failed in schedule '{}': {}",
@@ -319,27 +383,8 @@ async fn tick<P: PlatformOperations>(
             }
         }
 
-        // Compute next run and update in memory
-        let last_run = format!("{}", now_secs);
-        match next_run_after(&sched.cron, now_secs) {
-            Ok(next) => {
-                let next_run = format!("{}", next);
-                if let Err(e) = memory.update_schedule_run(&sched.name, &last_run, &next_run) {
-                    log::error!(
-                        "[Scheduler] failed to update schedule '{}': {}",
-                        sched.name,
-                        e
-                    );
-                }
-            }
-            Err(e) => {
-                log::error!(
-                    "[Scheduler] failed to compute next run for '{}': {}",
-                    sched.name,
-                    e
-                );
-            }
-        }
+        // Update run timestamps
+        update_schedule_after_run(memory, &sched.name, now_secs, &sched.cron);
     }
 
     Ok(())

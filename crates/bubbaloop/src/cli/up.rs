@@ -92,10 +92,7 @@ impl UpCommand {
             let driver_entry = match skills::resolve_driver(&skill.driver) {
                 Some(d) => d,
                 None => {
-                    println!(
-                        "  [warn] Unknown driver '{}', skipping",
-                        skill.driver
-                    );
+                    println!("  [warn] Unknown driver '{}', skipping", skill.driver);
                     skipped_count += 1;
                     continue;
                 }
@@ -134,10 +131,7 @@ impl UpCommand {
             if !skill.config.is_empty() {
                 let node_dir = resolve_node_dir(&registry_node);
                 if self.dry_run {
-                    println!(
-                        "  [dry-run] Would write config to {}",
-                        node_dir.display()
-                    );
+                    println!("  [dry-run] Would write config to {}", node_dir.display());
                 } else {
                     match write_node_config(&node_dir, &skill.config) {
                         Ok(()) => {
@@ -163,6 +157,47 @@ impl UpCommand {
             already_installed,
             skipped_count
         );
+
+        // 6. Register skill schedules in memory DB
+        let db_path = get_bubbaloop_home().join("memory.db");
+        let mem = match crate::agent::memory::Memory::open(&db_path) {
+            Ok(m) => m,
+            Err(e) => {
+                log::warn!("Could not open memory DB, skipping schedule registration: {}", e);
+                return Ok(());
+            }
+        };
+        for skill in &skill_configs {
+            if let Some(ref schedule_expr) = skill.schedule {
+                if !skill.actions.is_empty() {
+                    let actions_json = serde_json::to_string(&skill.actions)
+                        .unwrap_or_else(|_| "[]".to_string());
+                    let sched = crate::agent::memory::Schedule {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        name: skill.name.clone(),
+                        cron: schedule_expr.clone(),
+                        actions: actions_json,
+                        tier: 1,
+                        last_run: None,
+                        next_run: None,
+                        created_by: "yaml".to_string(),
+                    };
+                    if self.dry_run {
+                        println!(
+                            "  [dry-run] Would register schedule: {} ({})",
+                            skill.name, schedule_expr
+                        );
+                    } else if let Err(e) = mem.upsert_schedule(&sched) {
+                        println!("  [warn] Failed to register schedule: {}", e);
+                    } else {
+                        println!(
+                            "  Registered schedule: {} ({})",
+                            skill.name, schedule_expr
+                        );
+                    }
+                }
+            }
+        }
 
         Ok(())
     }

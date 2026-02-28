@@ -51,6 +51,8 @@ pub async fn run_agent(
         scope: scope.clone(),
         machine_id: machine_id.clone(),
     });
+    let sched_scope = scope.clone();
+    let sched_machine_id = machine_id.clone();
     let dispatcher = Dispatcher::new(platform.clone(), scope, machine_id);
 
     // 3. Get tool definitions
@@ -60,13 +62,23 @@ pub async fn run_agent(
     let memory_path = get_bubbaloop_home().join("memory.db");
     let memory = Memory::open(&memory_path)?;
 
-    // 5. Welcome message
+    // 5. Start scheduler in background
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    tokio::spawn(scheduler::run_scheduler(
+        memory_path.clone(),
+        platform.clone(),
+        sched_scope,
+        sched_machine_id,
+        shutdown_rx,
+    ));
+
+    // 6. Welcome message
     println!(
         "Bubbaloop Agent ready ({} tools available). Type 'quit' or 'exit' to stop.",
         tools.len()
     );
 
-    // 6. Main REPL loop
+    // 7. Main REPL loop
     let stdin = std::io::stdin();
     let mut conversation: Vec<Message> = Vec::new();
 
@@ -194,6 +206,9 @@ pub async fn run_agent(
             conversation.push(Message::tool_results(tool_results));
         }
     }
+
+    // Signal scheduler to shut down
+    drop(shutdown_tx);
 
     println!("Goodbye.");
     Ok(())
