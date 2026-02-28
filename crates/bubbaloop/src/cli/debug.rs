@@ -149,18 +149,9 @@ impl DebugCommand {
                 Self::print_help();
                 Ok(())
             }
-            Some(DebugAction::Topics(args)) => {
-                log::warn!("Note: 'bubbaloop debug topics' is deprecated. Use MCP tool 'list_topics' instead.");
-                list_topics(args).await
-            }
-            Some(DebugAction::Subscribe(args)) => {
-                log::warn!("Note: 'bubbaloop debug subscribe' is deprecated. Use MCP tool 'subscribe_topic' instead.");
-                subscribe_topic(args).await
-            }
-            Some(DebugAction::Query(args)) => {
-                log::warn!("Note: 'bubbaloop debug query' is deprecated. Use MCP tool 'query_zenoh' instead.");
-                query_endpoint(args).await
-            }
+            Some(DebugAction::Topics(args)) => list_topics(args).await,
+            Some(DebugAction::Subscribe(args)) => subscribe_topic(args).await,
+            Some(DebugAction::Query(args)) => query_endpoint(args).await,
             Some(DebugAction::Info(args)) => show_info(args).await,
             Some(DebugAction::Liveliness(args)) => query_liveliness(args).await,
         }
