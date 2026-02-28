@@ -36,6 +36,10 @@ pub struct LoginCommand {
     /// show current authentication status
     #[argh(switch)]
     pub status: bool,
+
+    /// save the key without validating against the API
+    #[argh(switch)]
+    pub skip_validation: bool,
 }
 
 /// Remove saved Anthropic API key
@@ -57,7 +61,7 @@ impl LoginCommand {
         if self.status {
             show_status().await
         } else {
-            run_login().await
+            run_login(self.skip_validation).await
         }
     }
 }
@@ -85,7 +89,7 @@ impl LogoutCommand {
 
 // ── Interactive login flow ──────────────────────────────────────────
 
-async fn run_login() -> Result<()> {
+async fn run_login(skip_validation: bool) -> Result<()> {
     println!("\n  Bubbaloop Login\n");
     println!("  To use the agent, you need an Anthropic API key.\n");
 
@@ -111,22 +115,26 @@ async fn run_login() -> Result<()> {
         return Err(LoginError::InvalidKey("empty input".to_string()));
     }
 
-    // Step 3: Validate
-    print!("\n  Validating... ");
-    match validate_api_key(&key).await {
-        Ok(model_name) => {
-            println!("Key is valid ({} available)", model_name);
-        }
-        Err(LoginError::InvalidKey(msg)) => {
-            println!("Invalid key: {}", msg);
-            return Err(LoginError::InvalidKey(msg));
-        }
-        Err(e) => {
-            // Network error — save anyway, warn user
-            println!(
-                "Could not validate ({})\n  Saving key anyway — check later with: bubbaloop login --status",
-                e
-            );
+    // Step 3: Validate (unless skipped)
+    if skip_validation {
+        println!("\n  Skipping validation (--skip-validation)");
+    } else {
+        print!("\n  Validating... ");
+        match validate_api_key(&key).await {
+            Ok(model_name) => {
+                println!("Key is valid ({} available)", model_name);
+            }
+            Err(LoginError::InvalidKey(msg)) => {
+                println!("Invalid key: {}", msg);
+                return Err(LoginError::InvalidKey(msg));
+            }
+            Err(e) => {
+                // Network error — save anyway, warn user
+                println!(
+                    "Could not validate ({})\n  Saving key anyway — check later with: bubbaloop login --status",
+                    e
+                );
+            }
         }
     }
 
