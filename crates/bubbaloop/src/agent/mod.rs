@@ -21,10 +21,70 @@ use crate::daemon::registry::get_bubbaloop_home;
 use crate::mcp::platform::DaemonPlatform;
 use std::sync::Arc;
 
+/// Maximum number of conversation messages to keep in context.
+///
+/// Older messages are dropped to avoid exceeding Claude's context window.
+/// Each pair (user + assistant) counts as 2, so 40 messages ≈ 20 exchanges.
+const MAX_CONVERSATION_MESSAGES: usize = 40;
+
+/// Errors from agent operations.
+#[derive(Debug, thiserror::Error)]
+pub enum AgentError {
+    #[error("Claude API error: {0}")]
+    Claude(#[from] claude::ClaudeError),
+    #[error("Memory error: {0}")]
+    Memory(#[from] memory::MemoryError),
+    #[error("Zenoh connection failed: {0}")]
+    Zenoh(String),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+pub type Result<T> = std::result::Result<T, AgentError>;
+
 /// Configuration for the interactive agent session.
 pub struct AgentConfig {
     /// Claude model override (uses default if None).
     pub model: Option<String>,
+}
+
+/// Create a lightweight Zenoh session for the agent.
+///
+/// Uses client mode with disabled scouting for fast startup (~0s instead of
+/// ~5s). Falls back gracefully — tools that need Zenoh will return errors
+/// but the chat loop still works.
+pub async fn create_agent_session(endpoint: Option<&str>) -> Result<Arc<zenoh::Session>> {
+    let mut config = zenoh::Config::default();
+
+    // Client mode — lighter weight, no routing
+    config
+        .insert_json5("mode", "\"client\"")
+        .expect("Failed to set Zenoh mode");
+
+    // Resolve endpoint
+    let env_endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT").ok();
+    let ep = endpoint
+        .or(env_endpoint.as_deref())
+        .unwrap_or("tcp/127.0.0.1:7447");
+
+    config
+        .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
+        .expect("Failed to set Zenoh endpoint");
+
+    // Disable scouting entirely for instant startup
+    config
+        .insert_json5("scouting/multicast/enabled", "false")
+        .expect("Failed to disable multicast scouting");
+    config
+        .insert_json5("scouting/gossip/enabled", "false")
+        .expect("Failed to disable gossip scouting");
+
+    // Single attempt — don't block if router is down
+    let session = zenoh::open(config)
+        .await
+        .map_err(|e| AgentError::Zenoh(e.to_string()))?;
+
+    Ok(Arc::new(session))
 }
 
 /// Run the interactive agent REPL.
@@ -38,7 +98,7 @@ pub async fn run_agent(
     config: AgentConfig,
     session: Arc<zenoh::Session>,
     node_manager: Arc<crate::daemon::node_manager::NodeManager>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     // 1. Initialise Claude client from ANTHROPIC_API_KEY env var
     let client = ClaudeClient::from_env(config.model.as_deref())?;
 
@@ -73,10 +133,22 @@ pub async fn run_agent(
     ));
 
     // 6. Welcome message
-    println!(
-        "Bubbaloop Agent ready ({} tools available). Type 'quit' or 'exit' to stop.",
-        tools.len()
-    );
+    let model_name = config.model.as_deref().unwrap_or(claude::DEFAULT_MODEL);
+    let node_count = match dispatcher.get_node_inventory().await {
+        ref s if s.starts_with("No nodes") => "0".to_string(),
+        ref s => s
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().next())
+            .unwrap_or("0")
+            .to_string(),
+    };
+    println!();
+    println!("  Bubbaloop Agent v{}", env!("CARGO_PKG_VERSION"));
+    println!("  Model: {}", model_name);
+    println!("  Tools: {} | Nodes: {}", tools.len(), node_count);
+    println!();
+    println!("  Type a message to chat, 'quit' to exit.");
 
     // 7. Main REPL loop
     let stdin = std::io::stdin();
@@ -85,7 +157,6 @@ pub async fn run_agent(
     loop {
         // Read user input
         print!("> ");
-        // Flush stdout so the prompt appears before blocking on stdin
         use std::io::Write;
         std::io::stdout().flush().ok();
 
@@ -175,9 +246,10 @@ pub async fn run_agent(
                 break;
             }
 
-            // Dispatch tool calls
+            // Dispatch tool calls — show progress to user
             let mut tool_results = Vec::new();
             for (id, name, input) in &tool_uses {
+                println!("  [calling {}...]", name);
                 log::info!("[Agent] calling tool: {}", name);
                 let result = dispatcher.call_tool(id, name, input).await;
                 if let ContentBlock::ToolResult {
@@ -204,6 +276,13 @@ pub async fn run_agent(
 
             // Add tool results to conversation
             conversation.push(Message::tool_results(tool_results));
+        }
+
+        // Trim conversation to avoid blowing the context window.
+        // Keep the most recent messages, dropping from the front.
+        if conversation.len() > MAX_CONVERSATION_MESSAGES {
+            let drain_count = conversation.len() - MAX_CONVERSATION_MESSAGES;
+            conversation.drain(..drain_count);
         }
     }
 

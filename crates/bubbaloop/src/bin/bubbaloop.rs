@@ -258,22 +258,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         }
         Some(Command::Agent(cmd)) => {
+            // Suppress noisy Zenoh logs — agent only needs warn-level from Zenoh
             drop(
-                env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-                    .try_init(),
+                env_logger::Builder::from_env(
+                    env_logger::Env::default().default_filter_or("info,zenoh=warn"),
+                )
+                .try_init(),
             );
-            log::info!("Connecting to Zenoh...");
-            let session = bubbaloop::daemon::create_session(cmd.zenoh_endpoint.as_deref())
-                .await
-                .map_err(|e| e as Box<dyn std::error::Error>)?;
-            log::info!("Initializing node manager...");
+            println!("Connecting to Zenoh...");
+            let session =
+                match bubbaloop::agent::create_agent_session(cmd.zenoh_endpoint.as_deref()).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        return Ok(());
+                    }
+                };
             let node_manager = bubbaloop::daemon::NodeManager::new().await?;
-            bubbaloop::agent::run_agent(
+            if let Err(e) = bubbaloop::agent::run_agent(
                 bubbaloop::agent::AgentConfig { model: cmd.model },
                 session,
                 node_manager,
             )
-            .await?;
+            .await
+            {
+                eprintln!("Error: {}", e);
+            }
         }
         Some(Command::Up(cmd)) => {
             cmd.run()

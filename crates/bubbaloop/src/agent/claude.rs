@@ -16,7 +16,7 @@ const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2023-06-01";
 
 /// Default model when none is specified.
-const DEFAULT_MODEL: &str = "claude-sonnet-4-20250514";
+pub const DEFAULT_MODEL: &str = "claude-sonnet-4-20250514";
 
 /// Default max tokens per response.
 const MAX_TOKENS: u32 = 4096;
@@ -182,17 +182,35 @@ pub struct ClaudeClient {
 }
 
 impl ClaudeClient {
-    /// Create a client from the `ANTHROPIC_API_KEY` environment variable.
+    /// Create a client, resolving the API key from (in order):
+    ///
+    /// 1. `ANTHROPIC_API_KEY` environment variable
+    /// 2. `~/.bubbaloop/anthropic-key` file (first line, trimmed)
     ///
     /// Uses `DEFAULT_MODEL` when `model` is `None`.
     pub fn from_env(model: Option<&str>) -> Result<Self> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| ClaudeError::MissingApiKey)?;
+        let api_key = std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .or_else(Self::read_key_file)
+            .ok_or(ClaudeError::MissingApiKey)?;
 
         Ok(Self {
             client: reqwest::Client::new(),
             api_key,
             model: model.unwrap_or(DEFAULT_MODEL).to_string(),
         })
+    }
+
+    /// Try to read the API key from `~/.bubbaloop/anthropic-key`.
+    fn read_key_file() -> Option<String> {
+        let path = dirs::home_dir()?.join(".bubbaloop").join("anthropic-key");
+        let content = std::fs::read_to_string(path).ok()?;
+        let key = content.lines().next()?.trim().to_string();
+        if key.is_empty() {
+            None
+        } else {
+            Some(key)
+        }
     }
 
     /// Send a message to the Claude API.
