@@ -52,7 +52,7 @@ anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # Embedded database (memory layer)
-rusqlite = { version = "0.33", features = ["bundled"] }
+rusqlite = { version = "0.33", features = ["bundled-full"] }
 
 # Cron expression parsing (scheduler)
 cron = "0.15"

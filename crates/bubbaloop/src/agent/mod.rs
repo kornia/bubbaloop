@@ -105,6 +105,7 @@ pub async fn run_agent(
     // 2. Create dispatcher with DaemonPlatform
     let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = crate::daemon::util::get_machine_id();
+    let node_manager_ref = node_manager.clone();
     let platform = Arc::new(DaemonPlatform {
         node_manager,
         session,
@@ -122,6 +123,77 @@ pub async fn run_agent(
     let memory_path = get_bubbaloop_home().join("memory.db");
     let memory = Memory::open(&memory_path)?;
 
+    // 4a. Seed conversation history from previous sessions
+    let mut conversation: Vec<Message> = Vec::new();
+    if let Ok(rows) = memory.recent_conversations(20) {
+        for row in rows.into_iter().rev() {
+            // DB returns DESC; reverse to get chronological order
+            match row.role.as_str() {
+                "user" => conversation.push(Message::user(&row.content)),
+                "assistant" if !row.content.is_empty() => {
+                    conversation.push(Message {
+                        role: "assistant".to_string(),
+                        content: vec![ContentBlock::Text { text: row.content }],
+                    });
+                }
+                _ => {} // skip tool-only rows
+            }
+        }
+        if !conversation.is_empty() {
+            log::info!(
+                "Restored {} messages from previous session",
+                conversation.len()
+            );
+        }
+    }
+
+    // 4b. Prune old data (keep 30 days)
+    match memory.prune_old_conversations(30) {
+        Ok(n) if n > 0 => log::info!("Pruned {} old conversation rows", n),
+        Err(e) => log::warn!("Failed to prune conversations: {}", e),
+        _ => {}
+    }
+    match memory.prune_old_events(30) {
+        Ok(n) if n > 0 => log::info!("Pruned {} old event rows", n),
+        Err(e) => log::warn!("Failed to prune events: {}", e),
+        _ => {}
+    }
+
+    // 4c. Load skill files (agent reads the markdown bodies as context)
+    let skills_dir = get_bubbaloop_home().join("skills");
+    let skills = crate::skills::load_skills(&skills_dir).unwrap_or_else(|e| {
+        log::warn!("Failed to load skills: {}", e);
+        Vec::new()
+    });
+
+    // 4d. Register skill schedules in memory (so scheduler can run them)
+    for skill in &skills {
+        if let Some(ref schedule_expr) = skill.schedule {
+            if !skill.actions.is_empty() {
+                let actions_json =
+                    serde_json::to_string(&skill.actions).unwrap_or_else(|_| "[]".to_string());
+                let sched = crate::agent::memory::Schedule {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: skill.name.clone(),
+                    cron: schedule_expr.clone(),
+                    actions: actions_json,
+                    tier: 1,
+                    last_run: None,
+                    next_run: None,
+                    created_by: "skill".to_string(),
+                };
+                if let Err(e) = memory.upsert_schedule(&sched) {
+                    log::warn!("Failed to register skill schedule '{}': {}", skill.name, e);
+                }
+            }
+        }
+    }
+
+    // 4e. Index skills for FTS5 full-text search
+    if let Err(e) = memory.index_skills(&skills) {
+        log::warn!("Failed to index skills for search: {}", e);
+    }
+
     // 5. Start scheduler in background
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
     tokio::spawn(scheduler::run_scheduler(
@@ -131,6 +203,28 @@ pub async fn run_agent(
         sched_machine_id,
         shutdown_rx,
     ));
+
+    // 5b. Bridge node events to memory
+    let event_memory = Memory::open(&memory_path)?;
+    let mut event_rx = node_manager_ref.subscribe();
+    let mut event_shutdown_rx = shutdown_tx.subscribe();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                Ok(event) = event_rx.recv() => {
+                    let details = serde_json::to_string(&event.state).ok();
+                    if let Err(e) = event_memory.log_event(
+                        &event.node_name,
+                        &event.event_type,
+                        details.as_deref(),
+                    ) {
+                        log::warn!("Failed to persist node event: {}", e);
+                    }
+                }
+                _ = event_shutdown_rx.changed() => break,
+            }
+        }
+    });
 
     // 6. Welcome message
     let model_name = config.model.as_deref().unwrap_or(claude::DEFAULT_MODEL);
@@ -152,7 +246,6 @@ pub async fn run_agent(
 
     // 7. Main REPL loop
     let stdin = std::io::stdin();
-    let mut conversation: Vec<Message> = Vec::new();
 
     loop {
         // Read user input
@@ -177,11 +270,25 @@ pub async fn run_agent(
             break;
         }
 
-        // Build live system prompt
+        // Build live system prompt with recency + relevance context
         let inventory = dispatcher.get_node_inventory().await;
         let schedules = memory.list_schedules().unwrap_or_default();
         let recent_events = memory.recent_events(10).unwrap_or_default();
-        let system_prompt = build_system_prompt(&inventory, &schedules, &recent_events);
+
+        // FTS5 semantic search on user input
+        let relevant_convos = memory.search_conversations(input, 5).unwrap_or_default();
+        let relevant_events = memory.search_events(input, 5).unwrap_or_default();
+        let relevant_skills = memory.search_skills(input, 3).unwrap_or_default();
+
+        let system_prompt = build_system_prompt(
+            &inventory,
+            &schedules,
+            &recent_events,
+            &skills,
+            &relevant_convos,
+            &relevant_events,
+            &relevant_skills,
+        );
 
         // Add user message
         conversation.push(Message::user(input));
