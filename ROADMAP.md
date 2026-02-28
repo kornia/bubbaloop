@@ -256,7 +256,8 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 
 **Deliverables:**
 - [ ] `curl -sSL https://get.bubbaloop.com | bash` install script
-- [ ] First-run wizard: detect hardware, suggest skills, set up API key
+- [x] `bubbaloop login` — API key setup (browser + paste + validate + save)
+- [ ] First-run wizard: detect hardware, suggest skills
 - [ ] `bubbaloop agent` auto-loads skills, auto-installs drivers, starts chat
 - [ ] AI-assisted skill creation: "Add my garage camera at rtsp://..."
 - [ ] Conversational scheduling: "Check cameras every hour"

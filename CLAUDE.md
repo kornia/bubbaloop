@@ -18,6 +18,7 @@ dashboard/                 # React + Vite + TypeScript
 ```
 
 Key source files in `crates/bubbaloop/src/`:
+- `cli/login.rs` — login/logout/status for Anthropic API key management
 - `cli/node/mod.rs` — node CRUD, validation, list/add/remove
 - `cli/node/install.rs` — install, precompiled binary download, GitHub clone
 - `cli/node/lifecycle.rs` — start, stop, restart, logs
