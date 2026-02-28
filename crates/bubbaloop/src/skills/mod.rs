@@ -105,15 +105,12 @@ pub static DRIVER_CATALOG: &[DriverEntry] = &[
 
 /// Look up a driver by name in the built-in catalog.
 pub fn resolve_driver(name: &str) -> Option<&'static DriverEntry> {
-    DRIVER_CATALOG
-        .iter()
-        .find(|e| e.driver_name == name)
+    DRIVER_CATALOG.iter().find(|e| e.driver_name == name)
 }
 
 /// Validate a skill config against naming rules and the driver catalog.
 pub fn validate_skill(skill: &SkillConfig) -> Result<()> {
-    crate::validation::validate_node_name(&skill.name)
-        .map_err(SkillError::InvalidName)?;
+    crate::validation::validate_node_name(&skill.name).map_err(SkillError::InvalidName)?;
 
     if resolve_driver(&skill.driver).is_none() {
         return Err(SkillError::UnknownDriver(skill.driver.clone()));
@@ -167,19 +164,11 @@ pub fn load_skills(skills_dir: &Path) -> Result<Vec<SkillConfig>> {
 
         match validate_skill(&skill) {
             Ok(()) => {
-                log::debug!(
-                    "Loaded skill '{}' (driver: {})",
-                    skill.name,
-                    skill.driver
-                );
+                log::debug!("Loaded skill '{}' (driver: {})", skill.name, skill.driver);
                 skills.push(skill);
             }
             Err(err) => {
-                log::warn!(
-                    "Skill file '{}' failed validation: {}",
-                    path.display(),
-                    err
-                );
+                log::warn!("Skill file '{}' failed validation: {}", path.display(), err);
             }
         }
     }
@@ -293,7 +282,10 @@ actions:
             schedule: None,
             actions: Vec::new(),
         };
-        assert!(matches!(validate_skill(&skill), Err(SkillError::InvalidName(_))));
+        assert!(matches!(
+            validate_skill(&skill),
+            Err(SkillError::InvalidName(_))
+        ));
     }
 
     #[test]
@@ -305,7 +297,10 @@ actions:
             schedule: None,
             actions: Vec::new(),
         };
-        assert!(matches!(validate_skill(&skill), Err(SkillError::InvalidName(_))));
+        assert!(matches!(
+            validate_skill(&skill),
+            Err(SkillError::InvalidName(_))
+        ));
     }
 
     #[test]

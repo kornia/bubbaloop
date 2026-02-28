@@ -163,15 +163,18 @@ impl UpCommand {
         let mem = match crate::agent::memory::Memory::open(&db_path) {
             Ok(m) => m,
             Err(e) => {
-                log::warn!("Could not open memory DB, skipping schedule registration: {}", e);
+                log::warn!(
+                    "Could not open memory DB, skipping schedule registration: {}",
+                    e
+                );
                 return Ok(());
             }
         };
         for skill in &skill_configs {
             if let Some(ref schedule_expr) = skill.schedule {
                 if !skill.actions.is_empty() {
-                    let actions_json = serde_json::to_string(&skill.actions)
-                        .unwrap_or_else(|_| "[]".to_string());
+                    let actions_json =
+                        serde_json::to_string(&skill.actions).unwrap_or_else(|_| "[]".to_string());
                     let sched = crate::agent::memory::Schedule {
                         id: uuid::Uuid::new_v4().to_string(),
                         name: skill.name.clone(),
@@ -190,10 +193,7 @@ impl UpCommand {
                     } else if let Err(e) = mem.upsert_schedule(&sched) {
                         println!("  [warn] Failed to register schedule: {}", e);
                     } else {
-                        println!(
-                            "  Registered schedule: {} ({})",
-                            skill.name, schedule_expr
-                        );
+                        println!("  Registered schedule: {} ({})", skill.name, schedule_expr);
                     }
                 }
             }

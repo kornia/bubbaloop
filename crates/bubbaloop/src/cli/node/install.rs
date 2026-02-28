@@ -5,9 +5,9 @@ use std::process::Command;
 
 use zenoh::query::QueryTarget;
 
-use crate::registry;
-use super::{CommandResponse, InstallArgs, NodeError, NodeListResponse, Result};
 use super::{get_zenoh_session, send_command};
+use super::{CommandResponse, InstallArgs, NodeError, NodeListResponse, Result};
+use crate::registry;
 
 /// Copy canonical header.proto to a node's protos/ directory if it exists.
 /// This ensures nodes use the correct version of header.proto.
@@ -53,17 +53,15 @@ pub(crate) fn normalize_git_url(source: &str) -> String {
 pub(crate) fn is_git_url(source: &str) -> bool {
     source.starts_with("https://github.com/")
         || source.starts_with("git@github.com:")
-        || (source.contains("github.com/")
-            && !source.starts_with('/')
-            && !source.starts_with('.'))
+        || (source.contains("github.com/") && !source.starts_with('/') && !source.starts_with('.'))
 }
 
 pub(crate) fn extract_node_name(path: &str) -> Result<String> {
     let node_yaml = Path::new(path).join("node.yaml");
     if node_yaml.exists() {
         let content = std::fs::read_to_string(&node_yaml)?;
-        let manifest: serde_yaml::Value = serde_yaml::from_str(&content)
-            .map_err(|e| NodeError::CommandFailed(e.to_string()))?;
+        let manifest: serde_yaml::Value =
+            serde_yaml::from_str(&content).map_err(|e| NodeError::CommandFailed(e.to_string()))?;
         if let Some(name) = manifest.get("name").and_then(|v| v.as_str()) {
             return Ok(name.to_string());
         }
@@ -75,11 +73,7 @@ pub(crate) fn extract_node_name(path: &str) -> Result<String> {
         .ok_or_else(|| NodeError::CommandFailed("Cannot extract node name".into()))
 }
 
-pub(crate) fn clone_from_github(
-    url: &str,
-    output: Option<&str>,
-    branch: &str,
-) -> Result<String> {
+pub(crate) fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -> Result<String> {
     // Prevent argument injection via branch or URL starting with '-'
     if branch.starts_with('-') {
         return Err(NodeError::InvalidUrl(format!(
@@ -510,8 +504,7 @@ mod tests {
     #[test]
     fn test_clone_rejects_branch_argument_injection() {
         // Branch starting with '-' could be interpreted as a git flag
-        let result =
-            clone_from_github("https://github.com/user/repo", None, "--upload-pack=evil");
+        let result = clone_from_github("https://github.com/user/repo", None, "--upload-pack=evil");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Invalid branch name"));

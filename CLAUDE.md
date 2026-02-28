@@ -64,7 +64,7 @@ Testing: `cargo test --features test-harness --test integration_mcp` (47 tests)
 ```bash
 pixi run check     # cargo check (fast — run after every change)
 pixi run clippy    # zero warnings enforced (-D warnings)
-pixi run test      # cargo test (298 unit tests)
+pixi run test      # cargo test (358 unit tests)
 pixi run fmt       # cargo fmt --all
 pixi run build     # cargo build --release (slow on ARM64)
 cargo test --features test-harness --test integration_mcp  # 47 integration tests

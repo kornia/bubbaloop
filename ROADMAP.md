@@ -99,7 +99,7 @@ bubbaloop agent
 - [x] 3-tier RBAC (Viewer/Operator/Admin) + bearer token auth
 - [x] systemd integration via D-Bus (zbus)
 - [x] Dashboard (React + Vite)
-- [x] 298 unit tests + 47 MCP integration tests
+- [x] 358 unit tests + 47 MCP integration tests
 - [x] TUI removed — codebase simplified to ~14K lines
 
 **Binary size: 11 MB.** Runs on NVIDIA Jetson, Raspberry Pi, any Linux ARM64/x86_64.
@@ -122,12 +122,12 @@ config:
 ```
 
 **Deliverables:**
-- [ ] `~/.bubbaloop/skills/*.yaml` loader — parse driver + config at startup
-- [ ] Driver registry: map `driver: rtsp` → marketplace node `rtsp-camera`
-- [ ] Auto-install: download precompiled binary if driver not present
-- [ ] Config injection: YAML config → node env vars / config.yaml
-- [ ] `bubbaloop up` command: load all skills, ensure nodes running
-- [ ] Built-in driver catalog (v1):
+- [x] `~/.bubbaloop/skills/*.yaml` loader — parse driver + config at startup
+- [x] Driver registry: map `driver: rtsp` → marketplace node `rtsp-camera`
+- [x] Auto-install: download precompiled binary if driver not present
+- [x] Config injection: YAML config → node env vars / config.yaml
+- [x] `bubbaloop up` command: load all skills, ensure nodes running
+- [x] Built-in driver catalog (v1):
 
 | Driver | Marketplace Node | Use Case |
 |--------|-----------------|----------|
@@ -159,11 +159,11 @@ config:
 ```
 
 **Deliverables:**
-- [ ] `bubbaloop agent` CLI command (terminal chat interface)
-- [ ] Claude API integration via `reqwest` (tool_use for MCP tools)
-- [ ] Internal MCP tool dispatch (call tools without HTTP round-trip)
-- [ ] System prompt injection: sensor inventory, node status, active schedules
-- [ ] Multi-turn conversation loop with tool use
+- [x] `bubbaloop agent` CLI command (terminal chat interface)
+- [x] Claude API integration via `reqwest` (tool_use for MCP tools)
+- [x] Internal MCP tool dispatch (call tools without HTTP round-trip)
+- [x] System prompt injection: sensor inventory, node status, active schedules
+- [x] Multi-turn conversation loop with tool use
 - [ ] HTTP chat endpoint for future dashboard integration
 
 **New deps:** None (`reqwest` already in dep tree). **New code:** ~500-800 lines.
@@ -184,12 +184,12 @@ schedules     (id, name, cron, actions, tier, last_run, next_run)
 ```
 
 **Deliverables:**
-- [ ] SQLite via `rusqlite` (static libsqlite3) at `~/.bubbaloop/memory.db`
-- [ ] `conversations` table with FTS5 full-text search
-- [ ] `sensor_events` table: health changes, crashes, alerts with timestamps
-- [ ] `schedules` table: active jobs + execution history
+- [x] SQLite via `rusqlite` (static libsqlite3) at `~/.bubbaloop/memory.db`
+- [x] `conversations` table with timestamp indexing
+- [x] `sensor_events` table: health changes, crashes, alerts with timestamps
+- [x] `schedules` table: active jobs + execution history
 - [ ] Daemon event hook: write sensor events as they happen (no polling)
-- [ ] Context injection: recent events included in agent system prompt
+- [x] Context injection: recent events included in agent system prompt
 - [ ] Future: add `sqlite-vec` (~200KB) for vector search if needed
 
 **New deps:** `rusqlite` (+1-2 MB). **New code:** ~300-500 lines.
@@ -232,8 +232,8 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 ```
 
 **Deliverables:**
-- [ ] Tier 1 cron executor with built-in action set (offline, no LLM)
-- [ ] YAML `schedule:` + `actions:` syntax in skill files
+- [x] Tier 1 cron executor with built-in action set (offline, no LLM)
+- [x] YAML `schedule:` + `actions:` syntax in skill files
 - [ ] Tier 2 conversational schedules stored in SQLite
 - [ ] Rate limiting: configurable max LLM calls/day
 - [ ] `bubbaloop jobs` CLI: list, pause, resume, delete
@@ -312,5 +312,7 @@ These are out of scope but represent natural evolution:
 ## Design Documents
 
 - `docs/plans/2026-02-27-hardware-ai-agent-design.md` — Full agent design (architecture, memory, scheduling, security)
+- `docs/plans/2026-02-28-agent-implementation-design.md` — Agent implementation design (Phases 2-4)
+- `docs/plans/2026-02-28-agent-implementation.md` — Step-by-step implementation plan
 - `ARCHITECTURE.md` — Layer model, node contract, security, technology choices
 - `CONTRIBUTING.md` — Agentic workflows, agent tiers, validation

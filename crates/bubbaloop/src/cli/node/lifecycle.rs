@@ -4,8 +4,8 @@ use std::process::Command;
 
 use zenoh::query::QueryTarget;
 
-use super::{LogsArgs, LogsResponse, NodeError, Result};
 use super::{get_zenoh_session, send_command};
+use super::{LogsArgs, LogsResponse, NodeError, Result};
 
 pub(crate) async fn start_node(name: &str) -> Result<()> {
     send_command(name, "start").await

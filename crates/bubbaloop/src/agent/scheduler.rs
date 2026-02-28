@@ -311,12 +311,7 @@ fn collect_due_schedules(
 }
 
 /// Update schedule run timestamps in the memory DB (sync, under lock).
-fn update_schedule_after_run(
-    memory: &Mutex<Memory>,
-    name: &str,
-    now_secs: u64,
-    cron_expr: &str,
-) {
+fn update_schedule_after_run(memory: &Mutex<Memory>, name: &str, now_secs: u64, cron_expr: &str) {
     let last_run = format!("{}", now_secs);
     match next_run_after(cron_expr, now_secs) {
         Ok(next) => {
@@ -372,8 +367,7 @@ async fn tick<P: PlatformOperations>(
 
         // Execute each action — memory is locked briefly inside each action
         for action in &actions {
-            if let Err(e) =
-                execute_tier1_action(action, platform, memory, scope, machine_id).await
+            if let Err(e) = execute_tier1_action(action, platform, memory, scope, machine_id).await
             {
                 log::error!(
                     "[Scheduler] action failed in schedule '{}': {}",
