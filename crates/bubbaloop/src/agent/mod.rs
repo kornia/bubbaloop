@@ -10,6 +10,9 @@ pub mod memory;
 /// System prompt builder — injects live sensor inventory and schedules.
 pub mod prompt;
 
+/// Cron-based scheduler with Tier 1 built-in actions.
+pub mod scheduler;
+
 use crate::agent::claude::{ClaudeClient, ContentBlock, Message};
 use crate::agent::dispatch::Dispatcher;
 use crate::agent::memory::Memory;

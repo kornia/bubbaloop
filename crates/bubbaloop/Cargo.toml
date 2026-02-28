@@ -74,6 +74,7 @@ tokio-tungstenite = { workspace = true, optional = true }
 reqwest.workspace = true
 rusqlite.workspace = true
 cron.workspace = true
+chrono.workspace = true
 
 # MCP server (core)
 rmcp.workspace = true

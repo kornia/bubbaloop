@@ -54,6 +54,7 @@ rusqlite = { version = "0.33", features = ["bundled"] }
 
 # Cron expression parsing (scheduler)
 cron = "0.15"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 # Hex encoding
 hex = "0.4"
