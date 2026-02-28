@@ -23,6 +23,9 @@ pub mod marketplace;
 /// MCP server for AI agent integration
 pub mod mcp;
 
+/// REST API for CLI → daemon communication
+pub mod api;
+
 /// Shared input validation for trust boundaries
 pub mod validation;
 

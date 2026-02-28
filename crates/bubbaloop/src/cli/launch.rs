@@ -165,7 +165,7 @@ impl LaunchCommand {
             None
         };
 
-        // 5. Register instance via Zenoh
+        // 5. Register instance via REST API
         self.register_instance(&node_path, name_override, config_path.as_deref())
             .await?;
         println!("Registered: {}", launch.name);
@@ -191,47 +191,67 @@ impl LaunchCommand {
     }
 
     async fn resolve_node_path(&self, node_name: &str) -> Result<String> {
-        let session = node::get_zenoh_session().await?;
-        let replies = session
-            .get("bubbaloop/daemon/api/nodes")
-            .target(zenoh::query::QueryTarget::BestMatching)
-            .timeout(std::time::Duration::from_secs(10))
-            .await
-            .map_err(|e| LaunchError::Node(node::NodeError::Zenoh(e.to_string())))?;
+        // The REST API doesn't expose node paths directly.
+        // We check the node exists via the API, then look up the path from
+        // the local nodes directory (~/.bubbaloop/nodes/).
+        let client = crate::cli::daemon_client::DaemonClient::new();
+        let data = client.list_nodes().await.map_err(node::NodeError::from)?;
 
-        #[derive(Deserialize)]
-        struct NodeInfo {
-            name: String,
-            path: String,
-        }
-        #[derive(Deserialize)]
-        struct NodeListResponse {
-            nodes: Vec<NodeInfo>,
+        let found = data.nodes.iter().any(|n| n.name == node_name);
+        if !found {
+            return Err(LaunchError::Node(node::NodeError::NotFound(format!(
+                "Node '{}' not registered. Register it first with: bubbaloop node add <path>",
+                node_name
+            ))));
         }
 
-        for reply in replies {
-            if let Ok(sample) = reply.into_result() {
-                let payload = sample.payload().to_bytes();
-                if let Ok(response) = serde_json::from_slice::<NodeListResponse>(&payload) {
-                    for info in response.nodes {
-                        if info.name == node_name {
-                            session.close().await.map_err(|e| {
-                                LaunchError::Node(node::NodeError::Zenoh(e.to_string()))
-                            })?;
-                            return Ok(info.path);
+        // Search for the node path in ~/.bubbaloop/nodes/
+        let home =
+            dirs::home_dir().ok_or_else(|| LaunchError::Instance("HOME not set".to_string()))?;
+        let nodes_dir = home.join(".bubbaloop").join("nodes");
+
+        if let Ok(entries) = std::fs::read_dir(&nodes_dir) {
+            for entry in entries.flatten() {
+                let node_yaml = entry.path().join("node.yaml");
+                if node_yaml.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&node_yaml) {
+                        if let Ok(manifest) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
+                            if manifest.get("name").and_then(|v| v.as_str()) == Some(node_name) {
+                                return Ok(entry.path().to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
+                // Also check subdirectories (multi-node repos)
+                if entry.path().is_dir() {
+                    if let Ok(sub_entries) = std::fs::read_dir(entry.path()) {
+                        for sub_entry in sub_entries.flatten() {
+                            let sub_yaml = sub_entry.path().join("node.yaml");
+                            if sub_yaml.exists() {
+                                if let Ok(content) = std::fs::read_to_string(&sub_yaml) {
+                                    if let Ok(manifest) =
+                                        serde_yaml::from_str::<serde_yaml::Value>(&content)
+                                    {
+                                        if manifest.get("name").and_then(|v| v.as_str())
+                                            == Some(node_name)
+                                        {
+                                            return Ok(sub_entry
+                                                .path()
+                                                .to_string_lossy()
+                                                .to_string());
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        session
-            .close()
-            .await
-            .map_err(|e| LaunchError::Node(node::NodeError::Zenoh(e.to_string())))?;
-
+        // Fallback: use the node name as-is (the daemon knows about it)
         Err(LaunchError::Node(node::NodeError::NotFound(format!(
-            "Node '{}' not registered. Register it first with: bubbaloop node add <path>",
+            "Node '{}' is registered but its path could not be resolved from ~/.bubbaloop/nodes/",
             node_name
         ))))
     }
@@ -242,48 +262,14 @@ impl LaunchCommand {
         name_override: Option<&str>,
         config_path: Option<&str>,
     ) -> Result<()> {
-        let session = node::get_zenoh_session().await?;
-
-        let payload = serde_json::to_string(&serde_json::json!({
-            "command": "add",
-            "node_path": node_path,
-            "name": name_override,
-            "config": config_path,
-        }))?;
-
-        let replies = session
-            .get("bubbaloop/daemon/api/nodes/add")
-            .payload(payload)
-            .target(zenoh::query::QueryTarget::BestMatching)
-            .timeout(std::time::Duration::from_secs(30))
+        let client = crate::cli::daemon_client::DaemonClient::new();
+        let resp = client
+            .add_node(node_path, name_override, config_path)
             .await
-            .map_err(|e| LaunchError::Node(node::NodeError::Zenoh(e.to_string())))?;
+            .map_err(node::NodeError::from)?;
 
-        let mut success = false;
-        for reply in replies {
-            if let Ok(sample) = reply.into_result() {
-                let data: serde_json::Value = serde_json::from_slice(&sample.payload().to_bytes())?;
-                if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
-                    success = true;
-                    break;
-                } else {
-                    let msg = data
-                        .get("message")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown error");
-                    session.close().await.ok();
-                    return Err(LaunchError::Instance(msg.to_string()));
-                }
-            }
-        }
-
-        session
-            .close()
-            .await
-            .map_err(|e| LaunchError::Node(node::NodeError::Zenoh(e.to_string())))?;
-
-        if !success {
-            return Err(LaunchError::Instance("No response from daemon".to_string()));
+        if !resp.success {
+            return Err(LaunchError::Instance(resp.message));
         }
 
         Ok(())

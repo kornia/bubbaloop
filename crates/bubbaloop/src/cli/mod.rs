@@ -1,6 +1,7 @@
 //! CLI module for Bubbaloop commands
 
 pub mod agent;
+pub mod daemon_client;
 pub mod debug;
 pub mod doctor;
 pub mod launch;

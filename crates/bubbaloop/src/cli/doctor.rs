@@ -2,20 +2,16 @@
 //!
 //! Performs comprehensive health checks on all bubbaloop components:
 //! - System services (zenohd, daemon, bridge)
-//! - Zenoh connectivity
-//! - Daemon API endpoints
-//! - Node subscriptions
+//! - Daemon HTTP connectivity and health (via REST API)
+//! - Zenoh data plane availability (port check for node streaming)
+//! - Security posture
 //!
 //! Provides actionable fixes for each issue found.
 
 use anyhow::{anyhow, Result};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::time::Duration;
 use tokio::process::Command;
-use zenoh::query::QueryTarget;
-use zenoh::Session;
-
-const TIMEOUT_SECS: u64 = 5;
 
 /// Actions that can be automatically fixed
 #[derive(Debug, Clone)]
@@ -213,62 +209,9 @@ impl DiagnosticResult {
             details: None,
         }
     }
-
-    fn fail_with_details(
-        check: &str,
-        message: &str,
-        fix: &str,
-        details: serde_json::Value,
-    ) -> Self {
-        Self {
-            check: check.to_string(),
-            passed: false,
-            message: message.to_string(),
-            fix: Some(fix.to_string()),
-            fix_action: None,
-            details: Some(details),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct HealthResponse {
-    status: String,
-}
-
-#[derive(Deserialize)]
-struct NodeListResponse {
-    nodes: Vec<NodeState>,
-    #[allow(dead_code)]
-    timestamp_ms: u64,
-}
-
-#[derive(Deserialize)]
-struct NodeState {
-    #[allow(dead_code)]
-    name: String,
-    #[allow(dead_code)]
-    path: String,
-    #[allow(dead_code)]
-    status: String,
-    #[allow(dead_code)]
-    installed: bool,
-    #[allow(dead_code)]
-    autostart_enabled: bool,
-    #[allow(dead_code)]
-    version: String,
-    #[allow(dead_code)]
-    description: String,
-    #[allow(dead_code)]
-    node_type: String,
-    #[allow(dead_code)]
-    is_built: bool,
-    #[allow(dead_code)]
-    build_output: Vec<String>,
 }
 
 pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
-    // Normalize check name
     let check_type = check.to_lowercase();
 
     if !json {
@@ -285,14 +228,11 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
     let mut results = Vec::new();
     let mut fixes_applied = 0;
 
-    // Determine which checks to run
     let run_config = check_type == "all" || check_type == "config";
     let run_services = check_type == "all" || check_type == "zenoh";
-    let run_zenoh = check_type == "all" || check_type == "zenoh";
+    let run_connectivity = check_type == "all" || check_type == "zenoh";
     let run_daemon = check_type == "all" || check_type == "daemon";
     let run_security = check_type == "all" || check_type == "security";
-
-    let mut session: Option<Session> = None;
 
     // 0. Check configuration files
     if run_config {
@@ -301,7 +241,6 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
         }
         results.extend(check_configuration().await);
 
-        // Apply fixes for configuration if --fix flag is set
         if fix && !json {
             fixes_applied += apply_fixes(&mut results).await;
         }
@@ -317,7 +256,6 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
         }
         results.extend(check_system_services().await);
 
-        // Apply fixes for system services if --fix flag is set
         if fix && !json {
             fixes_applied += apply_fixes(&mut results).await;
         }
@@ -326,71 +264,37 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
         }
     }
 
-    // 2. Check Zenoh connectivity
-    if run_zenoh {
+    // 2. Check daemon HTTP connectivity (replaces Zenoh connectivity check)
+    if run_connectivity {
         if !json {
-            println!("[2/4] Checking Zenoh connectivity...");
+            println!("[2/4] Checking daemon connectivity...");
         }
-        let zenoh_results = check_zenoh_comprehensive().await;
-        let has_session = zenoh_results
-            .iter()
-            .any(|r| r.check == "Zenoh connection" && r.passed);
-
-        results.extend(zenoh_results);
-
-        if has_session {
-            // Try to get a session for further checks
-            if let Ok(s) = get_zenoh_session().await {
-                session = Some(s);
-            }
-        }
+        results.extend(check_daemon_connectivity().await);
 
         if !json {
             println!();
         }
     }
 
-    // 3. Check daemon health (requires Zenoh connection)
+    // 3. Check daemon health
     if run_daemon {
         if !json {
             println!("[3/4] Checking daemon health...");
         }
+        results.extend(check_daemon_health().await);
 
-        // Get session if we don't already have one
-        if session.is_none() && check_type == "daemon" {
-            if let Ok(s) = get_zenoh_session().await {
-                session = Some(s);
-            }
-        }
-
-        if let Some(ref session) = session {
-            results.extend(check_daemon_health(session).await);
-        } else {
-            results.push(DiagnosticResult::fail(
-                "Daemon health",
-                "Skipped (no Zenoh connection)",
-                "Fix Zenoh connection first",
-            ));
-        }
         if !json {
             println!();
         }
     }
 
-    // 4. Check node subscriptions (requires Zenoh connection)
+    // 4. Check Zenoh data plane (optional, for streaming)
     if check_type == "all" {
         if !json {
-            println!("[4/5] Checking node subscriptions...");
+            println!("[4/5] Checking Zenoh data plane...");
         }
-        if let Some(ref session) = session {
-            results.extend(check_node_subscriptions(session).await);
-        } else {
-            results.push(DiagnosticResult::fail(
-                "Node subscriptions",
-                "Skipped (no Zenoh connection)",
-                "Fix Zenoh connection first",
-            ));
-        }
+        results.extend(check_node_subscriptions().await);
+
         if !json {
             println!();
         }
@@ -407,16 +311,10 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
         }
     }
 
-    // Output results
     if json {
         print_json_results(&results, fixes_applied)?;
     } else {
         print_human_results(&results, fixes_applied, fix)?;
-    }
-
-    // Close Zenoh session if open
-    if let Some(session) = session {
-        let _ = session.close().await;
     }
 
     Ok(())
@@ -737,205 +635,56 @@ async fn check_systemd_service(service_name: &str) -> String {
     }
 }
 
-async fn get_zenoh_session() -> Result<Session> {
-    let mut config = zenoh::Config::default();
-
-    config
-        .insert_json5("mode", "\"client\"")
-        .map_err(|e| anyhow!("Failed to configure client mode: {}", e))?;
-
-    let endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT")
-        .unwrap_or_else(|_| "tcp/127.0.0.1:7447".to_string());
-
-    config
-        .insert_json5("connect/endpoints", &format!("[\"{}\"]", endpoint))
-        .map_err(|e| anyhow!("Failed to configure endpoint: {}", e))?;
-
-    // Disable scouting
-    let _ = config.insert_json5("scouting/multicast/enabled", "false");
-    let _ = config.insert_json5("scouting/gossip/enabled", "false");
-
-    zenoh::open(config)
-        .await
-        .map_err(|e| anyhow!("Failed to open Zenoh session: {}", e))
-}
-
-/// Comprehensive Zenoh connectivity checks
-async fn check_zenoh_comprehensive() -> Vec<DiagnosticResult> {
+/// Check daemon HTTP connectivity (replaces Zenoh connectivity checks)
+async fn check_daemon_connectivity() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
 
-    let endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT")
-        .unwrap_or_else(|_| "tcp/127.0.0.1:7447".to_string());
+    let client = crate::cli::daemon_client::DaemonClient::new();
+    let port = std::env::var("BUBBALOOP_MCP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(crate::mcp::MCP_PORT);
 
-    // Parse endpoint to get host and port
-    let (host, port) = parse_zenoh_endpoint(&endpoint);
-
-    // Check 1: Can we create a session?
-    let session_result = get_zenoh_session().await;
-    match &session_result {
-        Ok(session) => {
-            let session_id = session.zid().to_string();
+    match client.health().await {
+        Ok(resp) => {
             results.push(DiagnosticResult::pass_with_details(
-                "Zenoh connection",
-                &format!("connected to {}", endpoint),
+                "Daemon HTTP",
+                &format!("reachable on port {} (v{})", port, resp.version),
                 serde_json::json!({
-                    "endpoint": endpoint,
-                    "session_id": session_id,
-                    "mode": "client",
-                }),
-            ));
-
-            // Check 2: Can we declare a test queryable?
-            match session.declare_queryable("bubbaloop/doctor/test").await {
-                Ok(queryable) => {
-                    results.push(DiagnosticResult::pass(
-                        "Zenoh queryable",
-                        "can declare queryables",
-                    ));
-                    drop(queryable);
-                }
-                Err(e) => {
-                    results.push(DiagnosticResult::fail(
-                        "Zenoh queryable",
-                        &format!("failed to declare queryable: {}", e),
-                        "Check Zenoh router permissions and configuration",
-                    ));
-                }
-            }
-
-            // Check 3: Can we query ourselves?
-            let test_key = "bubbaloop/doctor/test/query";
-            let _test_queryable = session.declare_queryable(test_key).await;
-
-            if let Ok(test_queryable) = _test_queryable {
-                // Spawn a task to respond to our own query
-                let handle = tokio::spawn(async move {
-                    if let Ok(query) = test_queryable.recv_async().await {
-                        let _ = query.reply(test_key, "pong").await;
-                    }
-                });
-
-                tokio::time::sleep(Duration::from_millis(100)).await;
-
-                // Try to query
-                match session.get(test_key).timeout(Duration::from_secs(2)).await {
-                    Ok(receiver) => {
-                        let replies: Vec<_> = receiver.into_iter().collect();
-                        if replies.is_empty() {
-                            results.push(DiagnosticResult::fail_with_details(
-                                "Zenoh query/reply",
-                                "query succeeded but no replies received (timeout)",
-                                "This is the 'Didn't receive final reply for query: Timeout' error. Check if zenohd is running and accessible. Increase query timeout if on slow network.",
-                                serde_json::json!({
-                                    "error_type": "timeout",
-                                    "common_cause": "zenohd not routing queries correctly",
-                                    "timeout_ms": 2000,
-                                }),
-                            ));
-                        } else {
-                            results.push(DiagnosticResult::pass(
-                                "Zenoh query/reply",
-                                "can send queries and receive replies",
-                            ));
-                        }
-                    }
-                    Err(e) => {
-                        results.push(DiagnosticResult::fail_with_details(
-                            "Zenoh query/reply",
-                            &format!("query failed: {}", e),
-                            "This indicates Zenoh routing is broken. Check zenohd logs and configuration.",
-                            serde_json::json!({
-                                "error": e.to_string(),
-                                "error_type": "query_failed",
-                            }),
-                        ));
-                    }
-                }
-
-                handle.abort();
-            } else {
-                results.push(DiagnosticResult::fail(
-                    "Zenoh query/reply",
-                    "skipped (could not declare test queryable)",
-                    "Fix queryable declaration first",
-                ));
-            }
-
-            let _ = session.close().await;
-        }
-        Err(e) => {
-            results.push(DiagnosticResult::fail_with_details(
-                "Zenoh connection",
-                &format!("failed to connect: {}", e),
-                &format!(
-                    "Ensure zenohd is running and accessible at {}. Run: zenohd &",
-                    endpoint
-                ),
-                serde_json::json!({
-                    "endpoint": endpoint,
-                    "host": host,
                     "port": port,
-                    "error": e.to_string(),
+                    "status": resp.status,
+                    "version": resp.version,
+                    "nodes_total": resp.nodes_total,
+                    "nodes_running": resp.nodes_running,
                 }),
             ));
-
-            // Check if port is even listening
-            if let Ok(can_connect) = tokio::time::timeout(
-                Duration::from_secs(1),
-                tokio::net::TcpStream::connect(format!("{}:{}", host, port)),
-            )
-            .await
-            {
-                if can_connect.is_ok() {
-                    results.push(DiagnosticResult::pass(
-                        "Zenoh port",
-                        &format!("port {} is listening", port),
-                    ));
-                } else {
-                    results.push(DiagnosticResult::fail(
-                        "Zenoh port",
-                        &format!("port {} is not accessible", port),
-                        "Start zenohd or check firewall settings",
-                    ));
-                }
-            } else {
-                results.push(DiagnosticResult::fail(
-                    "Zenoh port",
-                    &format!("timeout connecting to port {}", port),
-                    "Check if zenohd is running and network is accessible",
-                ));
-            }
+        }
+        Err(_) => {
+            results.push(DiagnosticResult::fail(
+                "Daemon HTTP",
+                &format!("not reachable on port {}", port),
+                "Is the daemon running? Check: systemctl --user status bubbaloop-daemon",
+            ));
         }
     }
 
     results
 }
 
-fn parse_zenoh_endpoint(endpoint: &str) -> (String, u16) {
-    // Parse "tcp/127.0.0.1:7447" format
-    if let Some(addr_part) = endpoint.strip_prefix("tcp/") {
-        if let Some((host, port_str)) = addr_part.rsplit_once(':') {
-            if let Ok(port) = port_str.parse() {
-                return (host.to_string(), port);
-            }
-        }
-    }
-    // Default
-    ("127.0.0.1".to_string(), 7447)
-}
-
-async fn check_daemon_health(session: &Session) -> Vec<DiagnosticResult> {
+async fn check_daemon_health() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
 
-    // Query health endpoint
-    match query_with_timeout::<HealthResponse>(session, "bubbaloop/daemon/api/health").await {
-        Ok(response) => {
-            if response.status == "ok" {
+    let client = crate::cli::daemon_client::DaemonClient::new();
+
+    // Check health endpoint
+    match client.health().await {
+        Ok(resp) => {
+            if resp.status == "ok" {
                 results.push(DiagnosticResult::pass("Daemon health", "ok"));
             } else {
                 results.push(DiagnosticResult::fail(
                     "Daemon health",
-                    &format!("unexpected status: {}", response.status),
+                    &format!("unexpected status: {}", resp.status),
                     "Run: systemctl --user restart bubbaloop-daemon",
                 ));
             }
@@ -943,25 +692,25 @@ async fn check_daemon_health(session: &Session) -> Vec<DiagnosticResult> {
         Err(e) => {
             results.push(DiagnosticResult::fail(
                 "Daemon health",
-                &format!("query failed: {}", e),
-                "Check if daemon is connected to the same Zenoh router. Run: systemctl --user status bubbaloop-daemon",
+                &format!("health check failed: {}", e),
+                "Check if daemon is running. Run: systemctl --user status bubbaloop-daemon",
             ));
         }
     }
 
-    // Query nodes endpoint
-    match query_with_timeout::<NodeListResponse>(session, "bubbaloop/daemon/api/nodes").await {
-        Ok(response) => {
+    // Check nodes endpoint
+    match client.list_nodes().await {
+        Ok(data) => {
             results.push(DiagnosticResult::pass(
                 "Node list",
-                &format!("accessible ({} nodes)", response.nodes.len()),
+                &format!("accessible ({} nodes)", data.nodes.len()),
             ));
         }
         Err(e) => {
             results.push(DiagnosticResult::fail(
                 "Node list",
                 &format!("query failed: {}", e),
-                "Check if daemon is connected to the same Zenoh router",
+                "Check if daemon REST API is responding",
             ));
         }
     }
@@ -969,24 +718,22 @@ async fn check_daemon_health(session: &Session) -> Vec<DiagnosticResult> {
     results
 }
 
-async fn check_node_subscriptions(session: &Session) -> Vec<DiagnosticResult> {
+async fn check_node_subscriptions() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
 
-    // Try to subscribe to daemon nodes topic
-    match session.declare_subscriber("bubbaloop/daemon/nodes").await {
-        Ok(_subscriber) => {
-            results.push(DiagnosticResult::pass(
-                "Node subscription",
-                "can subscribe to bubbaloop/daemon/nodes",
-            ));
-        }
-        Err(e) => {
-            results.push(DiagnosticResult::fail(
-                "Node subscription",
-                &format!("failed: {}", e),
-                "Check Zenoh router configuration",
-            ));
-        }
+    // Zenoh data plane check: just verify zenohd port is accessible
+    let zenoh_port_open = check_port(7447).await;
+    if zenoh_port_open {
+        results.push(DiagnosticResult::pass(
+            "Zenoh data plane",
+            "port 7447 accessible (used by nodes for streaming)",
+        ));
+    } else {
+        results.push(DiagnosticResult::fail(
+            "Zenoh data plane",
+            "port 7447 not accessible",
+            "Zenoh data plane is used by nodes for streaming. Start zenohd if needed.",
+        ));
     }
 
     results
@@ -1210,39 +957,6 @@ fn check_node_names(bubbaloop_dir: &std::path::Path) -> Vec<DiagnosticResult> {
     results
 }
 
-async fn query_with_timeout<T: for<'de> Deserialize<'de>>(
-    session: &Session,
-    key_expr: &str,
-) -> Result<T> {
-    let replies = session
-        .get(key_expr)
-        .target(QueryTarget::BestMatching)
-        .timeout(Duration::from_secs(TIMEOUT_SECS))
-        .await
-        .map_err(|e| anyhow!("Zenoh query failed: {}", e))?;
-
-    let timeout_duration = Duration::from_secs(TIMEOUT_SECS);
-
-    match tokio::time::timeout(timeout_duration, replies.recv_async()).await {
-        Ok(Ok(reply)) => {
-            if let Ok(sample) = reply.result() {
-                let bytes = sample.payload().to_bytes();
-                let text = String::from_utf8_lossy(&bytes);
-                let result: T = serde_json::from_str(&text)?;
-                return Ok(result);
-            }
-        }
-        Ok(Err(e)) => return Err(anyhow!("Failed to receive reply: {}", e)),
-        Err(_) => { /* timeout - fall through to error below */ }
-    }
-
-    Err(anyhow!(
-        "No reply received for {} (timeout after {}s)",
-        key_expr,
-        TIMEOUT_SECS
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1263,43 +977,6 @@ mod tests {
         assert_eq!(result.check, "test");
         assert_eq!(result.message, "something wrong");
         assert_eq!(result.fix, Some("do this".to_string()));
-    }
-
-    #[test]
-    fn test_health_response_deserialization() {
-        let json = r#"{"status": "ok"}"#;
-        let response: HealthResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(response.status, "ok");
-    }
-
-    #[test]
-    fn test_node_list_response_deserialization() {
-        let json = r#"{
-            "nodes": [],
-            "timestamp_ms": 1234567890
-        }"#;
-        let response: NodeListResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(response.nodes.len(), 0);
-        assert_eq!(response.timestamp_ms, 1234567890);
-    }
-
-    #[test]
-    fn test_node_state_deserialization() {
-        let json = r#"{
-            "name": "test-node",
-            "path": "/path",
-            "status": "running",
-            "installed": true,
-            "autostart_enabled": false,
-            "version": "1.0.0",
-            "description": "Test",
-            "node_type": "rust",
-            "is_built": true,
-            "build_output": []
-        }"#;
-        let node: NodeState = serde_json::from_str(json).unwrap();
-        assert_eq!(node.name, "test-node");
-        assert_eq!(node.status, "running");
     }
 
     // Security check tests
@@ -1461,19 +1138,5 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].passed);
         assert!(!results[1].passed);
-    }
-
-    #[test]
-    fn test_parse_zenoh_endpoint_tcp() {
-        let (host, port) = parse_zenoh_endpoint("tcp/192.168.1.100:7447");
-        assert_eq!(host, "192.168.1.100");
-        assert_eq!(port, 7447);
-    }
-
-    #[test]
-    fn test_parse_zenoh_endpoint_default() {
-        let (host, port) = parse_zenoh_endpoint("invalid");
-        assert_eq!(host, "127.0.0.1");
-        assert_eq!(port, 7447);
     }
 }

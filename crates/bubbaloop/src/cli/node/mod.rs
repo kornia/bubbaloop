@@ -1,25 +1,23 @@
 //! Node management CLI commands
 //!
 //! Commands for managing bubbaloop nodes from the command line.
-//! These interact with the daemon via Zenoh to manage systemd services.
+//! These interact with the daemon via HTTP REST API to manage systemd services.
 
 pub mod build;
 pub mod install;
 pub mod lifecycle;
 
 use argh::FromArgs;
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-use zenoh::query::QueryTarget;
 
 use crate::registry;
 use crate::templates;
 
 #[derive(Debug, Error)]
 pub enum NodeError {
-    #[error("Zenoh error: {0}")]
-    Zenoh(String),
+    #[error("Daemon error: {0}")]
+    Daemon(#[from] crate::cli::daemon_client::DaemonClientError),
     #[error("Node not found: {0}")]
     NotFound(String),
     #[error("Command failed: {0}")]
@@ -270,6 +268,7 @@ pub(crate) struct LogsArgs {
     pub(crate) name: String,
 
     /// number of lines to show (default: 50)
+    #[allow(dead_code)]
     #[argh(option, short = 'n', default = "50")]
     pub(crate) lines: usize,
 
@@ -340,8 +339,9 @@ struct DiscoverArgs {
     format: String,
 }
 
-/// Response from daemon API
-#[derive(Deserialize)]
+/// Legacy response types kept for tests (no longer used at runtime).
+#[cfg(test)]
+#[derive(serde::Deserialize)]
 pub(crate) struct CommandResponse {
     pub(crate) success: bool,
     pub(crate) message: String,
@@ -349,7 +349,8 @@ pub(crate) struct CommandResponse {
     pub(crate) output: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[cfg(test)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub(crate) struct NodeState {
     pub(crate) name: String,
     pub(crate) path: String,
@@ -364,12 +365,14 @@ pub(crate) struct NodeState {
     pub(crate) base_node: String,
 }
 
-#[derive(Deserialize)]
+#[cfg(test)]
+#[derive(serde::Deserialize)]
 pub(crate) struct NodeListResponse {
     pub(crate) nodes: Vec<NodeState>,
 }
 
-#[derive(Deserialize)]
+#[cfg(test)]
+#[derive(serde::Deserialize)]
 pub(crate) struct LogsResponse {
     pub(crate) lines: Vec<String>,
     pub(crate) success: bool,
@@ -452,80 +455,18 @@ impl NodeCommand {
     }
 }
 
-pub(crate) async fn get_zenoh_session() -> Result<zenoh::Session> {
-    // Connect to local zenoh router, or custom endpoint via env var
-    let mut config = zenoh::Config::default();
-
-    // Run as client mode - only connect to router, don't listen
-    config
-        .insert_json5("mode", "\"client\"")
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-
-    let endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT")
-        .unwrap_or_else(|_| "tcp/127.0.0.1:7447".to_string());
-    config
-        .insert_json5("connect/endpoints", &format!("[\"{}\"]", endpoint))
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-
-    // Disable all scouting to avoid connecting to remote peers via Tailscale
-    config
-        .insert_json5("scouting/multicast/enabled", "false")
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-    config
-        .insert_json5("scouting/gossip/enabled", "false")
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-
-    let session = zenoh::open(config)
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-    Ok(session)
-}
-
 pub(crate) async fn send_command(name: &str, command: &str) -> Result<()> {
-    let session = get_zenoh_session().await?;
-    let payload = serde_json::to_string(&serde_json::json!({"command": command}))?;
-    let key = format!("bubbaloop/daemon/api/nodes/{}/command", name);
-
-    let mut last_error = None;
-
-    for attempt in 1..=3 {
-        if let Ok(replies) = session
-            .get(&key)
-            .payload(payload.clone())
-            .target(QueryTarget::BestMatching)
-            .timeout(std::time::Duration::from_secs(30))
-            .await
-        {
-            for reply in replies {
-                if let Ok(sample) = reply.into_result() {
-                    let data: CommandResponse =
-                        serde_json::from_slice(&sample.payload().to_bytes())?;
-                    if data.success {
-                        println!("{}", data.message);
-                        if !data.output.is_empty() {
-                            println!("{}", data.output);
-                        }
-                        session
-                            .close()
-                            .await
-                            .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-                        return Ok(());
-                    }
-                    last_error = Some(NodeError::CommandFailed(data.message));
-                }
-            }
+    let client = crate::cli::daemon_client::DaemonClient::new();
+    let resp = client.send_command(name, command).await?;
+    if resp.success {
+        println!("{}", resp.message);
+        if !resp.output.is_empty() {
+            println!("{}", resp.output);
         }
-
-        if attempt < 3 {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
+        Ok(())
+    } else {
+        Err(NodeError::CommandFailed(resp.message))
     }
-
-    session
-        .close()
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-    Err(last_error.unwrap_or_else(|| NodeError::Zenoh("No response from daemon".into())))
 }
 
 pub(crate) fn truncate(s: &str, max: usize) -> String {
@@ -668,108 +609,28 @@ async fn list_nodes(args: ListArgs) -> Result<()> {
         ));
     }
 
-    let session = get_zenoh_session().await?;
+    let client = crate::cli::daemon_client::DaemonClient::new();
+    let data = client.list_nodes().await?;
 
-    // Retry up to 3 times with 1 second delay between retries
-    let mut best_data: Option<NodeListResponse> = None;
-
-    for attempt in 1..=3 {
-        let replies_result = session
-            .get("bubbaloop/daemon/api/nodes")
-            .target(QueryTarget::BestMatching)
-            .timeout(std::time::Duration::from_secs(30))
-            .await;
-
-        if let Ok(replies) = replies_result {
-            for reply in replies {
-                if let Ok(sample) = reply.into_result() {
-                    if let Ok(data) =
-                        serde_json::from_slice::<NodeListResponse>(&sample.payload().to_bytes())
-                    {
-                        if !data.nodes.is_empty() || best_data.is_none() {
-                            best_data = Some(data);
-                            if !best_data.as_ref().unwrap().nodes.is_empty() {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if best_data.as_ref().is_some_and(|d| !d.nodes.is_empty()) {
-                break;
-            }
-        }
-
-        if attempt < 3 {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
-    }
-
-    if let Some(mut data) = best_data {
-        // Apply --base / --instances filter
-        if args.base {
-            data.nodes.retain(|n| n.base_node.is_empty());
-        } else if args.instances {
-            data.nodes.retain(|n| !n.base_node.is_empty());
-        }
-
-        if args.format == "json" {
-            println!("{}", serde_json::to_string_pretty(&data.nodes)?);
-        } else if data.nodes.is_empty() {
-            println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
-        } else {
-            let has_instances = data.nodes.iter().any(|n| !n.base_node.is_empty());
-            if has_instances {
-                println!(
-                    "{:<20} {:<10} {:<16} {:<12} {:<8} DESCRIPTION",
-                    "NAME", "STATUS", "BASE", "TYPE", "BUILT"
-                );
-                println!("{}", "-".repeat(86));
-                for node in data.nodes {
-                    let built = if node.is_built { "yes" } else { "no" };
-                    let base = if node.base_node.is_empty() {
-                        "-"
-                    } else {
-                        &node.base_node
-                    };
-                    println!(
-                        "{:<20} {:<10} {:<16} {:<12} {:<8} {}",
-                        node.name,
-                        node.status,
-                        base,
-                        node.node_type,
-                        built,
-                        truncate(&node.description, 30)
-                    );
-                }
-            } else {
-                println!(
-                    "{:<20} {:<10} {:<12} {:<8} DESCRIPTION",
-                    "NAME", "STATUS", "TYPE", "BUILT"
-                );
-                println!("{}", "-".repeat(70));
-                for node in data.nodes {
-                    let built = if node.is_built { "yes" } else { "no" };
-                    println!(
-                        "{:<20} {:<10} {:<12} {:<8} {}",
-                        node.name,
-                        node.status,
-                        node.node_type,
-                        built,
-                        truncate(&node.description, 30)
-                    );
-                }
-            }
-        }
+    if args.format == "json" {
+        println!("{}", serde_json::to_string_pretty(&data.nodes)?);
+    } else if data.nodes.is_empty() {
+        println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
     } else {
-        println!("No response from daemon. Is it running?");
+        println!(
+            "{:<20} {:<10} {:<12} {:<8} HEALTH",
+            "NAME", "STATUS", "TYPE", "BUILT"
+        );
+        println!("{}", "-".repeat(70));
+        for node in &data.nodes {
+            let built = if node.is_built { "yes" } else { "no" };
+            println!(
+                "{:<20} {:<10} {:<12} {:<8} {}",
+                node.name, node.status, node.node_type, built, node.health,
+            );
+        }
     }
 
-    session
-        .close()
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
     Ok(())
 }
 
@@ -889,53 +750,17 @@ async fn add_node(args: AddArgs) -> Result<()> {
     // Resolve the actual node path (handles --subdir and multi-node discovery)
     let node_path = resolve_node_path(&base_path, args.subdir.as_deref())?;
 
-    // Add to daemon via Zenoh
-    let session = get_zenoh_session().await?;
-
-    let payload = serde_json::to_string(&serde_json::json!({
-        "command": "add",
-        "node_path": node_path,
-        "name": args.name,
-        "config": args.config,
-    }))?;
-
-    let mut node_name: Option<String> = None;
-
-    for attempt in 1..=3 {
-        if let Ok(replies) = session
-            .get("bubbaloop/daemon/api/nodes/add")
-            .payload(payload.clone())
-            .target(QueryTarget::BestMatching)
-            .timeout(std::time::Duration::from_secs(30))
-            .await
-        {
-            for reply in replies {
-                if let Ok(sample) = reply.into_result() {
-                    let data: CommandResponse =
-                        serde_json::from_slice(&sample.payload().to_bytes())?;
-                    if data.success {
-                        println!("Added node from: {}", node_path);
-                        node_name = install::extract_node_name(&node_path).ok();
-                        break;
-                    } else if attempt == 3 {
-                        session
-                            .close()
-                            .await
-                            .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-                        return Err(NodeError::CommandFailed(data.message));
-                    }
-                }
-            }
-
-            if node_name.is_some() {
-                break;
-            }
-        }
-
-        if attempt < 3 {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
+    // Add to daemon via REST API
+    let client = crate::cli::daemon_client::DaemonClient::new();
+    let resp = client
+        .add_node(&node_path, args.name.as_deref(), args.config.as_deref())
+        .await?;
+    if !resp.success {
+        return Err(NodeError::CommandFailed(resp.message));
     }
+    println!("Added node from: {}", node_path);
+
+    let node_name = install::extract_node_name(&node_path).ok();
 
     // Optional: build
     if args.build {
@@ -953,51 +778,22 @@ async fn add_node(args: AddArgs) -> Result<()> {
         }
     }
 
-    session
-        .close()
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
     Ok(())
 }
 
 async fn remove_node(args: RemoveArgs) -> Result<()> {
-    let session = get_zenoh_session().await?;
-
-    let payload = serde_json::to_string(&serde_json::json!({
-        "command": "remove"
-    }))?;
-
-    let key = format!("bubbaloop/daemon/api/nodes/{}/command", args.name);
-    let replies: Vec<_> = session
-        .get(&key)
-        .payload(payload)
-        .target(QueryTarget::BestMatching)
-        .timeout(std::time::Duration::from_secs(30))
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?
-        .into_iter()
-        .collect();
-
-    for reply in replies {
-        if let Ok(sample) = reply.into_result() {
-            let data: CommandResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
-            if data.success {
-                println!("Removed node: {}", args.name);
-            } else {
-                return Err(NodeError::CommandFailed(data.message));
-            }
-        }
+    let client = crate::cli::daemon_client::DaemonClient::new();
+    let resp = client.remove_node(&args.name).await?;
+    if resp.success {
+        println!("Removed node: {}", args.name);
+    } else {
+        return Err(NodeError::CommandFailed(resp.message));
     }
 
     if args.delete_files {
-        // Get node path first, then delete
         eprintln!("Note: File deletion not implemented yet. Remove files manually.");
     }
 
-    session
-        .close()
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
     Ok(())
 }
 
@@ -1044,74 +840,67 @@ async fn create_instance(args: InstanceArgs) -> Result<()> {
     // Build the full instance name: base-suffix
     let instance_name = format!("{}-{}", args.base_node, args.suffix);
 
-    // First, find the base node to get its path
-    let session = get_zenoh_session().await?;
+    // Query daemon for base node via REST API list
+    let client = crate::cli::daemon_client::DaemonClient::new();
+    let data = client.list_nodes().await?;
 
-    // Query the daemon for the base node's path
-    let query_payload = serde_json::to_string(&serde_json::json!({
-        "command": "get_node",
-        "name": args.base_node,
-    }))?;
-
-    let replies = session
-        .get("bubbaloop/daemon/api/nodes")
-        .payload(query_payload)
-        .target(QueryTarget::BestMatching)
-        .timeout(std::time::Duration::from_secs(10))
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-
-    let mut base_node_path: Option<String> = None;
-
-    for reply in replies {
-        if let Ok(sample) = reply.into_result() {
-            let data: NodeListResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
-            // Find the base node (must have empty base_node field, meaning it's not an instance)
-            for node in data.nodes {
-                if node.name == args.base_node && node.base_node.is_empty() {
-                    base_node_path = Some(node.path.clone());
-                    break;
-                }
-            }
-        }
-    }
-
-    let base_path = base_node_path.ok_or_else(|| {
-        NodeError::NotFound(format!(
+    // Find the base node - check it exists
+    let base_exists = data.nodes.iter().any(|n| n.name == args.base_node);
+    if !base_exists {
+        return Err(NodeError::NotFound(format!(
             "Base node '{}' not found. Add it first with: bubbaloop node add <path>",
             args.base_node
-        ))
-    })?;
+        )));
+    }
 
     // Handle config file
     let config_path = if args.copy_config {
-        // Copy example config from base node's configs/ directory
-        let configs_dir = Path::new(&base_path).join("configs");
-        if !configs_dir.exists() {
-            return Err(NodeError::NotFound(format!(
-                "No configs/ directory found in base node at {}",
-                base_path
-            )));
+        // For copy_config we need the base node's path which the API doesn't expose.
+        // Fall back to searching in ~/.bubbaloop/nodes/
+        let home =
+            dirs::home_dir().ok_or_else(|| NodeError::Io(std::io::Error::other("HOME not set")))?;
+        let nodes_dir = home.join(".bubbaloop").join("nodes");
+
+        // Try to find the base node directory
+        let mut found_config: Option<String> = None;
+        if let Ok(entries) = std::fs::read_dir(&nodes_dir) {
+            for entry in entries.flatten() {
+                let node_yaml = entry.path().join("node.yaml");
+                if node_yaml.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&node_yaml) {
+                        if let Ok(manifest) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
+                            if manifest.get("name").and_then(|v| v.as_str())
+                                == Some(&args.base_node)
+                            {
+                                let configs_dir = entry.path().join("configs");
+                                if configs_dir.exists() {
+                                    let example_config = find_example_config(&configs_dir)?;
+                                    let dest_dir = home.join(".bubbaloop").join("configs");
+                                    std::fs::create_dir_all(&dest_dir)?;
+                                    let dest_path =
+                                        dest_dir.join(format!("{}.yaml", instance_name));
+                                    std::fs::copy(&example_config, &dest_path)?;
+                                    println!("Copied example config to: {}", dest_path.display());
+                                    println!(
+                                        "Edit this file to configure your instance before starting."
+                                    );
+                                    found_config = Some(dest_path.to_string_lossy().to_string());
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        // Look for an example config
-        let example_config = find_example_config(&configs_dir)?;
-
-        // Create ~/.bubbaloop/configs/ if needed
-        let dest_dir = dirs::home_dir()
-            .ok_or_else(|| NodeError::Io(std::io::Error::other("HOME not set")))?
-            .join(".bubbaloop")
-            .join("configs");
-        std::fs::create_dir_all(&dest_dir)?;
-
-        // Copy to ~/.bubbaloop/configs/<instance-name>.yaml
-        let dest_path = dest_dir.join(format!("{}.yaml", instance_name));
-        std::fs::copy(&example_config, &dest_path)?;
-
-        println!("Copied example config to: {}", dest_path.display());
-        println!("Edit this file to configure your instance before starting.");
-
-        Some(dest_path.to_string_lossy().to_string())
+        if found_config.is_none() {
+            return Err(NodeError::NotFound(format!(
+                "Could not find configs/ directory for base node '{}'",
+                args.base_node
+            )));
+        }
+        found_config
     } else if let Some(ref config) = args.config {
         // Validate config path exists
         let config_path = Path::new(config);
@@ -1126,55 +915,21 @@ async fn create_instance(args: InstanceArgs) -> Result<()> {
         None
     };
 
-    // Register the instance with the daemon
-    let add_payload = serde_json::to_string(&serde_json::json!({
-        "command": "add",
-        "node_path": base_path,
-        "name": instance_name,
-        "config": config_path,
-    }))?;
-
-    let replies = session
-        .get("bubbaloop/daemon/api/nodes/add")
-        .payload(add_payload)
-        .target(QueryTarget::BestMatching)
-        .timeout(std::time::Duration::from_secs(30))
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-
-    let mut success = false;
-    for reply in replies {
-        if let Ok(sample) = reply.into_result() {
-            let data: CommandResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
-            if data.success {
-                println!(
-                    "Created instance '{}' from base node '{}'",
-                    instance_name, args.base_node
-                );
-                success = true;
-            } else {
-                session
-                    .close()
-                    .await
-                    .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-                return Err(NodeError::CommandFailed(data.message));
-            }
-        }
+    // Register the instance with the daemon via REST API
+    let resp = client
+        .add_node(
+            &args.base_node,
+            Some(&instance_name),
+            config_path.as_deref(),
+        )
+        .await?;
+    if !resp.success {
+        return Err(NodeError::CommandFailed(resp.message));
     }
-
-    if !success {
-        session
-            .close()
-            .await
-            .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-        return Err(NodeError::Zenoh("No response from daemon".into()));
-    }
-
-    // Close the session before send_command (which opens its own)
-    session
-        .close()
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+    println!(
+        "Created instance '{}' from base node '{}'",
+        instance_name, args.base_node
+    );
 
     // Optional: install and/or start
     if args.start || args.install {
@@ -1278,31 +1033,11 @@ async fn discover_nodes(args: DiscoverArgs) -> Result<()> {
     }
     let all_marketplace = registry::load_cached_registry();
 
-    // Query daemon for registered nodes
-    let registered: Vec<NodeState> = match get_zenoh_session().await {
-        Ok(session) => {
-            let result = session
-                .get("bubbaloop/daemon/api/nodes")
-                .target(QueryTarget::BestMatching)
-                .timeout(std::time::Duration::from_secs(5))
-                .await;
-            let mut nodes = Vec::new();
-            if let Ok(replies) = result {
-                for reply in replies {
-                    if let Ok(sample) = reply.into_result() {
-                        if let Ok(data) =
-                            serde_json::from_slice::<NodeListResponse>(&sample.payload().to_bytes())
-                        {
-                            nodes = data.nodes;
-                            break;
-                        }
-                    }
-                }
-            }
-            let _ = session.close().await;
-            nodes
-        }
-        Err(_) => Vec::new(),
+    // Query daemon for registered nodes via REST API
+    let client = crate::cli::daemon_client::DaemonClient::new();
+    let registered = match client.list_nodes().await {
+        Ok(data) => data.nodes,
+        Err(_) => vec![],
     };
 
     if all_marketplace.is_empty() {
@@ -1327,15 +1062,10 @@ async fn discover_nodes(args: DiscoverArgs) -> Result<()> {
     let entries: Vec<DiscoverEntry> = all_marketplace
         .iter()
         .map(|node| {
-            let reg = registered
-                .iter()
-                .find(|r| r.name == node.name && r.base_node.is_empty());
+            let reg = registered.iter().find(|r| r.name == node.name);
             let is_added = reg.is_some();
             let is_built = reg.map(|r| r.is_built).unwrap_or(false);
-            let instance_count = registered
-                .iter()
-                .filter(|r| r.base_node == node.name)
-                .count();
+            let instance_count = 0;
             DiscoverEntry {
                 name: node.name.clone(),
                 version: node.version.clone(),

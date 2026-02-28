@@ -2,10 +2,7 @@
 
 use std::process::Command;
 
-use zenoh::query::QueryTarget;
-
-use super::{get_zenoh_session, send_command};
-use super::{LogsArgs, LogsResponse, NodeError, Result};
+use super::{send_command, LogsArgs, NodeError, Result};
 
 pub(crate) async fn start_node(name: &str) -> Result<()> {
     send_command(name, "start").await
@@ -21,51 +18,23 @@ pub(crate) async fn restart_node(name: &str) -> Result<()> {
 
 pub(crate) async fn view_logs(args: LogsArgs) -> Result<()> {
     if args.follow {
-        // Use journalctl directly for follow mode
+        // Use journalctl directly for follow mode (streaming, no daemon needed)
         let service = format!("bubbaloop-{}.service", args.name);
         let status = Command::new("journalctl")
             .args(["--user", "-u", &service, "-f", "--no-pager"])
             .status()?;
 
         if !status.success() {
-            // Fallback to systemctl status
-            let _ = Command::new("systemctl")
-                .args(["--user", "status", "-l", "--no-pager", &service])
-                .status();
+            return Err(NodeError::CommandFailed(format!(
+                "journalctl failed for service {}. Is the service installed?",
+                service
+            )));
         }
         return Ok(());
     }
 
-    let session = get_zenoh_session().await?;
-
-    let key = format!("bubbaloop/daemon/api/nodes/{}/logs", args.name);
-    let replies: Vec<_> = session
-        .get(&key)
-        .target(QueryTarget::BestMatching)
-        .timeout(std::time::Duration::from_secs(30))
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?
-        .into_iter()
-        .collect();
-
-    for reply in replies {
-        if let Ok(sample) = reply.into_result() {
-            let data: LogsResponse = serde_json::from_slice(&sample.payload().to_bytes())?;
-            if data.success {
-                for line in data.lines.iter().take(args.lines) {
-                    println!("{}", line);
-                }
-            } else if let Some(error) = data.error {
-                return Err(NodeError::CommandFailed(error));
-            }
-        }
-    }
-
-    session
-        .close()
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-    Ok(())
+    // Use REST API for non-follow mode
+    super::send_command(&args.name, "logs").await
 }
 
 #[cfg(test)]

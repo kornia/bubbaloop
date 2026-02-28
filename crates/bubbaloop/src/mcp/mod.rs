@@ -925,6 +925,8 @@ pub async fn run_mcp_server(
         machine_id: machine_id.clone(),
     });
 
+    let api_router = crate::api::api_router(platform.clone());
+
     let mcp_service = StreamableHttpService::new(
         move || {
             Ok(BubbaLoopMcpServer::new(
@@ -981,6 +983,7 @@ pub async fn run_mcp_server(
                 }
             }),
         )
+        .nest("/api/v1", api_router)
         .nest_service("/mcp", mcp_service)
         .layer(tower_governor::GovernorLayer::new(governor_conf));
 

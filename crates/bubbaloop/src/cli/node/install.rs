@@ -3,10 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use zenoh::query::QueryTarget;
-
-use super::{get_zenoh_session, send_command};
-use super::{CommandResponse, InstallArgs, NodeError, NodeListResponse, Result};
+use super::{send_command, InstallArgs, NodeError, Result};
 use crate::registry;
 
 /// Copy canonical header.proto to a node's protos/ directory if it exists.
@@ -168,32 +165,13 @@ pub(crate) fn try_download_precompiled(entry: &registry::RegistryNode) -> Result
 /// install it as a systemd service (existing behavior). Otherwise, look up the
 /// name in the marketplace registry, clone, register, build, and install.
 pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
-    // First, check if node is already registered with the daemon
-    let session = get_zenoh_session().await?;
+    // First, check if node is already registered with the daemon via REST API
+    let client = crate::cli::daemon_client::DaemonClient::new();
 
-    let replies_result = session
-        .get("bubbaloop/daemon/api/nodes")
-        .target(QueryTarget::BestMatching)
-        .timeout(std::time::Duration::from_secs(10))
-        .await;
-
-    let mut is_registered = false;
-
-    if let Ok(replies) = replies_result {
-        for reply in replies {
-            if let Ok(sample) = reply.into_result() {
-                let payload = sample.payload().to_bytes();
-                if let Ok(data) = serde_json::from_slice::<NodeListResponse>(&payload) {
-                    is_registered = data.nodes.iter().any(|n| n.name == args.name);
-                }
-            }
-        }
-    }
-
-    session
-        .close()
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
+    let is_registered = match client.list_nodes().await {
+        Ok(data) => data.nodes.iter().any(|n| n.name == args.name),
+        Err(_) => false,
+    };
 
     if is_registered {
         log::info!(
@@ -253,57 +231,9 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
         Ok(node_path) => {
             println!("Downloaded precompiled binary for '{}'", args.name);
 
-            // Register with daemon
-            let session = get_zenoh_session().await?;
-            let payload = serde_json::to_string(&serde_json::json!({
-                "command": "add",
-                "node_path": node_path
-            }))?;
-
-            let mut registered_ok = false;
-            for attempt in 1..=3 {
-                let replies_result = session
-                    .get("bubbaloop/daemon/api/nodes/add")
-                    .payload(payload.clone())
-                    .target(QueryTarget::BestMatching)
-                    .timeout(std::time::Duration::from_secs(30))
-                    .await;
-
-                match replies_result {
-                    Ok(replies) => {
-                        for reply in replies {
-                            if let Ok(sample) = reply.into_result() {
-                                let data: CommandResponse =
-                                    serde_json::from_slice(&sample.payload().to_bytes())?;
-                                if data.success {
-                                    registered_ok = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if registered_ok {
-                            break;
-                        }
-                    }
-                    Err(_) if attempt < 3 => {
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                    }
-                    Err(e) => {
-                        session
-                            .close()
-                            .await
-                            .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-                        return Err(NodeError::Zenoh(e.to_string()));
-                    }
-                }
-            }
-
-            session
-                .close()
-                .await
-                .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-
-            if !registered_ok {
+            // Register with daemon via REST API
+            let resp = client.add_node(&node_path, None, None).await?;
+            if !resp.success {
                 return Err(NodeError::CommandFailed(
                     "Failed to register node with daemon".into(),
                 ));
@@ -346,65 +276,16 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
     // Copy canonical header.proto if protos/ directory exists
     copy_canonical_header_proto(Path::new(&node_path));
 
-    // Register with daemon
-    let session = get_zenoh_session().await?;
-
-    let payload = serde_json::to_string(&serde_json::json!({
-        "command": "add",
-        "node_path": node_path
-    }))?;
-
-    let mut registered_ok = false;
-
-    for attempt in 1..=3 {
-        let replies_result = session
-            .get("bubbaloop/daemon/api/nodes/add")
-            .payload(payload.clone())
-            .target(QueryTarget::BestMatching)
-            .timeout(std::time::Duration::from_secs(30))
-            .await;
-
-        match replies_result {
-            Ok(replies) => {
-                for reply in replies {
-                    if let Ok(sample) = reply.into_result() {
-                        let data: CommandResponse =
-                            serde_json::from_slice(&sample.payload().to_bytes())?;
-                        if data.success {
-                            log::info!("node install: registered '{}' with daemon", args.name);
-                            println!("Registered node: {}", args.name);
-                            registered_ok = true;
-                            break;
-                        }
-                    }
-                }
-                if registered_ok {
-                    break;
-                }
-            }
-            Err(_) if attempt < 3 => {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-            Err(e) => {
-                session
-                    .close()
-                    .await
-                    .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-                return Err(NodeError::Zenoh(e.to_string()));
-            }
-        }
-    }
-
-    session
-        .close()
-        .await
-        .map_err(|e| NodeError::Zenoh(e.to_string()))?;
-
-    if !registered_ok {
+    // Register with daemon via REST API
+    let resp = client.add_node(&node_path, None, None).await?;
+    if !resp.success {
         return Err(NodeError::CommandFailed(
             "Failed to register node with daemon".into(),
         ));
     }
+
+    log::info!("node install: registered '{}' with daemon", args.name);
+    println!("Registered node: {}", args.name);
 
     // Build only if --build is passed
     if args.build {
