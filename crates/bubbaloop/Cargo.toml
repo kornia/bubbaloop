@@ -35,6 +35,8 @@ argh.workspace = true
 log.workspace = true
 env_logger.workspace = true
 walkdir = "2"
+rpassword.workspace = true
+open.workspace = true
 
 # Zenoh for daemon communication
 zenoh.workspace = true

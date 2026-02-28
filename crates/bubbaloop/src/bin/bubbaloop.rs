@@ -19,7 +19,10 @@
 
 use argh::FromArgs;
 use bubbaloop::cli::launch::LaunchCommand;
-use bubbaloop::cli::{AgentCommand, DebugCommand, MarketplaceCommand, NodeCommand, UpCommand};
+use bubbaloop::cli::{
+    AgentCommand, DebugCommand, LoginCommand, LogoutCommand, MarketplaceCommand, NodeCommand,
+    UpCommand,
+};
 
 /// Bubbaloop - AI-native orchestration for Physical AI
 #[derive(FromArgs)]
@@ -36,6 +39,8 @@ struct Args {
 #[argh(subcommand)]
 enum Command {
     Agent(AgentCommand),
+    Login(LoginCommand),
+    Logout(LogoutCommand),
     Status(StatusArgs),
     Doctor(DoctorArgs),
     Daemon(DaemonArgs),
@@ -208,6 +213,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              (default: ~/.bubbaloop/launch.yaml)");
             eprintln!("  marketplace  Manage marketplace sources:");
             eprintln!("              list, add, remove, enable, disable");
+            eprintln!("  login     Authenticate with Anthropic API:");
+            eprintln!("              --status: Show current auth status");
+            eprintln!("  logout    Remove saved Anthropic API key");
             eprintln!("  agent     Chat with your hardware via Claude AI:");
             eprintln!("              -m, --model <model>: Claude model");
             eprintln!("              -z, --zenoh-endpoint <endpoint>: Zenoh endpoint");
@@ -219,6 +227,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("  init-tls  Print TLS/mTLS certificate generation guide");
             eprintln!("\nRun 'bubbaloop <command> --help' for more information.");
             return Ok(());
+        }
+        Some(Command::Login(cmd)) => {
+            if let Err(e) = cmd.run().await {
+                eprintln!("Error: {}", e);
+            }
+        }
+        Some(Command::Logout(cmd)) => {
+            if let Err(e) = cmd.run() {
+                eprintln!("Error: {}", e);
+            }
         }
         Some(Command::Status(status_args)) => {
             bubbaloop::cli::status::run(&status_args.format).await?;
