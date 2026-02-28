@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.0.7](https://github.com/kornia/bubbaloop/compare/v0.0.6...v0.0.7) (2026-03-01)
+
+### Features
+
+* **cli:** migrate CLI from Zenoh to REST API ([c797ffa](https://github.com/kornia/bubbaloop/commit/c797ffa))
+* **cli:** add `bubbaloop login` and `logout` commands for API key setup ([315179a](https://github.com/kornia/bubbaloop/commit/315179a))
+* **cli:** add `--skip-validation` flag to login command ([d5054cf](https://github.com/kornia/bubbaloop/commit/d5054cf))
+* **cli:** make `bubbaloop up` create per-skill node instances ([0171643](https://github.com/kornia/bubbaloop/commit/0171643))
+* **agent:** add Claude API client with tool_use support ([61ddbf6](https://github.com/kornia/bubbaloop/commit/61ddbf6))
+* **agent:** add agent orchestrator, system prompt builder, and CLI command ([bfe4752](https://github.com/kornia/bubbaloop/commit/bfe4752))
+* **agent:** add internal MCP tool dispatcher ([8e8dda0](https://github.com/kornia/bubbaloop/commit/8e8dda0))
+* **agent:** wire scheduler into agent and register skill schedules ([c6a44e7](https://github.com/kornia/bubbaloop/commit/c6a44e7))
+* **memory:** add SQLite memory module with conversations, events, schedules ([93a7478](https://github.com/kornia/bubbaloop/commit/93a7478))
+* **memory:** add FTS5 full-text search to agent memory system ([ab704e3](https://github.com/kornia/bubbaloop/commit/ab704e3))
+* **scheduler:** add cron-based scheduler with Tier 1 built-in actions ([0215227](https://github.com/kornia/bubbaloop/commit/0215227))
+* **skills:** add YAML skills system and `bubbaloop up` command ([0cc7657](https://github.com/kornia/bubbaloop/commit/0cc7657))
+
+### Improvements
+
+* improve agent UX, error handling, and API key resolution ([f74fd91](https://github.com/kornia/bubbaloop/commit/f74fd91))
+* remove deprecation warnings from debug commands ([bbb5205](https://github.com/kornia/bubbaloop/commit/bbb5205))
+
+### Docs
+
+* updated CLAUDE.md, ROADMAP.md, ARCHITECTURE.md for login command and agent phases
+
 ## [0.0.6](https://github.com/kornia/bubbaloop/compare/v0.0.5...v0.0.6) (2026-02-27)
 
 ### Features
