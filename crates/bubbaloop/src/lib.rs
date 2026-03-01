@@ -115,6 +115,7 @@ fn extract_message_descriptor(type_name: &str) -> Result<Vec<u8>, prost::DecodeE
 
     // Get the message descriptor by name
     let message_descriptor = pool.get_message_by_name(type_name).ok_or_else(|| {
+        #[allow(deprecated)]
         prost::DecodeError::new(format!(
             "Message type '{}' not found in descriptor pool",
             type_name
@@ -162,9 +163,10 @@ fn extract_message_descriptor(type_name: &str) -> Result<Vec<u8>, prost::DecodeE
 
     // Serialize to bytes
     let mut bytes = Vec::new();
-    minimal_set
-        .encode(&mut bytes)
-        .map_err(|_| prost::DecodeError::new("Failed to encode FileDescriptorSet"))?;
+    minimal_set.encode(&mut bytes).map_err(|e| {
+        #[allow(deprecated)]
+        prost::DecodeError::new(format!("Failed to encode FileDescriptorSet: {}", e))
+    })?;
 
     Ok(bytes)
 }
