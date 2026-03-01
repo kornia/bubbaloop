@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "bubbaloop"
-version = "0.0.7-dev"
+version = "0.0.8-dev"
 dependencies = [
  "anyhow",
  "argh",

@@ -1,6 +1,6 @@
 <!-- LIVING DOCUMENT: Update when architecture changes. Source of truth for design decisions. -->
 
-# Bubbaloop Architecture
+# 🦐 Bubbaloop Architecture
 
 The open-source AI agent that talks to your cameras, sensors, and robots.
 Single Rust binary (~12-13 MB). Runs on Jetson, Raspberry Pi, any Linux.
@@ -10,7 +10,7 @@ Single Rust binary (~12-13 MB). Runs on Jetson, Raspberry Pi, any Linux.
 ### The Steinberger Principle
 
 > *"Perhaps only apps that rely on specific hardware sensors will remain."*
-> — Peter Steinberger, OpenClaw creator (Feb 2026)
+> — Peter Steinberger (Feb 2026)
 
 **Core thesis**: 80% of software apps will be replaced by AI agents. The surviving 20% are those that **interface with physical reality** — sensors, actuators, hardware.
 
@@ -40,11 +40,11 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 │  BUBBALOOP  (single binary, ~12-13 MB)                   │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │  Agent Layer (planned)                              │  │
+│  │  Agent Layer                                        │  │
 │  │  Claude API | Chat | Scheduler (offline Tier 1)     │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  Memory (planned: SQLite, +1-2 MB)                  │  │
+│  │  Memory (SQLite, +1-2 MB)                           │  │
 │  │  Conversations | Sensor events | Schedules          │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
@@ -67,7 +67,7 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 ```
 
 **Two entry points, same core:**
-- `bubbaloop agent` — self-contained hardware AI agent (planned)
+- `bubbaloop agent` — self-contained hardware AI agent
 - `bubbaloop mcp --stdio` — MCP server for Claude Code / external agents
 
 **Key principle**: Nodes are autonomous and self-describing. The MCP server is the sole control interface — Zenoh is the data plane only. The agent layer adds natural-language hardware control on top.
@@ -207,6 +207,16 @@ MCP is the **sole control interface**. 23+ generic tools across 5 categories:
 | **Transport security** | HTTP on localhost only (127.0.0.1:8088) or stdio |
 | **Audit logging** | All MCP requests logged with client identity and timestamp |
 
+### Authentication Methods
+
+| Method | How | Stored At |
+|--------|-----|-----------|
+| **API Key** | `bubbaloop login` → option 1 → paste key | `~/.bubbaloop/anthropic-key` (0600) |
+| **Claude Subscription** | `claude setup-token` → `bubbaloop login` → option 2 → paste token | `~/.bubbaloop/oauth-credentials.json` (0600) |
+| **Environment** | `ANTHROPIC_API_KEY` env var (highest priority) | Process environment |
+
+**OAuth tokens** (`sk-ant-oat01-*`) use Claude CLI identity headers (`user-agent: claude-cli`, `anthropic-beta` betas). Resolution order: env var → OAuth → API key file.
+
 ### Layer 2: Rust Memory Safety (Compile-Time)
 
 | Guarantee | How |
@@ -248,7 +258,7 @@ MCP is the **sole control interface**. 23+ generic tools across 5 categories:
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
 | systemd | zbus (D-Bus) | No subprocess spawning, safe |
-| LLM | Claude API (reqwest, planned) | Best tool-use, zero new deps |
+| LLM | Claude API (reqwest) | Best tool-use, OAuth + API key auth |
 | HTTP | axum | Dashboard + MCP HTTP transport |
 
 **Removed technologies:**

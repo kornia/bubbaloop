@@ -150,11 +150,7 @@ async fn add_node<P: PlatformOperations>(
 
     command_response(
         platform
-            .add_node(
-                &req.source,
-                req.name.as_deref(),
-                req.config.as_deref(),
-            )
+            .add_node(&req.source, req.name.as_deref(), req.config.as_deref())
             .await,
     )
 }

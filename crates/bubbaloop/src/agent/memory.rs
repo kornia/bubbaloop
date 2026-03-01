@@ -432,9 +432,9 @@ impl Memory {
     /// Called at agent startup after loading skills from disk.
     pub fn index_skills(&self, skills: &[crate::skills::SkillConfig]) -> Result<()> {
         self.conn.execute("DELETE FROM fts_skills", [])?;
-        let mut stmt = self.conn.prepare(
-            "INSERT INTO fts_skills (name, driver, body) VALUES (?1, ?2, ?3)",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("INSERT INTO fts_skills (name, driver, body) VALUES (?1, ?2, ?3)")?;
         for skill in skills {
             if !skill.body.is_empty() {
                 stmt.execute(params![skill.name, skill.driver, skill.body])?;
@@ -707,9 +707,12 @@ mod tests {
     #[test]
     fn fts_conversations_search() {
         let (mem, _dir) = test_memory();
-        mem.log_message("user", "the entrance camera keeps freezing", None).unwrap();
-        mem.log_message("user", "what is the weather today", None).unwrap();
-        mem.log_message("assistant", "I checked the camera status", None).unwrap();
+        mem.log_message("user", "the entrance camera keeps freezing", None)
+            .unwrap();
+        mem.log_message("user", "what is the weather today", None)
+            .unwrap();
+        mem.log_message("assistant", "I checked the camera status", None)
+            .unwrap();
 
         let results = mem.search_conversations("camera", 10).unwrap();
         assert_eq!(results.len(), 2, "should match 'camera' in two messages");
@@ -721,7 +724,12 @@ mod tests {
     fn fts_events_search() {
         let (mem, _dir) = test_memory();
         mem.log_event("rtsp-camera", "started", None).unwrap();
-        mem.log_event("rtsp-camera", "health_degraded", Some("frame_drop_rate=0.3")).unwrap();
+        mem.log_event(
+            "rtsp-camera",
+            "health_degraded",
+            Some("frame_drop_rate=0.3"),
+        )
+        .unwrap();
         mem.log_event("openmeteo", "started", None).unwrap();
 
         let results = mem.search_events("camera", 10).unwrap();
@@ -768,7 +776,8 @@ mod tests {
     #[test]
     fn fts_dual_write_consistency() {
         let (mem, _dir) = test_memory();
-        mem.log_message("user", "check camera health", None).unwrap();
+        mem.log_message("user", "check camera health", None)
+            .unwrap();
 
         // Should be findable via both recency and search
         let recent = mem.recent_conversations(10).unwrap();
@@ -784,7 +793,10 @@ mod tests {
         mem.log_message("user", "hello world", None).unwrap();
 
         let results = mem.search_conversations("", 10).unwrap();
-        assert!(results.is_empty(), "empty query should return empty results");
+        assert!(
+            results.is_empty(),
+            "empty query should return empty results"
+        );
     }
 
     #[cfg(unix)]

@@ -97,7 +97,10 @@ pub fn build_system_prompt(
         if !relevant_convos.is_empty() {
             ctx_lines.push("**Related conversations:**".to_string());
             for conv in relevant_convos.iter().take(5) {
-                ctx_lines.push(format!("- [{}] {}: {}", conv.timestamp, conv.role, conv.content));
+                ctx_lines.push(format!(
+                    "- [{}] {}: {}",
+                    conv.timestamp, conv.role, conv.content
+                ));
             }
             ctx_lines.push(String::new());
         }
@@ -192,7 +195,8 @@ mod tests {
                 created_by: "agent".into(),
             },
         ];
-        let prompt = build_system_prompt("No nodes registered.", &schedules, &[], &[], &[], &[], &[]);
+        let prompt =
+            build_system_prompt("No nodes registered.", &schedules, &[], &[], &[], &[], &[]);
         assert!(prompt.contains("Active Schedules"));
         assert!(prompt.contains("health-patrol"));
         assert!(prompt.contains("*/15 * * * *"));

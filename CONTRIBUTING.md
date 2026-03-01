@@ -1,4 +1,4 @@
-# Contributing to Bubbaloop
+# 🦐 Contributing to Bubbaloop
 
 <!-- LIVING DOCUMENT: Update when workflows change. See ARCHITECTURE.md for design, ROADMAP.md for timeline. -->
 
@@ -9,7 +9,7 @@ Bubbaloop is built for **agentic engineering** — developers AND AI agents work
 ## The Anti-Trap Rule
 
 > *"People build increasingly complex toolchains... only to end up building tools instead of genuinely valuable things."*
-> — Peter Steinberger, OpenClaw creator
+> — Peter Steinberger
 
 **Every workflow must directly improve sensor nodes, contracts, or tests.**
 

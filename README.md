@@ -1,6 +1,23 @@
-# Bubbaloop
+# 🦐 Bubbaloop
 
-AI-native orchestration for Physical AI — multi-camera streaming, fleet management, and real-time visualization built on Zenoh.
+> *"Shrimp-fried cameras, shrimp-grilled sensors, shrimp-sauteed robots..."*
+> — Bubba, on all the ways to talk to your hardware 🦐
+
+**The open-source Hardware AI agent.** Talk to your cameras, sensors, and robots in natural language. Manage federated IoT/robotics fleets and automate physical systems — all from a single 12 MB Rust binary.
+
+## Why Bubbaloop?
+
+AI agents revolutionized software engineering. **Bubbaloop brings that same power to hardware.**
+
+| | General AI Agents | **Bubbaloop** |
+|---|---|---|
+| **Focus** | Software tasks, coding, browsing | **Cameras, sensors, robots, IoT** |
+| **Runtime** | TypeScript / ~200 MB | **Rust / ~12 MB** |
+| **Data plane** | None | **Zenoh (zero-copy pub/sub)** |
+| **Hardware** | None | **Self-describing sensor nodes** |
+| **Runs on** | Desktop / cloud | **Jetson, RPi, any Linux ARM64/x86** |
+| **MCP role** | Client (consumes tools) | **Server (provides 23+ tools)** |
+| **Scheduling** | Always-on LLM (~$5-10/day) | **Offline Tier 1 + LLM Tier 2 (~$0.05/day)** |
 
 ## Quick Install
 
@@ -19,19 +36,38 @@ bubbaloop status
 |-----------|-------------|
 | `zenohd` | Pub/sub router on port 7447 |
 | `zenoh-bridge-remote-api` | WebSocket bridge on port 10001 |
-| `bubbaloop` | Single 7MB binary: CLI + TUI + daemon |
+| `bubbaloop` | Single ~12 MB binary: CLI + daemon + MCP server |
 | Dashboard | Web UI at http://localhost:8080 |
 
 All run as systemd user services with autostart enabled.
 
+## Login & Authentication
+
+```bash
+# Option 1: API Key (pay-as-you-go)
+bubbaloop login
+# → Choose [1], paste your key from console.anthropic.com
+
+# Option 2: Claude Subscription (Pro/Max/Team)
+claude setup-token    # Run in Claude Code CLI first
+bubbaloop login
+# → Choose [2], paste the sk-ant-oat01-* token
+
+# Check auth status
+bubbaloop login --status
+
+# Remove credentials
+bubbaloop logout
+```
+
 ## Basic Usage
 
 ```bash
-# Launch TUI (interactive terminal UI)
-bubbaloop
-
-# Non-interactive status check (for scripts/agents)
+# Check system status
 bubbaloop status
+
+# Talk to your hardware via Claude AI
+bubbaloop agent
 
 # System diagnostics with auto-fix
 bubbaloop doctor --fix
@@ -42,6 +78,9 @@ bubbaloop node add user/repo          # Add from GitHub
 bubbaloop node build my-node          # Build
 bubbaloop node start my-node          # Start service
 bubbaloop node logs my-node -f        # Follow logs
+
+# Load skills and start sensor nodes
+bubbaloop up
 ```
 
 ## Node Lifecycle
@@ -68,22 +107,87 @@ bubbaloop node start my-sensor
 bubbaloop node logs my-sensor
 ```
 
-## Multi-Instance Nodes
+## YAML Skills (Zero-Code Sensors)
 
-For nodes that can run multiple instances (e.g., cameras):
+```yaml
+# ~/.bubbaloop/skills/front-camera.yaml
+name: front-door
+driver: rtsp
+config:
+  url: rtsp://192.168.1.100/stream
+```
 
 ```bash
-# Add base node once
-bubbaloop node add ~/.bubbaloop/nodes/rtsp-camera
-
-# Create instances with different configs
-bubbaloop node instance rtsp-camera terrace --config config-terrace.yaml
-bubbaloop node instance rtsp-camera entrance --config config-entrance.yaml
-
-# Each runs as separate service
-bubbaloop node start rtsp-camera-terrace
-bubbaloop node start rtsp-camera-entrance
+# Load all skills, auto-install drivers, start nodes
+bubbaloop up
 ```
+
+## AI Agent Integration (MCP)
+
+Bubbaloop includes an MCP (Model Context Protocol) server — the sole control interface for AI agents. The daemon starts it automatically on port 8088.
+
+```bash
+# MCP over stdio (for Claude Code / local agents)
+bubbaloop mcp --stdio
+
+# MCP over HTTP (daemon mode, auto-started)
+bubbaloop daemon
+# → MCP server: http://127.0.0.1:8088/mcp
+```
+
+**Available MCP tools:**
+
+| Tool | Description |
+|------|-------------|
+| `list_nodes` | List all nodes with status |
+| `get_node_manifest` | Get a node's capabilities and topics |
+| `send_command` | Send a command to a node |
+| `install_node` / `uninstall_node` | Install or remove nodes |
+| `start_node` / `stop_node` | Control node lifecycle |
+| `get_node_logs` | Read node service logs |
+| `discover_nodes` | Fleet-wide manifest discovery |
+| `query_zenoh` | Query any Zenoh key expression |
+
+Configure Claude Code to use it via `.mcp.json` (already in project root).
+
+## Architecture
+
+```
+                    ┌──────────────────────────────────┐
+                    │   AI Agent (Claude via MCP)       │
+                    │   http://127.0.0.1:8088/mcp      │
+                    └──────────────┬───────────────────┘
+                                   │
+Dashboard (React) ─┬─ WebSocket ───┤─── Zenoh pub/sub
+CLI ───────────────┘               │
+                                   │
+Daemon ────────────────────────────┤
+  ├─ Node Manager (lifecycle)      │
+  ├─ MCP Server (23+ tools)       │
+  ├─ Agent Layer (Claude API)      │
+  └─ Systemd D-Bus (zbus)         │
+                                   │
+Nodes (self-describing) ───────────┘
+  ├─ rtsp-camera  [schema|manifest|health|config|command]
+  ├─ openmeteo    [schema|manifest|health|config|command]
+  └─ custom...    [schema|manifest|health|config|command]
+```
+
+The daemon is a **passive skill runtime** — external AI agents (Claude Code, etc.) control everything through MCP. No autonomous decision-making.
+
+## Node Contract
+
+Every node is self-describing with standard queryables:
+
+```
+{node}/schema      → Protobuf FileDescriptorSet (binary)
+{node}/manifest    → Capabilities, topics, commands (JSON)
+{node}/health      → Status and uptime (JSON)
+{node}/config      → Current configuration (JSON)
+{node}/command     → Imperative actions (JSON request/response)
+```
+
+AI agents discover nodes via `bubbaloop/**/manifest` wildcard query, then interact through commands and data subscriptions.
 
 ## Development
 
@@ -124,101 +228,17 @@ bubbaloop doctor --json
 ```
 
 Common issues:
-- **TUI disconnected**: `bubbaloop doctor --fix` restarts stale services
 - **Zenoh timeout**: Check `pgrep zenohd`, restart if missing
 - **Build fails**: Check `bubbaloop node logs <name>` for errors
+- **Auth failed**: Run `bubbaloop login --status` to check credentials
 
 ## Documentation
 
 - **Full docs**: `pixi run docs` or see [docs/](docs/)
-- **Agent guidelines**: See [CLAUDE.md](CLAUDE.md) for architecture and coding standards
+- **Architecture**: See [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions
+- **Roadmap**: See [ROADMAP.md](ROADMAP.md) for what's next
+- **Agent guidelines**: See [CLAUDE.md](CLAUDE.md) for coding standards
 - **CLI reference**: `bubbaloop --help` or `bubbaloop node --help`
-
-## AI Agent Integration (MCP)
-
-Bubbaloop includes an MCP (Model Context Protocol) server that lets any LLM control your sensor nodes via natural language. Build with `--features mcp` to enable.
-
-```bash
-# Build with MCP support
-cargo build --release --features mcp
-
-# The daemon starts the MCP server on port 8088
-bubbaloop daemon
-# → MCP server: http://127.0.0.1:8088/mcp
-```
-
-**Available MCP tools:**
-
-| Tool | Description |
-|------|-------------|
-| `list_nodes` | List all nodes with status |
-| `get_node_manifest` | Get a node's capabilities and topics |
-| `send_command` | Send a command to a node |
-| `start_node` / `stop_node` | Control node lifecycle |
-| `get_node_logs` | Read node service logs |
-| `discover_nodes` | Fleet-wide manifest discovery |
-| `query_zenoh` | Query any Zenoh key expression |
-Configure Claude Code to use it via `.mcp.json` (already in project root).
-
-## Automation via External Agents
-
-The daemon is a **passive skill runtime** — it does not include an autonomous rule engine. Instead, external AI agents (OpenClaw, Claude Code, n8n, Home Assistant, etc.) can program automation logic by:
-
-1. **Continuously monitoring** node status via `get_system_status` MCP tool
-2. **Reacting to events** by subscribing to Zenoh topics (e.g., `bubbaloop/**/health/*`)
-3. **Taking actions** via MCP tools (e.g., `restart_node`, `send_command`)
-
-**Example:** Auto-restart failed nodes via OpenClaw:
-```python
-while True:
-    status = mcp_call("get_system_status")
-    for node in status["nodes"]:
-        if node["health"] == "unhealthy":
-            mcp_call("restart_node", {"node_name": node["name"]})
-    await asyncio.sleep(60)
-      params:
-        resolution: "1080p"
-```
-
-Rules support: `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains` operators. Actions: `log`, `command` (send to node), `publish` (to Zenoh topic). Human overrides via `bubbaloop/{scope}/{machine_id}/human/override/**` topic.
-
-## Node Contract
-
-Every node is self-describing with standard queryables:
-
-```
-{node}/schema      → Protobuf FileDescriptorSet (binary)
-{node}/manifest    → Capabilities, topics, commands (JSON)
-{node}/health      → Status and uptime (JSON)
-{node}/config      → Current configuration (JSON)
-{node}/command     → Imperative actions (JSON request/response)
-```
-
-AI agents discover nodes via `bubbaloop/**/manifest` wildcard query, then interact through commands and data subscriptions.
-
-## Architecture
-
-```
-                    ┌──────────────────────────────────┐
-                    │   AI Agent (Claude via MCP)       │
-                    │   http://127.0.0.1:8088/mcp      │
-                    └──────────────┬───────────────────┘
-                                   │
-Dashboard (React) ─┬─ WebSocket ───┤─── Zenoh pub/sub
-TUI (ratatui) ─────┤               │
-CLI ───────────────┘               │
-                                   │
-Daemon ────────────────────────────┤
-  ├─ Node Manager (lifecycle)      │
-  ├─ Agent Rule Engine (rules.yaml)│
-  ├─ MCP Server (feature-gated)   │
-  └─ Systemd D-Bus (zbus)         │
-                                   │
-Nodes (self-describing) ───────────┘
-  ├─ rtsp-camera  [schema|manifest|health|config|command]
-  ├─ openmeteo    [schema|manifest|health|config|command]
-  └─ custom...    [schema|manifest|health|config|command]
-```
 
 ## License
 

@@ -188,10 +188,7 @@ impl UpCommand {
                     log::debug!("Installed service for {}", instance_name);
                 }
                 Ok(_) | Err(_) => {
-                    log::debug!(
-                        "Service install for {} (may already exist)",
-                        instance_name
-                    );
+                    log::debug!("Service install for {} (may already exist)", instance_name);
                 }
             }
 
