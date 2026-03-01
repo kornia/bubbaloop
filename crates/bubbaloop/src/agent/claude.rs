@@ -32,7 +32,7 @@ pub enum ClaudeError {
     #[error("API error (status {status}): {message}")]
     Api { status: u16, message: String },
 
-    #[error("ANTHROPIC_API_KEY not set")]
+    #[error("no API key or OAuth credentials configured — run 'bubbaloop login'")]
     MissingApiKey,
 
     #[error("format error: {0}")]
@@ -40,6 +40,17 @@ pub enum ClaudeError {
 }
 
 pub type Result<T> = std::result::Result<T, ClaudeError>;
+
+// ── Auth method ─────────────────────────────────────────────────────
+
+/// How the client authenticates with the Anthropic API.
+#[derive(Debug)]
+enum AuthMethod {
+    /// Traditional API key (x-api-key header)
+    ApiKey(String),
+    /// OAuth bearer token (Authorization: Bearer header)
+    OAuthToken(String),
+}
 
 // ── Content blocks ──────────────────────────────────────────────────
 
@@ -177,28 +188,50 @@ pub struct ApiResponse {
 #[derive(Debug)]
 pub struct ClaudeClient {
     client: reqwest::Client,
-    api_key: String,
+    auth: AuthMethod,
     model: String,
 }
 
 impl ClaudeClient {
-    /// Create a client, resolving the API key from (in order):
+    /// Create a client, resolving credentials from (in order):
     ///
-    /// 1. `ANTHROPIC_API_KEY` environment variable
-    /// 2. `~/.bubbaloop/anthropic-key` file (first line, trimmed)
+    /// 1. `ANTHROPIC_API_KEY` environment variable → ApiKey
+    /// 2. `~/.bubbaloop/oauth-credentials.json` file → OAuthToken (if not expired)
+    /// 3. `~/.bubbaloop/anthropic-key` file (first line, trimmed) → ApiKey
+    ///
+    /// OAuth is checked before the key file because it represents a fresher
+    /// login session (tokens from `bubbaloop login` option 2).
     ///
     /// Uses `DEFAULT_MODEL` when `model` is `None`.
     pub fn from_env(model: Option<&str>) -> Result<Self> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .ok()
-            .or_else(Self::read_key_file)
-            .ok_or(ClaudeError::MissingApiKey)?;
+        // 1. Check env var (always highest priority — explicit override)
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            return Ok(Self {
+                client: reqwest::Client::new(),
+                auth: AuthMethod::ApiKey(key),
+                model: model.unwrap_or(DEFAULT_MODEL).to_string(),
+            });
+        }
 
-        Ok(Self {
-            client: reqwest::Client::new(),
-            api_key,
-            model: model.unwrap_or(DEFAULT_MODEL).to_string(),
-        })
+        // 2. Check OAuth credentials (fresher than static key file)
+        if let Some(token) = Self::read_oauth_token() {
+            return Ok(Self {
+                client: reqwest::Client::new(),
+                auth: AuthMethod::OAuthToken(token),
+                model: model.unwrap_or(DEFAULT_MODEL).to_string(),
+            });
+        }
+
+        // 3. Check API key file (fallback)
+        if let Some(key) = Self::read_key_file() {
+            return Ok(Self {
+                client: reqwest::Client::new(),
+                auth: AuthMethod::ApiKey(key),
+                model: model.unwrap_or(DEFAULT_MODEL).to_string(),
+            });
+        }
+
+        Err(ClaudeError::MissingApiKey)
     }
 
     /// Try to read the API key from `~/.bubbaloop/anthropic-key`.
@@ -210,6 +243,32 @@ impl ClaudeClient {
             None
         } else {
             Some(key)
+        }
+    }
+
+    /// Try to read an OAuth access token from `~/.bubbaloop/oauth-credentials.json`.
+    /// Returns None if file doesn't exist or token is expired.
+    fn read_oauth_token() -> Option<String> {
+        let path = dirs::home_dir()?
+            .join(".bubbaloop")
+            .join("oauth-credentials.json");
+        let content = std::fs::read_to_string(path).ok()?;
+        let creds: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+        let access_token = creds.get("access_token")?.as_str()?.to_string();
+        let expires_at = creds.get("expires_at")?.as_u64()?;
+
+        // Check if token is still valid (with 5 minute buffer)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+
+        if now + 300 < expires_at {
+            Some(access_token)
+        } else {
+            log::warn!("OAuth token expired — run 'bubbaloop login' to refresh");
+            None
         }
     }
 
@@ -230,15 +289,26 @@ impl ClaudeClient {
             tools,
         };
 
-        let response = self
+        let mut request = self
             .client
             .post(API_URL)
-            .header("x-api-key", &self.api_key)
             .header("anthropic-version", API_VERSION)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            .header("content-type", "application/json");
+
+        // Apply auth based on method
+        request = match &self.auth {
+            AuthMethod::ApiKey(key) => request.header("x-api-key", key),
+            AuthMethod::OAuthToken(token) => request
+                .header("authorization", format!("Bearer {}", token))
+                .header("user-agent", "claude-cli/2.1.62")
+                .header("x-app", "cli")
+                .header(
+                    "anthropic-beta",
+                    "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+                ),
+        };
+
+        let response = request.json(&body).send().await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -508,5 +578,19 @@ mod tests {
         // Roundtrip
         let parsed: ToolDefinition = serde_json::from_value(json).unwrap();
         assert_eq!(parsed.name, "list_nodes");
+    }
+
+    #[test]
+    fn test_auth_method_api_key_debug() {
+        let auth = AuthMethod::ApiKey("sk-ant-test".to_string());
+        let debug = format!("{:?}", auth);
+        assert!(debug.contains("ApiKey"));
+    }
+
+    #[test]
+    fn test_auth_method_oauth_token_debug() {
+        let auth = AuthMethod::OAuthToken("sk-ant-oat01-test".to_string());
+        let debug = format!("{:?}", auth);
+        assert!(debug.contains("OAuthToken"));
     }
 }
