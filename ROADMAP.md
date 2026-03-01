@@ -2,11 +2,11 @@
 
 <!-- LIVING DOCUMENT: Update checkboxes as work completes. See ARCHITECTURE.md for design details. -->
 
-> 🦐 The open-source AI agent that talks to your cameras, sensors, and robots.
+> The open-source AI agent that talks to your cameras, sensors, and robots.
 
 ---
 
-## 🦐 Design DNA
+## Design DNA
 
 > **"Perhaps only apps that rely on specific hardware sensors will remain."**
 > — Peter Steinberger (Feb 2026)
@@ -21,7 +21,7 @@
 5. **Offline-first** — scheduled actions run without LLM or internet
 6. **Secure by default** — Rust, sandboxed nodes, no skill injection vectors
 
-## 🦐 Vision
+## Vision
 
 ```bash
 # Install
@@ -47,7 +47,7 @@ bubbaloop agent
 
 ---
 
-## 🦐 Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -84,7 +84,7 @@ bubbaloop agent
 
 ---
 
-## 🦐 What's Built (Foundation)
+## What's Built (Foundation)
 
 ### v0.0.1–v0.0.6: MCP-Native Sensor Runtime
 
@@ -106,7 +106,7 @@ bubbaloop agent
 
 ---
 
-## 🦐 What's Next
+## What's Next
 
 ### Phase 1: YAML Skill Loader + Driver Mapping
 
@@ -264,7 +264,7 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 
 ---
 
-## 🦐 Future (Not in v1)
+## Future (Not in v1)
 
 These are out of scope but represent natural evolution:
 
@@ -278,7 +278,7 @@ These are out of scope but represent natural evolution:
 
 ---
 
-## 🦐 Comparison
+## Comparison
 
 | | General Agents | Container Agents | Ultra-light Agents | **Bubbaloop** |
 |---|---|---|---|---|
@@ -294,7 +294,7 @@ These are out of scope but represent natural evolution:
 
 ---
 
-## 🦐 Technology Stack
+## Technology Stack
 
 | Component | Technology | Why |
 |-----------|------------|-----|
@@ -310,7 +310,7 @@ These are out of scope but represent natural evolution:
 
 ---
 
-## 🦐 Design Documents
+## Design Documents
 
 - `docs/plans/2026-02-27-hardware-ai-agent-design.md` — Full agent design (architecture, memory, scheduling, security)
 - `docs/plans/2026-02-28-agent-implementation-design.md` — Agent implementation design (Phases 2-4)

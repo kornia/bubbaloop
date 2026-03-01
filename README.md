@@ -5,7 +5,7 @@
 
 **The open-source Hardware AI agent.** Talk to your cameras, sensors, and robots in natural language. Manage federated IoT/robotics fleets and automate physical systems — all from a single 12 MB Rust binary.
 
-## 🦐 Why Bubbaloop?
+## Why Bubbaloop?
 
 AI agents revolutionized software engineering. **Bubbaloop brings that same power to hardware.**
 
@@ -19,7 +19,7 @@ AI agents revolutionized software engineering. **Bubbaloop brings that same powe
 | **MCP role** | Client (consumes tools) | **Server (provides 23+ tools)** |
 | **Scheduling** | Always-on LLM (~$5-10/day) | **Offline Tier 1 + LLM Tier 2 (~$0.05/day)** |
 
-## 🦐 Quick Install
+## Quick Install
 
 ```bash
 # One-line install (Linux x86_64/ARM64)
@@ -30,7 +30,7 @@ source ~/.bashrc
 bubbaloop status
 ```
 
-## 🦐 What Gets Installed
+## What Gets Installed
 
 | Component | Description |
 |-----------|-------------|
@@ -41,7 +41,7 @@ bubbaloop status
 
 All run as systemd user services with autostart enabled.
 
-## 🦐 Login & Authentication
+## Login & Authentication
 
 ```bash
 # Option 1: API Key (pay-as-you-go)
@@ -60,7 +60,7 @@ bubbaloop login --status
 bubbaloop logout
 ```
 
-## 🦐 Basic Usage
+## Basic Usage
 
 ```bash
 # Check system status
@@ -83,7 +83,7 @@ bubbaloop node logs my-node -f        # Follow logs
 bubbaloop up
 ```
 
-## 🦐 Node Lifecycle
+## Node Lifecycle
 
 ```bash
 # 1. Create a new node (generates SDK-based scaffold)
@@ -107,7 +107,7 @@ bubbaloop node start my-sensor
 bubbaloop node logs my-sensor
 ```
 
-## 🦐 YAML Skills (Zero-Code Sensors)
+## YAML Skills (Zero-Code Sensors)
 
 ```yaml
 # ~/.bubbaloop/skills/front-camera.yaml
@@ -122,7 +122,7 @@ config:
 bubbaloop up
 ```
 
-## 🦐 AI Agent Integration (MCP)
+## AI Agent Integration (MCP)
 
 Bubbaloop includes an MCP (Model Context Protocol) server — the sole control interface for AI agents. The daemon starts it automatically on port 8088.
 
@@ -150,7 +150,7 @@ bubbaloop daemon
 
 Configure Claude Code to use it via `.mcp.json` (already in project root).
 
-## 🦐 Architecture
+## Architecture
 
 ```
                     ┌──────────────────────────────────┐
@@ -175,7 +175,7 @@ Nodes (self-describing) ───────────┘
 
 The daemon is a **passive skill runtime** — external AI agents (Claude Code, etc.) control everything through MCP. No autonomous decision-making.
 
-## 🦐 Node Contract
+## Node Contract
 
 Every node is self-describing with standard queryables:
 
@@ -189,7 +189,7 @@ Every node is self-describing with standard queryables:
 
 AI agents discover nodes via `bubbaloop/**/manifest` wildcard query, then interact through commands and data subscriptions.
 
-## 🦐 Development
+## Development
 
 ```bash
 git clone https://github.com/kornia/bubbaloop.git
@@ -201,7 +201,7 @@ pixi run daemon    # Run daemon
 pixi run dashboard # Run web dashboard
 ```
 
-## 🦐 Service Management
+## Service Management
 
 ```bash
 # View all services
@@ -214,7 +214,7 @@ systemctl --user restart bubbaloop-daemon
 journalctl --user -u bubbaloop-daemon -f
 ```
 
-## 🦐 Troubleshooting
+## Troubleshooting
 
 ```bash
 # Quick diagnostics
@@ -232,7 +232,7 @@ Common issues:
 - **Build fails**: Check `bubbaloop node logs <name>` for errors
 - **Auth failed**: Run `bubbaloop login --status` to check credentials
 
-## 🦐 Documentation
+## Documentation
 
 - **Full docs**: `pixi run docs` or see [docs/](docs/)
 - **Architecture**: See [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions
@@ -240,6 +240,6 @@ Common issues:
 - **Agent guidelines**: See [CLAUDE.md](CLAUDE.md) for coding standards
 - **CLI reference**: `bubbaloop --help` or `bubbaloop node --help`
 
-## 🦐 License
+## License
 
 Apache-2.0

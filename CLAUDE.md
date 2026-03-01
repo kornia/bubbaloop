@@ -1,6 +1,6 @@
 # 🦐 Bubbaloop
 
-🦐 Physical AI orchestration built on Zenoh. Single binary: CLI + daemon + MCP server.
+Physical AI orchestration built on Zenoh. Single binary: CLI + daemon + MCP server.
 
 ## Living Documents (update these as architecture evolves)
 

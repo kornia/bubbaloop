@@ -2,10 +2,10 @@
 
 # 🦐 Bubbaloop Architecture
 
-🦐 The open-source AI agent that talks to your cameras, sensors, and robots.
+The open-source AI agent that talks to your cameras, sensors, and robots.
 Single Rust binary (~12-13 MB). Runs on Jetson, Raspberry Pi, any Linux.
 
-## 🦐 Design DNA
+## Design DNA
 
 ### The Steinberger Principle
 
@@ -33,7 +33,7 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 
 ---
 
-## 🦐 Layer Model
+## Layer Model
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -74,7 +74,7 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 
 ---
 
-## 🦐 Node Contract
+## Node Contract
 
 Every sensor node MUST implement these standard queryables:
 
@@ -131,7 +131,7 @@ Nodes that support imperative actions MUST declare `{topic_prefix}/command` quer
 
 ---
 
-## 🦐 Topic Hierarchy
+## Topic Hierarchy
 
 ```
 bubbaloop/{scope}/{machine_id}/{node_name}/{...}
@@ -156,7 +156,7 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447  # Optional override
 
 ---
 
-## 🦐 MCP Server
+## MCP Server
 
 MCP is the **sole control interface**. 23+ generic tools across 5 categories:
 
@@ -195,7 +195,7 @@ MCP is the **sole control interface**. 23+ generic tools across 5 categories:
 
 ---
 
-## 🦐 Security Layers (Defense in Depth)
+## Security Layers (Defense in Depth)
 
 ### Layer 1: MCP Authentication & Authorization
 
@@ -246,7 +246,7 @@ MCP is the **sole control interface**. 23+ generic tools across 5 categories:
 
 ---
 
-## 🦐 Key Technology Choices
+## Key Technology Choices
 
 | Component | Technology | Why |
 |-----------|------------|-----|
