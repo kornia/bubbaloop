@@ -9,7 +9,7 @@
 //! - Health: monitors node heartbeats via Zenoh pub/sub
 //! - MCP Gateway: exposes all operations as MCP tools for AI agents
 //!
-//! External AI agents (OpenClaw, Claude, etc.) interact exclusively through MCP.
+//! External AI agents (Claude Code, etc.) interact exclusively through MCP.
 //! The daemon never makes autonomous decisions — it's a passive skill runtime.
 
 pub mod node_manager;

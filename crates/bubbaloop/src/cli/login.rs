@@ -1,10 +1,12 @@
 //! Login and logout commands for managing the Anthropic API key.
 //!
 //! `bubbaloop login`  — interactive browser + paste + validate + save flow
-//!                      supports API key login or OAuth 2.1 PKCE for Claude subscribers
+//!                      supports API key login or Claude setup-token for subscribers
 //! `bubbaloop logout` — remove saved key and/or OAuth credentials
 
 use std::path::PathBuf;
+
+use crate::agent::claude::OAUTH_BETA_HEADERS;
 
 // ── Errors ──────────────────────────────────────────────────────────
 
@@ -88,27 +90,27 @@ impl LoginCommand {
 
 impl LogoutCommand {
     pub fn run(&self) -> Result<()> {
-        // Remove API key
-        let path = key_file_path()?;
-        if path.exists() {
-            std::fs::remove_file(&path)?;
-            println!("Removed API key from {}", path.display());
+        let key_path = key_file_path()?;
+        let oauth_path = oauth_credentials_path().ok();
+
+        let mut removed = false;
+
+        if key_path.exists() {
+            std::fs::remove_file(&key_path)?;
+            println!("Removed API key from {}", key_path.display());
+            removed = true;
         }
 
-        // Remove OAuth credentials
-        if let Ok(oauth_path) = oauth_credentials_path() {
+        if let Some(ref oauth_path) = oauth_path {
             if oauth_path.exists() {
-                std::fs::remove_file(&oauth_path)?;
+                std::fs::remove_file(oauth_path)?;
                 println!("Removed OAuth credentials from {}", oauth_path.display());
+                removed = true;
             }
         }
 
-        if !path.exists() {
-            if let Ok(oauth_path) = oauth_credentials_path() {
-                if !oauth_path.exists() {
-                    println!("No credentials found");
-                }
-            }
+        if !removed {
+            println!("No credentials found");
         }
 
         if std::env::var("ANTHROPIC_API_KEY").is_ok() {
@@ -236,7 +238,7 @@ async fn run_setup_token_login() -> Result<()> {
         return Err(LoginError::OAuth(format!(
             "expected token starting with '{}', got '{}'",
             SETUP_TOKEN_PREFIX,
-            &token[..token.len().min(15)]
+            &token[..token.len().min(8)]
         )));
     }
 
@@ -369,10 +371,7 @@ async fn validate_bearer_token(token: &str) -> Result<String> {
         .header("anthropic-version", API_VERSION)
         .header("user-agent", "claude-cli/2.1.62")
         .header("x-app", "cli")
-        .header(
-            "anthropic-beta",
-            "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-        )
+        .header("anthropic-beta", OAUTH_BETA_HEADERS)
         .send()
         .await?;
 
@@ -385,16 +384,7 @@ async fn validate_bearer_token(token: &str) -> Result<String> {
     }
 
     let body: serde_json::Value = resp.json().await?;
-    let model_name = body
-        .get("data")
-        .and_then(|d| d.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|m| m.get("id"))
-        .and_then(|id| id.as_str())
-        .unwrap_or("models endpoint reachable")
-        .to_string();
-
-    Ok(model_name)
+    Ok(parse_model_name(&body))
 }
 
 // ── OAuth credential storage ────────────────────────────────────────
@@ -417,27 +407,7 @@ pub fn load_oauth_credentials() -> Result<Option<OAuthCredentials>> {
 }
 
 fn save_oauth_credentials(path: &PathBuf, creds: &OAuthCredentials) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(creds)?;
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        write!(file, "{}", json)?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, json)?;
-    }
-    Ok(())
+    save_file_0600(path, &serde_json::to_string_pretty(creds)?)
 }
 
 // ── API key helpers ─────────────────────────────────────────────────
@@ -469,27 +439,15 @@ async fn validate_api_key(key: &str) -> Result<String> {
         )));
     }
 
-    // Parse response to extract a model name
     let body: serde_json::Value = resp.json().await?;
-    let model_name = body
-        .get("data")
-        .and_then(|d| d.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|m| m.get("id"))
-        .and_then(|id| id.as_str())
-        .unwrap_or("models endpoint reachable")
-        .to_string();
-
-    Ok(model_name)
+    Ok(parse_model_name(&body))
 }
 
-/// Write the key to disk with 0600 permissions.
-fn save_key_file(path: &PathBuf, key: &str) -> Result<()> {
-    // Ensure parent directory exists
+/// Write content to `path` with 0600 permissions, creating parent dirs as needed.
+fn save_file_0600(path: &PathBuf, content: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -500,15 +458,28 @@ fn save_key_file(path: &PathBuf, key: &str) -> Result<()> {
             .truncate(true)
             .mode(0o600)
             .open(path)?;
-        write!(file, "{}", key)?;
+        write!(file, "{}", content)?;
     }
-
     #[cfg(not(unix))]
     {
-        std::fs::write(path, key)?;
+        std::fs::write(path, content)?;
     }
-
     Ok(())
+}
+
+fn save_key_file(path: &PathBuf, key: &str) -> Result<()> {
+    save_file_0600(path, key)
+}
+
+/// Extract the first model name from a `/v1/models` response body.
+fn parse_model_name(body: &serde_json::Value) -> String {
+    body.get("data")
+        .and_then(|d| d.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|m| m.get("id"))
+        .and_then(|id| id.as_str())
+        .unwrap_or("models endpoint reachable")
+        .to_string()
 }
 
 /// Get the path to the API key file: `~/.bubbaloop/anthropic-key`.

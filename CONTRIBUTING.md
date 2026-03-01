@@ -1,15 +1,15 @@
-# Contributing to Bubbaloop
+# 🦐 Contributing to Bubbaloop
 
 <!-- LIVING DOCUMENT: Update when workflows change. See ARCHITECTURE.md for design, ROADMAP.md for timeline. -->
 
-Bubbaloop is built for **agentic engineering** — developers AND AI agents working together. This guide defines workflows that serve sensor nodes, contracts, and tests.
+🦐 Bubbaloop is built for **agentic engineering** — developers AND AI agents working together. This guide defines workflows that serve sensor nodes, contracts, and tests.
 
 ---
 
-## The Anti-Trap Rule
+## 🦐 The Anti-Trap Rule
 
 > *"People build increasingly complex toolchains... only to end up building tools instead of genuinely valuable things."*
-> — Peter Steinberger, OpenClaw creator
+> — Peter Steinberger
 
 **Every workflow must directly improve sensor nodes, contracts, or tests.**
 
@@ -17,7 +17,7 @@ If a workflow only improves the workflow itself, **delete it**. The sensor nodes
 
 ---
 
-## Development Workflows
+## 🦐 Development Workflows
 
 ### 1. Rust Feature: Plan → Execute → Validate → Review
 
@@ -58,7 +58,7 @@ If a workflow only improves the workflow itself, **delete it**. The sensor nodes
 
 ---
 
-## Agent Tier Guidelines
+## 🦐 Agent Tier Guidelines
 
 Start at the lowest tier. Escalate only on failure. Haiku costs ~10x less than Opus.
 
@@ -75,7 +75,7 @@ Start at the lowest tier. Escalate only on failure. Haiku costs ~10x less than O
 
 ---
 
-## Validation Checklist
+## 🦐 Validation Checklist
 
 | Command | When | Why |
 |---------|------|-----|
@@ -88,7 +88,7 @@ Start at the lowest tier. Escalate only on failure. Haiku costs ~10x less than O
 
 ---
 
-## Code Standards & Commits
+## 🦐 Code Standards & Commits
 
 See `CLAUDE.md` for full conventions. Critical rules:
 
@@ -104,7 +104,7 @@ See `CLAUDE.md` for full conventions. Critical rules:
 
 ---
 
-## Pull Request Checklist
+## 🦐 Pull Request Checklist
 
 - [ ] `pixi run check` passes
 - [ ] `cargo test --lib -p bubbaloop` (298+ tests)

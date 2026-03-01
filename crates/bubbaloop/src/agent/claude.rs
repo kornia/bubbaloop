@@ -21,6 +21,10 @@ pub const DEFAULT_MODEL: &str = "claude-sonnet-4-20250514";
 /// Default max tokens per response.
 const MAX_TOKENS: u32 = 4096;
 
+/// Required beta headers for OAuth tokens (matches Claude Code CLI).
+/// Without these, Anthropic returns 401 for setup-token auth.
+pub const OAUTH_BETA_HEADERS: &str = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
+
 // ── Errors ──────────────────────────────────────────────────────────
 
 /// Errors from Claude API operations.
@@ -302,10 +306,7 @@ impl ClaudeClient {
                 .header("authorization", format!("Bearer {}", token))
                 .header("user-agent", "claude-cli/2.1.62")
                 .header("x-app", "cli")
-                .header(
-                    "anthropic-beta",
-                    "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-                ),
+                .header("anthropic-beta", OAUTH_BETA_HEADERS),
         };
 
         let response = request.json(&body).send().await?;
@@ -532,24 +533,23 @@ mod tests {
 
     #[test]
     fn client_from_env_missing_key() {
-        // Ensure the key is not set (test isolation: we cannot unset
-        // env vars safely across threads, so we just check that if it
-        // happens to be unset the error is correct).
-        // Use a temp override approach: save, remove, test, restore.
+        // When ANTHROPIC_API_KEY is unset, from_env() may still succeed
+        // if OAuth credentials or a key file exist on disk.
         let saved = std::env::var("ANTHROPIC_API_KEY").ok();
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        // SAFETY: This test is not run concurrently with other env-mutating tests.
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
 
         let result = ClaudeClient::from_env(None);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            matches!(err, ClaudeError::MissingApiKey),
-            "expected MissingApiKey, got: {err:?}"
-        );
+        match result {
+            Err(ClaudeError::MissingApiKey) => {} // Expected when no credentials on disk
+            Ok(_) => {} // Valid if OAuth or key file exists
+            Err(e) => panic!("unexpected error: {e:?}"),
+        }
 
         // Restore if it was set
         if let Some(key) = saved {
-            std::env::set_var("ANTHROPIC_API_KEY", key);
+            // SAFETY: Restoring the env var after test.
+            unsafe { std::env::set_var("ANTHROPIC_API_KEY", key) };
         }
     }
 

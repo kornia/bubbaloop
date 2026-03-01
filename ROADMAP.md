@@ -1,15 +1,15 @@
-# Bubbaloop Roadmap
+# 🦐 Bubbaloop Roadmap
 
 <!-- LIVING DOCUMENT: Update checkboxes as work completes. See ARCHITECTURE.md for design details. -->
 
-> The open-source AI agent that talks to your cameras, sensors, and robots.
+> 🦐 The open-source AI agent that talks to your cameras, sensors, and robots.
 
 ---
 
-## Design DNA
+## 🦐 Design DNA
 
 > **"Perhaps only apps that rely on specific hardware sensors will remain."**
-> — Peter Steinberger, OpenClaw creator (Feb 2026)
+> — Peter Steinberger (Feb 2026)
 
 **The Steinberger Test**: Does this make the sensor/hardware layer stronger, or does it add app-layer complexity that AI agents will replace?
 
@@ -21,7 +21,7 @@
 5. **Offline-first** — scheduled actions run without LLM or internet
 6. **Secure by default** — Rust, sandboxed nodes, no skill injection vectors
 
-## Vision
+## 🦐 Vision
 
 ```bash
 # Install
@@ -47,7 +47,7 @@ bubbaloop agent
 
 ---
 
-## Architecture
+## 🦐 Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -80,11 +80,11 @@ bubbaloop agent
 
 **Two entry points, same core:**
 - `bubbaloop agent` — self-contained hardware AI agent
-- `bubbaloop mcp --stdio` — MCP server for Claude Code / OpenClaw
+- `bubbaloop mcp --stdio` — MCP server for Claude Code / external agents
 
 ---
 
-## What's Built (Foundation)
+## 🦐 What's Built (Foundation)
 
 ### v0.0.1–v0.0.6: MCP-Native Sensor Runtime
 
@@ -106,7 +106,7 @@ bubbaloop agent
 
 ---
 
-## What's Next
+## 🦐 What's Next
 
 ### Phase 1: YAML Skill Loader + Driver Mapping
 
@@ -209,7 +209,7 @@ Target:             ~12-13 MB
 
 **Goal:** Autonomous hardware management without always-on LLM.
 
-**Key insight:** OpenClaw keeps the LLM running 24/7 (~$5-10/day). Bubbaloop's Tier 1 schedules run offline with zero LLM calls.
+**Key insight:** Always-on LLM agents cost ~$5-10/day. Bubbaloop's Tier 1 schedules run offline with zero LLM calls.
 
 #### Tier 1: Declarative (no LLM, works offline)
 
@@ -239,7 +239,7 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 - [ ] `bubbaloop jobs` CLI: list, pause, resume, delete
 - [ ] Execution history logged in SQLite
 
-| | OpenClaw | Bubbaloop |
+| | Always-on LLM | Bubbaloop |
 |---|---|---|
 | Health check every 15min | 96 LLM calls/day | 0 (Tier 1) |
 | Morning summary | 1 call/day | 1 call/day (Tier 2) |
@@ -256,7 +256,7 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 
 **Deliverables:**
 - [ ] `curl -sSL https://get.bubbaloop.com | bash` install script
-- [x] `bubbaloop login` — API key setup (browser + paste + validate + save)
+- [x] `bubbaloop login` — API key + Claude subscription (setup-token) authentication
 - [ ] First-run wizard: detect hardware, suggest skills
 - [ ] `bubbaloop agent` auto-loads skills, auto-installs drivers, starts chat
 - [ ] AI-assisted skill creation: "Add my garage camera at rtsp://..."
@@ -264,13 +264,13 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 
 ---
 
-## Future (Not in v1)
+## 🦐 Future (Not in v1)
 
 These are out of scope but represent natural evolution:
 
 - **Local LLM** — Ollama support for fully offline agent operation
 - **Hardware discovery** — USB/V4L2/mDNS auto-detection of connected sensors
-- **Multi-channel** — WhatsApp/Telegram/Discord (via OpenClaw bridge or native)
+- **Multi-channel** — WhatsApp/Telegram/Discord (via bridge or native)
 - **Fleet** — Cloud sync of memory and schedules across machines
 - **Voice** — Speech-to-text for hands-free robot control
 - **Visual** — Camera frame analysis in Claude conversations (multimodal)
@@ -278,9 +278,9 @@ These are out of scope but represent natural evolution:
 
 ---
 
-## Comparison
+## 🦐 Comparison
 
-| | OpenClaw | NanoClaw | PicoClaw | **Bubbaloop** |
+| | General Agents | Container Agents | Ultra-light Agents | **Bubbaloop** |
 |---|---|---|---|---|
 | **Language** | TypeScript | Python | Go | **Rust** |
 | **Binary** | ~200 MB (Node.js) | ~50 MB (Python) | ~10 MB | **~12-13 MB** |
@@ -294,7 +294,7 @@ These are out of scope but represent natural evolution:
 
 ---
 
-## Technology Stack
+## 🦐 Technology Stack
 
 | Component | Technology | Why |
 |-----------|------------|-----|
@@ -310,7 +310,7 @@ These are out of scope but represent natural evolution:
 
 ---
 
-## Design Documents
+## 🦐 Design Documents
 
 - `docs/plans/2026-02-27-hardware-ai-agent-design.md` — Full agent design (architecture, memory, scheduling, security)
 - `docs/plans/2026-02-28-agent-implementation-design.md` — Agent implementation design (Phases 2-4)

@@ -1,6 +1,6 @@
-# Bubbaloop
+# 🦐 Bubbaloop
 
-Physical AI orchestration built on Zenoh. Single binary: CLI + daemon + MCP server.
+🦐 Physical AI orchestration built on Zenoh. Single binary: CLI + daemon + MCP server.
 
 ## Living Documents (update these as architecture evolves)
 
@@ -18,7 +18,8 @@ dashboard/                 # React + Vite + TypeScript
 ```
 
 Key source files in `crates/bubbaloop/src/`:
-- `cli/login.rs` — login/logout/status for Anthropic API key management
+- `cli/login.rs` — login/logout/status: API key + Claude subscription (setup-token) auth
+- `agent/claude.rs` — Claude API client with dual auth (API key + OAuth bearer token)
 - `cli/node/mod.rs` — node CRUD, validation, list/add/remove
 - `cli/node/install.rs` — install, precompiled binary download, GitHub clone
 - `cli/node/lifecycle.rs` — start, stop, restart, logs
@@ -52,7 +53,7 @@ Nodes repo: [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes
 
 MCP is core (not feature-gated). 3-tier RBAC, bearer token auth. Run: `bubbaloop mcp --stdio` or daemon HTTP on :8088.
 
-The daemon is a **passive skill runtime** — AI agents (OpenClaw, Claude, etc.) interact exclusively through MCP. No autonomous decision-making.
+The daemon is a **passive skill runtime** — AI agents (Claude Code, etc.) interact exclusively through MCP. No autonomous decision-making.
 
 Key files in `crates/bubbaloop/src/mcp/`: `mod.rs` (tools, BubbaLoopMcpServer), `platform.rs` (PlatformOperations trait), `rbac.rs`, `auth.rs`.
 
@@ -141,3 +142,4 @@ Exception: views with their own fallback decode chain (like JsonView) don't need
 - Logs must go to stderr (convention: never pollute stdout)
 - Zenoh session: MUST use `"client"` mode for router routing; check `BUBBALOOP_ZENOH_ENDPOINT` env var
 - Dashboard schema race: subscriptions start before schemas load — always use `useSchemaReady()` gating
+- OAuth tokens require Claude CLI identity headers (user-agent, x-app, anthropic-beta) — see `agent/claude.rs::OAUTH_BETA_HEADERS`
