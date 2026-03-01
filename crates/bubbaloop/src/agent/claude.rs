@@ -542,7 +542,7 @@ mod tests {
         let result = ClaudeClient::from_env(None);
         match result {
             Err(ClaudeError::MissingApiKey) => {} // Expected when no credentials on disk
-            Ok(_) => {} // Valid if OAuth or key file exists
+            Ok(_) => {}                           // Valid if OAuth or key file exists
             Err(e) => panic!("unexpected error: {e:?}"),
         }
 
