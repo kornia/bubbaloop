@@ -176,6 +176,13 @@ impl {{node_name_pascal}}Node {
 
         log::info!("Node scoped topic prefix: {}", topic_prefix);
 
+        // Sanitize topic suffix to prevent Zenoh path injection
+        let illegal_chars = ['/', '*', '#'];
+        if self.config.publish_topic.contains(&illegal_chars[..]) || self.config.publish_topic.contains("..") {
+            return Err(anyhow!("Security: Illegal characters in publish topic '{}'", self.config.publish_topic));
+        }
+        self.config.publish_topic = self.config.publish_topic.trim_start_matches('/').to_string();
+
         // Construct full publish topic
         let full_publish_topic = format!("{}/{}", topic_prefix, self.config.publish_topic);
         log::info!("Publishing to: {}", full_publish_topic);
