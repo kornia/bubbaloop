@@ -73,7 +73,14 @@ class {{node_name_pascal}}Node:
         # Resolve scoped topic prefix
         self._machine_id = _get_machine_id()
         self._scope = _get_scope()
-        self._node_name = "{{node_name}}"
+        
+        # Prevent Namespace Breakout by sanitizing the node name
+        self._node_name = "{{node_name}}" \
+            .replace("/", "_") \
+            .replace("*", "_") \
+            .replace("#", "_") \
+            .replace("..", "_")
+            
         self._topic_prefix = f"bubbaloop/{self._scope}/{self._machine_id}/{self._node_name}"
         logger.info(f"Topic prefix: {self._topic_prefix}")
 

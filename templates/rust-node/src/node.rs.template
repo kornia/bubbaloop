@@ -172,7 +172,15 @@ impl {{node_name_pascal}}Node {
     pub async fn run(&mut self, running: Arc<AtomicBool>) -> Result<()> {
         let scope = get_scope();
         let machine_id = get_machine_id();
-        let topic_prefix = format!("bubbaloop/{}/{}/{{{{node_name}}}}", scope, machine_id);
+        
+        // Prevent Namespace Breakout by sanitizing the node name
+        let safe_node_name = "{{node_name}}"
+            .replace('/', "_")
+            .replace('*', "_")
+            .replace('#', "_")
+            .replace("..", "_");
+            
+        let topic_prefix = format!("bubbaloop/{}/{}/{}", scope, machine_id, safe_node_name);
 
         log::info!("Node scoped topic prefix: {}", topic_prefix);
 
