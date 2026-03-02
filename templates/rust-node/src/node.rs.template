@@ -198,11 +198,12 @@ impl {{node_name_pascal}}Node {
         let _schema_queryable = self.session
             .declare_queryable(&schema_key)
             .callback(|query| {
-                use zenoh::Wait;
                 log::debug!("Schema query received");
-                if let Err(e) = query.reply(query.key_expr(), ZBytes::from(DESCRIPTOR.to_vec())).wait() {
-                    log::warn!("Failed to reply to schema query: {}", e);
-                }
+                tokio::spawn(async move {
+                    if let Err(e) = query.reply(query.key_expr(), ZBytes::from(DESCRIPTOR.to_vec())).await {
+                        log::warn!("Failed to reply to schema query: {}", e);
+                    }
+                });
             })
             .await
             .map_err(|e| anyhow!("Failed to create schema queryable: {}", e))?;
@@ -216,46 +217,52 @@ impl {{node_name_pascal}}Node {
         let _manifest_queryable = self.session
             .declare_queryable(&format!("{}/manifest", topic_prefix))
             .callback(move |query| {
-                use zenoh::Wait;
                 log::debug!("Manifest query received");
-                let manifest = serde_json::json!({
-                    "name": "{{node_name}}",
-                    "version": "0.1.0",
-                    "language": "rust",
-                    "description": "{{description}}",
-                    "machine_id": &manifest_machine_id,
-                    "scope": &manifest_scope,
-                    "capabilities": &manifest_config.capabilities,
-                    "requires_hardware": &manifest_config.requires_hardware,
-                    "publishes": [{
-                        "topic_suffix": &manifest_config.publish_topic,
-                        "full_topic": &manifest_publish,
-                        "rate_hz": manifest_config.rate_hz,
-                    }],
-                    "subscribes": manifest_config.subscribe_topic.as_deref().map(|t| vec![t]).unwrap_or_default(),
-                    "commands": manifest_config.commands.iter().map(|c| serde_json::json!({
-                        "name": &c.name,
-                        "description": &c.description,
-                        "parameters": &c.parameters,
-                        "returns": &c.returns,
-                    })).collect::<Vec<_>>(),
-                    "schema_key": format!("{}/schema", manifest_prefix),
-                    "health_key": format!("{}/health", manifest_prefix),
-                    "config_key": format!("{}/config", manifest_prefix),
-                    "command_key": format!("{}/command", manifest_prefix),
-                    "security": {
-                        "acl_prefix": format!("bubbaloop/*/{}/{{{{node_name}}}}/**", manifest_machine_id),
-                        "data_classification": &manifest_config.data_classification,
-                    },
-                    "time": {
-                        "clock_source": &manifest_config.clock_source,
-                        "timestamp_field": &manifest_config.timestamp_field,
-                        "timestamp_unit": &manifest_config.timestamp_unit,
-                    },
+                let manifest_config = manifest_config.clone();
+                let manifest_machine_id = manifest_machine_id.clone();
+                let manifest_scope = manifest_scope.clone();
+                let manifest_publish = manifest_publish.clone();
+                let manifest_prefix = manifest_prefix.clone();
+                tokio::spawn(async move {
+                    let manifest = serde_json::json!({
+                        "name": "{{node_name}}",
+                        "version": "0.1.0",
+                        "language": "rust",
+                        "description": "{{description}}",
+                        "machine_id": &manifest_machine_id,
+                        "scope": &manifest_scope,
+                        "capabilities": &manifest_config.capabilities,
+                        "requires_hardware": &manifest_config.requires_hardware,
+                        "publishes": [{
+                            "topic_suffix": &manifest_config.publish_topic,
+                            "full_topic": &manifest_publish,
+                            "rate_hz": manifest_config.rate_hz,
+                        }],
+                        "subscribes": manifest_config.subscribe_topic.as_deref().map(|t| vec![t]).unwrap_or_default(),
+                        "commands": manifest_config.commands.iter().map(|c| serde_json::json!({
+                            "name": &c.name,
+                            "description": &c.description,
+                            "parameters": &c.parameters,
+                            "returns": &c.returns,
+                        })).collect::<Vec<_>>(),
+                        "schema_key": format!("{}/schema", manifest_prefix),
+                        "health_key": format!("{}/health", manifest_prefix),
+                        "config_key": format!("{}/config", manifest_prefix),
+                        "command_key": format!("{}/command", manifest_prefix),
+                        "security": {
+                            "acl_prefix": format!("bubbaloop/*/{}/{{{{node_name}}}}/**", manifest_machine_id),
+                            "data_classification": &manifest_config.data_classification,
+                        },
+                        "time": {
+                            "clock_source": &manifest_config.clock_source,
+                            "timestamp_field": &manifest_config.timestamp_field,
+                            "timestamp_unit": &manifest_config.timestamp_unit,
+                        },
+                    });
+                    if let Err(e) = query.reply(query.key_expr(), ZBytes::from(manifest.to_string().into_bytes())).await {
+                        log::warn!("Failed to reply to manifest query: {}", e);
+                    }
                 });
-                if let Err(e) = query.reply(query.key_expr(), ZBytes::from(manifest.to_string().into_bytes())).wait() {
-                    log::warn!("Failed to reply to manifest query: {}", e);
-                }
             })
             .await
             .map_err(|e| anyhow!("Failed to create manifest queryable: {}", e))?;
@@ -265,15 +272,16 @@ impl {{node_name_pascal}}Node {
         let _health_queryable = self.session
             .declare_queryable(&format!("{}/health", topic_prefix))
             .callback(move |query| {
-                use zenoh::Wait;
                 log::debug!("Health query received");
-                let health = serde_json::json!({
-                    "status": "ok",
-                    "uptime_s": start_time.elapsed().as_secs(),
+                tokio::spawn(async move {
+                    let health = serde_json::json!({
+                        "status": "ok",
+                        "uptime_s": start_time.elapsed().as_secs(),
+                    });
+                    if let Err(e) = query.reply(query.key_expr(), ZBytes::from(health.to_string().into_bytes())).await {
+                        log::warn!("Failed to reply to health query: {}", e);
+                    }
                 });
-                if let Err(e) = query.reply(query.key_expr(), ZBytes::from(health.to_string().into_bytes())).wait() {
-                    log::warn!("Failed to reply to health query: {}", e);
-                }
             })
             .await
             .map_err(|e| anyhow!("Failed to create health queryable: {}", e))?;
@@ -283,11 +291,13 @@ impl {{node_name_pascal}}Node {
         let _config_queryable = self.session
             .declare_queryable(&format!("{}/config", topic_prefix))
             .callback(move |query| {
-                use zenoh::Wait;
                 log::debug!("Config query received");
-                if let Err(e) = query.reply(query.key_expr(), ZBytes::from(config_json.as_bytes().to_vec())).wait() {
-                    log::warn!("Failed to reply to config query: {}", e);
-                }
+                let config_json = config_json.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = query.reply(query.key_expr(), ZBytes::from(config_json.as_bytes().to_vec())).await {
+                        log::warn!("Failed to reply to config query: {}", e);
+                    }
+                });
             })
             .await
             .map_err(|e| anyhow!("Failed to create config queryable: {}", e))?;
@@ -299,54 +309,56 @@ impl {{node_name_pascal}}Node {
         let _command_queryable = self.session
             .declare_queryable(&format!("{}/command", topic_prefix))
             .callback(move |query| {
-                use zenoh::Wait;
                 log::debug!("Command query received");
-                let response = match query.payload() {
-                    Some(payload) => {
-                        let bytes = payload.to_bytes();
-                        match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                            Ok(req) => {
-                                let cmd_name = req.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                                let known = command_config.commands.iter().any(|c| c.name == cmd_name);
-                                if known {
-                                    // TODO: Implement command handling logic per command name
-                                    serde_json::json!({
-                                        "result": format!("Command '{}' received (not yet implemented)", cmd_name),
-                                        "error": null
-                                    })
-                                } else {
-                                    let available: Vec<&str> = command_config.commands.iter().map(|c| c.name.as_str()).collect();
-                                    serde_json::json!({
-                                        "result": null,
-                                        "error": format!("Unknown command '{}'. Available: {:?}", cmd_name, available)
-                                    })
+                let command_config = command_config.clone();
+                tokio::spawn(async move {
+                    let response = match query.payload() {
+                        Some(payload) => {
+                            let bytes = payload.to_bytes();
+                            match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                                Ok(req) => {
+                                    let cmd_name = req.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                                    let known = command_config.commands.iter().any(|c| c.name == cmd_name);
+                                    if known {
+                                        // TODO: Implement command handling logic per command name
+                                        serde_json::json!({
+                                            "result": format!("Command '{}' received (not yet implemented)", cmd_name),
+                                            "error": null
+                                        })
+                                    } else {
+                                        let available: Vec<&str> = command_config.commands.iter().map(|c| c.name.as_str()).collect();
+                                        serde_json::json!({
+                                            "result": null,
+                                            "error": format!("Unknown command '{}'. Available: {:?}", cmd_name, available)
+                                        })
+                                    }
                                 }
+                                Err(e) => serde_json::json!({
+                                    "result": null,
+                                    "error": format!("Invalid JSON payload: {}", e)
+                                }),
                             }
-                            Err(e) => serde_json::json!({
-                                "result": null,
-                                "error": format!("Invalid JSON payload: {}", e)
-                            }),
                         }
-                    }
-                    None => {
-                        // No payload = list available commands
-                        let cmds: Vec<serde_json::Value> = command_config.commands.iter().map(|c| {
+                        None => {
+                            // No payload = list available commands
+                            let cmds: Vec<serde_json::Value> = command_config.commands.iter().map(|c| {
+                                serde_json::json!({
+                                    "name": c.name,
+                                    "description": c.description,
+                                    "parameters": c.parameters,
+                                    "returns": c.returns,
+                                })
+                            }).collect();
                             serde_json::json!({
-                                "name": c.name,
-                                "description": c.description,
-                                "parameters": c.parameters,
-                                "returns": c.returns,
+                                "result": cmds,
+                                "error": null
                             })
-                        }).collect();
-                        serde_json::json!({
-                            "result": cmds,
-                            "error": null
-                        })
+                        }
+                    };
+                    if let Err(e) = query.reply(query.key_expr(), ZBytes::from(response.to_string().into_bytes())).await {
+                        log::warn!("Failed to reply to command query: {}", e);
                     }
-                };
-                if let Err(e) = query.reply(query.key_expr(), ZBytes::from(response.to_string().into_bytes())).wait() {
-                    log::warn!("Failed to reply to command query: {}", e);
-                }
+                });
             })
             .await
             .map_err(|e| anyhow!("Failed to create command queryable: {}", e))?;
