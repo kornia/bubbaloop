@@ -1,52 +1,40 @@
-//! System prompt builder — injects live sensor inventory and schedules.
+//! System prompt builder — injects Soul identity, live node inventory,
+//! job schedules, and episodic search results.
 
-use crate::agent::memory::{ConversationRow, Schedule, SensorEvent, SkillSearchResult};
-use crate::skills::SkillConfig;
+use crate::agent::memory::episodic::LogEntry;
+use crate::agent::memory::semantic::Job;
+use crate::agent::soul::Soul;
 
-/// Build the system prompt with live sensor data injected.
+/// Build the system prompt from the Soul identity and live state.
 ///
-/// Includes role description, loaded skill instructions, current node
-/// inventory, active schedules, and recent sensor events. The prompt
-/// gives the Claude agent full context about the physical system it
-/// controls and the user's intent for each skill.
+/// The prompt structure:
+/// 1. Soul identity (from ~/.bubbaloop/soul/identity.md)
+/// 2. Current node inventory
+/// 3. Active jobs (from semantic memory)
+/// 4. Recent episodic context (from FTS5 search)
 pub fn build_system_prompt(
+    soul: &Soul,
     node_inventory: &str,
-    schedules: &[Schedule],
-    recent_events: &[SensorEvent],
-    skills: &[SkillConfig],
-    relevant_convos: &[ConversationRow],
-    relevant_events: &[SensorEvent],
-    relevant_skills: &[SkillSearchResult],
+    active_jobs: &[Job],
+    relevant_episodes: &[LogEntry],
 ) -> String {
     let mut parts = Vec::new();
 
-    // Role description
-    parts.push(
-        "You are Bubbaloop, an AI agent that controls physical sensors and hardware. \
-         You manage a fleet of sensor nodes (cameras, weather stations, telemetry devices) \
-         through the Bubbaloop skill runtime.\n\
-         \n\
-         You can list nodes, start/stop them, check their health, install new nodes from \
-         the marketplace, send commands, and query Zenoh topics. Always verify the current \
-         state before making changes.\n\
-         \n\
-         Be concise but informative. When you perform actions, report what you did and the result."
-            .to_string(),
-    );
+    // Soul identity (the core of the agent's personality)
+    parts.push(soul.identity.clone());
 
-    // Loaded skills — agent-readable instructions from ~/.bubbaloop/skills/
-    let skills_with_body: Vec<_> = skills.iter().filter(|s| !s.body.is_empty()).collect();
-    if !skills_with_body.is_empty() {
-        let mut skill_lines = vec!["\n## Skills\n".to_string()];
-        for skill in &skills_with_body {
-            skill_lines.push(format!("### {} (driver: {})\n", skill.name, skill.driver));
-            skill_lines.push(skill.body.clone());
-            skill_lines.push(String::new());
-        }
-        parts.push(skill_lines.join("\n"));
-    }
+    // Capabilities summary
+    parts.push(format!(
+        "\n## Configuration\n\n\
+         - Model: {}\n\
+         - Max turns per job: {}\n\
+         - Approval mode: {}",
+        soul.capabilities.model_name,
+        soul.capabilities.max_turns,
+        soul.capabilities.default_approval_mode,
+    ));
 
-    // Current sensor inventory
+    // Current node inventory
     parts.push(format!(
         "\n## Current Sensor Inventory\n\n{}",
         if node_inventory.is_empty() {
@@ -56,88 +44,34 @@ pub fn build_system_prompt(
         }
     ));
 
-    // Active schedules
-    if !schedules.is_empty() {
-        let mut schedule_lines = vec!["\n## Active Schedules\n".to_string()];
-        for sched in schedules {
-            let last = sched.last_run.as_deref().unwrap_or("never");
-            let next = sched.next_run.as_deref().unwrap_or("not scheduled");
-            schedule_lines.push(format!(
-                "- {} (cron: {}, tier: {}, last run: {}, next: {})",
-                sched.name, sched.cron, sched.tier, last, next
+    // Active jobs
+    let pending_jobs: Vec<_> = active_jobs
+        .iter()
+        .filter(|j| j.status == "pending" || j.status == "running")
+        .collect();
+    if !pending_jobs.is_empty() {
+        let mut job_lines = vec!["\n## Active Jobs\n".to_string()];
+        for job in &pending_jobs {
+            let cron = job.cron_schedule.as_deref().unwrap_or("one-off");
+            job_lines.push(format!(
+                "- {} [status={}, schedule={}, retries={}]",
+                job.prompt_payload, job.status, cron, job.retry_count
             ));
         }
-        parts.push(schedule_lines.join("\n"));
+        parts.push(job_lines.join("\n"));
     }
 
-    // Recent events (limit to 10)
-    if !recent_events.is_empty() {
-        let mut event_lines = vec!["\n## Recent Events\n".to_string()];
-        for event in recent_events.iter().take(10) {
-            let details = event.details.as_deref().unwrap_or("");
-            if details.is_empty() {
-                event_lines.push(format!(
-                    "- [{}] {} {}",
-                    event.timestamp, event.node_name, event.event_type
-                ));
-            } else {
-                event_lines.push(format!(
-                    "- [{}] {} {} ({})",
-                    event.timestamp, event.node_name, event.event_type, details
-                ));
-            }
+    // Relevant episodic context
+    if !relevant_episodes.is_empty() {
+        let mut ep_lines = vec!["\n## Relevant Context (from episodic memory)\n".to_string()];
+        for entry in relevant_episodes.iter().take(5) {
+            let content_preview: String = entry.content.chars().take(200).collect();
+            ep_lines.push(format!(
+                "- [{}] {}: {}",
+                entry.timestamp, entry.role, content_preview
+            ));
         }
-        parts.push(event_lines.join("\n"));
-    }
-
-    // Relevant context from semantic search (FTS5)
-    if !relevant_convos.is_empty() || !relevant_events.is_empty() || !relevant_skills.is_empty() {
-        let mut ctx_lines = vec!["\n## Relevant Context (from past interactions)\n".to_string()];
-
-        if !relevant_convos.is_empty() {
-            ctx_lines.push("**Related conversations:**".to_string());
-            for conv in relevant_convos.iter().take(5) {
-                ctx_lines.push(format!(
-                    "- [{}] {}: {}",
-                    conv.timestamp, conv.role, conv.content
-                ));
-            }
-            ctx_lines.push(String::new());
-        }
-
-        if !relevant_events.is_empty() {
-            ctx_lines.push("**Related events:**".to_string());
-            for event in relevant_events.iter().take(5) {
-                let details = event.details.as_deref().unwrap_or("");
-                if details.is_empty() {
-                    ctx_lines.push(format!(
-                        "- [{}] {} {}",
-                        event.timestamp, event.node_name, event.event_type
-                    ));
-                } else {
-                    ctx_lines.push(format!(
-                        "- [{}] {} {} ({})",
-                        event.timestamp, event.node_name, event.event_type, details
-                    ));
-                }
-            }
-            ctx_lines.push(String::new());
-        }
-
-        if !relevant_skills.is_empty() {
-            ctx_lines.push("**Related skills:**".to_string());
-            for skill in relevant_skills.iter().take(3) {
-                // Truncate body to first 200 chars for context
-                let body_preview: String = skill.body.chars().take(200).collect();
-                ctx_lines.push(format!(
-                    "- {} (driver: {}): {}",
-                    skill.name, skill.driver, body_preview
-                ));
-            }
-            ctx_lines.push(String::new());
-        }
-
-        parts.push(ctx_lines.join("\n"));
+        parts.push(ep_lines.join("\n"));
     }
 
     parts.join("\n")
@@ -148,155 +82,99 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prompt_with_empty_inventory() {
-        let prompt = build_system_prompt("", &[], &[], &[], &[], &[], &[]);
-        assert!(prompt.contains("You are Bubbaloop"));
+    fn prompt_with_default_soul() {
+        let soul = Soul::default();
+        let prompt = build_system_prompt(&soul, "", &[], &[]);
+        assert!(prompt.contains("Bubbaloop"));
         assert!(prompt.contains("No sensors installed."));
-        // Should not contain schedule or event sections
-        assert!(!prompt.contains("Active Schedules"));
-        assert!(!prompt.contains("Recent Events"));
+        assert!(prompt.contains("claude-sonnet-4-20250514"));
     }
 
     #[test]
-    fn prompt_with_nodes() {
-        let inventory = "2 node(s) registered:\n  \
-                         - rtsp-camera [status=Running, health=Healthy]\n  \
-                         - openmeteo [status=Stopped, health=Unknown]";
-        let prompt = build_system_prompt(inventory, &[], &[], &[], &[], &[], &[]);
-        assert!(prompt.contains("You are Bubbaloop"));
-        assert!(prompt.contains("rtsp-camera"));
-        assert!(prompt.contains("openmeteo"));
-        assert!(prompt.contains("2 node(s) registered"));
-        // Empty inventory text should NOT appear
+    fn prompt_with_custom_soul() {
+        let soul = Soul {
+            identity: "I am a test agent.".to_string(),
+            capabilities: crate::agent::soul::Capabilities {
+                model_name: "test-model".to_string(),
+                max_turns: 5,
+                default_approval_mode: "propose".to_string(),
+                ..Default::default()
+            },
+        };
+        let prompt =
+            build_system_prompt(&soul, "1 node(s) registered:\n  - cam [Running]", &[], &[]);
+        assert!(prompt.contains("I am a test agent."));
+        assert!(prompt.contains("test-model"));
+        assert!(prompt.contains("propose"));
+        assert!(prompt.contains("cam"));
         assert!(!prompt.contains("No sensors installed."));
     }
 
     #[test]
-    fn prompt_with_schedules() {
-        let schedules = vec![
-            Schedule {
-                id: "s1".into(),
-                name: "health-patrol".into(),
-                cron: "*/15 * * * *".into(),
-                actions: r#"["check_all_health"]"#.into(),
-                tier: 1,
-                last_run: Some("1709136000".into()),
-                next_run: Some("1709136900".into()),
-                created_by: "yaml".into(),
-            },
-            Schedule {
-                id: "s2".into(),
-                name: "daily-restart".into(),
-                cron: "0 3 * * *".into(),
-                actions: r#"["restart_all"]"#.into(),
-                tier: 2,
-                last_run: None,
-                next_run: None,
-                created_by: "agent".into(),
-            },
-        ];
-        let prompt =
-            build_system_prompt("No nodes registered.", &schedules, &[], &[], &[], &[], &[]);
-        assert!(prompt.contains("Active Schedules"));
-        assert!(prompt.contains("health-patrol"));
+    fn prompt_with_active_jobs() {
+        let soul = Soul::default();
+        let jobs = vec![Job {
+            id: "job-1".to_string(),
+            cron_schedule: Some("*/15 * * * *".to_string()),
+            next_run_at: "0".to_string(),
+            prompt_payload: "health patrol".to_string(),
+            status: "pending".to_string(),
+            recurrence: true,
+            retry_count: 0,
+            last_error: None,
+        }];
+        let prompt = build_system_prompt(&soul, "", &jobs, &[]);
+        assert!(prompt.contains("Active Jobs"));
+        assert!(prompt.contains("health patrol"));
         assert!(prompt.contains("*/15 * * * *"));
-        assert!(prompt.contains("tier: 1"));
-        assert!(prompt.contains("last run: 1709136000"));
-        assert!(prompt.contains("daily-restart"));
-        assert!(prompt.contains("last run: never"));
-        assert!(prompt.contains("next: not scheduled"));
     }
 
     #[test]
-    fn prompt_with_events() {
-        let events: Vec<SensorEvent> = (0..15)
-            .map(|i| SensorEvent {
-                id: format!("e{}", i),
-                timestamp: format!("{}", 1709136000 + i),
-                node_name: "rtsp-camera".into(),
-                event_type: if i % 2 == 0 {
-                    "health_ok".into()
-                } else {
-                    "started".into()
-                },
-                details: if i == 0 {
-                    Some(r#"{"uptime":120}"#.into())
-                } else {
-                    None
-                },
+    fn prompt_with_episodic_context() {
+        let soul = Soul::default();
+        let episodes = vec![LogEntry {
+            timestamp: "2026-03-03T10:00:00Z".to_string(),
+            role: "assistant".to_string(),
+            content: "Restarted front-door camera after 5 minutes offline.".to_string(),
+            job_id: Some("job-1".to_string()),
+            flush: None,
+        }];
+        let prompt = build_system_prompt(&soul, "", &[], &episodes);
+        assert!(prompt.contains("Relevant Context"));
+        assert!(prompt.contains("front-door camera"));
+    }
+
+    #[test]
+    fn prompt_skips_completed_jobs() {
+        let soul = Soul::default();
+        let jobs = vec![Job {
+            id: "job-1".to_string(),
+            cron_schedule: None,
+            next_run_at: "0".to_string(),
+            prompt_payload: "done task".to_string(),
+            status: "completed".to_string(),
+            recurrence: false,
+            retry_count: 0,
+            last_error: None,
+        }];
+        let prompt = build_system_prompt(&soul, "", &jobs, &[]);
+        assert!(!prompt.contains("Active Jobs"));
+    }
+
+    #[test]
+    fn prompt_limits_episodic_to_5() {
+        let soul = Soul::default();
+        let episodes: Vec<LogEntry> = (0..10)
+            .map(|i| LogEntry {
+                timestamp: format!("2026-03-03T10:{:02}:00Z", i),
+                role: "user".to_string(),
+                content: format!("message {}", i),
+                job_id: None,
+                flush: None,
             })
             .collect();
-
-        let prompt = build_system_prompt("No nodes registered.", &[], &events, &[], &[], &[], &[]);
-        assert!(prompt.contains("Recent Events"));
-        assert!(prompt.contains("rtsp-camera"));
-        assert!(prompt.contains("health_ok"));
-        // First event should have details
-        assert!(prompt.contains(r#"{"uptime":120}"#));
-        // Should be limited to 10 events (we passed 15)
-        let event_count = prompt.matches("rtsp-camera").count();
-        assert_eq!(
-            event_count, 10,
-            "should limit to 10 events, got {}",
-            event_count
-        );
-    }
-
-    #[test]
-    fn prompt_with_skills() {
-        let skills = vec![SkillConfig {
-            name: "entrance-cam".into(),
-            driver: "rtsp".into(),
-            enabled: true,
-            config: Default::default(),
-            schedule: None,
-            actions: Vec::new(),
-            body: "# Entrance Camera\n\nTapo C200 at the front door.\nURL: rtsp://192.168.1.141:554/stream2".into(),
-        }];
-        let prompt = build_system_prompt("", &[], &[], &skills, &[], &[], &[]);
-        assert!(prompt.contains("## Skills"));
-        assert!(prompt.contains("entrance-cam (driver: rtsp)"));
-        assert!(prompt.contains("Entrance Camera"));
-        assert!(prompt.contains("front door"));
-    }
-
-    #[test]
-    fn prompt_skips_skills_without_body() {
-        let skills = vec![SkillConfig {
-            name: "legacy-cam".into(),
-            driver: "rtsp".into(),
-            enabled: true,
-            config: Default::default(),
-            schedule: None,
-            actions: Vec::new(),
-            body: String::new(),
-        }];
-        let prompt = build_system_prompt("", &[], &[], &skills, &[], &[], &[]);
-        assert!(!prompt.contains("Skills"));
-    }
-
-    #[test]
-    fn prompt_with_relevant_context() {
-        let convos = vec![ConversationRow {
-            id: "c1".into(),
-            timestamp: "2026-02-28T10:00:00Z".into(),
-            role: "user".into(),
-            content: "The entrance camera keeps freezing".into(),
-            tool_calls: None,
-        }];
-        let events = vec![SensorEvent {
-            id: "e1".into(),
-            timestamp: "2026-02-28T09:55:00Z".into(),
-            node_name: "rtsp-camera".into(),
-            event_type: "health_degraded".into(),
-            details: Some("frame_drop_rate=0.3".into()),
-        }];
-        let prompt = build_system_prompt("", &[], &[], &[], &convos, &events, &[]);
-        assert!(prompt.contains("Relevant Context"));
-        assert!(prompt.contains("Related conversations"));
-        assert!(prompt.contains("entrance camera keeps freezing"));
-        assert!(prompt.contains("Related events"));
-        assert!(prompt.contains("health_degraded"));
-        assert!(prompt.contains("frame_drop_rate"));
+        let prompt = build_system_prompt(&soul, "", &[], &episodes);
+        let count = prompt.matches("message ").count();
+        assert_eq!(count, 5, "should limit episodic context to 5 entries");
     }
 }

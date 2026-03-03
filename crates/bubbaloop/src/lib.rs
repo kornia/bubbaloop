@@ -32,7 +32,7 @@ pub mod validation;
 /// YAML skill loader — driver catalog and config parsing
 pub mod skills;
 
-/// Agent layer: Claude API chat, SQLite memory, scheduling
+/// Agent layer: OpenClaw-inspired rewrite (Soul, 3-tier memory, adaptive heartbeat)
 pub mod agent;
 
 /// Protobuf schemas for bubbaloop

@@ -54,15 +54,15 @@ bubbaloop agent
 │  BUBBALOOP  (single binary, ~12-13 MB)                   │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │  Agent Layer                                        │  │
-│  │  Claude API | Chat | Scheduler (offline Tier 1)     │  │
+│  │  Agent Layer (OpenClaw architecture)                │  │
+│  │  Soul + onboarding | ModelProvider | Heartbeat     │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  Memory (SQLite, +1-2 MB)                           │  │
-│  │  Conversations | Sensor events | Schedules          │  │
+│  │  3-Tier Memory                                      │  │
+│  │  Short-term (RAM) | Episodic (NDJSON) | Semantic DB │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (23+ tools) — sole control interface    │  │
+│  │  MCP Server (25 tools) — sole control interface     │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  Daemon (passive skill runtime)                     │  │
@@ -89,7 +89,7 @@ bubbaloop agent
 ### v0.0.1–v0.0.6: MCP-Native Sensor Runtime
 
 - [x] Single binary: CLI + daemon + MCP server
-- [x] 23 MCP tools (discovery, lifecycle, data, config, system)
+- [x] 25 MCP tools (discovery, lifecycle, data, config, system)
 - [x] MCP is sole control interface — Zenoh for data only
 - [x] Marketplace with precompiled binaries (ARM64 + x86_64)
 - [x] Full node lifecycle via MCP: install, uninstall, start, stop, restart, autostart
@@ -99,7 +99,7 @@ bubbaloop agent
 - [x] 3-tier RBAC (Viewer/Operator/Admin) + bearer token auth
 - [x] systemd integration via D-Bus (zbus)
 - [x] Dashboard (React + Vite)
-- [x] 358 unit tests + 47 MCP integration tests
+- [x] 445 unit tests + 47 MCP integration tests
 - [x] TUI removed — codebase simplified to ~14K lines
 
 **Binary size: 11 MB.** Runs on NVIDIA Jetson, Raspberry Pi, any Linux ARM64/x86_64.
@@ -170,26 +170,24 @@ config:
 
 ---
 
-### Phase 3: SQLite Memory
+### Phase 3: 3-Tier Memory (OpenClaw Rewrite)
 
-**Goal:** "What happened at the front door yesterday?" — sensor-native memory.
+**Goal:** "What happened at the front door yesterday?" — sensor-native memory with episodic recall.
 
 **Constraint:** +1-2 MB binary size only. No Arrow, no DataFusion, no heavy frameworks.
 
-```sql
--- Three tables, one embedded database
-conversations (id, timestamp, role, content, tool_calls)
-sensor_events (id, timestamp, node_name, event_type, details)
-schedules     (id, name, cron, actions, tier, last_run, next_run)
-```
+**3-Tier architecture** (OpenClaw-inspired):
+- **Tier 1 — Short-term (RAM):** `Vec<Message>` for active turn
+- **Tier 2 — Episodic (NDJSON + FTS5):** Daily log files with BM25 search
+- **Tier 3 — Semantic (SQLite):** Jobs + proposals tables
 
 **Deliverables:**
 - [x] SQLite via `rusqlite` (static libsqlite3) at `~/.bubbaloop/memory.db`
-- [x] `conversations` table with timestamp indexing
-- [x] `sensor_events` table: health changes, crashes, alerts with timestamps
-- [x] `schedules` table: active jobs + execution history
-- [ ] Daemon event hook: write sensor events as they happen (no polling)
-- [x] Context injection: recent events included in agent system prompt
+- [x] NDJSON episodic log (`~/.bubbaloop/memory/daily_logs_*.jsonl`)
+- [x] FTS5 full-text search for episodic recall
+- [x] Jobs table with retry logic + circuit breaker
+- [x] Proposals table for human-in-the-loop approval
+- [x] Context injection: recent events + episodic recall in agent system prompt
 - [ ] Future: add `sqlite-vec` (~200KB) for vector search if needed
 
 **New deps:** `rusqlite` (+1-2 MB). **New code:** ~300-500 lines.
@@ -205,11 +203,11 @@ Target:             ~12-13 MB
 
 ---
 
-### Phase 4: Scheduling
+### Phase 4: Scheduling + Adaptive Heartbeat
 
 **Goal:** Autonomous hardware management without always-on LLM.
 
-**Key insight:** Always-on LLM agents cost ~$5-10/day. Bubbaloop's Tier 1 schedules run offline with zero LLM calls.
+**Key insight:** Always-on LLM agents cost ~$5-10/day. Bubbaloop's adaptive heartbeat idles at ~1,440 beats/day ($0.03/day Haiku), spiking only when events occur.
 
 #### Tier 1: Declarative (no LLM, works offline)
 
@@ -234,10 +232,12 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 **Deliverables:**
 - [x] Tier 1 cron executor with built-in action set (offline, no LLM)
 - [x] YAML `schedule:` + `actions:` syntax in skill files
-- [ ] Tier 2 conversational schedules stored in SQLite
+- [x] Tier 2 conversational schedules via `schedule_task` tool
+- [x] Adaptive heartbeat: arousal-based interval (5s–60s)
+- [x] Soul hot-reload: edit `~/.bubbaloop/soul/` and agent picks up changes live
+- [x] Human-in-the-loop proposals: list/approve/reject via MCP
 - [ ] Rate limiting: configurable max LLM calls/day
 - [ ] `bubbaloop jobs` CLI: list, pause, resume, delete
-- [ ] Execution history logged in SQLite
 
 | | Always-on LLM | Bubbaloop |
 |---|---|---|
@@ -257,7 +257,7 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 **Deliverables:**
 - [ ] `curl -sSL https://get.bubbaloop.com | bash` install script
 - [x] `bubbaloop login` — API key + Claude subscription (setup-token) authentication
-- [ ] First-run wizard: detect hardware, suggest skills
+- [x] First-run onboarding: name, focus, approval mode → personalized `identity.md`
 - [ ] `bubbaloop agent` auto-loads skills, auto-installs drivers, starts chat
 - [ ] AI-assisted skill creation: "Add my garage camera at rtsp://..."
 - [ ] Conversational scheduling: "Check cameras every hour"
@@ -301,7 +301,7 @@ These are out of scope but represent natural evolution:
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 23+ tools |
+| Control | MCP (rmcp) | Standard AI agent interface, 25 tools |
 | Memory | SQLite (rusqlite) | Embedded, +1-2 MB, battle-tested everywhere |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
@@ -312,6 +312,7 @@ These are out of scope but represent natural evolution:
 
 ## Design Documents
 
+- `docs/plans/2026-03-03-openclaw-agent-rewrite-design.md` — OpenClaw agent rewrite (Soul, 3-tier memory, adaptive heartbeat, proposals)
 - `docs/plans/2026-02-27-hardware-ai-agent-design.md` — Full agent design (architecture, memory, scheduling, security)
 - `docs/plans/2026-02-28-agent-implementation-design.md` — Agent implementation design (Phases 2-4)
 - `docs/plans/2026-02-28-agent-implementation.md` — Step-by-step implementation plan

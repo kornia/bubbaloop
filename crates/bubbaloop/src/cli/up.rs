@@ -221,10 +221,10 @@ impl UpCommand {
             started_count, already_running, skipped_count, disabled_count
         );
 
-        // 6. Register skill schedules in memory DB
+        // 6. Register skill schedules as agent jobs
         let db_path = get_bubbaloop_home().join("memory.db");
-        let mem = match crate::agent::memory::Memory::open(&db_path) {
-            Ok(m) => m,
+        let store = match crate::agent::memory::semantic::SemanticStore::open(&db_path) {
+            Ok(s) => s,
             Err(e) => {
                 log::warn!(
                     "Could not open memory DB, skipping schedule registration: {}",
@@ -238,22 +238,29 @@ impl UpCommand {
                 if !skill.actions.is_empty() {
                     let actions_json =
                         serde_json::to_string(&skill.actions).unwrap_or_else(|_| "[]".to_string());
-                    let sched = crate::agent::memory::Schedule {
+                    let prompt = format!("[skill:{}] {}", skill.name, actions_json);
+                    let next_run = crate::agent::scheduler::next_run_after(
+                        schedule_expr,
+                        crate::agent::scheduler::now_epoch_secs(),
+                    )
+                    .map(|ts| ts.to_string())
+                    .unwrap_or_else(|_| "0".to_string());
+                    let job = crate::agent::memory::semantic::Job {
                         id: uuid::Uuid::new_v4().to_string(),
-                        name: skill.name.clone(),
-                        cron: schedule_expr.clone(),
-                        actions: actions_json,
-                        tier: 1,
-                        last_run: None,
-                        next_run: None,
-                        created_by: "yaml".to_string(),
+                        cron_schedule: Some(schedule_expr.clone()),
+                        next_run_at: next_run,
+                        prompt_payload: prompt,
+                        status: "pending".to_string(),
+                        recurrence: true,
+                        retry_count: 0,
+                        last_error: None,
                     };
                     if self.dry_run {
                         println!(
                             "  [dry-run] Would register schedule: {} ({})",
                             skill.name, schedule_expr
                         );
-                    } else if let Err(e) = mem.upsert_schedule(&sched) {
+                    } else if let Err(e) = store.create_job(&job) {
                         println!("  [warn] Failed to register schedule: {}", e);
                     } else {
                         println!("  Registered schedule: {} ({})", skill.name, schedule_expr);

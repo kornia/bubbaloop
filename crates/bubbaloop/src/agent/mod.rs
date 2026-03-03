@@ -1,76 +1,69 @@
-/// Raw reqwest Claude API client with tool_use support.
-pub mod claude;
+//! Agent — OpenClaw-inspired architecture with Soul, 3-tier memory, and adaptive heartbeat.
+//!
+//! Module structure (design doc Section 6):
+//! - `soul` — Hot-swappable identity + capabilities
+//! - `provider` — ModelProvider trait + Claude/Ollama backends
+//! - `memory` — 3-tier: short-term (RAM) + episodic (NDJSON) + semantic (SQLite)
+//! - `heartbeat` — Adaptive heartbeat with arousal/decay
+//! - `dispatch` — Internal MCP tool dispatch
+//! - `prompt` — System prompt builder
+//! - `scheduler` — Job poller integrated with heartbeat
 
-/// Minimal local Ollama chat backend.
-pub mod ollama;
-
-/// Internal MCP tool dispatch — calls PlatformOperations directly.
 pub mod dispatch;
-
-/// SQLite memory layer — conversations, sensor events, schedules.
+pub mod heartbeat;
 pub mod memory;
-
-/// System prompt builder — injects live sensor inventory and schedules.
 pub mod prompt;
-
-/// Cron-based scheduler with Tier 1 built-in actions.
+pub mod provider;
 pub mod scheduler;
+pub mod soul;
 
-use crate::agent::claude::{ClaudeClient, ContentBlock, Message};
 use crate::agent::dispatch::Dispatcher;
+use crate::agent::heartbeat::{ArousalSource, ArousalState, HeartbeatState};
+use crate::agent::memory::episodic::EpisodicLog;
 use crate::agent::memory::Memory;
-use crate::agent::prompt::build_system_prompt;
+use crate::agent::provider::claude::{ClaudeProvider, DEFAULT_MODEL};
+use crate::agent::provider::{ContentBlock, Message, ModelProvider};
+use crate::agent::soul::Soul;
 use crate::daemon::registry::get_bubbaloop_home;
 use crate::mcp::platform::DaemonPlatform;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
-/// Maximum number of conversation messages to keep in context.
-///
-/// Older messages are dropped to avoid exceeding Claude's context window.
-/// Each pair (user + assistant) counts as 2, so 40 messages ≈ 20 exchanges.
+/// Maximum number of conversation messages to keep in short-term memory.
 const MAX_CONVERSATION_MESSAGES: usize = 40;
+
+/// Default context window size (tokens). Used for flush threshold calculation.
+const DEFAULT_CONTEXT_WINDOW: u32 = 200_000;
 
 /// Errors from agent operations.
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    #[error("Claude API error: {0}")]
-    Claude(#[from] claude::ClaudeError),
-    #[error("Ollama API error: {0}")]
-    Ollama(#[from] ollama::OllamaError),
+    #[error("Provider error: {0}")]
+    Provider(#[from] provider::ProviderError),
     #[error("Memory error: {0}")]
     Memory(#[from] memory::MemoryError),
     #[error("Zenoh connection failed: {0}")]
     Zenoh(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Unknown provider: {0}")]
-    InvalidProvider(String),
 }
 
 pub type Result<T> = std::result::Result<T, AgentError>;
 
 /// Configuration for the interactive agent session.
 pub struct AgentConfig {
-    /// Claude model override (uses default if None).
+    /// Claude model override (uses Soul default if None).
     pub model: Option<String>,
-    /// Provider selection (claude, ollama)
-    pub provider: Option<String>,
 }
 
 /// Create a lightweight Zenoh session for the agent.
-///
-/// Uses client mode with disabled scouting for fast startup (~0s instead of
-/// ~5s). Falls back gracefully — tools that need Zenoh will return errors
-/// but the chat loop still works.
 pub async fn create_agent_session(endpoint: Option<&str>) -> Result<Arc<zenoh::Session>> {
     let mut config = zenoh::Config::default();
 
-    // Client mode — lighter weight, no routing
     config
         .insert_json5("mode", "\"client\"")
         .expect("Failed to set Zenoh mode");
 
-    // Resolve endpoint
     let env_endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT").ok();
     let ep = endpoint
         .or(env_endpoint.as_deref())
@@ -80,7 +73,6 @@ pub async fn create_agent_session(endpoint: Option<&str>) -> Result<Arc<zenoh::S
         .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
         .expect("Failed to set Zenoh endpoint");
 
-    // Disable scouting entirely for instant startup
     config
         .insert_json5("scouting/multicast/enabled", "false")
         .expect("Failed to disable multicast scouting");
@@ -88,7 +80,6 @@ pub async fn create_agent_session(endpoint: Option<&str>) -> Result<Arc<zenoh::S
         .insert_json5("scouting/gossip/enabled", "false")
         .expect("Failed to disable gossip scouting");
 
-    // Single attempt — don't block if router is down
     let session = zenoh::open(config)
         .await
         .map_err(|e| AgentError::Zenoh(e.to_string()))?;
@@ -96,352 +87,484 @@ pub async fn create_agent_session(endpoint: Option<&str>) -> Result<Arc<zenoh::S
     Ok(Arc::new(session))
 }
 
-enum LlmClient {
-    Claude(ClaudeClient),
-    Ollama(ollama::OllamaClient),
-}
+/// Run a single agent job (one complete turn cycle).
+///
+/// State machine:
+/// 1. Hydrate: read Soul, build system prompt with state context
+/// 2. Cycle: max_turns, call provider.generate(), log to episodic, dispatch tools
+/// 3. Finalize: update job status, handle failures
+async fn run_agent_turn<M: ModelProvider, P: crate::mcp::platform::PlatformOperations>(
+    provider: &M,
+    dispatcher: &Dispatcher<P>,
+    memory: &mut Memory,
+    soul: &Soul,
+    user_input: Option<&str>,
+    job_id: Option<&str>,
+) -> Result<()> {
+    // 1. Build system prompt
+    let inventory = dispatcher.get_node_inventory().await;
+    let active_jobs = memory.semantic.pending_jobs().unwrap_or_default();
+    let decay_half_life = soul.capabilities.episodic_decay_half_life_days;
+    let relevant_episodes = match user_input {
+        Some(input) => memory
+            .episodic
+            .search_with_decay(input, 5, decay_half_life)
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let system_prompt =
+        prompt::build_system_prompt(soul, &inventory, &active_jobs, &relevant_episodes);
 
-impl LlmClient {
-    async fn send(
-        &self,
-        system: Option<&str>,
-        messages: &[crate::agent::claude::Message],
-        tools: &Vec<crate::agent::claude::ToolDefinition>,
-    ) -> Result<crate::agent::claude::ApiResponse> {
-        match self {
-            LlmClient::Claude(c) => c
-                .send(system, messages, tools)
-                .await
-                .map_err(AgentError::Claude),
-            LlmClient::Ollama(c) => c
-                .send(system, messages, tools)
-                .await
-                .map_err(AgentError::Ollama),
+    // Add user input to short-term memory
+    if let Some(input) = user_input {
+        memory.short_term.push(Message::user(input));
+        // Log to episodic
+        let entry = EpisodicLog::make_entry("user", input, job_id);
+        if let Err(e) = memory.episodic.append(&entry) {
+            log::warn!("Failed to log user message to episodic: {}", e);
         }
     }
+
+    let tools = Dispatcher::<P>::tool_definitions();
+
+    // 2. Turn cycle (max_turns)
+    let mut last_input_tokens = 0u32;
+    for _turn in 0..soul.capabilities.max_turns {
+        let response = match provider
+            .generate(Some(&system_prompt), &memory.short_term, &tools)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("Provider error: {}", e);
+                println!("Error: {}", e);
+                break;
+            }
+        };
+
+        last_input_tokens = response.usage.input_tokens;
+
+        // Build assistant message and add to short-term
+        let assistant_msg = Message {
+            role: "assistant".to_string(),
+            content: response.content.clone(),
+        };
+        memory.short_term.push(assistant_msg);
+
+        // Print text blocks
+        let text = response.text();
+        if !text.is_empty() {
+            println!("{}", text);
+            // Log to episodic
+            let entry = EpisodicLog::make_entry("assistant", &text, job_id);
+            if let Err(e) = memory.episodic.append(&entry) {
+                log::warn!("Failed to log assistant message to episodic: {}", e);
+            }
+        }
+
+        // Check for tool calls
+        let tool_calls = response.tool_calls();
+        if tool_calls.is_empty() {
+            break; // Text-only response, turn complete
+        }
+
+        // Dispatch tool calls
+        let mut tool_results = Vec::new();
+        for tc in &tool_calls {
+            println!("  [calling {}...]", tc.name);
+            log::info!("[Agent] calling tool: {}", tc.name);
+
+            // Memory tools are handled inline (EpisodicLog holds !Send Connection)
+            let result = match tc.name.as_str() {
+                "memory_search" => {
+                    let query = tc.input.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                    let limit =
+                        tc.input.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+                    let decay = soul.capabilities.episodic_decay_half_life_days;
+                    match memory.episodic.search_with_decay(query, limit, decay) {
+                        Ok(entries) if entries.is_empty() => ContentBlock::ToolResult {
+                            tool_use_id: tc.id.clone(),
+                            content: "No matching entries found.".to_string(),
+                            is_error: None,
+                        },
+                        Ok(entries) => {
+                            let text = entries
+                                .iter()
+                                .map(|e| format!("[{}] {}: {}", e.timestamp, e.role, e.content))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            ContentBlock::ToolResult {
+                                tool_use_id: tc.id.clone(),
+                                content: text,
+                                is_error: None,
+                            }
+                        }
+                        Err(e) => ContentBlock::ToolResult {
+                            tool_use_id: tc.id.clone(),
+                            content: format!("Error: {}", e),
+                            is_error: Some(true),
+                        },
+                    }
+                }
+                "memory_forget" => {
+                    let query = tc.input.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                    let reason = tc
+                        .input
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("agent requested");
+                    match memory.episodic.forget(query, reason) {
+                        Ok(0) => ContentBlock::ToolResult {
+                            tool_use_id: tc.id.clone(),
+                            content: "No matching entries found to forget.".to_string(),
+                            is_error: None,
+                        },
+                        Ok(n) => ContentBlock::ToolResult {
+                            tool_use_id: tc.id.clone(),
+                            content: format!("Forgot {} entries matching '{}'.", n, query),
+                            is_error: None,
+                        },
+                        Err(e) => ContentBlock::ToolResult {
+                            tool_use_id: tc.id.clone(),
+                            content: format!("Error: {}", e),
+                            is_error: Some(true),
+                        },
+                    }
+                }
+                _ => dispatcher.call_tool(&tc.id, &tc.name, &tc.input).await,
+            };
+
+            if let ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } = &result
+            {
+                tool_results.push((tool_use_id.clone(), content.clone(), *is_error));
+                // Log tool result to episodic
+                let entry = EpisodicLog::make_entry("tool", content, job_id);
+                if let Err(e) = memory.episodic.append(&entry) {
+                    log::warn!("Failed to log tool result to episodic: {}", e);
+                }
+            }
+        }
+
+        // Add tool results to short-term memory
+        memory.short_term.push(Message::tool_results(tool_results));
+    }
+
+    // 2.5. Pre-compaction flush (design Section 5.5)
+    //
+    // When context usage approaches the window limit, trigger a silent flush turn.
+    // The flush turn asks the model to persist important state before context compaction.
+    // This does NOT count toward max_turns.
+    let flush_threshold = soul.capabilities.compaction_flush_threshold_tokens as u32;
+    if last_input_tokens > 0
+        && last_input_tokens > DEFAULT_CONTEXT_WINDOW.saturating_sub(flush_threshold)
+    {
+        log::info!(
+            "[Agent] Triggering pre-compaction flush (input_tokens={}, threshold={})",
+            last_input_tokens,
+            DEFAULT_CONTEXT_WINDOW - flush_threshold
+        );
+
+        // Add flush instruction as a user message
+        let flush_instruction =
+            "SYSTEM: Context window is approaching capacity. Persist any important state \
+             to memory before context compaction. Summarize: active proposals, node health \
+             assessments, unresolved decisions, and key reasoning. Be concise.";
+        memory.short_term.push(Message::user(flush_instruction));
+
+        if let Ok(flush_response) = provider
+            .generate(Some(&system_prompt), &memory.short_term, &tools)
+            .await
+        {
+            let flush_text = flush_response.text();
+            if is_flush_substantive(&flush_text) {
+                // Log flush to episodic with flush: true tag
+                let entry = EpisodicLog::make_flush_entry(&flush_text, job_id);
+                if let Err(e) = memory.episodic.append(&entry) {
+                    log::warn!("Failed to log flush to episodic: {}", e);
+                }
+                log::info!("[Agent] Flush persisted ({} chars)", flush_text.len());
+            } else {
+                log::debug!("[Agent] Flush skipped (not substantive)");
+            }
+        }
+    }
+
+    // 3. Trim short-term memory
+    if memory.short_term.len() > MAX_CONVERSATION_MESSAGES {
+        let drain_count = memory.short_term.len() - MAX_CONVERSATION_MESSAGES;
+        memory.short_term.drain(..drain_count);
+    }
+
+    Ok(())
 }
 
-/// Run the interactive agent REPL.
+/// Check whether flush text is substantive enough to persist.
 ///
-/// Connects to the Claude API, initialises the tool dispatcher and memory
-/// store, then loops reading user input from stdin. Each message is sent
-/// to Claude along with the live system prompt (sensor inventory, schedules,
-/// recent events). Tool-use responses are dispatched and fed back until
-/// the model produces a final text reply.
+/// Returns false for empty/short text or phrases indicating nothing to save.
+/// This prevents context clutter from trivial flush responses.
+fn is_flush_substantive(text: &str) -> bool {
+    if text.len() < 50 {
+        return false;
+    }
+    let lower = text.to_lowercase();
+    let no_content_phrases = [
+        "nothing to persist",
+        "no important state",
+        "nothing significant",
+        "no active proposals",
+        "nothing noteworthy",
+    ];
+    !no_content_phrases.iter().any(|p| lower.contains(p))
+}
+
+/// Run the interactive agent REPL with adaptive heartbeat.
 pub async fn run_agent(
     config: AgentConfig,
     session: Arc<zenoh::Session>,
     node_manager: Arc<crate::daemon::node_manager::NodeManager>,
 ) -> Result<()> {
-    // 1. Initialise client based on provider
-    let client = match config.provider.as_deref() {
-        Some("ollama") => {
-            LlmClient::Ollama(ollama::OllamaClient::from_env(config.model.as_deref())?)
+    // 1. Load Soul (creates defaults if needed)
+    Soul::ensure_defaults();
+
+    // First-run onboarding — ask name, focus, preferences
+    let soul_dir = soul::soul_directory();
+    if Soul::is_first_run(&soul_dir) {
+        if let Err(e) = Soul::run_onboarding(&soul_dir) {
+            log::warn!("Onboarding failed (using defaults): {}", e);
         }
-        Some(other) => return Err(AgentError::InvalidProvider(other.to_string())),
-        None => LlmClient::Claude(ClaudeClient::from_env(config.model.as_deref())?),
+    }
+
+    let soul = Arc::new(RwLock::new(Soul::load_or_default()));
+
+    // Resolve model: CLI override > Soul capability
+    let model_name = {
+        let s = soul.read().await;
+        config
+            .model
+            .clone()
+            .unwrap_or_else(|| s.capabilities.model_name.clone())
     };
 
-    // 2. Create dispatcher with DaemonPlatform
+    // 2. Initialize provider
+    let provider = ClaudeProvider::from_env(Some(&model_name))?;
+
+    // 3. Create dispatcher
     let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = crate::daemon::util::get_machine_id();
-    let node_manager_ref = node_manager.clone();
     let platform = Arc::new(DaemonPlatform {
-        node_manager,
-        session: session.clone(),
+        node_manager: node_manager.clone(),
+        session,
         scope: scope.clone(),
         machine_id: machine_id.clone(),
     });
-    let sched_scope = scope.clone();
-    let sched_machine_id = machine_id.clone();
-    let dispatcher = Dispatcher::new(platform.clone(), scope.clone(), machine_id.clone());
+    let dispatcher = Dispatcher::new(platform.clone(), scope, machine_id);
 
-    // 3. Get tool definitions
+    // 4. Open memory + startup cleanup
+    let base = get_bubbaloop_home();
+    let mut memory = Memory::open(&base)?;
+    {
+        let retention = soul.read().await.capabilities.episodic_log_retention_days;
+        memory.startup_cleanup(retention);
+    }
+
+    // 5. Set up shutdown signal
+    let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(());
+
+    // 6. Start soul watcher in background
+    let soul_clone = soul.clone();
+    let watcher_shutdown = shutdown_tx.subscribe();
+    tokio::spawn(soul::soul_watcher(soul_clone, watcher_shutdown));
+
+    // 7. Initialize arousal state
+    let initial_caps = soul.read().await.capabilities.clone();
+    let mut arousal = ArousalState::new(&initial_caps);
+
+    // 8. Welcome message
+    let display_model = config.model.as_deref().unwrap_or(DEFAULT_MODEL);
     let tools = Dispatcher::<DaemonPlatform>::tool_definitions();
-
-    // 4. Open memory store
-    let memory_path = get_bubbaloop_home().join("memory.db");
-    let memory = Memory::open(&memory_path)?;
-
-    // 4a. Seed conversation history from previous sessions
-    let mut conversation: Vec<Message> = Vec::new();
-    if let Ok(rows) = memory.recent_conversations(20) {
-        for row in rows.into_iter().rev() {
-            // DB returns DESC; reverse to get chronological order
-            match row.role.as_str() {
-                "user" => conversation.push(Message::user(&row.content)),
-                "assistant" if !row.content.is_empty() => {
-                    conversation.push(Message {
-                        role: "assistant".to_string(),
-                        content: vec![ContentBlock::Text { text: row.content }],
-                    });
-                }
-                _ => {} // skip tool-only rows
-            }
-        }
-        if !conversation.is_empty() {
-            log::info!(
-                "Restored {} messages from previous session",
-                conversation.len()
-            );
-        }
-    }
-
-    // 4b. Prune old data (keep 30 days)
-    match memory.prune_old_conversations(30) {
-        Ok(n) if n > 0 => log::info!("Pruned {} old conversation rows", n),
-        Err(e) => log::warn!("Failed to prune conversations: {}", e),
-        _ => {}
-    }
-    match memory.prune_old_events(30) {
-        Ok(n) if n > 0 => log::info!("Pruned {} old event rows", n),
-        Err(e) => log::warn!("Failed to prune events: {}", e),
-        _ => {}
-    }
-
-    // 4c. Load skill files (agent reads the markdown bodies as context)
-    let skills_dir = get_bubbaloop_home().join("skills");
-    let skills = crate::skills::load_skills(&skills_dir).unwrap_or_else(|e| {
-        log::warn!("Failed to load skills: {}", e);
-        Vec::new()
-    });
-
-    // 4d. Register skill schedules in memory (so scheduler can run them)
-    for skill in &skills {
-        if let Some(ref schedule_expr) = skill.schedule {
-            if !skill.actions.is_empty() {
-                let actions_json =
-                    serde_json::to_string(&skill.actions).unwrap_or_else(|_| "[]".to_string());
-                let sched = crate::agent::memory::Schedule {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    name: skill.name.clone(),
-                    cron: schedule_expr.clone(),
-                    actions: actions_json,
-                    tier: 1,
-                    last_run: None,
-                    next_run: None,
-                    created_by: "skill".to_string(),
-                };
-                if let Err(e) = memory.upsert_schedule(&sched) {
-                    log::warn!("Failed to register skill schedule '{}': {}", skill.name, e);
-                }
-            }
-        }
-    }
-
-    // 4e. Index skills for FTS5 full-text search
-    if let Err(e) = memory.index_skills(&skills) {
-        log::warn!("Failed to index skills for search: {}", e);
-    }
-
-    // 5. Start scheduler in background
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
-    tokio::spawn(scheduler::run_scheduler(
-        memory_path.clone(),
-        platform.clone(),
-        sched_scope,
-        sched_machine_id,
-        shutdown_rx.clone(),
-    ));
-
-    // 5b. Bridge node events to memory
-    let event_memory = Memory::open(&memory_path)?;
-    let mut event_rx = node_manager_ref.subscribe();
-    let mut event_shutdown_rx = shutdown_tx.subscribe();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                Ok(event) = event_rx.recv() => {
-                    let details = serde_json::to_string(&event.state).ok();
-                    if let Err(e) = event_memory.log_event(
-                        &event.node_name,
-                        &event.event_type,
-                        details.as_deref(),
-                    ) {
-                        log::warn!("Failed to persist node event: {}", e);
-                    }
-                }
-                _ = event_shutdown_rx.changed() => break,
-            }
-        }
-    });
-
-    // 6. Welcome message
-    let model_name = config
-        .model
-        .as_deref()
-        .unwrap_or(match config.provider.as_deref() {
-            Some("ollama") => ollama::DEFAULT_MODEL,
-            _ => claude::DEFAULT_MODEL,
-        });
-    let node_count = match dispatcher.get_node_inventory().await {
-        ref s if s.starts_with("No nodes") => "0".to_string(),
-        ref s => s
-            .lines()
-            .next()
-            .and_then(|l| l.split_whitespace().next())
-            .unwrap_or("0")
-            .to_string(),
-    };
+    let inventory = dispatcher.get_node_inventory().await;
+    let node_count = inventory
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().next())
+        .and_then(|n| n.parse::<usize>().ok())
+        .unwrap_or(0);
+    let agent_name = soul.read().await.name().to_string();
     println!();
-    println!("  Bubbaloop Agent v{}", env!("CARGO_PKG_VERSION"));
-    println!("  Model: {}", model_name);
+    println!("  {} v2 ({})", agent_name, env!("CARGO_PKG_VERSION"));
+    println!("  Model: {}", display_model);
     println!("  Tools: {} | Nodes: {}", tools.len(), node_count);
+    println!(
+        "  Heartbeat: {}s base, {}s min",
+        initial_caps.heartbeat_base_interval, initial_caps.heartbeat_min_interval
+    );
     println!();
     println!("  Type a message to chat, 'quit' to exit.");
 
-    // 7. Main REPL loop
+    // 9. Main event loop (heartbeat + REPL)
     let stdin = std::io::stdin();
+    let (repl_tx, mut repl_rx) = tokio::sync::mpsc::channel::<String>(1);
 
-    loop {
-        // Read user input
-        print!("> ");
-        use std::io::Write;
-        std::io::stdout().flush().ok();
-
-        let mut line = String::new();
-        let bytes_read = stdin.read_line(&mut line)?;
-
-        // EOF (Ctrl-D)
-        if bytes_read == 0 {
-            println!();
-            break;
-        }
-
-        let input = line.trim();
-        if input.is_empty() {
-            continue;
-        }
-        if input == "quit" || input == "exit" {
-            break;
-        }
-
-        // Build live system prompt with recency + relevance context
-        let inventory = dispatcher.get_node_inventory().await;
-        let schedules = memory.list_schedules().unwrap_or_default();
-        let recent_events = memory.recent_events(10).unwrap_or_default();
-
-        // FTS5 semantic search on user input
-        let relevant_convos = memory.search_conversations(input, 5).unwrap_or_default();
-        let relevant_events = memory.search_events(input, 5).unwrap_or_default();
-        let relevant_skills = memory.search_skills(input, 3).unwrap_or_default();
-
-        let system_prompt = build_system_prompt(
-            &inventory,
-            &schedules,
-            &recent_events,
-            &skills,
-            &relevant_convos,
-            &relevant_events,
-            &relevant_skills,
-        );
-
-        // Add user message
-        conversation.push(Message::user(input));
-
-        // Log user message to memory
-        if let Err(e) = memory.log_message("user", input, None) {
-            log::warn!("Failed to log user message: {}", e);
-        }
-
-        // Send to Claude and handle tool-use loop
+    // Spawn REPL reader in a blocking thread
+    let repl_shutdown = shutdown_tx.subscribe();
+    std::thread::spawn(move || {
         loop {
-            let response = match client
-                .send(Some(&system_prompt), &conversation, &tools)
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    println!("Error: {}", e);
-                    log::error!("Agent API error: {}", e);
-                    break;
-                }
-            };
-
-            // Build assistant message from response content
-            let assistant_msg = Message {
-                role: "assistant".to_string(),
-                content: response.content.clone(),
-            };
-            conversation.push(assistant_msg);
-
-            // Print any text blocks
-            for block in &response.content {
-                if let ContentBlock::Text { text } = block {
-                    println!("{}", text);
-                }
-            }
-
-            // Check for tool calls
-            let tool_uses: Vec<_> = response
-                .content
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::ToolUse { id, name, input } => Some((id, name, input)),
-                    _ => None,
-                })
-                .collect();
-
-            if tool_uses.is_empty() {
-                // No tool calls — log assistant response and break
-                let response_text: String = response
-                    .content
-                    .iter()
-                    .filter_map(|b| match b {
-                        ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
-                if let Err(e) = memory.log_message("assistant", &response_text, None) {
-                    log::warn!("Failed to log assistant message: {}", e);
-                }
+            if repl_shutdown.has_changed().unwrap_or(true) {
                 break;
             }
+            print!("> ");
+            use std::io::Write;
+            std::io::stdout().flush().ok();
 
-            // Dispatch tool calls — show progress to user
-            let mut tool_results = Vec::new();
-            for (id, name, input) in &tool_uses {
-                println!("  [calling {}...]", name);
-                log::info!("[Agent] calling tool: {}", name);
-                let result = dispatcher.call_tool(id, name, input).await;
-                if let ContentBlock::ToolResult {
-                    tool_use_id,
-                    content,
-                    is_error,
-                } = &result
-                {
-                    tool_results.push((tool_use_id.clone(), content.clone(), *is_error));
+            let mut line = String::new();
+            match stdin.read_line(&mut line) {
+                Ok(0) => break, // EOF
+                Ok(_) => {
+                    let trimmed = line.trim().to_string();
+                    if trimmed == "quit" || trimmed == "exit" {
+                        let _ = repl_tx.blocking_send(trimmed);
+                        break;
+                    }
+                    if !trimmed.is_empty() {
+                        let _ = repl_tx.blocking_send(trimmed);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // Heartbeat + REPL select loop
+    let mut heartbeat_shutdown = shutdown_tx.subscribe();
+    loop {
+        let interval = std::time::Duration::from_secs(arousal.interval_secs());
+
+        tokio::select! {
+            // Heartbeat tick
+            _ = tokio::time::sleep(interval) => {
+                // Collect state (check for pending jobs)
+                let jobs = memory.semantic.pending_jobs().unwrap_or_default();
+                let has_jobs = !jobs.is_empty();
+
+                let state = if has_jobs {
+                    HeartbeatState {
+                        event_count: jobs.len(),
+                        has_changes: true,
+                        sources: vec![ArousalSource::PendingJobFired],
+                    }
+                } else {
+                    HeartbeatState::default()
+                };
+
+                arousal.update(&state);
+
+                // Only run agent turn if there's work to do
+                if has_jobs {
+                    for job in &jobs {
+                        let soul_snapshot = soul.read().await.clone();
+                        memory.semantic.start_job(&job.id).ok();
+
+                        if let Err(e) = run_agent_turn(
+                            &provider,
+                            &dispatcher,
+                            &mut memory,
+                            &soul_snapshot,
+                            Some(&job.prompt_payload),
+                            Some(&job.id),
+                        ).await {
+                            log::error!("Agent turn failed for job {}: {}", job.id, e);
+                            let max_retries = soul_snapshot.capabilities.max_retries;
+                            memory.semantic.fail_job(&job.id, &e.to_string(), max_retries).ok();
+                        } else {
+                            // Calculate next_run for recurring jobs
+                            let next_run = if job.recurrence {
+                                job.cron_schedule.as_deref().and_then(|cron| {
+                                    scheduler::next_run_after(cron, scheduler::now_epoch_secs()).ok()
+                                }).map(|ts| ts.to_string())
+                            } else {
+                                None
+                            };
+                            memory.semantic.complete_job(&job.id, next_run.as_deref()).ok();
+                        }
+
+                        memory.clear_short_term();
+                    }
+                }
+
+                if !arousal.is_at_rest() {
+                    log::debug!("[Heartbeat] arousal={:.2}, interval={}s", arousal.arousal(), arousal.interval_secs());
                 }
             }
 
-            // Log tool calls to memory
-            let tool_calls_json = serde_json::to_string(
-                &tool_uses
-                    .iter()
-                    .map(|(_, name, _)| name)
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap_or_default();
-            if let Err(e) = memory.log_message("assistant", "", Some(&tool_calls_json)) {
-                log::warn!("Failed to log tool calls: {}", e);
+            // REPL input
+            Some(input) = repl_rx.recv() => {
+                if input == "quit" || input == "exit" {
+                    break;
+                }
+
+                arousal.spike(ArousalSource::UserInput);
+
+                let soul_snapshot = soul.read().await.clone();
+                if let Err(e) = run_agent_turn(
+                    &provider,
+                    &dispatcher,
+                    &mut memory,
+                    &soul_snapshot,
+                    Some(&input),
+                    None,
+                ).await {
+                    log::error!("Agent turn failed: {}", e);
+                    println!("Error: {}", e);
+                }
             }
 
-            // Add tool results to conversation
-            conversation.push(Message::tool_results(tool_results));
-        }
-
-        // Trim conversation to avoid blowing the context window.
-        // Keep the most recent messages, dropping from the front.
-        if conversation.len() > MAX_CONVERSATION_MESSAGES {
-            let drain_count = conversation.len() - MAX_CONVERSATION_MESSAGES;
-            conversation.drain(..drain_count);
+            // Shutdown signal
+            _ = heartbeat_shutdown.changed() => {
+                break;
+            }
         }
     }
 
-    // Signal scheduler to shut down
+    // Graceful shutdown
     drop(shutdown_tx);
-
     println!("Goodbye.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flush_short_text_not_substantive() {
+        assert!(!is_flush_substantive("OK"));
+        assert!(!is_flush_substantive("No state to save."));
+        assert!(!is_flush_substantive("")); // 0 len < 50
+    }
+
+    #[test]
+    fn flush_no_content_phrases() {
+        assert!(!is_flush_substantive(
+            "After reviewing the current state, there is nothing to persist at this time. All systems are nominal."
+        ));
+        assert!(!is_flush_substantive(
+            "I have checked all nodes and proposals. There is no important state to record right now."
+        ));
+        assert!(!is_flush_substantive(
+            "Current status check complete. Nothing significant has changed since the last flush."
+        ));
+    }
+
+    #[test]
+    fn flush_real_content_is_substantive() {
+        assert!(is_flush_substantive(
+            "Active proposals: prop-1 (restart rtsp-camera, pending approval). \
+             Node health: openmeteo degraded (3 consecutive timeouts). \
+             Key reasoning: weather API rate limit may have been hit."
+        ));
+    }
 }

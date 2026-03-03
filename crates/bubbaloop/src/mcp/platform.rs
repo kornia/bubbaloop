@@ -120,6 +120,56 @@ pub trait PlatformOperations: Send + Sync + 'static {
         &self,
         name: &str,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    // ── Agent proposals & scheduling ─────────────────────────────────
+
+    /// List proposals, optionally filtered by status (pending, approved, rejected).
+    fn list_proposals(
+        &self,
+        status_filter: Option<&str>,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Approve a pending proposal by ID. Returns the approved proposal as JSON.
+    fn approve_proposal(
+        &self,
+        id: &str,
+        decided_by: &str,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Reject a pending proposal by ID. Returns the rejected proposal as JSON.
+    fn reject_proposal(
+        &self,
+        id: &str,
+        decided_by: &str,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Schedule a job for the agent. Returns the new job ID.
+    fn schedule_job(
+        &self,
+        prompt: &str,
+        cron_schedule: Option<&str>,
+        recurrence: bool,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    // ── Memory admin ────────────────────────────────────────────────
+
+    /// List jobs, optionally filtered by status. Returns JSON string.
+    fn list_jobs(
+        &self,
+        status_filter: Option<&str>,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Delete a specific job by ID.
+    fn delete_job(
+        &self,
+        id: &str,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Clear episodic memory older than N days. Returns count of pruned files.
+    fn clear_episodic_memory(
+        &self,
+        older_than_days: u32,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
 }
 
 // ── DaemonPlatform: real implementation backed by NodeManager + Zenoh ────
@@ -481,6 +531,108 @@ impl PlatformOperations for DaemonPlatform {
             Err(PlatformError::CommandFailed(result.message))
         }
     }
+
+    async fn list_proposals(&self, status_filter: Option<&str>) -> PlatformResult<String> {
+        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let store = crate::agent::memory::semantic::SemanticStore::open(&db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        let proposals = store
+            .list_proposals(status_filter)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        serde_json::to_string_pretty(&proposals).map_err(|e| PlatformError::Internal(e.to_string()))
+    }
+
+    async fn approve_proposal(&self, id: &str, decided_by: &str) -> PlatformResult<String> {
+        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let store = crate::agent::memory::semantic::SemanticStore::open(&db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        store
+            .approve_proposal(id, decided_by)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        Ok(format!("Proposal '{}' approved by {}", id, decided_by))
+    }
+
+    async fn reject_proposal(&self, id: &str, decided_by: &str) -> PlatformResult<String> {
+        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let store = crate::agent::memory::semantic::SemanticStore::open(&db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        store
+            .reject_proposal(id, decided_by)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        Ok(format!("Proposal '{}' rejected by {}", id, decided_by))
+    }
+
+    async fn schedule_job(
+        &self,
+        prompt: &str,
+        cron_schedule: Option<&str>,
+        recurrence: bool,
+    ) -> PlatformResult<String> {
+        use crate::agent::memory::semantic::{Job, SemanticStore};
+        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let store =
+            SemanticStore::open(&db_path).map_err(|e| PlatformError::Internal(e.to_string()))?;
+        let next_run = match cron_schedule {
+            Some(cron) => crate::agent::scheduler::next_run_after(
+                cron,
+                crate::agent::scheduler::now_epoch_secs(),
+            )
+            .map_err(|e| PlatformError::InvalidInput(e.to_string()))?
+            .to_string(),
+            None => crate::agent::scheduler::now_epoch_secs().to_string(),
+        };
+        let job_id = uuid::Uuid::new_v4().to_string();
+        let job = Job {
+            id: job_id.clone(),
+            cron_schedule: cron_schedule.map(|s| s.to_string()),
+            next_run_at: next_run,
+            prompt_payload: prompt.to_string(),
+            status: "pending".to_string(),
+            recurrence,
+            retry_count: 0,
+            last_error: None,
+        };
+        store
+            .create_job(&job)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        Ok(format!("Job '{}' scheduled", job_id))
+    }
+
+    async fn list_jobs(&self, status_filter: Option<&str>) -> PlatformResult<String> {
+        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let store = crate::agent::memory::semantic::SemanticStore::open(&db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        let jobs = store
+            .list_jobs(status_filter)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        serde_json::to_string_pretty(&jobs).map_err(|e| PlatformError::Internal(e.to_string()))
+    }
+
+    async fn delete_job(&self, id: &str) -> PlatformResult<String> {
+        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let store = crate::agent::memory::semantic::SemanticStore::open(&db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        store
+            .delete_job(id)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        Ok(format!("Job '{}' deleted", id))
+    }
+
+    async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {
+        let base = crate::daemon::registry::get_bubbaloop_home();
+        let log_dir = base.join("memory");
+        let db_path = base.join("memory.db");
+
+        let episodic = crate::agent::memory::episodic::EpisodicLog::new(&log_dir, &db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        let pruned = episodic
+            .prune_old_logs(older_than_days)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        Ok(format!(
+            "Pruned {} episodic log file(s) older than {} days",
+            pruned, older_than_days
+        ))
+    }
 }
 
 /// Query a Zenoh key expression and return text results.
@@ -675,6 +827,50 @@ pub mod mock {
             } else {
                 Err(PlatformError::NodeNotFound(name.to_string()))
             }
+        }
+
+        async fn list_proposals(&self, status_filter: Option<&str>) -> PlatformResult<String> {
+            let filter = status_filter.unwrap_or("all");
+            Ok(format!("mock: list proposals (filter={})", filter))
+        }
+
+        async fn approve_proposal(&self, id: &str, decided_by: &str) -> PlatformResult<String> {
+            Ok(format!(
+                "mock: proposal '{}' approved by {}",
+                id, decided_by
+            ))
+        }
+
+        async fn reject_proposal(&self, id: &str, decided_by: &str) -> PlatformResult<String> {
+            Ok(format!(
+                "mock: proposal '{}' rejected by {}",
+                id, decided_by
+            ))
+        }
+
+        async fn schedule_job(
+            &self,
+            prompt: &str,
+            _cron_schedule: Option<&str>,
+            _recurrence: bool,
+        ) -> PlatformResult<String> {
+            Ok(format!("mock: job scheduled: {}", prompt))
+        }
+
+        async fn list_jobs(&self, status_filter: Option<&str>) -> PlatformResult<String> {
+            let filter = status_filter.unwrap_or("all");
+            Ok(format!("mock: list jobs (filter={})", filter))
+        }
+
+        async fn delete_job(&self, id: &str) -> PlatformResult<String> {
+            Ok(format!("mock: job '{}' deleted", id))
+        }
+
+        async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {
+            Ok(format!(
+                "mock: cleared episodic memory older than {} days",
+                older_than_days
+            ))
         }
     }
 }
@@ -1189,6 +1385,7 @@ mod tests {
             "get_machine_info",
             "get_node_schema",
             "discover_capabilities",
+            "list_jobs",
         ];
         for tool in &viewer_tools {
             assert_eq!(
@@ -1211,6 +1408,7 @@ mod tests {
             "get_node_logs",
             "enable_autostart",
             "disable_autostart",
+            "delete_job",
         ];
         for tool in &operator_tools {
             assert_eq!(
@@ -1231,6 +1429,7 @@ mod tests {
             "build_node",
             "uninstall_node",
             "clean_node",
+            "clear_episodic_memory",
         ];
         for tool in &admin_tools {
             assert_eq!(
@@ -1346,6 +1545,27 @@ mod tests {
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["name"], "test");
         assert_eq!(json["status"], "Running");
+    }
+
+    #[tokio::test]
+    async fn list_jobs_mock() {
+        let mock = MockPlatform::new();
+        let msg = mock.list_jobs(Some("pending")).await.unwrap();
+        assert!(msg.contains("pending"));
+    }
+
+    #[tokio::test]
+    async fn delete_job_mock() {
+        let mock = MockPlatform::new();
+        let msg = mock.delete_job("job-123").await.unwrap();
+        assert!(msg.contains("job-123"));
+    }
+
+    #[tokio::test]
+    async fn clear_episodic_memory_mock() {
+        let mock = MockPlatform::new();
+        let msg = mock.clear_episodic_memory(30).await.unwrap();
+        assert!(msg.contains("30"));
     }
 
     #[test]

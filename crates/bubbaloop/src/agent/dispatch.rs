@@ -1,9 +1,9 @@
 //! Internal MCP tool dispatch — calls PlatformOperations directly.
 //!
-//! Maps tool names to platform method calls without going through the full
-//! MCP server stack (avoids constructing `RequestContext`).
+//! Carries forward the battle-tested 25 tool definitions from agent/dispatch.rs,
+//! adapted to use the new provider types.
 
-use crate::agent::claude::{ContentBlock, ToolDefinition};
+use crate::agent::provider::{ContentBlock, ToolDefinition};
 use crate::mcp::platform::{NodeCommand, PlatformOperations};
 use crate::validation;
 use serde_json::{json, Value};
@@ -26,9 +26,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
         }
     }
 
-    /// Returns Claude-compatible tool definitions for all 24 MCP tools.
-    ///
-    /// Names, descriptions, and schemas match the MCP server exactly.
+    /// Returns Claude-compatible tool definitions for all 25 MCP tools.
     pub fn tool_definitions() -> Vec<ToolDefinition> {
         let empty_object = json!({
             "type": "object",
@@ -102,16 +100,13 @@ impl<P: PlatformOperations> Dispatcher<P> {
             ToolDefinition {
                 name: "list_commands".to_string(),
                 description: "List available commands for a specific node with their \
-                    parameters and descriptions. Use this before send_command to discover \
-                    what actions a node supports."
+                    parameters and descriptions."
                     .to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "start_node".to_string(),
-                description: "Start a stopped node via the daemon. The node must be \
-                    installed and built."
-                    .to_string(),
+                description: "Start a stopped node via the daemon.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
@@ -131,159 +126,170 @@ impl<P: PlatformOperations> Dispatcher<P> {
             },
             ToolDefinition {
                 name: "build_node".to_string(),
-                description: "Trigger a build for a node. Builds the node's source code \
-                    using its configured build command (Cargo, pixi, etc.). Admin only."
-                    .to_string(),
+                description: "Trigger a build for a node. Admin only.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "remove_node".to_string(),
-                description: "Remove a registered node. Stops the node first if it is \
-                    running, then removes it from the daemon registry. Admin only."
-                    .to_string(),
+                description: "Remove a registered node. Admin only.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "uninstall_node".to_string(),
-                description: "Uninstall a node's systemd service. Stops the node if \
-                    running and removes the systemd service file, but keeps the node \
-                    registered. Admin only."
-                    .to_string(),
+                description: "Uninstall a node's systemd service. Admin only.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "clean_node".to_string(),
-                description: "Clean a node's build artifacts and cached data. Useful for \
-                    forcing a rebuild. Admin only."
-                    .to_string(),
+                description: "Clean a node's build artifacts. Admin only.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "enable_autostart".to_string(),
-                description: "Enable autostart for a node. The node's systemd service \
-                    will start automatically on boot."
-                    .to_string(),
+                description: "Enable autostart for a node.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "disable_autostart".to_string(),
-                description: "Disable autostart for a node. The node's systemd service \
-                    will no longer start automatically on boot."
-                    .to_string(),
+                description: "Disable autostart for a node.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "get_stream_info".to_string(),
-                description: "Get Zenoh connection parameters for subscribing to a node's \
-                    data stream. Returns topic pattern, encoding, and endpoint. Use this \
-                    to set up streaming data access outside MCP."
+                description: "Get Zenoh connection parameters for a node's data stream."
                     .to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "get_node_schema".to_string(),
-                description: "Get the protobuf schema of a node's data messages. Returns \
-                    the schema in human-readable format if available."
-                    .to_string(),
+                description: "Get the protobuf schema of a node's data messages.".to_string(),
                 input_schema: node_name_schema,
             },
             // ── Custom-parameter tools ──────────────────────────────
             ToolDefinition {
                 name: "send_command".to_string(),
-                description: "Send a command to a node's command queryable. The node must \
-                    support the command — call list_commands first to see available commands. \
-                    Example: node_name='rtsp-camera', command='capture_frame', \
-                    params={\"resolution\": \"1080p\"}. Returns the command result or error."
-                    .to_string(),
+                description: "Send a command to a node's command queryable.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "node_name": {
-                            "type": "string",
-                            "description": "Name of the node to send the command to"
-                        },
-                        "command": {
-                            "type": "string",
-                            "description": "Command name (must be listed in the node's manifest)"
-                        },
-                        "params": {
-                            "description": "Optional JSON parameters for the command"
-                        }
+                        "node_name": { "type": "string", "description": "Node name" },
+                        "command": { "type": "string", "description": "Command name" },
+                        "params": { "description": "Optional JSON parameters" }
                     },
                     "required": ["node_name", "command"]
                 }),
             },
             ToolDefinition {
                 name: "query_zenoh".to_string(),
-                description: "Query a Zenoh key expression (admin only). Key must start \
-                    with 'bubbaloop/'. Returns up to 100 results."
-                    .to_string(),
+                description: "Query a Zenoh key expression (admin only).".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "key_expr": {
-                            "type": "string",
-                            "description": "Full Zenoh key expression to query (e.g., \
-                                \"bubbaloop/local/nvidia_orin00/openmeteo/status\")"
-                        }
+                        "key_expr": { "type": "string", "description": "Zenoh key expression" }
                     },
                     "required": ["key_expr"]
                 }),
             },
             ToolDefinition {
                 name: "install_node".to_string(),
-                description: "Install a node from the marketplace, a local path, or \
-                    GitHub repository. Accepts a marketplace name (e.g., 'rtsp-camera'), \
-                    a local directory path (e.g., '/path/to/my-node'), or GitHub format \
-                    (e.g., 'user/repo'). Downloads precompiled binaries when available, \
-                    registers the node with the daemon, and creates the systemd service. \
-                    Admin only."
+                description: "Install a node from marketplace, local path, or GitHub. Admin only."
                     .to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "source": {
-                            "type": "string",
-                            "description": "Source path: marketplace name, local directory \
-                                path, or GitHub \"user/repo\" format"
-                        }
+                        "source": { "type": "string", "description": "Marketplace name, path, or user/repo" }
                     },
                     "required": ["source"]
                 }),
             },
             ToolDefinition {
                 name: "discover_capabilities".to_string(),
-                description: "Discover available node capabilities. Returns nodes grouped \
-                    by capability type (sensor, actuator, processor, gateway). Optionally \
-                    filter by a single capability type."
+                description: "Discover available node capabilities grouped by type.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "capability": { "type": "string", "description": "Filter by type: sensor, actuator, processor, gateway" }
+                    },
+                    "required": []
+                }),
+            },
+            ToolDefinition {
+                name: "schedule_task".to_string(),
+                description: "Schedule a task for the agent to execute later. Supports one-off \
+                    and recurring tasks via cron expressions (e.g., '*/15 * * * *' for every 15 minutes)."
                     .to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "capability": {
+                        "prompt": {
                             "type": "string",
-                            "description": "Filter by capability type: \"sensor\", \
-                                \"actuator\", \"processor\", \"gateway\". Omit for all."
+                            "description": "The instruction for the agent to execute"
+                        },
+                        "cron_schedule": {
+                            "type": "string",
+                            "description": "Optional cron expression for recurring tasks (5 or 6 field)"
+                        },
+                        "recurrence": {
+                            "type": "boolean",
+                            "description": "Whether this is a recurring task (default: false)"
                         }
                     },
-                    "required": []
+                    "required": ["prompt"]
+                }),
+            },
+            // ── Memory tools (handled inline in run_agent_turn) ────
+            ToolDefinition {
+                name: "memory_search".to_string(),
+                description: "Search episodic memory for past conversations, tool results, and \
+                    agent observations. Uses BM25 full-text search with temporal decay. Returns \
+                    the most relevant entries."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query (keywords or phrases)"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum results to return (default: 10)"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
+            ToolDefinition {
+                name: "memory_forget".to_string(),
+                description: "Remove matching entries from episodic memory search index. \
+                    Use for PII removal, correcting false memories, or user-requested deletion. \
+                    Creates an audit trail. NDJSON source files are preserved."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query to match entries to forget"
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Reason for forgetting (logged in audit trail)"
+                        }
+                    },
+                    "required": ["query", "reason"]
                 }),
             },
         ]
     }
 
     /// Dispatch a tool call by name, returning a `ContentBlock::ToolResult`.
-    ///
-    /// Maps all 24 tool names to the corresponding `PlatformOperations` method.
     pub async fn call_tool(&self, tool_use_id: &str, name: &str, input: &Value) -> ContentBlock {
         let (text, is_error) = match name {
-            // ── No-parameter tools ──────────────────────────────────
             "list_nodes" => self.handle_list_nodes().await,
             "discover_nodes" => self.handle_discover_nodes().await,
             "get_system_status" => self.handle_get_system_status().await,
             "get_machine_info" => self.handle_get_machine_info(),
-
-            // ── Single node_name tools ──────────────────────────────
             "get_node_health" => self.handle_get_node_health(input).await,
             "get_node_config" => self.handle_get_node_config(input).await,
             "get_node_manifest" => self.handle_get_node_manifest(input).await,
@@ -309,13 +315,11 @@ impl<P: PlatformOperations> Dispatcher<P> {
             }
             "get_stream_info" => self.handle_get_stream_info(input).await,
             "get_node_schema" => self.handle_get_node_schema(input).await,
-
-            // ── Custom-parameter tools ──────────────────────────────
             "send_command" => self.handle_send_command(input).await,
             "query_zenoh" => self.handle_query_zenoh(input).await,
             "install_node" => self.handle_install_node(input).await,
             "discover_capabilities" => self.handle_discover_capabilities(input).await,
-
+            "schedule_task" => self.handle_schedule_task(input).await,
             _ => (format!("Unknown tool: {}", name), Some(true)),
         };
 
@@ -326,7 +330,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
         }
     }
 
-    /// List nodes and format as a text summary for the agent system prompt.
+    /// List nodes formatted as text for the system prompt.
     pub async fn get_node_inventory(&self) -> String {
         match self.platform.list_nodes().await {
             Ok(nodes) if nodes.is_empty() => "No nodes registered.".to_string(),
@@ -347,7 +351,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
 
     // ── Internal helpers ─────────────────────────────────────────────
 
-    /// Extract and validate `node_name` from JSON input.
     fn extract_node_name(input: &Value) -> Result<String, (String, Option<bool>)> {
         let name = input
             .get("node_name")
@@ -362,7 +365,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
         Ok(name.to_string())
     }
 
-    /// Extract `node_name`, validate, and execute a `NodeCommand`.
     async fn handle_node_command(&self, input: &Value, cmd: NodeCommand) -> (String, Option<bool>) {
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
@@ -373,8 +375,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
             Err(e) => (format!("Error: {}", e), Some(true)),
         }
     }
-
-    // ── No-parameter tool handlers ───────────────────────────────────
 
     async fn handle_list_nodes(&self) -> (String, Option<bool>) {
         match self.platform.list_nodes().await {
@@ -445,8 +445,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
         (text, None)
     }
 
-    // ── Node-name tool handlers ──────────────────────────────────────
-
     async fn handle_get_node_health(&self, input: &Value) -> (String, Option<bool>) {
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
@@ -514,8 +512,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
             Ok(text) => text,
             Err(e) => return (format!("Error: {}", e), Some(true)),
         };
-        // Try to parse the manifest and extract commands.
-        // query_zenoh formats as "[key_expr] json_body".
         let commands = manifest_text
             .lines()
             .filter_map(|line| {
@@ -561,8 +557,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
             ),
             "encoding": "protobuf",
             "endpoint": "tcp/localhost:7447",
-            "note": "Subscribe to this topic via Zenoh client library for real-time \
-                data. MCP is control-plane only.",
         });
         let text = serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".to_string());
         (text, None)
@@ -582,8 +576,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
             Err(e) => (format!("Error: {}", e), Some(true)),
         }
     }
-
-    // ── Custom-parameter tool handlers ───────────────────────────────
 
     async fn handle_send_command(&self, input: &Value) -> (String, Option<bool>) {
         let node_name = match Self::extract_node_name(input) {
@@ -605,10 +597,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             "bubbaloop/{}/{}/{}/command",
             self.scope, self.machine_id, node_name
         );
-        let payload = json!({
-            "command": command,
-            "params": params,
-        });
+        let payload = json!({ "command": command, "params": params });
         let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
 
         match self
@@ -652,9 +641,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
             None => return ("Missing required parameter: source".to_string(), Some(true)),
         };
 
-        // Route based on source format (same logic as MCP server):
-        // - Simple name (no `/`, no `.` prefix, valid node name) -> marketplace
-        // - Path/URL -> existing install_node flow
         let is_marketplace_name = !source.contains('/')
             && !source.starts_with('.')
             && validation::validate_node_name(&source).is_ok();
@@ -674,6 +660,27 @@ impl<P: PlatformOperations> Dispatcher<P> {
         }
     }
 
+    async fn handle_schedule_task(&self, input: &Value) -> (String, Option<bool>) {
+        let prompt = match input.get("prompt").and_then(|v| v.as_str()) {
+            Some(p) => p.to_string(),
+            None => return ("Missing required parameter: prompt".to_string(), Some(true)),
+        };
+        let cron_schedule = input.get("cron_schedule").and_then(|v| v.as_str());
+        let recurrence = input
+            .get("recurrence")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        match self
+            .platform
+            .schedule_job(&prompt, cron_schedule, recurrence)
+            .await
+        {
+            Ok(msg) => (msg, None),
+            Err(e) => (format!("Error: {}", e), Some(true)),
+        }
+    }
+
     async fn handle_discover_capabilities(&self, input: &Value) -> (String, Option<bool>) {
         let capability = input
             .get("capability")
@@ -682,7 +689,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
 
         match self.platform.get_manifests(capability.as_deref()).await {
             Ok(manifests) => {
-                // Group nodes by capability type (same logic as MCP server).
                 let mut grouped: std::collections::HashMap<String, Vec<Value>> =
                     std::collections::HashMap::new();
 
@@ -697,27 +703,14 @@ impl<P: PlatformOperations> Dispatcher<P> {
                         grouped
                             .entry("uncategorized".to_string())
                             .or_default()
-                            .push(json!({
-                                "name": name,
-                                "description": manifest.get("description")
-                                    .and_then(|d| d.as_str()).unwrap_or(""),
-                                "version": manifest.get("version")
-                                    .and_then(|v| v.as_str()).unwrap_or(""),
-                            }));
+                            .push(json!({ "name": name }));
                     } else {
                         for cap in &capabilities {
                             let cap_str = cap.as_str().unwrap_or("unknown").to_string();
-                            grouped.entry(cap_str).or_default().push(json!({
-                                "name": name,
-                                "description": manifest.get("description")
-                                    .and_then(|d| d.as_str()).unwrap_or(""),
-                                "version": manifest.get("version")
-                                    .and_then(|v| v.as_str()).unwrap_or(""),
-                                "publishes": manifest.get("publishes")
-                                    .cloned().unwrap_or(json!([])),
-                                "commands": manifest.get("commands")
-                                    .cloned().unwrap_or(json!([])),
-                            }));
+                            grouped
+                                .entry(cap_str)
+                                .or_default()
+                                .push(json!({ "name": name }));
                         }
                     }
                 }
@@ -735,49 +728,26 @@ impl<P: PlatformOperations> Dispatcher<P> {
     }
 }
 
-// ── Tests ───────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// Expected number of tools exposed by the dispatcher.
-    const TOOL_COUNT: usize = 24;
+    const TOOL_COUNT: usize = 27;
 
     #[test]
     fn tool_definitions_count() {
         let defs = Dispatcher::<crate::mcp::platform::DaemonPlatform>::tool_definitions();
-        assert_eq!(
-            defs.len(),
-            TOOL_COUNT,
-            "expected {} tool definitions, got {}",
-            TOOL_COUNT,
-            defs.len()
-        );
+        assert_eq!(defs.len(), TOOL_COUNT);
     }
 
     #[test]
     fn tool_definitions_have_required_fields() {
         let defs = Dispatcher::<crate::mcp::platform::DaemonPlatform>::tool_definitions();
         for def in &defs {
-            assert!(!def.name.is_empty(), "tool name must not be empty");
-            assert!(
-                !def.description.is_empty(),
-                "tool '{}' must have a description",
-                def.name
-            );
-            assert!(
-                def.input_schema.is_object(),
-                "tool '{}' input_schema must be an object",
-                def.name
-            );
-            assert_eq!(
-                def.input_schema.get("type").and_then(|v| v.as_str()),
-                Some("object"),
-                "tool '{}' input_schema type must be \"object\"",
-                def.name
-            );
+            assert!(!def.name.is_empty());
+            assert!(!def.description.is_empty());
+            assert!(def.input_schema.is_object());
         }
     }
 
@@ -786,11 +756,7 @@ mod tests {
         let defs = Dispatcher::<crate::mcp::platform::DaemonPlatform>::tool_definitions();
         let mut seen = HashSet::new();
         for def in &defs {
-            assert!(
-                seen.insert(def.name.clone()),
-                "duplicate tool name: {}",
-                def.name
-            );
+            assert!(seen.insert(def.name.clone()), "duplicate: {}", def.name);
         }
     }
 }

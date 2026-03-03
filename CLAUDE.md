@@ -19,7 +19,12 @@ dashboard/                 # React + Vite + TypeScript
 
 Key source files in `crates/bubbaloop/src/`:
 - `cli/login.rs` — login/logout/status: API key + Claude subscription (setup-token) auth
-- `agent/claude.rs` — Claude API client with dual auth (API key + OAuth bearer token)
+- `agent/mod.rs` — Agent orchestrator: adaptive heartbeat + REPL + job poller
+- `agent/soul.rs` — Soul struct, first-run onboarding, notify hot-reload (`~/.bubbaloop/soul/`)
+- `agent/provider/claude.rs` — Claude API client with dual auth (API key + OAuth bearer token)
+- `agent/memory/` — 3-tier: short-term (RAM) + episodic (NDJSON) + semantic (SQLite)
+- `agent/heartbeat.rs` — Adaptive heartbeat: arousal + decay + state collection
+- `agent/dispatch.rs` — Internal MCP tool dispatch (25 tools)
 - `cli/node/mod.rs` — node CRUD, validation, list/add/remove
 - `cli/node/install.rs` — install, precompiled binary download, GitHub clone
 - `cli/node/lifecycle.rs` — start, stop, restart, logs
@@ -66,7 +71,7 @@ Testing: `cargo test --features test-harness --test integration_mcp` (47 tests)
 ```bash
 pixi run check     # cargo check (fast — run after every change)
 pixi run clippy    # zero warnings enforced (-D warnings)
-pixi run test      # cargo test (358 unit tests)
+pixi run test      # cargo test (445 unit tests)
 pixi run fmt       # cargo fmt --all
 pixi run build     # cargo build --release (slow on ARM64)
 cargo test --features test-harness --test integration_mcp  # 47 integration tests
@@ -142,4 +147,4 @@ Exception: views with their own fallback decode chain (like JsonView) don't need
 - Logs must go to stderr (convention: never pollute stdout)
 - Zenoh session: MUST use `"client"` mode for router routing; check `BUBBALOOP_ZENOH_ENDPOINT` env var
 - Dashboard schema race: subscriptions start before schemas load — always use `useSchemaReady()` gating
-- OAuth tokens require Claude CLI identity headers (user-agent, x-app, anthropic-beta) — see `agent/claude.rs::OAUTH_BETA_HEADERS`
+- OAuth tokens require Claude CLI identity headers (user-agent, x-app, anthropic-beta) — see `agent/provider/claude.rs::OAUTH_BETA_HEADERS`

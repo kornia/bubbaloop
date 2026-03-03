@@ -40,15 +40,15 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 │  BUBBALOOP  (single binary, ~12-13 MB)                   │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │  Agent Layer                                        │  │
-│  │  Claude API | Chat | Scheduler (offline Tier 1)     │  │
+│  │  Agent Layer (OpenClaw architecture)                │  │
+│  │  Soul + onboarding | ModelProvider | Heartbeat     │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  Memory (SQLite, +1-2 MB)                           │  │
-│  │  Conversations | Sensor events | Schedules          │  │
+│  │  3-Tier Memory                                      │  │
+│  │  Short-term (RAM) | Episodic (NDJSON) | Semantic DB │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (23+ tools) — sole control interface    │  │
+│  │  MCP Server (25+ tools) — sole control interface    │  │
 │  │  RBAC (Viewer/Operator/Admin) | Bearer token auth   │  │
 │  │  PlatformOperations trait | Rate limiting            │  │
 │  └──────────────────────┬─────────────────────────────┘  │
@@ -158,7 +158,7 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447  # Optional override
 
 ## MCP Server
 
-MCP is the **sole control interface**. 23+ generic tools across 5 categories:
+MCP is the **sole control interface**. 25 generic tools across 5 categories:
 
 | Category | Tools |
 |----------|-------|
@@ -253,8 +253,8 @@ MCP is the **sole control interface**. 23+ generic tools across 5 categories:
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 23+ tools |
-| Memory | SQLite (rusqlite, planned) | Embedded, +1-2 MB, battle-tested |
+| Control | MCP (rmcp) | Standard AI agent interface, 25 tools |
+| Memory | SQLite (rusqlite) + NDJSON | 3-tier: RAM + episodic (NDJSON/FTS5) + semantic (SQLite) |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
 | systemd | zbus (D-Bus) | No subprocess spawning, safe |
@@ -276,4 +276,5 @@ MCP is the **sole control interface**. 23+ generic tools across 5 categories:
   - `ROADMAP.md` — implementation phases
   - `CONTRIBUTING.md` — workflows and processes
   - `CLAUDE.md` — coding conventions and build commands
+  - `docs/plans/2026-03-03-openclaw-agent-rewrite-design.md` — OpenClaw agent rewrite design
   - `docs/plans/2026-02-27-hardware-ai-agent-design.md` — full agent design

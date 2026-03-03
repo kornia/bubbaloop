@@ -1,7 +1,7 @@
 # OpenClaw Agent Rewrite Design
 
 **Date:** 2026-03-03
-**Status:** Draft (iterating)
+**Status:** Implemented (v0.0.9-dev)
 **Scope:** Complete agent rewrite — Soul, Memory, Provider, Heartbeat, Jobs, Proposals
 
 ## Motivation
@@ -39,7 +39,7 @@ This rewrite adopts the **Pico/Zero architecture pattern**: local-first, type-sa
 │  │                                                          │
 │  │  RAM: Vec<Message>     │ Short-term (one turn)          │  │
 │  │  NDJSON: daily_logs    │ Episodic (append-only)         │  │
-│  │  SQLite: jobs+proposals│ Semantic (stub for sqlite-vec) │  │
+│  │  SQLite: jobs+proposals│ Semantic (jobs + proposals)    │  │
 │  └─────────────────────────────────────────────────────────┘  │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
@@ -82,6 +82,10 @@ pub struct Capabilities {
     pub heartbeat_decay_factor: f64,   // 0.7
     // Approval
     pub default_approval_mode: String, // "auto" | "propose"
+    // Retry / circuit breaker
+    pub max_retries: u32,              // 3
+    // Pre-compaction flush (Section 5.5)
+    pub compaction_flush_threshold_tokens: usize, // 4000
 }
 ```
 
@@ -176,15 +180,15 @@ CREATE VIRTUAL TABLE fts_episodic USING fts5(
 
 ```rust
 impl EpisodicLog {
-    /// Append entry to NDJSON + FTS5 (dual-write)
-    pub async fn append(&self, entry: &LogEntry) -> Result<()>;
+    /// Append entry to NDJSON + FTS5 (dual-write, synchronous)
+    pub fn append(&self, entry: &LogEntry) -> Result<()>;
 
     /// BM25 full-text search over all episodic logs
-    pub fn search_episodic(&self, query: &str, limit: usize) -> Result<Vec<LogEntry>>;
+    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<LogEntry>>;
 }
 ```
 
-Example: `search_episodic("camera offline", 5)` returns the 5 most relevant log entries mentioning camera issues, ranked by BM25.
+Example: `search("camera offline", 5)` returns the 5 most relevant log entries mentioning camera issues, ranked by BM25.
 
 ### Why FTS5 (Not Vector Search)
 
@@ -206,18 +210,21 @@ sqlite-vec → semantic search (embeddings)  # Phase 2
 ## 3. ModelProvider Trait
 
 ```rust
-#[async_trait]
+/// Uses RPITIT (Return Position Impl Trait In Trait) — no #[async_trait] needed.
 pub trait ModelProvider: Send + Sync {
-    async fn generate(
+    fn generate(
         &self,
+        system: Option<&str>,
         messages: &[Message],
         tools: &[ToolDefinition],
-    ) -> Result<ModelResponse, ProviderError>;
+    ) -> impl Future<Output = Result<ModelResponse>> + Send;
 }
 
-pub enum ModelResponse {
-    Text(String),
-    ToolCalls(Vec<ToolCall>),
+/// Model response carrying raw content blocks + token usage.
+pub struct ModelResponse {
+    pub content: Vec<ContentBlock>,  // text + tool_use blocks
+    pub usage: Usage,                // { input_tokens, output_tokens }
+    pub stop_reason: Option<String>, // "end_turn" | "tool_use"
 }
 ```
 
@@ -394,7 +401,7 @@ compaction_flush_threshold_tokens = 4000  # Trigger flush when this close to con
 
 ### Post-Compaction Recovery
 
-After compaction, the agent can use `search_episodic("flush", 1)` to retrieve the most recent flush entry and restore context about what it was working on.
+After compaction, the agent can use `search("flush", 1)` to retrieve the most recent flush entry and restore context about what it was working on.
 
 ## 6. Module Structure
 
@@ -404,8 +411,8 @@ crates/bubbaloop/src/agent/
 ├── soul.rs          # Soul struct + notify hot-reload (Arc<RwLock<Soul>>)
 ├── memory/
 │   ├── mod.rs       # Memory facade (short-term + episodic + semantic)
-│   ├── episodic.rs  # NDJSON append-only log
-│   └── semantic.rs  # SQLite stub for future embeddings
+│   ├── episodic.rs  # NDJSON append-only log + FTS5 dual-write index
+│   └── semantic.rs  # SQLite jobs + proposals tables
 ├── provider/
 │   ├── mod.rs       # ModelProvider trait definition
 │   ├── claude.rs    # ClaudeProvider (reqwest, dual auth)
@@ -460,7 +467,7 @@ This is a **full replacement**, not a refactor:
 
 1. Delete existing `agent/` module (mod.rs, claude.rs, dispatch.rs, memory.rs, scheduler.rs, prompt.rs)
 2. Build new module structure from scratch per this design
-3. `dispatch.rs` logic carries forward (24 MCP tool definitions are stable)
+3. `dispatch.rs` logic carries forward (25 MCP tool definitions including `schedule_task`)
 4. `claude.rs` auth logic carries forward into `provider/claude.rs`
 5. SQLite schema changes: drop conversations/sensor_events/schedules/FTS5 tables, add jobs/proposals
 6. NDJSON episodic log is new (no migration from SQLite conversations)
@@ -471,10 +478,18 @@ This is a **full replacement**, not a refactor:
 - `~/.bubbaloop/soul/` directory is new (created on first run with defaults)
 - `~/.bubbaloop/memory/` directory is new (NDJSON logs)
 
-## 9. Open Questions (for team iteration)
+### Implementation Notes
+
+- **ModelProvider uses RPITIT** — Rust's Return Position Impl Trait In Trait, not `#[async_trait]`. This makes the trait not dyn-compatible, so `run_agent_turn()` is generic over `M: ModelProvider`.
+- **MCP proposal tools implemented** — `list_proposals` (Viewer), `approve_proposal` (Operator), `reject_proposal` (Operator) are registered in `mcp/mod.rs` with RBAC.
+- **`schedule_task` tool** — 25th tool in dispatch.rs, creates jobs via `PlatformOperations::schedule_job()`.
+- **Pre-compaction flush** — Monitors `response.usage.input_tokens` against `DEFAULT_CONTEXT_WINDOW` (200K). Flush turns do not count toward `max_turns`.
+- **SQLite WAL concurrent access** — MCP server opens ephemeral `SemanticStore` connections to the same `memory.db`, safe under WAL mode.
+
+## 9. Open Questions (Post-Implementation)
 
 1. **NDJSON retention policy:** How many days of logs to keep? Auto-prune after 30 days?
-2. **Arousal cap:** Should arousal have a maximum value (e.g., 20.0) to prevent interval from staying at MIN forever during sustained events?
+2. ~~**Panic loop dampening**~~ **Resolved:** Exponential backoff + circuit breaker (see Section 5, "Job Retry & Circuit Breaker"). Jobs get 3 retries with exponential backoff (20s→40s→80s), then park as `failed_requires_approval` with a proposal for human review.
 3. **Model routing:** Haiku for "nothing changed" beats, Sonnet for reasoning — implement now or later?
 4. **FTS5 temporal decay:** Should FTS5 search include temporal decay like OpenClaw (30-day half-life), so recent logs rank higher than old ones?
 5. **Soul versioning:** Should capabilities.toml have a schema version to handle future field additions gracefully?

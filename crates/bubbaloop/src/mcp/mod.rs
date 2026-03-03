@@ -84,6 +84,45 @@ struct DiscoverCapabilitiesParams {
     capability: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ListProposalsParams {
+    /// Filter by status: "pending", "approved", "rejected". Omit for all.
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ProposalIdRequest {
+    /// ID of the proposal.
+    proposal_id: String,
+    /// Who is making this decision (e.g., "user", "mcp-client").
+    #[serde(default = "default_decided_by")]
+    decided_by: String,
+}
+
+fn default_decided_by() -> String {
+    "mcp".to_string()
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ListJobsParams {
+    /// Filter by status: "pending", "running", "completed", "failed". Omit for all.
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DeleteJobRequest {
+    /// ID of the job to delete.
+    job_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ClearEpisodicMemoryRequest {
+    /// Delete episodic log files older than this many days.
+    older_than_days: u32,
+}
+
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
@@ -781,6 +820,135 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             ))])),
         }
     }
+
+    // ── Agent proposal tools ─────────────────────────────────────────
+
+    #[tool(
+        description = "List agent proposals awaiting human approval. Optionally filter by status: 'pending', 'approved', 'rejected'."
+    )]
+    async fn list_proposals(
+        &self,
+        Parameters(params): Parameters<ListProposalsParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_proposals filter={:?}", params.status);
+        match self.platform.list_proposals(params.status.as_deref()).await {
+            Ok(result) => Ok(CallToolResult::success(vec![Content::text(result)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Approve a pending agent proposal. The proposed actions will be executed by the agent on its next heartbeat."
+    )]
+    async fn approve_proposal(
+        &self,
+        Parameters(req): Parameters<ProposalIdRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=approve_proposal id={} by={}",
+            req.proposal_id,
+            req.decided_by
+        );
+        match self
+            .platform
+            .approve_proposal(&req.proposal_id, &req.decided_by)
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Reject a pending agent proposal. The proposed actions will be discarded."
+    )]
+    async fn reject_proposal(
+        &self,
+        Parameters(req): Parameters<ProposalIdRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=reject_proposal id={} by={}",
+            req.proposal_id,
+            req.decided_by
+        );
+        match self
+            .platform
+            .reject_proposal(&req.proposal_id, &req.decided_by)
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Memory admin tools ──────────────────────────────────────────
+
+    #[tool(
+        description = "List agent jobs with optional status filter. Returns all scheduled, running, completed, and failed jobs."
+    )]
+    async fn list_jobs(
+        &self,
+        Parameters(params): Parameters<ListJobsParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_jobs filter={:?}", params.status);
+        match self.platform.list_jobs(params.status.as_deref()).await {
+            Ok(result) => Ok(CallToolResult::success(vec![Content::text(result)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Delete a specific agent job by ID. Removes the job from the scheduler. Operator only."
+    )]
+    async fn delete_job(
+        &self,
+        Parameters(req): Parameters<DeleteJobRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=delete_job id={}", req.job_id);
+        match self.platform.delete_job(&req.job_id).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Clear episodic memory logs older than the specified number of days. Removes NDJSON files and FTS5 index entries. Admin only."
+    )]
+    async fn clear_episodic_memory(
+        &self,
+        Parameters(req): Parameters<ClearEpisodicMemoryRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=clear_episodic_memory older_than_days={}",
+            req.older_than_days
+        );
+        match self
+            .platform
+            .clear_episodic_memory(req.older_than_days)
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
 }
 
 // ── ServerHandler implementation ──────────────────────────────────
@@ -801,6 +969,8 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
                  **Autostart:** enable_autostart, disable_autostart\n\
                  **Data:** send_command, get_stream_info (returns Zenoh topic for streaming)\n\
                  **Config:** get_node_config, get_node_manifest, list_commands\n\
+                 **Proposals:** list_proposals, approve_proposal, reject_proposal\n\
+                 **Memory:** list_jobs, delete_job, clear_episodic_memory\n\
                  **System:** get_system_status, get_machine_info, query_zenoh, discover_nodes\n\n\
                  install_node accepts marketplace names (e.g., 'rtsp-camera'), local paths, or GitHub 'user/repo' format.\n\
                  Use discover_capabilities to find nodes by capability (sensor, actuator, processor, gateway).\n\

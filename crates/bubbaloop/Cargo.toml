@@ -78,6 +78,10 @@ rusqlite.workspace = true
 cron.workspace = true
 chrono.workspace = true
 
+# Agent v2: Soul hot-reload + TOML config
+notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
+toml = "0.8"
+
 # MCP server (core)
 rmcp.workspace = true
 schemars.workspace = true

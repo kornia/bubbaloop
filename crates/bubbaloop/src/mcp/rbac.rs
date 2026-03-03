@@ -59,15 +59,23 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "discover_nodes"
         | "get_node_manifest"
         | "list_commands"
-        | "discover_capabilities" => Tier::Viewer,
+        | "discover_capabilities"
+        | "list_proposals"
+        | "list_jobs" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
         "start_node" | "stop_node" | "restart_node" | "get_node_config" | "send_command"
-        | "get_node_logs" | "enable_autostart" | "disable_autostart" => Tier::Operator,
+        | "get_node_logs" | "enable_autostart" | "disable_autostart" | "approve_proposal"
+        | "reject_proposal" | "delete_job" => Tier::Operator,
 
         // Admin tools (system modification)
-        "install_node" | "remove_node" | "build_node" | "query_zenoh" | "uninstall_node"
-        | "clean_node" => Tier::Admin,
+        "install_node"
+        | "remove_node"
+        | "build_node"
+        | "query_zenoh"
+        | "uninstall_node"
+        | "clean_node"
+        | "clear_episodic_memory" => Tier::Admin,
 
         // Unknown tools default to admin (principle of least privilege)
         _ => Tier::Admin,
@@ -103,18 +111,24 @@ mod tests {
         assert_eq!(required_tier("list_nodes"), Tier::Viewer);
         assert_eq!(required_tier("get_node_health"), Tier::Viewer);
         assert_eq!(required_tier("discover_nodes"), Tier::Viewer);
+        assert_eq!(required_tier("list_proposals"), Tier::Viewer);
+        assert_eq!(required_tier("list_jobs"), Tier::Viewer);
     }
 
     #[test]
     fn test_required_tier_operator_tools() {
         assert_eq!(required_tier("start_node"), Tier::Operator);
         assert_eq!(required_tier("send_command"), Tier::Operator);
+        assert_eq!(required_tier("approve_proposal"), Tier::Operator);
+        assert_eq!(required_tier("reject_proposal"), Tier::Operator);
+        assert_eq!(required_tier("delete_job"), Tier::Operator);
     }
 
     #[test]
     fn test_required_tier_admin_tools() {
         assert_eq!(required_tier("query_zenoh"), Tier::Admin);
         assert_eq!(required_tier("install_node"), Tier::Admin);
+        assert_eq!(required_tier("clear_episodic_memory"), Tier::Admin);
     }
 
     #[test]

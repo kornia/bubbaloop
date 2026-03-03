@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use crate::agent::claude::OAUTH_BETA_HEADERS;
+use crate::agent::provider::claude::OAUTH_BETA_HEADERS;
 
 // ── Errors ──────────────────────────────────────────────────────────
 
