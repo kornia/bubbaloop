@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use zenoh::Wait;
 
 /// Declare a Zenoh queryable that serves the node's protobuf FileDescriptorSet.
 ///
@@ -20,7 +21,7 @@ pub async fn declare_schema_queryable(
             let descriptor = descriptor.to_vec();
             move |query| {
                 log::debug!("Schema query received");
-                if let Err(e) = query.reply(&query.key_expr().clone(), descriptor.as_slice()) {
+                if let Err(e) = query.reply(&query.key_expr().clone(), descriptor.as_slice()).wait() {
                     log::warn!("Failed to reply to schema query: {}", e);
                 }
             }

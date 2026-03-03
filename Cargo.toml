@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/bubbaloop",
+    "crates/bubbaloop-node-sdk",
 ]
 resolver = "2"
 

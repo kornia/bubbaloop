@@ -14,7 +14,12 @@ pub struct NodeContext {
 
 impl NodeContext {
     /// Build a fully-qualified scoped topic: `bubbaloop/{scope}/{machine_id}/{suffix}`
-    pub fn topic(&self, suffix: &str) -> String {
-        format!("bubbaloop/{}/{}/{}", self.scope, self.machine_id, suffix)
+    pub fn topic(&self, suffix: &str) -> anyhow::Result<String> {
+        let illegal_chars = ['/', '*', '#'];
+        if suffix.contains(&illegal_chars[..]) || suffix.contains("..") {
+            anyhow::bail!("Security: Illegal characters in topic suffix '{}'", suffix);
+        }
+        let safe_suffix = suffix.trim_start_matches('/');
+        Ok(format!("bubbaloop/{}/{}/{}", self.scope, self.machine_id, safe_suffix))
     }
 }
