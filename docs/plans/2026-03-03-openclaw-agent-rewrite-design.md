@@ -150,6 +150,59 @@ CREATE TABLE proposals (
 CREATE INDEX idx_proposals_status ON proposals(status);
 ```
 
+## 2.5. Episodic Log Indexing (FTS5)
+
+**Inspired by:** [OpenClaw Memory System](https://docs.openclaw.ai/concepts/memory) — hybrid BM25+vector search over daily logs
+
+### Problem
+
+NDJSON episodic logs are write-only by design. You can `grep` them, but there's no structured search — the agent can't answer "what happened with the front-door camera last Tuesday?" without reading entire log files.
+
+### Solution: Dual-Write Pattern
+
+On each `EpisodicLog::append()`, also insert into an SQLite FTS5 virtual table. NDJSON remains the source of truth; FTS5 is a derived query index.
+
+```sql
+CREATE VIRTUAL TABLE fts_episodic USING fts5(
+    content,                          -- full-text indexed
+    id UNINDEXED,                     -- log entry UUID
+    role UNINDEXED,                   -- "user" | "assistant" | "tool" | "system"
+    timestamp UNINDEXED,              -- ISO 8601
+    job_id UNINDEXED                  -- nullable, links to jobs table
+);
+```
+
+### Query API
+
+```rust
+impl EpisodicLog {
+    /// Append entry to NDJSON + FTS5 (dual-write)
+    pub async fn append(&self, entry: &LogEntry) -> Result<()>;
+
+    /// BM25 full-text search over all episodic logs
+    pub fn search_episodic(&self, query: &str, limit: usize) -> Result<Vec<LogEntry>>;
+}
+```
+
+Example: `search_episodic("camera offline", 5)` returns the 5 most relevant log entries mentioning camera issues, ranked by BM25.
+
+### Why FTS5 (Not Vector Search)
+
+- **FTS5 is built into rusqlite** — zero new dependencies
+- **BM25 ranking is sufficient** for keyword recall over structured logs
+- **Deterministic** — same query always returns same results (no embedding drift)
+- **Fast** — FTS5 is optimized for full-text search, handles millions of rows
+
+### Future: Vector Search (Phase 2)
+
+When semantic search is needed (e.g., "find times the agent was confused"), add sqlite-vec embeddings alongside FTS5. The dual-write pattern extends naturally:
+
+```
+NDJSON → source of truth (durability)
+FTS5   → keyword search (BM25)
+sqlite-vec → semantic search (embeddings)  # Phase 2
+```
+
 ## 3. ModelProvider Trait
 
 ```rust
@@ -295,6 +348,54 @@ loop {
    - Calculate next_run if recurring
 ```
 
+## 5.5. Pre-Compaction Memory Flush
+
+**Inspired by:** [OpenClaw `memoryFlush`](https://snowan.gitbook.io/study-notes/ai-blogs/openclaw-memory-system-deep-dive) — persists durable state before context truncation
+
+### Problem
+
+When the context window fills up and gets truncated (compacted), in-flight reasoning is lost. The agent might have been mid-analysis of a node health issue or holding uncommitted proposals — all silently dropped.
+
+### Solution: Flush Before Compact
+
+Before context window truncation, inject a **silent agentic turn** that persists critical state to episodic memory:
+
+```
+Context usage > compaction_flush_threshold_tokens (default: 4000 from limit)?
+  → YES: Trigger flush turn
+       System prompt: "Persist any important state to episodic memory before context compaction."
+       Agent writes to NDJSON + FTS5:
+         - Active proposals and their current status
+         - Recent node health assessments
+         - Unresolved decisions or open questions
+         - Summary of current reasoning chain
+  → NO: Continue normally
+```
+
+### Configuration (capabilities.toml)
+
+```toml
+# Pre-compaction memory flush
+compaction_flush_threshold_tokens = 4000  # Trigger flush when this close to context limit
+```
+
+### Flush Behavior
+
+- Runs **once per compaction cycle** — tracked with a `flush_pending: bool` flag
+- Flag is set when context crosses threshold, cleared after flush completes
+- Flush turn does NOT count toward `max_turns` limit
+- Flush output is appended to episodic log with `role: "system"` and tagged `"flush": true`
+
+### Example Flush Entry (NDJSON)
+
+```json
+{"timestamp":"2026-03-03T14:30:00Z","role":"system","content":"Pre-compaction flush: front-door camera reported offline at 14:25. Proposal P-007 pending (restart camera). Arousal at 4.2, investigating root cause.","flush":true,"job_id":"job-456"}
+```
+
+### Post-Compaction Recovery
+
+After compaction, the agent can use `search_episodic("flush", 1)` to retrieve the most recent flush entry and restore context about what it was working on.
+
 ## 6. Module Structure
 
 ```
@@ -325,8 +426,8 @@ All other deps (`rusqlite`, `reqwest`, `cron`, `chrono`, `uuid`, `serde`, `tokio
 
 ### Removed Dependencies
 
-- FTS5 virtual tables (no longer needed — episodic is NDJSON)
-- `rusqlite` features can be slimmed (no `bundled-full`, just `bundled`)
+- Old FTS5 tables for conversations/sensor_events (replaced by `fts_episodic` dual-write index — see Section 2.5)
+- `rusqlite` still needs `bundled-full` for FTS5 support
 
 ## 7. Human-in-the-Loop Approval
 
@@ -375,12 +476,14 @@ This is a **full replacement**, not a refactor:
 1. **NDJSON retention policy:** How many days of logs to keep? Auto-prune after 30 days?
 2. **Arousal cap:** Should arousal have a maximum value (e.g., 20.0) to prevent interval from staying at MIN forever during sustained events?
 3. **Model routing:** Haiku for "nothing changed" beats, Sonnet for reasoning — implement now or later?
-4. **Episodic → Semantic promotion:** Should high-value episodic entries (errors, decisions) be promoted to SQLite for queryability?
+4. **FTS5 temporal decay:** Should FTS5 search include temporal decay like OpenClaw (30-day half-life), so recent logs rank higher than old ones?
 5. **Soul versioning:** Should capabilities.toml have a schema version to handle future field additions gracefully?
 
 ## References
 
 - [OpenClaw Agent Loop](https://docs.openclaw.ai/concepts/agent-loop) — heartbeat scheduler pattern
+- [OpenClaw Memory System](https://docs.openclaw.ai/concepts/memory) — hybrid BM25+vector search, memoryFlush
+- [OpenClaw Memory Deep Dive](https://snowan.gitbook.io/study-notes/ai-blogs/openclaw-memory-system-deep-dive) — episodic indexing, pre-compaction flush
 - [ZeroClaw Architecture](https://zeroclaw.net/) — Rust trait-based autonomous agent
 - [Pico Framework](https://github.com/nichochar/pico-agent) — file-as-identity, NDJSON memory
 - Existing heartbeat design: `docs/plans/2026-03-02-heartbeat-agent-loop-design.md`
