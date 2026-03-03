@@ -112,7 +112,7 @@ flowchart LR
 
 Each camera runs as an independent node:
 
-- Wraps GStreamer pipeline in ROS-Z node
+- Wraps GStreamer pipeline in Zenoh node
 - Publishes `CompressedImage` messages
 - Includes timestamps and sequence numbers
 - Handles graceful shutdown
@@ -189,6 +189,6 @@ WebCodecs API is required for H264 decoding:
 
 ## Next Steps
 
-- [Messaging](messaging.md) — Zenoh/ROS-Z messaging patterns
+- [Messaging](messaging.md) — Zenoh messaging patterns
 - [Topics](topics.md) — Topic naming conventions
 - [Components](../components/index.md) — Available components

@@ -81,6 +81,14 @@ vi.mock('../SortableNetworkMonitorCard', () => ({
   )),
 }));
 
+// Mock ZenohSubscriptionContext to avoid needing the provider in tests
+vi.mock('../../contexts/ZenohSubscriptionContext', () => ({
+  useZenohSubscriptionContext: vi.fn(() => ({
+    getDiscoveredTopics: vi.fn(() => []),
+  })),
+  ZenohSubscriptionProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
 // Mock dnd-kit to avoid drag-and-drop complexity in unit tests
 vi.mock('@dnd-kit/core', () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,

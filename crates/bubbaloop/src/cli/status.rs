@@ -2,7 +2,7 @@
 //!
 //! Provides a concise view of the bubbaloop system status:
 //! - Zenoh router (running/stopped, port)
-//! - Daemon (running/stopped, node count)
+//! - Daemon (running/stopped, node count via MCP /health endpoint)
 //! - Bridge (running/stopped)
 //! - Node summary (running/stopped/not-installed counts)
 //!
@@ -10,13 +10,10 @@
 
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use zenoh::query::QueryTarget;
-use zenoh::Session;
-
-const API_NODES: &str = "bubbaloop/daemon/api/nodes";
 
 #[derive(Debug, Serialize)]
 struct StatusOutput {
@@ -51,36 +48,12 @@ struct NodeSummary {
     not_installed: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct NodeState {
+#[derive(Debug, Deserialize)]
+struct DaemonHealthResponse {
     #[allow(dead_code)]
-    name: String,
-    #[allow(dead_code)]
-    path: String,
     status: String,
-    installed: bool,
-    #[allow(dead_code)]
-    autostart_enabled: bool,
-    #[allow(dead_code)]
-    version: String,
-    #[allow(dead_code)]
-    description: String,
-    #[allow(dead_code)]
-    node_type: String,
-    #[allow(dead_code)]
-    is_built: bool,
-    #[allow(dead_code)]
-    build_output: Vec<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    base_node: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct NodeListResponse {
-    nodes: Vec<NodeState>,
-    #[allow(dead_code)]
-    timestamp_ms: u64,
+    nodes_total: usize,
+    nodes_running: usize,
 }
 
 async fn check_systemd_service(service_name: &str) -> String {
@@ -102,31 +75,24 @@ async fn check_systemd_service(service_name: &str) -> String {
     }
 }
 
-async fn query_nodes(session: &Session) -> Result<NodeListResponse> {
-    let replies = session
-        .get(API_NODES)
-        .target(QueryTarget::BestMatching)
-        .timeout(Duration::from_secs(5))
+/// Query the daemon's MCP /health endpoint via raw HTTP.
+/// Returns None if the daemon is unreachable.
+async fn check_daemon_mcp(port: u16) -> Option<DaemonHealthResponse> {
+    let addr = format!("127.0.0.1:{}", port);
+    let mut stream = tokio::net::TcpStream::connect(&addr).await.ok()?;
+    let request = format!(
+        "GET /health HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        port
+    );
+    stream.write_all(request.as_bytes()).await.ok()?;
+    let mut buf = Vec::new();
+    tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf))
         .await
-        .map_err(|e| anyhow!("Zenoh query failed: {}", e))?;
-
-    let timeout_duration = Duration::from_secs(5);
-    let start = std::time::Instant::now();
-
-    while start.elapsed() < timeout_duration {
-        match tokio::time::timeout(timeout_duration - start.elapsed(), replies.recv_async()).await {
-            Ok(Ok(reply)) => {
-                if let Ok(sample) = reply.result() {
-                    let bytes = sample.payload().to_bytes();
-                    let result: NodeListResponse = serde_json::from_slice(&bytes)?;
-                    return Ok(result);
-                }
-            }
-            Ok(Err(_)) | Err(_) => break,
-        }
-    }
-
-    Err(anyhow!("No reply received from daemon (timeout after 5s)"))
+        .ok()?
+        .ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let body = text.split("\r\n\r\n").nth(1)?;
+    serde_json::from_str(body).ok()
 }
 
 fn print_table(status: &StatusOutput) {
@@ -198,54 +164,50 @@ pub async fn run(format: &str) -> Result<()> {
 }
 
 async fn collect_status() -> Result<StatusOutput> {
-    // Check Zenoh router
     let zenoh_running = is_process_running("zenohd").await;
     let zenoh = ZenohStatus {
         running: zenoh_running,
         port: 7447,
     };
 
-    // Check daemon
-    let daemon_service = check_systemd_service("bubbaloop-daemon.service").await;
-    let daemon_running = daemon_service == "active";
+    let mcp_port = std::env::var("BUBBALOOP_MCP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(crate::mcp::MCP_PORT);
 
-    // Try to get node count from daemon if it's running
-    let mut node_count = None;
-    let mut node_summary = NodeSummary {
-        running: 0,
-        stopped: 0,
-        not_installed: 0,
-    };
-
-    if daemon_running && zenoh_running {
-        if let Ok(session) = get_zenoh_session().await {
-            if let Ok(response) = query_nodes(&session).await {
-                node_count = Some(response.nodes.len());
-
-                // Count node states
-                for node in response.nodes {
-                    if !node.installed {
-                        node_summary.not_installed += 1;
-                    } else if node.status.to_lowercase() == "running" {
-                        node_summary.running += 1;
-                    } else {
-                        node_summary.stopped += 1;
-                    }
-                }
-            }
-            let _ = session.close().await;
-        }
-    }
+    // Primary: query MCP /health endpoint. Fallback: systemd service check.
+    let (daemon_running, node_count, node_summary) =
+        if let Some(health) = check_daemon_mcp(mcp_port).await {
+            (
+                true,
+                Some(health.nodes_total),
+                NodeSummary {
+                    running: health.nodes_running,
+                    stopped: health.nodes_total.saturating_sub(health.nodes_running),
+                    not_installed: 0,
+                },
+            )
+        } else {
+            let svc = check_systemd_service("bubbaloop-daemon.service").await;
+            (
+                svc == "running",
+                None,
+                NodeSummary {
+                    running: 0,
+                    stopped: 0,
+                    not_installed: 0,
+                },
+            )
+        };
 
     let daemon = DaemonStatus {
         running: daemon_running,
         nodes: node_count,
     };
 
-    // Check bridge
     let bridge_service = check_systemd_service("bubbaloop-bridge.service").await;
     let bridge = BridgeStatus {
-        running: bridge_service == "active",
+        running: bridge_service == "running",
     };
 
     Ok(StatusOutput {
@@ -260,29 +222,6 @@ async fn is_process_running(name: &str) -> bool {
     let output = Command::new("pgrep").arg("-x").arg(name).output().await;
 
     matches!(output, Ok(out) if out.status.success())
-}
-
-async fn get_zenoh_session() -> Result<Session> {
-    let mut config = zenoh::Config::default();
-
-    config
-        .insert_json5("mode", "\"client\"")
-        .map_err(|e| anyhow!("Failed to configure client mode: {}", e))?;
-
-    let endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT")
-        .unwrap_or_else(|_| "tcp/127.0.0.1:7447".to_string());
-
-    config
-        .insert_json5("connect/endpoints", &format!("[\"{}\"]", endpoint))
-        .map_err(|e| anyhow!("Failed to configure endpoint: {}", e))?;
-
-    // Disable scouting
-    let _ = config.insert_json5("scouting/multicast/enabled", "false");
-    let _ = config.insert_json5("scouting/gossip/enabled", "false");
-
-    zenoh::open(config)
-        .await
-        .map_err(|e| anyhow!("Failed to open Zenoh session: {}", e))
 }
 
 #[cfg(test)]
@@ -356,58 +295,11 @@ mod tests {
     }
 
     #[test]
-    fn test_node_state_deserialization() {
-        let json = r#"{
-            "name": "rtsp-camera",
-            "path": "/path/to/node",
-            "status": "running",
-            "installed": true,
-            "autostart_enabled": true,
-            "version": "0.1.0",
-            "description": "RTSP Camera Node",
-            "node_type": "rust",
-            "is_built": true,
-            "build_output": ["Building...", "Done"]
-        }"#;
-
-        let node: NodeState = serde_json::from_str(json).unwrap();
-        assert_eq!(node.name, "rtsp-camera");
-        assert_eq!(node.status, "running");
-        assert_eq!(node.node_type, "rust");
-        assert!(node.installed);
-        assert!(node.is_built);
-    }
-
-    #[test]
-    fn test_node_list_response_deserialization() {
-        let json = r#"{
-            "nodes": [
-                {
-                    "name": "node1",
-                    "path": "/path1",
-                    "status": "running",
-                    "installed": true,
-                    "autostart_enabled": false,
-                    "version": "1.0.0",
-                    "description": "First node",
-                    "node_type": "rust",
-                    "is_built": true,
-                    "build_output": []
-                }
-            ],
-            "timestamp_ms": 1234567890
-        }"#;
-
-        let response: NodeListResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(response.nodes.len(), 1);
-        assert_eq!(response.nodes[0].name, "node1");
-        assert_eq!(response.timestamp_ms, 1234567890);
-    }
-
-    #[test]
-    fn test_node_list_response_empty() {
-        let json = r#"{"nodes": [], "timestamp_ms": 0}"#;
-        let response: NodeListResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(response.nodes.len(), 0);
+    fn test_daemon_health_response_deserialization() {
+        let json = r#"{"status": "ok", "version": "0.0.6", "nodes_total": 5, "nodes_running": 3}"#;
+        let resp: DaemonHealthResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.status, "ok");
+        assert_eq!(resp.nodes_total, 5);
+        assert_eq!(resp.nodes_running, 3);
     }
 }

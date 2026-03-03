@@ -133,10 +133,10 @@ export function WeatherViewPanel({
   const [isSendingLocation, setIsSendingLocation] = useState(false);
   const [locationUpdateStatus, setLocationUpdateStatus] = useState<'idle' | 'sent' | 'error'>('idle');
 
-  // Match any machine/scope: **/TypeName/* (works with new ros-z format: 0/bubbaloop/scope/machine/node/resource/type/hash)
-  const currentTopic = '**/bubbaloop.weather.v1.CurrentWeather/*';
-  const hourlyTopic = '**/bubbaloop.weather.v1.HourlyForecast/*';
-  const dailyTopic = '**/bubbaloop.weather.v1.DailyForecast/*';
+  // Match any machine/scope via ** wildcard (vanilla Zenoh format)
+  const currentTopic = '**/weather/current';
+  const hourlyTopic = '**/weather/hourly';
+  const dailyTopic = '**/weather/daily';
 
   // Handle current weather samples
   const handleCurrentSample = useCallback((sample: Sample) => {
@@ -288,9 +288,8 @@ export function WeatherViewPanel({
         timezone: '',
       })).finish();
 
-      // Publish to the config topic using ros-z format
-      // The topic format is: domain_id/topic_name/schema/hash
-      const configKey = '0/weather%config%location/bubbaloop.weather.v1.LocationConfig/RIHS01_0000000000000000000000000000000000000000000000000000000000000000';
+      // Publish to the config topic using vanilla Zenoh format
+      const configKey = 'weather/config/location';
 
       console.log('[WeatherView] Publishing location update to:', configKey);
       console.log('[WeatherView] Location:', { lat, lon });

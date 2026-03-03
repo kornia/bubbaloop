@@ -390,10 +390,10 @@ else
 fi
 
 step "Daemon: scouting disabled"
-if grep -q 'scouting/multicast/enabled.*false' crates/bubbaloop/src/daemon/zenoh_service.rs; then
+if grep -q 'scouting/multicast/enabled.*false' crates/bubbaloop/src/daemon/mod.rs; then
     pass
 else
-    fail "Daemon zenoh_service.rs doesn't disable scouting"
+    fail "Daemon mod.rs doesn't disable scouting"
 fi
 
 # ══════════════════════════════════════════════════════════════════════

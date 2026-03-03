@@ -9,6 +9,17 @@ This guide walks you through creating a custom Bubbaloop node that publishes dat
 - `zenohd` running locally
 - `bubbaloop` CLI built and in your PATH
 
+## Where to Create Your Node
+
+**Every node is its own Git repository**, separate from the main bubbaloop repo. Create it anywhere on your filesystem:
+
+```bash
+# Pick any directory — your home, a projects folder, etc.
+mkdir ~/my-nodes && cd ~/my-nodes
+```
+
+Your node will depend on `bubbaloop-node-sdk` and `bubbaloop-schemas` via Git (not local paths). This means you can develop, build, and publish independently.
+
 ## Step 1: Scaffold
 
 ```bash
@@ -20,44 +31,59 @@ This creates:
 
 ```
 my-sensor/
-  Cargo.toml         # Standalone crate with bubbaloop-schemas dependency
+  Cargo.toml         # Depends on bubbaloop-node-sdk + bubbaloop-schemas
   node.yaml          # Node manifest
   pixi.toml          # Build environment
-  .cargo/config.toml # Local target directory
-  config.yaml        # Runtime configuration
+  config.yaml        # Runtime configuration (publish_topic, rate_hz)
+  build.rs           # Proto compilation
   src/
-    main.rs          # Entry point with CLI args and shutdown handling
-    node.rs          # Node logic (edit this)
+    main.rs          # Node trait impl + run_node() (edit this)
 ```
 
 ## Step 2: Implement Your Logic
 
-Edit `src/node.rs`. The generated scaffold provides a basic pub/sub structure.
-
-To use Bubbaloop protobuf types (e.g., for publishing camera-compatible messages):
+Edit `src/main.rs`. The generated scaffold uses the Node SDK — you only implement `init()` and `run()`:
 
 ```rust
-use bubbaloop_schemas::Header;
-use prost::Message;
+use bubbaloop_node_sdk::{Node, NodeContext};
 
-fn create_header(sequence: u64, node_name: &str) -> Header {
-    Header {
-        acq_time: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0),
-        pub_time: 0,
-        sequence,
-        frame_id: node_name.to_string(),
-        ..Default::default()
+#[async_trait::async_trait]
+impl Node for MySensorNode {
+    type Config = Config;
+    fn name() -> &'static str { "my-sensor" }
+    fn descriptor() -> &'static [u8] { DESCRIPTOR }
+
+    async fn init(ctx: &NodeContext, config: &Config) -> anyhow::Result<Self> {
+        let topic = ctx.topic(&format!("{}/{}", Self::name(), config.publish_topic));
+        let publisher = ctx.session.declare_publisher(&topic).await
+            .map_err(|e| anyhow::anyhow!("Publisher: {e}"))?;
+        Ok(Self { publisher, rate_hz: config.rate_hz })
+    }
+
+    async fn run(self, ctx: NodeContext) -> anyhow::Result<()> {
+        let mut shutdown_rx = ctx.shutdown_rx.clone();
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs_f64(1.0 / self.rate_hz));
+        loop {
+            tokio::select! {
+                biased;
+                _ = shutdown_rx.changed() => break,
+                _ = tick.tick() => {
+                    // YOUR SENSOR LOGIC HERE
+                    self.publisher.put(data).await.ok();
+                }
+            }
+        }
+        Ok(())
     }
 }
 ```
 
-Enable the `ros-z` feature in `Cargo.toml` if you need ROS-Z pub/sub:
+The SDK automatically handles: Zenoh session, health heartbeat, schema queryable, config loading, signal handling, and logging. You focus on your sensor logic.
 
-```toml
-bubbaloop-schemas = { git = "https://github.com/kornia/bubbaloop.git", branch = "main", path = "crates/bubbaloop-schemas", features = ["ros-z"] }
+Nodes publish using vanilla Zenoh topics with the standard format:
+
+```
+bubbaloop/{scope}/{machine_id}/{node_name}/{resource}
 ```
 
 ## Step 3: Build
@@ -122,13 +148,12 @@ The `bubbaloop-schemas` crate provides these protobuf types:
 | `CurrentWeather`, `HourlyForecast`, `DailyForecast` | `weather` | (default) |
 | `SystemMetrics` | `system_telemetry` | (default) |
 | `NetworkStatus` | `network_monitor` | (default) |
-| ROS-Z trait impls | - | `ros-z` |
 | `TopicsConfig` | `config` | `config` |
-| `get_descriptor_for_message` | - | `descriptor` + `ros-z` |
 
 ## Next Steps
 
-- Add health heartbeats (publish to `bubbaloop/{scope}/{machine_id}/health/{node-name}`)
-- Add configuration via `config.yaml`
-- Add service dependencies in `node.yaml` with `depends_on`
-- See [Node Marketplace](node-marketplace.md) for publishing to the community
+- The SDK handles health heartbeats automatically — no manual setup needed
+- Add custom protobuf messages in `protos/` and reference them in `run()`
+- Add node-specific config fields to your `Config` struct and `config.yaml`
+- See [Skillet Development Guide](../skillet-development.md) for the full SDK reference
+- See [Node Marketplace](node-marketplace.md) for publishing and discovery

@@ -5,3 +5,29 @@ description: {{description}}
 author: {{author}}
 build: "python build_proto.py"
 command: "pixi run run"
+
+# Skill capabilities — what this node provides to AI agents
+capabilities:
+  - sensor
+
+# Topics this node publishes
+publishes:
+  - suffix: output
+    description: "Primary data output"
+    # schema_type: "bubbaloop.header.v1.Header"  # Uncomment when using protobuf
+    # rate_hz: 1.0
+
+# Topics this node subscribes to (uncomment if needed)
+# subscribes:
+#   - suffix: input
+#     description: "Input data"
+
+# Commands this node accepts (uncomment if needed)
+# commands:
+#   - name: reset
+#     description: "Reset the node state"
+
+# Hardware/software requirements
+requires:
+  hardware:
+    - network

@@ -1,55 +1,97 @@
-//! {{node_name}} node - {{description}}
+//! {{node_name}} node — {{description}}
 
-use anyhow::Result;
-use argh::FromArgs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use bubbaloop_node_sdk::anyhow::Result;
+use bubbaloop_node_sdk::{Node, NodeContext};
+use std::time::Duration;
+use tokio::time::interval;
 
-mod node;
+/// Protobuf FileDescriptorSet bytes for schema registration
+const DESCRIPTOR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/descriptor.bin"));
 
-use node::{{node_name_pascal}}Node;
-
-/// {{description}}
-#[derive(FromArgs)]
-struct Args {
-    /// path to configuration file
-    #[argh(option, short = 'c', default = "default_config_path()")]
-    config: PathBuf,
-
-    /// zenoh endpoint to connect to
-    #[argh(option, short = 'e')]
-    endpoint: Option<String>,
+/// Node-specific configuration (deserialized from config.yaml)
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Config {
+    /// Topic suffix for published data
+    pub publish_topic: String,
+    /// Publishing rate in Hz
+    pub rate_hz: f64,
 }
 
-fn default_config_path() -> PathBuf {
-    PathBuf::from("config.yaml")
+/// {{node_name_pascal}} node
+pub struct {{node_name_pascal}}Node {
+    publisher: zenoh::pubsub::Publisher<'static>,
+    rate_hz: f64,
+}
+
+#[bubbaloop_node_sdk::async_trait::async_trait]
+impl Node for {{node_name_pascal}}Node {
+    type Config = Config;
+
+    fn name() -> &'static str {
+        "{{node_name}}"
+    }
+
+    fn descriptor() -> &'static [u8] {
+        DESCRIPTOR
+    }
+
+    async fn init(ctx: &NodeContext, config: &Config) -> Result<Self> {
+        let topic = ctx.topic(&format!("{}/{}", Self::name(), config.publish_topic));
+        let publisher = ctx
+            .session
+            .declare_publisher(&topic)
+            .await
+            .map_err(|e| bubbaloop_node_sdk::anyhow::anyhow!("Publisher error: {e}"))?;
+
+        bubbaloop_node_sdk::log::info!("Publishing to: {}", topic);
+
+        Ok(Self {
+            publisher,
+            rate_hz: config.rate_hz,
+        })
+    }
+
+    async fn run(self, ctx: NodeContext) -> Result<()> {
+        let mut shutdown_rx = ctx.shutdown_rx.clone();
+        let mut tick = interval(Duration::from_secs_f64(1.0 / self.rate_hz));
+        let mut seq: u64 = 0;
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = shutdown_rx.changed() => break,
+                _ = tick.tick() => {
+                    // TODO: Replace with your actual sensor/processing logic
+                    let output = serde_json::json!({
+                        "sequence": seq,
+                        "data": "Hello from {{node_name}}",
+                    });
+                    self.publisher
+                        .put(serde_json::to_vec(&output).unwrap())
+                        .await
+                        .ok();
+                    seq = seq.wrapping_add(1);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info")
-    ).init();
+    bubbaloop_node_sdk::run_node::<{{node_name_pascal}}Node>().await
+}
 
-    let args: Args = argh::from_env();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // Setup graceful shutdown
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || {
-        log::info!("Shutdown signal received");
-        r.store(false, Ordering::SeqCst);
-    })?;
-
-    // Create and run the node
-    let mut node = {{node_name_pascal}}Node::new(&args.config, args.endpoint).await?;
-
-    log::info!("{{node_name}} node started");
-
-    node.run(running).await?;
-
-    log::info!("{{node_name}} node stopped");
-    Ok(())
+    #[test]
+    fn test_config_deserialize() {
+        let yaml = "publish_topic: output\nrate_hz: 10.0\n";
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.publish_topic, "output");
+        assert!((config.rate_hz - 10.0).abs() < f64::EPSILON);
+    }
 }

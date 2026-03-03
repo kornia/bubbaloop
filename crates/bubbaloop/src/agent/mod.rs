@@ -1,347 +1,401 @@
-//! Agent Logic Layer — lightweight rule engine for autonomous sensor-to-action.
-//!
-//! Discovers node topics via manifests, subscribes to sensor data,
-//! evaluates rules, and executes actions (log, command, publish).
-//!
-//! Rules are defined in `~/.bubbaloop/rules.yaml`. The agent is a "logic gate",
-//! not an LLM — the LLM lives externally via MCP.
+/// Raw reqwest Claude API client with tool_use support.
+pub mod claude;
 
-mod rules;
+/// Internal MCP tool dispatch — calls PlatformOperations directly.
+pub mod dispatch;
 
-pub use rules::{Action, AgentStatus, Condition, Operator, Rule, RuleConfig, RuleTriggerLog};
+/// SQLite memory layer — conversations, sensor events, schedules.
+pub mod memory;
 
-use crate::daemon::node_manager::NodeManager;
-use std::collections::HashMap;
+/// System prompt builder — injects live sensor inventory and schedules.
+pub mod prompt;
+
+/// Cron-based scheduler with Tier 1 built-in actions.
+pub mod scheduler;
+
+use crate::agent::claude::{ClaudeClient, ContentBlock, Message};
+use crate::agent::dispatch::Dispatcher;
+use crate::agent::memory::Memory;
+use crate::agent::prompt::build_system_prompt;
+use crate::daemon::registry::get_bubbaloop_home;
+use crate::mcp::platform::DaemonPlatform;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{watch, RwLock};
 
-/// Path to the rules configuration file.
-fn rules_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".bubbaloop")
-        .join("rules.yaml")
+/// Maximum number of conversation messages to keep in context.
+///
+/// Older messages are dropped to avoid exceeding Claude's context window.
+/// Each pair (user + assistant) counts as 2, so 40 messages ≈ 20 exchanges.
+const MAX_CONVERSATION_MESSAGES: usize = 40;
+
+/// Errors from agent operations.
+#[derive(Debug, thiserror::Error)]
+pub enum AgentError {
+    #[error("Claude API error: {0}")]
+    Claude(#[from] claude::ClaudeError),
+    #[error("Memory error: {0}")]
+    Memory(#[from] memory::MemoryError),
+    #[error("Zenoh connection failed: {0}")]
+    Zenoh(String),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
-/// The agent service — runs inside the daemon, evaluates rules on sensor events.
-#[allow(dead_code)]
-pub struct Agent {
+pub type Result<T> = std::result::Result<T, AgentError>;
+
+/// Configuration for the interactive agent session.
+pub struct AgentConfig {
+    /// Claude model override (uses default if None).
+    pub model: Option<String>,
+}
+
+/// Create a lightweight Zenoh session for the agent.
+///
+/// Uses client mode with disabled scouting for fast startup (~0s instead of
+/// ~5s). Falls back gracefully — tools that need Zenoh will return errors
+/// but the chat loop still works.
+pub async fn create_agent_session(endpoint: Option<&str>) -> Result<Arc<zenoh::Session>> {
+    let mut config = zenoh::Config::default();
+
+    // Client mode — lighter weight, no routing
+    config
+        .insert_json5("mode", "\"client\"")
+        .expect("Failed to set Zenoh mode");
+
+    // Resolve endpoint
+    let env_endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT").ok();
+    let ep = endpoint
+        .or(env_endpoint.as_deref())
+        .unwrap_or("tcp/127.0.0.1:7447");
+
+    config
+        .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
+        .expect("Failed to set Zenoh endpoint");
+
+    // Disable scouting entirely for instant startup
+    config
+        .insert_json5("scouting/multicast/enabled", "false")
+        .expect("Failed to disable multicast scouting");
+    config
+        .insert_json5("scouting/gossip/enabled", "false")
+        .expect("Failed to disable gossip scouting");
+
+    // Single attempt — don't block if router is down
+    let session = zenoh::open(config)
+        .await
+        .map_err(|e| AgentError::Zenoh(e.to_string()))?;
+
+    Ok(Arc::new(session))
+}
+
+/// Run the interactive agent REPL.
+///
+/// Connects to the Claude API, initialises the tool dispatcher and memory
+/// store, then loops reading user input from stdin. Each message is sent
+/// to Claude along with the live system prompt (sensor inventory, schedules,
+/// recent events). Tool-use responses are dispatched and fed back until
+/// the model produces a final text reply.
+pub async fn run_agent(
+    config: AgentConfig,
     session: Arc<zenoh::Session>,
-    node_manager: Arc<NodeManager>,
-    rules: Arc<RwLock<Vec<Rule>>>,
-    /// Log of recent rule triggers (rule_name -> last trigger info).
-    trigger_log: Arc<RwLock<HashMap<String, RuleTriggerLog>>>,
-    /// Active human overrides (node_name -> override details).
-    overrides: Arc<RwLock<HashMap<String, serde_json::Value>>>,
-    machine_id: String,
-    scope: String,
-}
+    node_manager: Arc<crate::daemon::node_manager::NodeManager>,
+) -> Result<()> {
+    // 1. Initialise Claude client from ANTHROPIC_API_KEY env var
+    let client = ClaudeClient::from_env(config.model.as_deref())?;
 
-impl Agent {
-    pub fn new(
-        session: Arc<zenoh::Session>,
-        node_manager: Arc<NodeManager>,
-    ) -> Self {
-        let machine_id = crate::daemon::util::get_machine_id();
-        let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+    // 2. Create dispatcher with DaemonPlatform
+    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+    let machine_id = crate::daemon::util::get_machine_id();
+    let node_manager_ref = node_manager.clone();
+    let platform = Arc::new(DaemonPlatform {
+        node_manager,
+        session,
+        scope: scope.clone(),
+        machine_id: machine_id.clone(),
+    });
+    let sched_scope = scope.clone();
+    let sched_machine_id = machine_id.clone();
+    let dispatcher = Dispatcher::new(platform.clone(), scope, machine_id);
 
-        // Load rules from file
-        let rules = match Self::load_rules() {
-            Ok(r) => {
-                log::info!("Agent loaded {} rules from {:?}", r.len(), rules_path());
-                r
-            }
-            Err(e) => {
-                log::warn!("Failed to load rules from {:?}: {}. Starting with empty rules.", rules_path(), e);
-                Vec::new()
-            }
-        };
+    // 3. Get tool definitions
+    let tools = Dispatcher::<DaemonPlatform>::tool_definitions();
 
-        Self {
-            session,
-            node_manager,
-            rules: Arc::new(RwLock::new(rules)),
-            trigger_log: Arc::new(RwLock::new(HashMap::new())),
-            overrides: Arc::new(RwLock::new(HashMap::new())),
-            machine_id,
-            scope,
-        }
-    }
+    // 4. Open memory store
+    let memory_path = get_bubbaloop_home().join("memory.db");
+    let memory = Memory::open(&memory_path)?;
 
-    fn load_rules() -> Result<Vec<Rule>, Box<dyn std::error::Error>> {
-        let path = rules_path();
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let content = std::fs::read_to_string(&path)?;
-        let config: RuleConfig = serde_yaml::from_str(&content)?;
-        Ok(config.rules)
-    }
-
-    /// Get current agent status (for MCP tools and status queryable).
-    pub async fn get_status(&self) -> AgentStatus {
-        let rules = self.rules.read().await;
-        let trigger_log = self.trigger_log.read().await;
-        let overrides = self.overrides.read().await;
-        AgentStatus {
-            rule_count: rules.len(),
-            rules: rules.iter().map(|r| r.name.clone()).collect(),
-            recent_triggers: trigger_log.clone(),
-            active_overrides: overrides.len(),
-        }
-    }
-
-    /// Get a snapshot of the current rules.
-    pub async fn get_rules(&self) -> Vec<Rule> {
-        self.rules.read().await.clone()
-    }
-
-    /// Run the agent event loop. Blocks until shutdown.
-    pub async fn run(self: Arc<Self>, mut shutdown_rx: watch::Receiver<()>) {
-        log::info!("Agent starting (machine_id={}, scope={})", self.machine_id, self.scope);
-
-        // Subscribe to human override namespace
-        let override_key = format!(
-            "bubbaloop/{}/{}/human/override/**",
-            self.scope, self.machine_id
-        );
-        let override_agent = self.clone();
-        let override_sub = match self.session.declare_subscriber(&override_key).await {
-            Ok(sub) => {
-                log::info!("Agent subscribed to overrides: {}", override_key);
-                Some(sub)
-            }
-            Err(e) => {
-                log::warn!("Failed to subscribe to overrides: {}", e);
-                None
-            }
-        };
-
-        // Publish agent status queryable
-        let status_key = format!(
-            "bubbaloop/{}/{}/agent/status",
-            self.scope, self.machine_id
-        );
-        let status_agent = self.clone();
-        let _status_queryable = match self.session.declare_queryable(&status_key).callback(move |query| {
-            use zenoh::Wait;
-            let agent = status_agent.clone();
-            // We need to block here since callback is sync; use a small runtime
-            let status = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(agent.get_status())
-            });
-            let json = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
-            if let Err(e) = query.reply(query.key_expr(), zenoh::bytes::ZBytes::from(json.into_bytes())).wait() {
-                log::warn!("Failed to reply to agent status query: {}", e);
-            }
-        }).await {
-            Ok(q) => {
-                log::info!("Agent status queryable: {}", status_key);
-                Some(q)
-            }
-            Err(e) => {
-                log::warn!("Failed to create agent status queryable: {}", e);
-                None
-            }
-        };
-
-        // Main loop: discover topics, subscribe, evaluate rules
-        let mut discovery_interval = tokio::time::interval(Duration::from_secs(30));
-        let mut subscriptions: HashMap<String, zenoh::pubsub::Subscriber<()>> = HashMap::new();
-
-        loop {
-            tokio::select! {
-                _ = shutdown_rx.changed() => {
-                    log::info!("Agent shutting down.");
-                    break;
-                }
-                _ = discovery_interval.tick() => {
-                    // Discover topics from manifests and subscribe to rule triggers
-                    self.discover_and_subscribe(&mut subscriptions).await;
-                }
-                // Process override messages
-                _ = async {
-                    if let Some(ref sub) = override_sub {
-                        if let Ok(sample) = sub.recv_async().await {
-                            override_agent.handle_override(&sample).await;
-                        }
-                    } else {
-                        // No override sub — just sleep to avoid busy loop
-                        tokio::time::sleep(Duration::from_secs(60)).await;
-                    }
-                } => {}
-            }
-        }
-    }
-
-    /// Discover node topics via manifests and subscribe to rule trigger patterns.
-    async fn discover_and_subscribe(
-        &self,
-        subscriptions: &mut HashMap<String, zenoh::pubsub::Subscriber<()>>,
-    ) {
-        let rules = self.rules.read().await;
-        if rules.is_empty() {
-            return;
-        }
-
-        // Collect unique trigger patterns from rules
-        let patterns: Vec<String> = rules
-            .iter()
-            .map(|r| r.trigger.clone())
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
-
-        for pattern in &patterns {
-            if subscriptions.contains_key(pattern) {
-                continue; // Already subscribed
-            }
-
-            let rules_ref = self.rules.clone();
-            let trigger_log = self.trigger_log.clone();
-            let overrides = self.overrides.clone();
-            let session = self.session.clone();
-            let pattern_for_cb = pattern.clone();
-
-            match self
-                .session
-                .declare_subscriber(pattern)
-                .callback(move |sample| {
-                    let rules = rules_ref.clone();
-                    let trigger_log = trigger_log.clone();
-                    let overrides = overrides.clone();
-                    let session = session.clone();
-                    let pattern = pattern_for_cb.clone();
-
-                    tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(async {
-                            Self::evaluate_rules_for_sample(
-                                &rules, &trigger_log, &overrides, &session, &sample, &pattern,
-                            )
-                            .await;
-                        });
+    // 4a. Seed conversation history from previous sessions
+    let mut conversation: Vec<Message> = Vec::new();
+    if let Ok(rows) = memory.recent_conversations(20) {
+        for row in rows.into_iter().rev() {
+            // DB returns DESC; reverse to get chronological order
+            match row.role.as_str() {
+                "user" => conversation.push(Message::user(&row.content)),
+                "assistant" if !row.content.is_empty() => {
+                    conversation.push(Message {
+                        role: "assistant".to_string(),
+                        content: vec![ContentBlock::Text { text: row.content }],
                     });
-                })
-                .await
-            {
-                Ok(sub) => {
-                    log::info!("Agent subscribed to trigger: {}", pattern);
-                    subscriptions.insert(pattern.clone(), sub);
                 }
-                Err(e) => {
-                    log::warn!("Agent failed to subscribe to {}: {}", pattern, e);
-                }
+                _ => {} // skip tool-only rows
             }
         }
-    }
-
-    /// Evaluate all matching rules for an incoming sample.
-    async fn evaluate_rules_for_sample(
-        rules: &RwLock<Vec<Rule>>,
-        trigger_log: &RwLock<HashMap<String, RuleTriggerLog>>,
-        overrides: &RwLock<HashMap<String, serde_json::Value>>,
-        session: &zenoh::Session,
-        sample: &zenoh::sample::Sample,
-        trigger_pattern: &str,
-    ) {
-        let payload = sample.payload().to_bytes();
-        let key = sample.key_expr().to_string();
-
-        // Try to parse payload as JSON
-        let json_value: Option<serde_json::Value> =
-            serde_json::from_slice(&payload).ok();
-
-        let rules = rules.read().await;
-        for rule in rules.iter() {
-            if rule.trigger != trigger_pattern {
-                continue;
-            }
-            if !rule.enabled {
-                continue;
-            }
-
-            // Evaluate condition
-            let condition_met = match (&rule.condition, &json_value) {
-                (Some(cond), Some(json)) => cond.evaluate(json),
-                (None, _) => true, // No condition = always trigger
-                (Some(_), None) => false, // Condition requires JSON but payload isn't JSON
-            };
-
-            if !condition_met {
-                continue;
-            }
-
-            // Check human override
-            if let Some(ref target_node) = rule.action.target_node() {
-                let overrides = overrides.read().await;
-                if overrides.contains_key(target_node.as_str()) {
-                    log::info!(
-                        "Rule '{}' skipped: human override active for '{}'",
-                        rule.name, target_node
-                    );
-                    continue;
-                }
-            }
-
-            // Execute action
-            log::info!("Rule '{}' triggered by {}", rule.name, key);
-            rule.action.execute(session).await;
-
-            // Log trigger
-            let mut log = trigger_log.write().await;
-            let prev_count = log.get(&rule.name).map(|l| l.trigger_count).unwrap_or(0);
-            log.insert(
-                rule.name.clone(),
-                RuleTriggerLog {
-                    last_triggered_ms: now_ms(),
-                    trigger_key: key.clone(),
-                    trigger_count: prev_count + 1,
-                },
+        if !conversation.is_empty() {
+            log::info!(
+                "Restored {} messages from previous session",
+                conversation.len()
             );
         }
     }
 
-    /// Handle a human override message.
-    async fn handle_override(&self, sample: &zenoh::sample::Sample) {
-        let payload = sample.payload().to_bytes();
-        match serde_json::from_slice::<serde_json::Value>(&payload) {
-            Ok(override_val) => {
-                if let Some(node) = override_val.get("node").and_then(|v| v.as_str()) {
-                    let expires_s = override_val
-                        .get("expires_s")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(300);
-                    log::info!(
-                        "Human override received for '{}' (expires in {}s)",
-                        node,
-                        expires_s
-                    );
-                    let mut overrides = self.overrides.write().await;
-                    overrides.insert(node.to_string(), override_val.clone());
+    // 4b. Prune old data (keep 30 days)
+    match memory.prune_old_conversations(30) {
+        Ok(n) if n > 0 => log::info!("Pruned {} old conversation rows", n),
+        Err(e) => log::warn!("Failed to prune conversations: {}", e),
+        _ => {}
+    }
+    match memory.prune_old_events(30) {
+        Ok(n) if n > 0 => log::info!("Pruned {} old event rows", n),
+        Err(e) => log::warn!("Failed to prune events: {}", e),
+        _ => {}
+    }
 
-                    // Schedule removal after expiry
-                    let overrides_ref = self.overrides.clone();
-                    let node_name = node.to_string();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(expires_s)).await;
-                        let mut overrides = overrides_ref.write().await;
-                        if overrides.remove(&node_name).is_some() {
-                            log::info!("Human override expired for '{}'", node_name);
-                        }
-                    });
+    // 4c. Load skill files (agent reads the markdown bodies as context)
+    let skills_dir = get_bubbaloop_home().join("skills");
+    let skills = crate::skills::load_skills(&skills_dir).unwrap_or_else(|e| {
+        log::warn!("Failed to load skills: {}", e);
+        Vec::new()
+    });
+
+    // 4d. Register skill schedules in memory (so scheduler can run them)
+    for skill in &skills {
+        if let Some(ref schedule_expr) = skill.schedule {
+            if !skill.actions.is_empty() {
+                let actions_json =
+                    serde_json::to_string(&skill.actions).unwrap_or_else(|_| "[]".to_string());
+                let sched = crate::agent::memory::Schedule {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: skill.name.clone(),
+                    cron: schedule_expr.clone(),
+                    actions: actions_json,
+                    tier: 1,
+                    last_run: None,
+                    next_run: None,
+                    created_by: "skill".to_string(),
+                };
+                if let Err(e) = memory.upsert_schedule(&sched) {
+                    log::warn!("Failed to register skill schedule '{}': {}", skill.name, e);
                 }
-            }
-            Err(e) => {
-                log::warn!("Invalid override payload: {}", e);
             }
         }
     }
-}
 
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
+    // 4e. Index skills for FTS5 full-text search
+    if let Err(e) = memory.index_skills(&skills) {
+        log::warn!("Failed to index skills for search: {}", e);
+    }
+
+    // 5. Start scheduler in background
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    tokio::spawn(scheduler::run_scheduler(
+        memory_path.clone(),
+        platform.clone(),
+        sched_scope,
+        sched_machine_id,
+        shutdown_rx,
+    ));
+
+    // 5b. Bridge node events to memory
+    let event_memory = Memory::open(&memory_path)?;
+    let mut event_rx = node_manager_ref.subscribe();
+    let mut event_shutdown_rx = shutdown_tx.subscribe();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                Ok(event) = event_rx.recv() => {
+                    let details = serde_json::to_string(&event.state).ok();
+                    if let Err(e) = event_memory.log_event(
+                        &event.node_name,
+                        &event.event_type,
+                        details.as_deref(),
+                    ) {
+                        log::warn!("Failed to persist node event: {}", e);
+                    }
+                }
+                _ = event_shutdown_rx.changed() => break,
+            }
+        }
+    });
+
+    // 6. Welcome message
+    let model_name = config.model.as_deref().unwrap_or(claude::DEFAULT_MODEL);
+    let node_count = match dispatcher.get_node_inventory().await {
+        ref s if s.starts_with("No nodes") => "0".to_string(),
+        ref s => s
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().next())
+            .unwrap_or("0")
+            .to_string(),
+    };
+    println!();
+    println!("  Bubbaloop Agent v{}", env!("CARGO_PKG_VERSION"));
+    println!("  Model: {}", model_name);
+    println!("  Tools: {} | Nodes: {}", tools.len(), node_count);
+    println!();
+    println!("  Type a message to chat, 'quit' to exit.");
+
+    // 7. Main REPL loop
+    let stdin = std::io::stdin();
+
+    loop {
+        // Read user input
+        print!("> ");
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+
+        let mut line = String::new();
+        let bytes_read = stdin.read_line(&mut line)?;
+
+        // EOF (Ctrl-D)
+        if bytes_read == 0 {
+            println!();
+            break;
+        }
+
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+        if input == "quit" || input == "exit" {
+            break;
+        }
+
+        // Build live system prompt with recency + relevance context
+        let inventory = dispatcher.get_node_inventory().await;
+        let schedules = memory.list_schedules().unwrap_or_default();
+        let recent_events = memory.recent_events(10).unwrap_or_default();
+
+        // FTS5 semantic search on user input
+        let relevant_convos = memory.search_conversations(input, 5).unwrap_or_default();
+        let relevant_events = memory.search_events(input, 5).unwrap_or_default();
+        let relevant_skills = memory.search_skills(input, 3).unwrap_or_default();
+
+        let system_prompt = build_system_prompt(
+            &inventory,
+            &schedules,
+            &recent_events,
+            &skills,
+            &relevant_convos,
+            &relevant_events,
+            &relevant_skills,
+        );
+
+        // Add user message
+        conversation.push(Message::user(input));
+
+        // Log user message to memory
+        if let Err(e) = memory.log_message("user", input, None) {
+            log::warn!("Failed to log user message: {}", e);
+        }
+
+        // Send to Claude and handle tool-use loop
+        loop {
+            let response = match client
+                .send(Some(&system_prompt), &conversation, &tools)
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("Error: {}", e);
+                    log::error!("Claude API error: {}", e);
+                    break;
+                }
+            };
+
+            // Build assistant message from response content
+            let assistant_msg = Message {
+                role: "assistant".to_string(),
+                content: response.content.clone(),
+            };
+            conversation.push(assistant_msg);
+
+            // Print any text blocks
+            for block in &response.content {
+                if let ContentBlock::Text { text } = block {
+                    println!("{}", text);
+                }
+            }
+
+            // Check for tool calls
+            let tool_uses: Vec<_> = response
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::ToolUse { id, name, input } => Some((id, name, input)),
+                    _ => None,
+                })
+                .collect();
+
+            if tool_uses.is_empty() {
+                // No tool calls — log assistant response and break
+                let response_text: String = response
+                    .content
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                if let Err(e) = memory.log_message("assistant", &response_text, None) {
+                    log::warn!("Failed to log assistant message: {}", e);
+                }
+                break;
+            }
+
+            // Dispatch tool calls — show progress to user
+            let mut tool_results = Vec::new();
+            for (id, name, input) in &tool_uses {
+                println!("  [calling {}...]", name);
+                log::info!("[Agent] calling tool: {}", name);
+                let result = dispatcher.call_tool(id, name, input).await;
+                if let ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } = &result
+                {
+                    tool_results.push((tool_use_id.clone(), content.clone(), *is_error));
+                }
+            }
+
+            // Log tool calls to memory
+            let tool_calls_json = serde_json::to_string(
+                &tool_uses
+                    .iter()
+                    .map(|(_, name, _)| name)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap_or_default();
+            if let Err(e) = memory.log_message("assistant", "", Some(&tool_calls_json)) {
+                log::warn!("Failed to log tool calls: {}", e);
+            }
+
+            // Add tool results to conversation
+            conversation.push(Message::tool_results(tool_results));
+        }
+
+        // Trim conversation to avoid blowing the context window.
+        // Keep the most recent messages, dropping from the front.
+        if conversation.len() > MAX_CONVERSATION_MESSAGES {
+            let drain_count = conversation.len() - MAX_CONVERSATION_MESSAGES;
+            conversation.drain(..drain_count);
+        }
+    }
+
+    // Signal scheduler to shut down
+    drop(shutdown_tx);
+
+    println!("Goodbye.");
+    Ok(())
 }

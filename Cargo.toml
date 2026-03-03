@@ -5,7 +5,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.0.4"
+version = "0.0.9-dev"
 authors = ["Edgar Riba <edgar.riba@gmail.com>"]
 license = "Apache-2.0"
 edition = "2021"
@@ -26,9 +26,6 @@ serde_yaml = "0.9"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 
-# ROS-Z pub/sub
-ros-z = { git = "https://github.com/ZettaScaleLabs/ros-z.git", branch = "main", features = ["protobuf"] }
-
 # Zenoh
 zenoh = "1.7"
 
@@ -39,19 +36,27 @@ env_logger = "0.11"
 # CLI
 argh = "0.1"
 ctrlc = "3.4"
+rpassword = "7"
+open = "5"
 
 # Error handling
 thiserror = "2.0"
-
-# TUI
-ratatui = "0.30"
-crossterm = "0.28"
 
 # Directories
 dirs = "6"
 
 # Error handling
 anyhow = "1"
+
+# HTTP client (Claude API)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Embedded database (memory layer)
+rusqlite = { version = "0.33", features = ["bundled-full"] }
+
+# Cron expression parsing (scheduler)
+cron = "0.15"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 # Hex encoding
 hex = "0.4"
@@ -67,7 +72,7 @@ mime_guess = "2"
 tokio-tungstenite = "0.26"
 
 # MCP server
-rmcp = { version = "0.15", features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { version = "0.15", features = ["server", "macros", "transport-streamable-http-server", "transport-io"] }
 schemars = "1.0"
 
 # internal dependencies

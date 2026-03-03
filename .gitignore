@@ -73,5 +73,6 @@ Thumbs.db
 # Tool config
 .omc/
 
-# External repo assembly (not part of this repo)
+# External repos and stale build artifacts (node source lives in separate repos)
 bubbaloop-nodes-official/
+crates/bubbaloop-nodes/

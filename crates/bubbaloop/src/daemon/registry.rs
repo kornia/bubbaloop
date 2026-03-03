@@ -30,8 +30,64 @@ pub enum RegistryError {
 
 pub type Result<T> = std::result::Result<T, RegistryError>;
 
-/// Node manifest from node.yaml
+/// Capability types a node can provide
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    Sensor,
+    Actuator,
+    Processor,
+    Gateway,
+}
+
+/// Declaration of a topic the node publishes or subscribes to
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TopicSpec {
+    /// Topic suffix (e.g., "output", "compressed", "metrics")
+    pub suffix: String,
+    /// Protobuf message type (e.g., "bubbaloop.header.v1.Header")
+    #[serde(default)]
+    pub schema_type: Option<String>,
+    /// Publishing rate in Hz (0 = event-driven)
+    #[serde(default)]
+    pub rate_hz: Option<f64>,
+    /// Human-readable description
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Declaration of a command the node accepts
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandSpec {
+    /// Command name (e.g., "capture", "set_resolution")
+    pub name: String,
+    /// Human-readable description
+    #[serde(default)]
+    pub description: Option<String>,
+    /// JSON schema for parameters (optional)
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
+    /// JSON schema for return value (optional)
+    #[serde(default)]
+    pub returns: Option<serde_json::Value>,
+}
+
+/// Hardware/software requirements
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Requirements {
+    /// Required hardware (e.g., ["camera", "gpu", "network"])
+    #[serde(default)]
+    pub hardware: Vec<String>,
+    /// Required software/binaries (e.g., ["ffmpeg", "gstreamer"])
+    #[serde(default)]
+    pub software: Vec<String>,
+    /// Required environment variables
+    #[serde(default)]
+    pub env_vars: Vec<String>,
+}
+
+/// Node manifest from node.yaml
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NodeManifest {
     pub name: String,
     pub version: String,
@@ -48,6 +104,24 @@ pub struct NodeManifest {
     /// Other nodes that this node depends on (must be started first)
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Capabilities this node provides
+    #[serde(default)]
+    pub capabilities: Vec<Capability>,
+    /// Topics this node publishes
+    #[serde(default)]
+    pub publishes: Vec<TopicSpec>,
+    /// Topics this node subscribes to
+    #[serde(default)]
+    pub subscribes: Vec<TopicSpec>,
+    /// Commands this node accepts
+    #[serde(default)]
+    pub commands: Vec<CommandSpec>,
+    /// Hardware/software requirements
+    #[serde(default)]
+    pub requires: Option<Requirements>,
+    /// Extensible metadata (for future use)
+    #[serde(default)]
+    pub metadata: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl NodeManifest {
@@ -431,7 +505,7 @@ mod tests {
             author: Some("Test Author".to_string()),
             build: Some("cargo build --release".to_string()),
             command: Some("./target/release/test-node".to_string()),
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_ok());
     }
@@ -443,10 +517,7 @@ mod tests {
             version: "1.0.0".to_string(),
             node_type: "rust".to_string(),
             description: "Test".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_err());
     }
@@ -458,10 +529,7 @@ mod tests {
             version: "1.0.0".to_string(),
             node_type: "rust".to_string(),
             description: "Test".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_err());
     }
@@ -473,10 +541,7 @@ mod tests {
             version: "1.0.0".to_string(),
             node_type: "rust".to_string(),
             description: "Test".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_err());
     }
@@ -488,10 +553,7 @@ mod tests {
             version: "1.0.0".to_string(),
             node_type: "rust".to_string(),
             description: "Test".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_ok());
     }
@@ -503,10 +565,7 @@ mod tests {
             version: "".to_string(),
             node_type: "rust".to_string(),
             description: "Test".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_err());
     }
@@ -518,10 +577,7 @@ mod tests {
             version: "alpha".to_string(),
             node_type: "rust".to_string(),
             description: "Test".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_err());
     }
@@ -533,10 +589,7 @@ mod tests {
             version: "1.0.0".to_string(),
             node_type: "javascript".to_string(),
             description: "Test".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_err());
     }
@@ -548,10 +601,7 @@ mod tests {
             version: "1.0.0".to_string(),
             node_type: "python".to_string(),
             description: "Test".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_ok());
     }
@@ -563,10 +613,7 @@ mod tests {
             version: "1.0.0".to_string(),
             node_type: "rust".to_string(),
             description: "a".repeat(501),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_err());
     }
@@ -578,10 +625,7 @@ mod tests {
             version: "1.0.0".to_string(),
             node_type: "rust".to_string(),
             description: "Test".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_err());
     }
@@ -593,10 +637,8 @@ mod tests {
             version: "1.0.0".to_string(),
             node_type: "rust".to_string(),
             description: "Test".to_string(),
-            author: None,
-            build: None,
             command: Some("./target\0/release/test".to_string()),
-            depends_on: vec![],
+            ..Default::default()
         };
         assert!(manifest.validate().is_err());
     }
@@ -614,10 +656,7 @@ mod tests {
             version: "0.1.0".to_string(),
             node_type: "rust".to_string(),
             description: "RTSP camera".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert_eq!(effective_name(&entry, &manifest), "rtsp-camera-terrace");
     }
@@ -635,10 +674,7 @@ mod tests {
             version: "0.1.0".to_string(),
             node_type: "rust".to_string(),
             description: "RTSP camera".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
         assert_eq!(effective_name(&entry, &manifest), "rtsp-camera");
     }
@@ -652,10 +688,7 @@ mod tests {
             version: "0.2.0".to_string(),
             node_type: "rust".to_string(),
             description: "RTSP camera node".to_string(),
-            author: None,
-            build: None,
-            command: None,
-            depends_on: vec![],
+            ..Default::default()
         };
 
         let entries = vec![
