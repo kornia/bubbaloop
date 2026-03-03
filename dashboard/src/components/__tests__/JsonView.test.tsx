@@ -191,10 +191,10 @@ describe('RawDataViewPanel', () => {
     expect(screen.getByTitle('Drag to reorder')).toBeInTheDocument();
   });
 
-  it('shows "No topic selected" text when no topic and no availableTopics', () => {
+  it('shows placeholder text when no topic and no availableTopics', () => {
     render(<RawDataViewPanel topic="" />);
 
-    expect(screen.getByText('No topic selected')).toBeInTheDocument();
+    expect(screen.getByText('Select a topic to start receiving data')).toBeInTheDocument();
   });
 
   it('handles topic change from dropdown', () => {

@@ -14,54 +14,22 @@ describe('normalizeTopicPattern', () => {
     expect(normalizeTopicPattern('camera/terrace/*')).toBe('camera/terrace');
   });
 
-  it('handles ros-z format: domain/encoded_topic/type/hash', () => {
-    const topic = '0/camera%terrace%raw_shm/bubbaloop.camera.v1.Image/RIHS01_abc123';
-    expect(normalizeTopicPattern(topic)).toBe('0/camera%terrace%raw_shm');
-  });
-
-  it('handles ros-z format without type info', () => {
-    expect(normalizeTopicPattern('0/camera%terrace')).toBe('0/camera%terrace');
-  });
-
-  it('strips bubbaloop type suffix from raw Zenoh key', () => {
-    const topic = 'camera/terrace/raw_shm/bubbaloop.camera.v1.Image/RIHS01_abc';
-    expect(normalizeTopicPattern(topic)).toBe('camera/terrace/raw_shm');
-  });
-
-  it('preserves plain topics without type/hash suffixes', () => {
+  it('preserves plain topics without wildcards', () => {
     expect(normalizeTopicPattern('weather/current')).toBe('weather/current');
   });
 
-  it('handles RIHS hash-only suffix', () => {
-    const topic = '0/test/RIHS01_abc123';
-    expect(normalizeTopicPattern(topic)).toBe('0/test');
+  it('preserves vanilla zenoh topic without wildcards', () => {
+    expect(normalizeTopicPattern('bubbaloop/local/m1/camera/entrance/compressed')).toBe('bubbaloop/local/m1/camera/entrance/compressed');
   });
 
-  it('strips RIHS suffix from end of raw Zenoh key', () => {
-    const topic = 'camera/terrace/RIHS01_xyz789';
-    expect(normalizeTopicPattern(topic)).toBe('camera/terrace');
+  it('preserves topic with multiple segments', () => {
+    const topic = 'bubbaloop/scope/machine/camera/terrace/data';
+    expect(normalizeTopicPattern(topic)).toBe('bubbaloop/scope/machine/camera/terrace/data');
   });
 
-  it('handles multiple segments before type/hash', () => {
-    const topic = 'bubbaloop/scope/machine/camera/terrace/bubbaloop.camera.v1.Image/RIHS01_abc';
-    expect(normalizeTopicPattern(topic)).toBe('bubbaloop/scope/machine/camera/terrace');
-  });
-
-  it('handles ros-z with wildcard then strips wildcard', () => {
-    const topic = '0/camera%terrace/**';
-    expect(normalizeTopicPattern(topic)).toBe('0/camera%terrace');
-  });
-
-  it('handles topic with type but no hash', () => {
-    const topic = 'camera/terrace/bubbaloop.camera.v1.Image';
-    expect(normalizeTopicPattern(topic)).toBe('camera/terrace');
-  });
-
-  it('does not strip segments that look like domains but are not', () => {
-    const topic = 'bubbaloop/scope/123/test';
-    // First segment is not a digit, so not ros-z format
-    // No type/hash suffixes either
-    expect(normalizeTopicPattern(topic)).toBe('bubbaloop/scope/123/test');
+  it('strips trailing wildcard from vanilla zenoh topic', () => {
+    const topic = 'bubbaloop/local/m1/camera/**';
+    expect(normalizeTopicPattern(topic)).toBe('bubbaloop/local/m1/camera');
   });
 
   it('handles wildcard-only pattern', () => {
@@ -71,48 +39,58 @@ describe('normalizeTopicPattern', () => {
 
   it('handles single segment topics', () => {
     expect(normalizeTopicPattern('test')).toBe('test');
-    expect(normalizeTopicPattern('0')).toBe('0');
   });
 
-  it('handles ros-z with only domain and topic', () => {
-    expect(normalizeTopicPattern('0/simple_topic')).toBe('0/simple_topic');
+  it('preserves daemon topic without wildcards', () => {
+    expect(normalizeTopicPattern('bubbaloop/daemon/nodes')).toBe('bubbaloop/daemon/nodes');
   });
 
-  it('handles type suffix that starts with bubbaloop', () => {
-    const topic = 'some/path/bubbaloop.system_telemetry.v1.SystemMetrics';
-    expect(normalizeTopicPattern(topic)).toBe('some/path');
-  });
-
-  it('preserves topic when last segment does not match type/hash pattern', () => {
+  it('preserves topic when no wildcard suffix', () => {
     const topic = 'camera/terrace/data';
     expect(normalizeTopicPattern(topic)).toBe('camera/terrace/data');
   });
 
-  describe('ros-z new format (slash-preserved)', () => {
-    it('strips type and hash from new ros-z format', () => {
-      const topic = '0/bubbaloop/local/m1/camera/terrace/raw_shm/bubbaloop.camera.v1.Image/RIHS01_abc123';
-      expect(normalizeTopicPattern(topic)).toBe('0/bubbaloop/local/m1/camera/terrace/raw_shm');
-    });
+  it('strips wildcard from weather subscription pattern', () => {
+    expect(normalizeTopicPattern('**/weather/current/**')).toBe('**/weather/current');
+  });
 
-    it('strips type and hash from telemetry new format', () => {
-      const topic = '0/bubbaloop/local/nvidia_orin00/system_telemetry/metrics/bubbaloop.system_telemetry.v1.SystemMetrics/RIHS01_xyz';
-      expect(normalizeTopicPattern(topic)).toBe('0/bubbaloop/local/nvidia_orin00/system_telemetry/metrics');
-    });
+  it('preserves scoped multi-machine topic', () => {
+    const topic = 'bubbaloop/local/nvidia_orin00/system-telemetry/metrics';
+    expect(normalizeTopicPattern(topic)).toBe('bubbaloop/local/nvidia_orin00/system-telemetry/metrics');
+  });
 
-    it('preserves new format without type/hash', () => {
-      const topic = '0/bubbaloop/local/m1/camera/raw';
-      expect(normalizeTopicPattern(topic)).toBe('0/bubbaloop/local/m1/camera/raw');
-    });
+  it('strips wildcard from network-monitor topic', () => {
+    const topic = '**/network-monitor/status/**';
+    expect(normalizeTopicPattern(topic)).toBe('**/network-monitor/status');
+  });
 
-    it('handles new format with only hash suffix', () => {
-      const topic = '0/bubbaloop/local/m1/test/RIHS01_abc123';
-      expect(normalizeTopicPattern(topic)).toBe('0/bubbaloop/local/m1/test');
-    });
+  it('handles topic with only trailing slash', () => {
+    expect(normalizeTopicPattern('camera/terrace/')).toBe('camera/terrace/');
+  });
 
-    it('handles new format with trailing wildcard', () => {
-      const topic = '0/bubbaloop/local/m1/camera/**';
-      expect(normalizeTopicPattern(topic)).toBe('0/bubbaloop/local/m1/camera');
-    });
+  it('does not strip wildcards in the middle of topic', () => {
+    expect(normalizeTopicPattern('bubbaloop/**/camera/compressed')).toBe('bubbaloop/**/camera/compressed');
+  });
+
+  it('strips trailing /** from full vanilla zenoh path', () => {
+    expect(normalizeTopicPattern('bubbaloop/local/nvidia_orin00/weather/**')).toBe('bubbaloop/local/nvidia_orin00/weather');
+  });
+
+  it('strips trailing /* from short path', () => {
+    expect(normalizeTopicPattern('bubbaloop/daemon/*')).toBe('bubbaloop/daemon');
+  });
+
+  it('handles production scope topics', () => {
+    const topic = 'bubbaloop/production/orin_02/camera/entrance/compressed';
+    expect(normalizeTopicPattern(topic)).toBe(topic);
+  });
+
+  it('handles staging scope with wildcard', () => {
+    expect(normalizeTopicPattern('bubbaloop/staging/test01/**')).toBe('bubbaloop/staging/test01');
+  });
+
+  it('preserves topic with embedded double star', () => {
+    expect(normalizeTopicPattern('bubbaloop/**/schema')).toBe('bubbaloop/**/schema');
   });
 });
 
@@ -312,6 +290,97 @@ describe('ZenohSubscriptionManager', () => {
       manager.subscribe('camera/terrace', vi.fn(), 'remote-1');
       expect(manager.getListenerCount('camera/terrace', 'local')).toBe(1);
       expect(manager.getListenerCount('camera/terrace', 'remote-1')).toBe(1);
+    });
+  });
+
+  describe('getDebugInfo', () => {
+    it('returns empty subscriptions for new manager', () => {
+      const manager = new ZenohSubscriptionManager();
+      const info = manager.getDebugInfo();
+      expect(info.subscriptions).toEqual([]);
+    });
+
+    it('returns subscription details when topics are subscribed', () => {
+      const manager = new ZenohSubscriptionManager();
+      manager.subscribe('camera/terrace', vi.fn());
+      manager.subscribe('weather/current', vi.fn());
+      const info = manager.getDebugInfo();
+      expect(info.subscriptions).toHaveLength(2);
+      expect(info.subscriptions[0].listeners).toBe(1);
+      expect(info.subscriptions[0].hasSubscriber).toBe(false); // No session set
+      expect(info.subscriptions[0].messageCount).toBe(0);
+    });
+
+    it('tracks listener count per topic', () => {
+      const manager = new ZenohSubscriptionManager();
+      manager.subscribe('camera/terrace', vi.fn());
+      manager.subscribe('camera/terrace', vi.fn());
+      manager.subscribe('camera/terrace', vi.fn());
+      const info = manager.getDebugInfo();
+      expect(info.subscriptions).toHaveLength(1);
+      expect(info.subscriptions[0].listeners).toBe(3);
+    });
+  });
+
+  describe('isMonitoringEnabled', () => {
+    it('returns false by default', () => {
+      const manager = new ZenohSubscriptionManager();
+      expect(manager.isMonitoringEnabled()).toBe(false);
+    });
+
+    it('returns false for non-existent endpoint', () => {
+      const manager = new ZenohSubscriptionManager();
+      expect(manager.isMonitoringEnabled('nonexistent')).toBe(false);
+    });
+  });
+
+  describe('getTopicStats', () => {
+    it('returns null for unsubscribed topic', () => {
+      const manager = new ZenohSubscriptionManager();
+      expect(manager.getTopicStats('camera/terrace')).toBeNull();
+    });
+
+    it('returns initial stats when topic has listener', () => {
+      const manager = new ZenohSubscriptionManager();
+      manager.subscribe('camera/terrace', vi.fn());
+      const stats = manager.getTopicStats('camera/terrace');
+      expect(stats).not.toBeNull();
+      expect(stats!.messageCount).toBe(0);
+      expect(stats!.fps).toBe(0);
+      expect(stats!.instantFps).toBe(0);
+    });
+
+    it('returns stats for topic with trailing wildcard normalization', () => {
+      const manager = new ZenohSubscriptionManager();
+      manager.subscribe('camera/terrace', vi.fn());
+      // Query with wildcard variant should find same stats
+      const stats = manager.getTopicStats('camera/terrace/**');
+      expect(stats).not.toBeNull();
+      expect(stats!.messageCount).toBe(0);
+    });
+  });
+
+  describe('vanilla Zenoh topic patterns', () => {
+    it('subscribes to full vanilla zenoh path', () => {
+      const manager = new ZenohSubscriptionManager();
+      const id = manager.subscribe('bubbaloop/local/nvidia_orin00/camera/entrance/compressed', vi.fn());
+      expect(id).toMatch(/^listener_\d+$/);
+      expect(manager.hasListeners('bubbaloop/local/nvidia_orin00/camera/entrance/compressed')).toBe(true);
+    });
+
+    it('deduplicates vanilla zenoh path with and without wildcard', () => {
+      const manager = new ZenohSubscriptionManager();
+      manager.subscribe('bubbaloop/local/m1/weather/current', vi.fn());
+      manager.subscribe('bubbaloop/local/m1/weather/current/**', vi.fn());
+      expect(manager.getListenerCount('bubbaloop/local/m1/weather/current')).toBe(2);
+    });
+
+    it('keeps different vanilla zenoh paths separate', () => {
+      const manager = new ZenohSubscriptionManager();
+      manager.subscribe('bubbaloop/local/m1/weather/current', vi.fn());
+      manager.subscribe('bubbaloop/local/m1/weather/hourly', vi.fn());
+      expect(manager.getListenerCount('bubbaloop/local/m1/weather/current')).toBe(1);
+      expect(manager.getListenerCount('bubbaloop/local/m1/weather/hourly')).toBe(1);
     });
   });
 });

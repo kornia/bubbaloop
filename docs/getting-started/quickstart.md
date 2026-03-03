@@ -5,55 +5,61 @@ Get started with Bubbaloop in minutes.
 ## Prerequisites
 
 - Linux (Ubuntu 22.04+, Jetson, Raspberry Pi)
-- Node.js 20+ (for TUI)
 - Modern browser (Chrome 94+, Edge 94+, Safari 16.4+) for dashboard
 
-## Installation
-
-### Step 1: Install Backend
+## Step 1: Install Bubbaloop
 
 ```bash
 curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
+source ~/.bashrc
 ```
 
 This installs Zenoh router, WebSocket bridge, and the bubbaloop daemon as systemd services.
 
-### Step 2: Install TUI
+### Verify
 
 ```bash
-npm install -g @kornia-ai/bubbaloop
+bubbaloop doctor --fix    # Auto-fix any issues
+bubbaloop status          # Should show daemon + zenoh running
 ```
 
-### Step 3: Run
+## Step 2: Install a Camera Node
 
 ```bash
-bubbaloop
+bubbaloop node install rtsp-camera
+```
+
+This downloads the precompiled binary from the marketplace and registers it with the daemon.
+
+## Step 3: Configure and Start
+
+```bash
+# Create a config for your camera
+mkdir -p ~/.bubbaloop/configs
+cat > ~/.bubbaloop/configs/entrance.yaml << 'EOF'
+name: entrance
+publish_topic: camera/entrance/compressed
+url: "rtsp://user:password@192.168.1.100:554/stream1"
+latency: 200
+decoder: cpu
+width: 1280
+height: 720
+EOF
+
+# Create an instance and start it
+bubbaloop node instance rtsp-camera entrance \
+  --config ~/.bubbaloop/configs/entrance.yaml --start
+```
+
+## Step 4: Verify
+
+```bash
+bubbaloop node list                    # Should show rtsp-camera-entrance running
+bubbaloop node logs rtsp-camera-entrance -f   # Live logs
+bubbaloop debug subscribe "camera/entrance/compressed"  # See frames
 ```
 
 See [Installation](installation.md) for detailed requirements.
-
-## Using the TUI
-
-The TUI is the main interface for managing Bubbaloop:
-
-### Navigation
-
-| Key | Action |
-|-----|--------|
-| `n` | Nodes — View and manage nodes |
-| `t` | Topics — Browse Zenoh topics |
-| `l` | Logs — View service logs |
-| `s` | Settings — Configure options |
-| `q` | Quit |
-
-### Managing Nodes
-
-From the Nodes panel:
-
-1. Select a node (e.g., `rtsp-camera`)
-2. Press `s` to start the service
-3. Press `l` to view logs
-4. Press `x` to stop the service
 
 ## Configuration
 

@@ -85,20 +85,7 @@ export function StatsViewPanel({
   }, [getAllMonitoredStats]);
 
   const shortenTopic = (topic: string) => {
-    // Handle two formats:
-    // 1. ros-z encoded: "0/camera%terrace%raw_shm" -> "camera/terrace/raw_shm"
-    // 2. Raw zenoh key: "camera/terrace/raw_shm" (already normalized, type/hash stripped)
-    const parts = topic.split('/');
-
-    // Check if it's ros-z format (starts with domain ID like "0/")
-    if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
-      // ros-z format: domain/encoded_topic
-      // Skip domain ID (parts[0]), decode topic name (parts[1])
-      return parts[1].replace(/%/g, '/');
-    }
-
-    // Raw format: already normalized, just return as-is
-    // The normalizeTopicPattern in subscription-manager strips type/hash
+    // Vanilla Zenoh format: just return the topic as-is
     return topic;
   };
 

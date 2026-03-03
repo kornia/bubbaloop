@@ -102,7 +102,7 @@ struct InfoArgs {
     json: bool,
 }
 
-/// Query Zenoh liveliness tokens (ros-z entity discovery)
+/// Query Zenoh liveliness tokens (entity discovery)
 #[derive(FromArgs)]
 #[argh(subcommand, name = "liveliness")]
 struct LivelinessArgs {
@@ -165,7 +165,7 @@ impl DebugCommand {
         eprintln!("  topics      List all active Zenoh topics");
         eprintln!("  query       Query a Zenoh queryable endpoint");
         eprintln!("  subscribe   Subscribe to a Zenoh topic and watch messages");
-        eprintln!("  liveliness  Query liveliness tokens (ros-z entity discovery)");
+        eprintln!("  liveliness  Query liveliness tokens (entity discovery)");
         eprintln!("\nRun 'bubbaloop debug <command> --help' for more information.");
     }
 }
@@ -483,7 +483,7 @@ async fn query_liveliness(args: LivelinessArgs) -> Result<()> {
     tokens.sort();
 
     if args.json {
-        // Parse ros-z liveliness tokens into structured data
+        // Parse liveliness tokens into structured data
         let parsed: Vec<serde_json::Value> = tokens
             .iter()
             .map(|t| {
@@ -514,8 +514,8 @@ async fn query_liveliness(args: LivelinessArgs) -> Result<()> {
     } else if tokens.is_empty() {
         println!("No liveliness tokens found.");
         println!("This could mean:");
-        println!("  - No ros-z nodes are running");
-        println!("  - Nodes are using plain Zenoh pub/sub (not ros-z ZPub/ZSub)");
+        println!("  - No nodes with liveliness tokens are running");
+        println!("  - Nodes may not have declared liveliness tokens");
         println!(
             "  - The pattern '{}' doesn't match any tokens",
             args.pattern
@@ -524,7 +524,7 @@ async fn query_liveliness(args: LivelinessArgs) -> Result<()> {
         println!("Liveliness Tokens ({}):", tokens.len());
         println!("{}", "-".repeat(80));
         for token in &tokens {
-            // Try to parse ros-z format for friendly display
+            // Try to parse liveliness token format for friendly display
             let parts: Vec<&str> = token.split('/').collect();
             if parts.len() >= 9 {
                 let kind = match parts.get(5).unwrap_or(&"") {

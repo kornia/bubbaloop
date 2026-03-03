@@ -168,7 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .fallback(static_handler)
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{}", args.port);
+    let addr = format!("127.0.0.1:{}", args.port);
     log::info!("Dashboard server listening on http://{}", addr);
     log::info!("Proxying /zenoh to {}", args.bridge);
 

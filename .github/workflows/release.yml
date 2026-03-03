@@ -100,14 +100,14 @@ jobs:
 
             ### Usage
             ```bash
-            bubbaloop           # Launch TUI
             bubbaloop status    # Show services status
-            bubbaloop tui       # Launch TUI explicitly
+            bubbaloop agent     # Talk to hardware via Claude AI
             bubbaloop daemon    # Run daemon directly
+            bubbaloop up        # Load skills and start nodes
             ```
 
             ### Assets
-            - `bubbaloop-linux-amd64` - Single binary for x86_64 (CLI + daemon + TUI)
+            - `bubbaloop-linux-amd64` - Single binary for x86_64 (CLI + daemon + MCP server)
             - `bubbaloop-linux-arm64` - Single binary for ARM64 (Jetson, Raspberry Pi)
             - `install.sh` - Full installation script (includes Zenoh + systemd setup)
 
@@ -135,14 +135,14 @@ jobs:
 
             ### Usage
             ```bash
-            bubbaloop           # Launch TUI
             bubbaloop status    # Show services status
-            bubbaloop tui       # Launch TUI explicitly
+            bubbaloop agent     # Talk to hardware via Claude AI
             bubbaloop daemon    # Run daemon directly
+            bubbaloop up        # Load skills and start nodes
             ```
 
             ### Assets
-            - `bubbaloop-linux-amd64` - Single binary for x86_64 (CLI + daemon + TUI)
+            - `bubbaloop-linux-amd64` - Single binary for x86_64 (CLI + daemon + MCP server)
             - `bubbaloop-linux-arm64` - Single binary for ARM64 (Jetson, Raspberry Pi)
             - `install.sh` - Full installation script (includes Zenoh + systemd setup)
 

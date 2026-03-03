@@ -13,7 +13,7 @@ Bubbaloop is an orchestration framework for building physical AI systems. The na
 - **Actuators** interact with the physical world (motors, servos, speakers)
 - **Dashboard** provides real-time monitoring, visualization, and analytics
 
-All components communicate via [Zenoh](https://zenoh.io/)/ROS-Z messaging for low-latency, distributed operation.
+All components communicate via [Zenoh](https://zenoh.io/) messaging for low-latency, distributed operation.
 
 ## Quick Install
 
@@ -79,7 +79,7 @@ flowchart TB
 |---------|-------------|
 | Zero-copy H264 passthrough | Direct stream forwarding, no decoding overhead |
 | Multi-camera support | Stream from multiple RTSP cameras simultaneously |
-| Zenoh/ROS-Z integration | Publish/subscribe with ROS-compatible topics |
+| Zenoh integration | Publish/subscribe with scoped topics |
 | React Dashboard | Real-time browser visualization with WebCodecs |
 | Multi-instance nodes | Run same node with different configs |
 | System diagnostics | `bubbaloop doctor --fix` for auto-repair |

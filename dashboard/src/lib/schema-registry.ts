@@ -33,17 +33,11 @@ export interface DecodeResult {
 }
 
 /**
- * Extract schema name from ros-z topic format: <domain_id>/<topic>/<schema>/<hash>
- * e.g., "0/weather%current/bubbaloop.weather.v1.CurrentWeather/RIHS01_..."
+ * Extract schema name from a topic.
+ * With vanilla Zenoh, there is no type name embedded in the topic.
+ * Always returns null — schema discovery relies on the fetchSchemas() queryable mechanism.
  */
-export function extractSchemaFromTopic(topic: string): string | null {
-  const parts = topic.split('/');
-  for (let i = parts.length - 2; i >= 1; i--) {
-    const part = parts[i];
-    if (part.includes('.') && !part.startsWith('RIHS')) {
-      return part;
-    }
-  }
+export function extractSchemaFromTopic(_topic: string): string | null {
   return null;
 }
 
@@ -275,7 +269,7 @@ export class SchemaRegistry {
    * 1. Extract topic prefix (first 4 segments) and try direct query to {prefix}/schema.
    *    This works when the 4th segment is the node name (e.g., "bubbaloop/local/m1/system-telemetry/metrics").
    *
-   * 2. If that fails, fall back to wildcard discovery (bubbaloop/** /schema).
+   * 2. If that fails, fall back to wildcard discovery (bubbaloop / ** / schema).
    *    This is necessary because topic resource names often differ from node names:
    *      - camera/* topics are published by the "rtsp-camera" node
    *      - weather/* topics are published by the "openmeteo" node
@@ -336,7 +330,7 @@ export class SchemaRegistry {
 
   /**
    * Try to decode a protobuf message by attempting all known message types.
-   * Useful when the type name is unknown (e.g., vanilla zenoh topics without ros-z schema hints).
+   * Useful when the type name is unknown.
    *
    * @param data - Raw protobuf bytes
    * @returns Decoded result or null if no type matches
@@ -380,28 +374,21 @@ export class SchemaRegistry {
 
   /**
    * Consolidated decode chain for a given topic and payload.
-   * Tries: ros-z type hint -> topic-based guess -> brute force.
+   * Tries: topic-based guess -> brute force.
    *
    * @param topic - The full Zenoh topic string
    * @param data - Raw protobuf bytes
    * @returns Decoded result or null if no type matches
    */
   tryDecodeForTopic(topic: string, data: Uint8Array): DecodeResult | null {
-    // 1. Try ros-z type hint embedded in topic
-    const schemaHint = extractSchemaFromTopic(topic);
-    if (schemaHint) {
-      const result = this.decode(schemaHint, data);
-      if (result) return result;
-    }
-
-    // 2. Infer type from topic path segments
+    // 1. Infer type from topic path segments
     const guessedType = this.guessTypeForTopic(topic);
     if (guessedType) {
       const result = this.decode(guessedType, data);
       if (result) return result;
     }
 
-    // 3. Brute force: try all known types
+    // 2. Brute force: try all known types
     return this.tryDecodeAny(data);
   }
 
@@ -438,7 +425,7 @@ export class SchemaRegistry {
    * Guess the most likely protobuf type for a vanilla zenoh topic.
    * Infers from the topic path segments by matching against known type names.
    *
-   * E.g., "bubbaloop/local/m1/network-monitor/status" → "bubbaloop.network_monitor.v1.NetworkStatus"
+   * E.g., "bubbaloop/local/m1/network-monitor/status" -> "bubbaloop.network_monitor.v1.NetworkStatus"
    */
   guessTypeForTopic(topic: string): string | null {
     const cached = this.topicGuessCache.get(topic);
@@ -534,37 +521,19 @@ function collectTypeNames(ns: protobuf.NamespaceBase, prefix: string, out: strin
 /**
  * Extract a scoped topic prefix that might correspond to a node's schema endpoint.
  *
- * Attempts to extract the first 4 segments (bubbaloop/{scope}/{machine}/{node-or-resource})
- * from a topic. This works when the 4th segment is the actual node name, but may fail when
- * the 4th segment is a topic resource name instead:
- *   - "bubbaloop/local/m1/camera/my-cam/compressed" → prefix is "bubbaloop/local/m1/camera"
+ * Extracts the first 4 segments (bubbaloop/{scope}/{machine}/{node-or-resource})
+ * from a vanilla Zenoh topic. This works when the 4th segment is the actual node name,
+ * but may fail when the 4th segment is a topic resource name instead:
+ *   - "bubbaloop/local/m1/camera/my-cam/compressed" -> prefix is "bubbaloop/local/m1/camera"
  *     but the schema is actually at "bubbaloop/local/m1/rtsp-camera/schema"
- *   - "bubbaloop/local/m1/weather/current" → prefix is "bubbaloop/local/m1/weather"
+ *   - "bubbaloop/local/m1/weather/current" -> prefix is "bubbaloop/local/m1/weather"
  *     but the schema is actually at "bubbaloop/local/m1/openmeteo/schema"
  *
  * This is a best-effort heuristic. Callers should fall back to wildcard discovery when
  * this prefix-based approach fails.
- *
- * For scoped topics like "bubbaloop/local/m1/system-telemetry/metrics", returns
- * "bubbaloop/local/m1/system-telemetry" so we can query "{prefix}/schema".
- * For ros-z topics like "0/bubbaloop%local%m1%node%res/Type/Hash", decodes the
- * %-encoded portion first.
  */
 export function extractTopicPrefix(topic: string): string | null {
-  let segments: string[];
-  const parts = topic.split('/');
-
-  if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
-    if (parts[1].includes('%')) {
-      // Old ros-z: decode %-encoded topic portion
-      segments = parts[1].replace(/%/g, '/').split('/');
-    } else {
-      // New ros-z: slashes preserved, skip domain ID
-      segments = parts.slice(1);
-    }
-  } else {
-    segments = parts;
-  }
+  const segments = topic.split('/');
 
   // Extract first 4 segments: bubbaloop/{scope}/{machine}/{node-or-resource}
   if (segments.length >= 4 && segments[0] === 'bubbaloop') {
