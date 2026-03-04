@@ -12,6 +12,7 @@
 //! External AI agents (Claude Code, etc.) interact exclusively through MCP.
 //! The daemon never makes autonomous decisions — it's a passive skill runtime.
 
+pub mod gateway;
 pub mod node_manager;
 pub mod registry;
 pub mod systemd;
@@ -102,6 +103,235 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>, zeno
     }
 }
 
+/// Run the daemon gateway: manifest queryable + command/event handling.
+///
+/// Registers the daemon on Zenoh so CLI clients can discover and control it
+/// without HTTP, using the same gateway pattern as agents.
+async fn run_daemon_gateway(
+    session: Arc<Session>,
+    node_manager: Arc<NodeManager>,
+    mcp_port: u16,
+    shutdown_tx: tokio::sync::watch::Sender<()>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+    let machine_id = util::get_machine_id();
+    let start_time = std::time::Instant::now();
+
+    // Create platform for dispatching commands
+    let platform = std::sync::Arc::new(crate::mcp::platform::DaemonPlatform {
+        node_manager: node_manager.clone(),
+        session: session.clone(),
+        scope: scope.clone(),
+        machine_id: machine_id.clone(),
+    });
+
+    // 1. Register manifest queryable
+    let manifest_key = gateway::manifest_topic(&scope, &machine_id);
+    let manifest_session = session.clone();
+    let manifest_machine_id = machine_id.clone();
+    let manifest_nm = node_manager.clone();
+    let manifest_port = mcp_port;
+    let manifest_start = start_time;
+    let mut manifest_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        match manifest_session.declare_queryable(&manifest_key).await {
+            Ok(queryable) => loop {
+                tokio::select! {
+                    result = queryable.recv_async() => {
+                        match result {
+                            Ok(query) => {
+                                let node_list = manifest_nm.get_node_list().await;
+                                let manifest = gateway::DaemonManifest {
+                                    version: env!("CARGO_PKG_VERSION").to_string(),
+                                    machine_id: manifest_machine_id.clone(),
+                                    uptime_secs: manifest_start.elapsed().as_secs(),
+                                    node_count: node_list.nodes.len(),
+                                    agent_count: 0, // TODO: get from agent runtime
+                                    mcp_port: manifest_port,
+                                };
+                                let payload = serde_json::to_vec(&manifest).unwrap_or_default();
+                                let _ = query.reply(&manifest_key, payload).await;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    _ = manifest_shutdown.changed() => break,
+                }
+            },
+            Err(e) => {
+                log::warn!("[Gateway] Failed to register manifest queryable: {}", e);
+            }
+        }
+    });
+
+    // 2. Subscribe to command topic and dispatch
+    let cmd_topic = gateway::command_topic(&scope, &machine_id);
+    let evt_topic = gateway::events_topic(&scope, &machine_id);
+
+    let subscriber = session
+        .declare_subscriber(&cmd_topic)
+        .await
+        .map_err(|e| format!("Failed to subscribe to command topic: {}", e))?;
+
+    let publisher = session
+        .declare_publisher(&evt_topic)
+        .await
+        .map_err(|e| format!("Failed to declare events publisher: {}", e))?;
+
+    log::info!(
+        "[Gateway] Daemon gateway started: cmd={}, events={}, manifest={}",
+        cmd_topic,
+        evt_topic,
+        gateway::manifest_topic(&scope, &machine_id)
+    );
+
+    loop {
+        tokio::select! {
+            result = subscriber.recv_async() => {
+                match result {
+                    Ok(sample) => {
+                        let payload = sample.payload().to_bytes().to_vec();
+                        match serde_json::from_slice::<gateway::DaemonCommand>(&payload) {
+                            Ok(cmd) => {
+                                let events = dispatch_daemon_command(
+                                    &cmd,
+                                    &platform,
+                                    &shutdown_tx,
+                                    start_time,
+                                    mcp_port,
+                                    &machine_id,
+                                ).await;
+                                for event in events {
+                                    if let Ok(bytes) = serde_json::to_vec(&event) {
+                                        if let Err(e) = publisher.put(bytes).await {
+                                            log::warn!("[Gateway] Failed to publish event: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("[Gateway] Invalid command message: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[Gateway] Command subscriber error: {}", e);
+                        break;
+                    }
+                }
+            }
+            _ = shutdown_rx.changed() => {
+                log::info!("[Gateway] Daemon gateway shutting down");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Dispatch a daemon command and return response events.
+async fn dispatch_daemon_command(
+    cmd: &gateway::DaemonCommand,
+    platform: &std::sync::Arc<crate::mcp::platform::DaemonPlatform>,
+    shutdown_tx: &tokio::sync::watch::Sender<()>,
+    start_time: std::time::Instant,
+    mcp_port: u16,
+    machine_id: &str,
+) -> Vec<gateway::DaemonEvent> {
+    use crate::mcp::platform::PlatformOperations;
+
+    let id = &cmd.id;
+    let mut events = Vec::new();
+
+    match &cmd.command {
+        gateway::DaemonCommandType::ListNodes => match platform.list_nodes().await {
+            Ok(nodes) => {
+                let text = serde_json::to_string(&nodes).unwrap_or_default();
+                events.push(gateway::DaemonEvent::result(id, &text));
+            }
+            Err(e) => {
+                events.push(gateway::DaemonEvent::error(id, &e.to_string()));
+            }
+        },
+        gateway::DaemonCommandType::StartNode { name } => {
+            match platform
+                .execute_command(name, crate::mcp::platform::NodeCommand::Start)
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
+        gateway::DaemonCommandType::StopNode { name } => {
+            match platform
+                .execute_command(name, crate::mcp::platform::NodeCommand::Stop)
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
+        gateway::DaemonCommandType::RestartNode { name } => {
+            match platform
+                .execute_command(name, crate::mcp::platform::NodeCommand::Restart)
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
+        gateway::DaemonCommandType::GetLogs { name } => {
+            match platform
+                .execute_command(name, crate::mcp::platform::NodeCommand::GetLogs)
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
+        gateway::DaemonCommandType::InstallNode {
+            source,
+            name,
+            config,
+        } => {
+            match platform
+                .add_node(source, name.as_deref(), config.as_deref())
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
+        gateway::DaemonCommandType::RemoveNode { name } => match platform.remove_node(name).await {
+            Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+            Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+        },
+        gateway::DaemonCommandType::Health => {
+            let node_list = platform.list_nodes().await.unwrap_or_default();
+            let manifest = gateway::DaemonManifest {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                machine_id: machine_id.to_string(),
+                uptime_secs: start_time.elapsed().as_secs(),
+                node_count: node_list.len(),
+                agent_count: 0,
+                mcp_port,
+            };
+            let text = serde_json::to_string(&manifest).unwrap_or_default();
+            events.push(gateway::DaemonEvent::result(id, &text));
+        }
+        gateway::DaemonCommandType::Shutdown => {
+            log::info!("[Gateway] Received shutdown command");
+            events.push(gateway::DaemonEvent::result(id, "shutting down"));
+            shutdown_tx.send(()).ok();
+        }
+    }
+
+    events.push(gateway::DaemonEvent::done(id));
+    events
+}
+
 /// Run the daemon with the given configuration.
 ///
 /// This is the main entry point called by `bubbaloop daemon`.
@@ -190,8 +420,49 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         })
     };
 
+    // Start agent runtime (multi-agent Zenoh gateway)
+    let agent_task = {
+        let agent_session = session.clone();
+        let agent_manager = node_manager.clone();
+        let agent_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::agent::runtime::run_agent_runtime(
+                agent_session,
+                agent_manager,
+                agent_shutdown,
+            )
+            .await
+            {
+                log::error!("Agent runtime error: {}", e);
+            }
+        })
+    };
+
+    // Start daemon gateway (Zenoh manifest + command/event topics)
+    let gateway_task = {
+        let gw_session = session.clone();
+        let gw_manager = node_manager.clone();
+        let gw_shutdown_tx = shutdown_tx.clone();
+        let gw_shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_daemon_gateway(
+                gw_session,
+                gw_manager,
+                mcp_port,
+                gw_shutdown_tx,
+                gw_shutdown_rx,
+            )
+            .await
+            {
+                log::error!("Daemon gateway error: {}", e);
+            }
+        })
+    };
+
     log::info!("Bubbaloop skill runtime started.");
     log::info!("  MCP server: http://127.0.0.1:{}/mcp", mcp_port);
+    log::info!("  Agent runtime: active");
+    log::info!("  Daemon gateway: active");
     log::info!("  Nodes: {} registered", initial_list.nodes.len());
     log::info!("  Health monitor: active (Zenoh heartbeats)");
 
@@ -199,8 +470,10 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
     let mut shutdown_wait = shutdown_rx.clone();
     shutdown_wait.changed().await.ok();
 
-    // Abort MCP server
+    // Abort MCP server, agent runtime, and gateway
     mcp_task.abort();
+    agent_task.abort();
+    gateway_task.abort();
 
     log::info!("Bubbaloop daemon stopped.");
 

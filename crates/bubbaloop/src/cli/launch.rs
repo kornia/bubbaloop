@@ -191,13 +191,16 @@ impl LaunchCommand {
     }
 
     async fn resolve_node_path(&self, node_name: &str) -> Result<String> {
-        // The REST API doesn't expose node paths directly.
-        // We check the node exists via the API, then look up the path from
-        // the local nodes directory (~/.bubbaloop/nodes/).
-        let client = crate::cli::daemon_client::DaemonClient::new();
-        let data = client.list_nodes().await.map_err(node::NodeError::from)?;
+        // Check the node exists via the Zenoh gateway, then look up the path
+        // from the local nodes directory (~/.bubbaloop/nodes/).
+        let client = crate::cli::daemon_client::DaemonClient::connect()
+            .await
+            .map_err(node::NodeError::from)?;
+        let nodes_json = client.list_nodes().await.map_err(node::NodeError::from)?;
+        let nodes: Vec<crate::mcp::platform::NodeInfo> =
+            serde_json::from_str(&nodes_json).unwrap_or_default();
 
-        let found = data.nodes.iter().any(|n| n.name == node_name);
+        let found = nodes.iter().any(|n| n.name == node_name);
         if !found {
             return Err(LaunchError::Node(node::NodeError::NotFound(format!(
                 "Node '{}' not registered. Register it first with: bubbaloop node add <path>",
@@ -262,15 +265,13 @@ impl LaunchCommand {
         name_override: Option<&str>,
         config_path: Option<&str>,
     ) -> Result<()> {
-        let client = crate::cli::daemon_client::DaemonClient::new();
-        let resp = client
+        let client = crate::cli::daemon_client::DaemonClient::connect()
+            .await
+            .map_err(node::NodeError::from)?;
+        client
             .add_node(node_path, name_override, config_path)
             .await
             .map_err(node::NodeError::from)?;
-
-        if !resp.success {
-            return Err(LaunchError::Instance(resp.message));
-        }
 
         Ok(())
     }

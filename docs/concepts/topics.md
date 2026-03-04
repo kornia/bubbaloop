@@ -9,109 +9,77 @@ Bubbaloop uses vanilla Zenoh key expressions for all message routing.
 Topics follow a hierarchical naming pattern:
 
 ```
-/{category}/{name}/{type}
+bubbaloop/{scope}/{machine_id}/{node_name}/{resource}
 ```
 
-**Examples:**
+| Segment | Description | Example |
+|---------|-------------|---------|
+| `scope` | Deployment environment | `local` |
+| `machine_id` | Unique machine identifier (hostname-based) | `nvidia_orin00` |
+| `node_name` | Node instance name | `rtsp-camera`, `openmeteo` |
+| `resource` | Data type or service | `schema`, `manifest`, `health`, `config`, `command` |
+
+### Standard Resources
+
+Every self-describing node serves these queryables:
+
+| Resource | Encoding | Description |
+|----------|----------|-------------|
+| `schema` | Protobuf (binary) | FileDescriptorSet for data messages |
+| `manifest` | JSON | Capabilities, topics, commands, hardware requirements |
+| `health` | JSON | Status, uptime, last heartbeat |
+| `config` | JSON | Current configuration |
+| `command` | JSON request/response | Imperative actions |
+
+### Data Topics
+
+Nodes publish data on custom sub-topics:
 
 | Topic | Description |
 |-------|-------------|
-| `/camera/front/compressed` | Front camera compressed images |
-| `/camera/back/compressed` | Back camera compressed images |
-| `/weather/current` | Current weather conditions |
-| `/weather/hourly` | Hourly weather forecast |
-| `/weather/daily` | Daily weather forecast |
+| `bubbaloop/local/nvidia_orin00/rtsp-camera/frame` | Camera compressed frames |
+| `bubbaloop/local/nvidia_orin00/openmeteo/status` | Current weather conditions |
+| `bubbaloop/local/nvidia_orin00/telemetry/status` | System telemetry |
 
-### Zenoh Key Expression
+### Agent Topics
 
-ROS topics are converted to Zenoh key expressions:
+The agent runtime uses dedicated topics for multi-agent messaging:
 
-| ROS Topic | Zenoh Key |
-|-----------|-----------|
-| `/camera/front/compressed` | `0/camera%front%compressed/**` |
-| `/weather/current` | `0/weather%current/**` |
-
-**Conversion:**
-
-1. Remove leading `/`
-2. Replace `/` with `%`
-3. Add prefix `0/` (namespace)
-4. Add suffix `/**` (wildcard)
-
-## Camera Topics
-
-Each camera publishes to its own topic based on the `name` field in the configuration.
-
-### Published Topics
-
-| Topic | Message Type | Description |
-|-------|--------------|-------------|
-| `/camera/{name}/compressed` | `CompressedImage` | H264 compressed frames |
-
-### Topic Pattern
-
-```
-/camera/{camera_name}/compressed
-```
-
-**Examples:**
-
-| Config Name | ROS Topic | Zenoh Key |
-|-------------|-----------|-----------|
-| `front_door` | `/camera/front_door/compressed` | `0/camera%front_door%compressed/**` |
-| `backyard` | `/camera/backyard/compressed` | `0/camera%backyard%compressed/**` |
-| `garage` | `/camera/garage/compressed` | `0/camera%garage%compressed/**` |
-
-### Message Format
-
-See [Camera Messages](../api/camera.md) for the `CompressedImage` definition.
-
-## Weather Topics
-
-The OpenMeteo service publishes weather data to multiple topics.
-
-### Published Topics
-
-| Topic | Message Type | Description |
-|-------|--------------|-------------|
-| `/weather/current` | `CurrentWeather` | Current conditions |
-| `/weather/hourly` | `HourlyForecast` | Hourly forecast (48h) |
-| `/weather/daily` | `DailyForecast` | Daily forecast (7 days) |
-
-### Subscribed Topics
-
-| Topic | Message Type | Description |
-|-------|--------------|-------------|
-| `/weather/location` | `LocationConfig` | Update location dynamically |
-
-### Message Format
-
-See [Weather Messages](../api/weather.md) for message definitions.
+| Topic | Direction | Description |
+|-------|-----------|-------------|
+| `bubbaloop/{scope}/{machine}/agent/inbox` | CLI → Daemon | Shared intake for all agent messages |
+| `bubbaloop/{scope}/{machine}/agent/{agent_id}/outbox` | Daemon → CLI | Per-agent streamed responses |
+| `bubbaloop/{scope}/{machine}/agent/{agent_id}/manifest` | Queryable | Agent capabilities and model info |
 
 ## Topic Discovery
 
-### In the Dashboard
+### Via CLI
 
-The dashboard automatically discovers available topics:
+```bash
+# List all active Zenoh topics
+bubbaloop debug topics
 
-1. Click **Add Panel** or **Add Camera**
-2. Click the edit icon
-3. Select from discovered topics
-4. Or enter a custom topic pattern
+# Subscribe to a specific topic
+bubbaloop debug subscribe "bubbaloop/local/nvidia_orin00/rtsp-camera/**"
 
-### In the TUI
+# Query a specific key expression
+bubbaloop debug query "bubbaloop/local/nvidia_orin00/openmeteo/status"
 
-Use the `/topics` command to list active topics:
+# List running agents
+bubbaloop agent list
+```
+
+### Via MCP
 
 ```
-/topics
+discover_nodes          # Query all manifests on bubbaloop/**/manifest
+list_nodes              # List registered nodes with status
+get_stream_info         # Get Zenoh topic for a node's data stream
 ```
 
-This shows:
+### Via Dashboard
 
-- Topic name
-- Message frequency (Hz)
-- Message count
+The dashboard automatically discovers topics by subscribing to `bubbaloop/**`.
 
 ## Wildcard Subscriptions
 
@@ -119,60 +87,38 @@ Zenoh supports wildcard subscriptions for monitoring multiple topics:
 
 | Pattern | Matches |
 |---------|---------|
-| `0/camera%**` | All camera topics |
-| `0/weather%**` | All weather topics |
-| `0/**` | All topics |
+| `bubbaloop/**` | All bubbaloop topics |
+| `bubbaloop/local/nvidia_orin00/**` | All topics on one machine |
+| `bubbaloop/**/schema` | All node schemas |
+| `bubbaloop/**/manifest` | All node manifests |
+| `bubbaloop/local/*/agent/*/outbox` | All agent outbox streams |
 
-**Example: Subscribe to all cameras**
-
-```typescript
-const subscriber = session.declareSubscriber("0/camera%**");
-```
-
-## Topic Namespacing
-
-The `bubbaloop/` prefix is the project namespace. Scopes support:
-
-| Prefix | Purpose |
-|--------|---------|
-| `0/` | Default namespace |
-| `robot1/` | Robot-specific namespace |
-| `sim/` | Simulation namespace |
-
-## Custom Topics
-
-When creating custom components, follow these conventions:
+## Topic Conventions
 
 ### Naming Guidelines
 
-1. Use lowercase with underscores
-2. Be descriptive but concise
-3. Include component category
-4. Include data type
-
-**Good examples:**
-
-- `/sensor/imu/data`
-- `/actuator/motor/velocity`
-- `/service/detector/results`
-
-**Avoid:**
-
-- `/MyCamera` (mixed case)
-- `/cam1` (not descriptive)
-- `/data` (too generic)
+1. Use underscores (not hyphens) in topic path segments
+2. Hostnames with hyphens are sanitized: `jetson-orin` → `jetson_orin`
+3. Be descriptive but concise
+4. Include node name and resource type
 
 ### Publishing Custom Topics
 
 ```rust
-// Rust example
-let topic = format!("/sensor/{}/data", sensor_name);
-let key = topic_to_zenoh_key(&topic);
-let publisher = session.declare_publisher(key).await?;
+// Rust example using the Node SDK
+let topic = ctx.topic("status");  // → bubbaloop/{scope}/{machine_id}/{node_name}/status
+let publisher = ctx.session.declare_publisher(&topic).await?;
+publisher.put(encoded_bytes).await?;
+```
+
+```python
+# Python example
+topic = f"bubbaloop/{scope}/{machine_id}/{node_name}/status"
+session.put(topic, payload)
 ```
 
 ## Next Steps
 
 - [API Reference](../api/index.md) — Message type definitions
-- [Camera Messages](../api/camera.md) — Camera message format
-- [Weather Messages](../api/weather.md) — Weather message format
+- [Agent Guide](../agent-guide.md) — Multi-agent messaging details
+- [Architecture](architecture.md) — System design overview

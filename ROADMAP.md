@@ -35,8 +35,9 @@ config:
   url: rtsp://192.168.1.100/stream
 EOF
 
-# Talk to your hardware
-bubbaloop agent
+# Talk to your hardware (agents run daemon-side, CLI is a thin Zenoh client)
+bubbaloop agent chat "What sensors do I have?"
+bubbaloop agent chat   # interactive REPL
 
 > What sensors do I have?
 > Check the camera every 15 minutes and restart if it goes down
@@ -54,8 +55,8 @@ bubbaloop agent
 │  BUBBALOOP  (single binary, ~12-13 MB)                   │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │  Agent Layer (OpenClaw architecture)                │  │
-│  │  Soul + onboarding | ModelProvider | Heartbeat     │  │
+│  │  Agent Runtime (multi-agent, Zenoh gateway)        │  │
+│  │  Soul | EventSink | Heartbeat | per-agent Memory   │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  3-Tier Memory                                      │  │
@@ -65,7 +66,7 @@ bubbaloop agent
 │  │  MCP Server (25 tools) — sole control interface     │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  Daemon (passive skill runtime)                     │  │
+│  │  Daemon (skill runtime + agent host)                │  │
 │  │  Node manager | systemd/D-Bus | Marketplace         │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
@@ -78,8 +79,9 @@ bubbaloop agent
      └────────┘  └────────┘  └────────┘
 ```
 
-**Two entry points, same core:**
-- `bubbaloop agent` — self-contained hardware AI agent
+**Three entry points, same core:**
+- `bubbaloop agent chat` — thin Zenoh CLI client (LLM runs daemon-side)
+- `bubbaloop agent list` — discover running agents via manifest queryables
 - `bubbaloop mcp --stdio` — MCP server for Claude Code / external agents
 
 ---
@@ -146,7 +148,7 @@ config:
 
 ### Phase 2: Agent Loop (Claude API)
 
-**Goal:** Natural language hardware control. `bubbaloop agent` starts a chat.
+**Goal:** Natural language hardware control. `bubbaloop agent chat` talks to daemon-side agents.
 
 ```
 > What sensors do I have?
@@ -159,11 +161,17 @@ config:
 ```
 
 **Deliverables:**
-- [x] `bubbaloop agent` CLI command (terminal chat interface)
+- [x] `bubbaloop agent chat` CLI command (thin Zenoh client, LLM runs daemon-side)
+- [x] `bubbaloop agent list` — discover running agents via manifest queryables
+- [x] Multi-agent runtime: agents run as tokio tasks inside daemon
+- [x] Agent gateway: Zenoh pub/sub wire format (inbox/outbox/manifest topics)
+- [x] Per-agent config via `~/.bubbaloop/agents.toml`
+- [x] Per-agent Soul + Memory isolation (`~/.bubbaloop/agents/{id}/`)
+- [x] EventSink abstraction (StdoutSink, ZenohSink — extensible to Telegram, web, etc.)
 - [x] Claude API integration via `reqwest` (tool_use for MCP tools)
 - [x] Internal MCP tool dispatch (call tools without HTTP round-trip)
 - [x] System prompt injection: sensor inventory, node status, active schedules
-- [x] Multi-turn conversation loop with tool use
+- [ ] Capability-based message routing (currently falls back to default agent)
 - [ ] HTTP chat endpoint for future dashboard integration
 
 **New deps:** None (`reqwest` already in dep tree). **New code:** ~500-800 lines.
@@ -182,8 +190,8 @@ config:
 - **Tier 3 — Semantic (SQLite):** Jobs + proposals tables
 
 **Deliverables:**
-- [x] SQLite via `rusqlite` (static libsqlite3) at `~/.bubbaloop/memory.db`
-- [x] NDJSON episodic log (`~/.bubbaloop/memory/daily_logs_*.jsonl`)
+- [x] SQLite via `rusqlite` (static libsqlite3) at `~/.bubbaloop/agents/{id}/memory.db`
+- [x] NDJSON episodic log (`~/.bubbaloop/agents/{id}/memory/daily_logs_*.jsonl`)
 - [x] FTS5 full-text search for episodic recall
 - [x] Jobs table with retry logic + circuit breaker
 - [x] Proposals table for human-in-the-loop approval
@@ -258,7 +266,7 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 - [ ] `curl -sSL https://get.bubbaloop.com | bash` install script
 - [x] `bubbaloop login` — API key + Claude subscription (setup-token) authentication
 - [x] First-run onboarding: name, focus, approval mode → personalized `identity.md`
-- [ ] `bubbaloop agent` auto-loads skills, auto-installs drivers, starts chat
+- [ ] `bubbaloop agent chat` auto-loads skills, auto-installs drivers, starts chat
 - [ ] AI-assisted skill creation: "Add my garage camera at rtsp://..."
 - [ ] Conversational scheduling: "Check cameras every hour"
 

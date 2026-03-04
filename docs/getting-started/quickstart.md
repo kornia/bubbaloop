@@ -59,6 +59,45 @@ bubbaloop node logs rtsp-camera-entrance -f   # Live logs
 bubbaloop debug subscribe "camera/entrance/compressed"  # See frames
 ```
 
+## Step 5: Talk to Your Hardware
+
+```bash
+# Authenticate with Anthropic (needed for AI agent)
+bubbaloop login
+
+# Start the daemon (agent runtime + MCP server + node manager)
+bubbaloop up
+
+# Chat with the default agent
+bubbaloop agent chat "What sensors do I have?"
+
+# Interactive REPL
+bubbaloop agent chat
+
+# List running agents
+bubbaloop agent list
+```
+
+### Custom Agents (Optional)
+
+Create `~/.bubbaloop/agents.toml` to configure multiple agents:
+
+```toml
+[agents.jean-clawd]
+enabled = true
+default = true
+
+[agents.camera-expert]
+enabled = true
+capabilities = ["camera", "rtsp", "video"]
+```
+
+Customize per-agent identity in `~/.bubbaloop/agents/{agent-id}/soul/identity.md`.
+
+See [Agent Guide](../agent-guide.md#creating-and-managing-agents) for the full multi-agent setup.
+
+---
+
 See [Installation](installation.md) for detailed requirements.
 
 ## Configuration
@@ -142,7 +181,6 @@ pixi run up
 
 # Or run services individually:
 pixi run daemon      # Bubbaloop daemon
-pixi run bubbaloop   # Terminal UI
 pixi run dashboard   # Web dashboard
 ```
 

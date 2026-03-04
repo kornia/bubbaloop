@@ -20,8 +20,8 @@
 use argh::FromArgs;
 use bubbaloop::cli::launch::LaunchCommand;
 use bubbaloop::cli::{
-    AgentCommand, DebugCommand, LoginCommand, LogoutCommand, MarketplaceCommand, NodeCommand,
-    UpCommand,
+    AgentCommand, DaemonCommand, DebugCommand, LoginCommand, LogoutCommand, MarketplaceCommand,
+    NodeCommand, UpCommand,
 };
 
 /// Bubbaloop - AI-native orchestration for Physical AI
@@ -43,7 +43,7 @@ enum Command {
     Logout(LogoutCommand),
     Status(StatusArgs),
     Doctor(DoctorArgs),
-    Daemon(DaemonArgs),
+    Daemon(DaemonCommand),
     Mcp(McpArgs),
     Node(NodeCommand),
     Launch(LaunchCommand),
@@ -86,15 +86,6 @@ struct DoctorArgs {
     /// specific check to run: all, zenoh, daemon (default: all)
     #[argh(option, short = 'c', default = "String::from(\"all\")")]
     check: String,
-}
-
-/// Run the daemon (node manager service)
-#[derive(FromArgs)]
-#[argh(subcommand, name = "daemon")]
-struct DaemonArgs {
-    /// zenoh endpoint to connect to (default: auto-discover local zenohd)
-    #[argh(option, short = 'z')]
-    zenoh_endpoint: Option<String>,
 }
 
 /// Run MCP server for AI agent integration
@@ -201,7 +192,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              --json: Output as JSON");
             eprintln!("              -c, --check <type>: all|zenoh|daemon (default: all)");
             eprintln!("              --fix: Auto-fix issues");
-            eprintln!("  daemon    Run the daemon (node manager service)");
+            eprintln!("  daemon    Manage the daemon lifecycle:");
+            eprintln!("              run: Run in foreground (default)");
+            eprintln!("              start: Start as systemd service");
+            eprintln!("              stop: Graceful shutdown via Zenoh");
+            eprintln!("              restart: Stop + start");
+            eprintln!("              status: Show uptime, nodes, agents");
+            eprintln!("              logs: Follow daemon logs");
+            eprintln!("              fix: Auto-fix daemon issues");
             eprintln!("  mcp       Run MCP server for AI agent integration:");
             eprintln!("              --stdio: JSON-RPC over stdin/stdout");
             eprintln!("              -p, --port <port>: HTTP mode (default: 8088)");
@@ -216,10 +214,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("  login     Authenticate with Anthropic API:");
             eprintln!("              --status: Show current auth status");
             eprintln!("  logout    Remove saved Anthropic API key");
-            eprintln!("  agent     Chat with your hardware via Claude AI:");
-            eprintln!("              -m, --model <model>: Claude model");
-            eprintln!("              -p, --provider <provider>: LLM provider (claude, ollama)");
-            eprintln!("              -z, --zenoh-endpoint <endpoint>: Zenoh endpoint");
+            eprintln!("  agent     Interact with AI agents via the daemon:");
+            eprintln!("              chat [-a agent[@machine]] [message]: Send messages to agents");
+            eprintln!("              list [--all]: Show running agents and capabilities");
             eprintln!("  up        Load skills and ensure sensor nodes are running:");
             eprintln!("              -s, --skills-dir <path>: Skills directory");
             eprintln!("              --dry-run: Show what would be done");
@@ -245,13 +242,105 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Doctor(args)) => {
             bubbaloop::cli::doctor::run(args.fix, args.json, &args.check).await?;
         }
-        Some(Command::Daemon(args)) => {
-            // Re-initialize logging for daemon (info level, not warn)
-            drop(
-                env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-                    .try_init(),
-            );
-            bubbaloop::daemon::run(args.zenoh_endpoint).await?;
+        Some(Command::Daemon(cmd)) => {
+            use bubbaloop::cli::daemon::DaemonSubcommand;
+
+            match cmd.subcommand {
+                // `bubbaloop daemon` with no subcommand = run in foreground (backward compat)
+                None | Some(DaemonSubcommand::Run(_)) => {
+                    // Re-initialize logging for daemon (info level, not warn)
+                    drop(
+                        env_logger::Builder::from_env(
+                            env_logger::Env::default().default_filter_or("info"),
+                        )
+                        .try_init(),
+                    );
+                    bubbaloop::daemon::run(cmd.zenoh_endpoint).await?;
+                }
+                Some(DaemonSubcommand::Start(_)) => {
+                    bubbaloop::cli::daemon_client::run_daemon_start().await?;
+                }
+                Some(DaemonSubcommand::Stop(_)) => {
+                    // Suppress noisy Zenoh logs
+                    drop(
+                        env_logger::Builder::from_env(
+                            env_logger::Env::default().default_filter_or("warn,zenoh=warn"),
+                        )
+                        .try_init(),
+                    );
+                    let session =
+                        match bubbaloop::agent::create_agent_session(cmd.zenoh_endpoint.as_deref())
+                            .await
+                        {
+                            Ok(s) => s,
+                            Err(e) => {
+                                eprintln!("Error: Cannot connect to Zenoh — is zenohd running?");
+                                eprintln!("  {}", e);
+                                return Ok(());
+                            }
+                        };
+                    bubbaloop::cli::daemon_client::run_daemon_stop(session).await?;
+                }
+                Some(DaemonSubcommand::Restart(_)) => {
+                    // Stop then start
+                    drop(
+                        env_logger::Builder::from_env(
+                            env_logger::Env::default().default_filter_or("warn,zenoh=warn"),
+                        )
+                        .try_init(),
+                    );
+                    if let Ok(session) =
+                        bubbaloop::agent::create_agent_session(cmd.zenoh_endpoint.as_deref()).await
+                    {
+                        let _ = bubbaloop::cli::daemon_client::run_daemon_stop(session).await;
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                    bubbaloop::cli::daemon_client::run_daemon_start().await?;
+                }
+                Some(DaemonSubcommand::Status(_)) => {
+                    drop(
+                        env_logger::Builder::from_env(
+                            env_logger::Env::default().default_filter_or("warn,zenoh=warn"),
+                        )
+                        .try_init(),
+                    );
+                    let session =
+                        match bubbaloop::agent::create_agent_session(cmd.zenoh_endpoint.as_deref())
+                            .await
+                        {
+                            Ok(s) => s,
+                            Err(e) => {
+                                eprintln!("Error: Cannot connect to Zenoh — is zenohd running?");
+                                eprintln!("  {}", e);
+                                return Ok(());
+                            }
+                        };
+                    bubbaloop::cli::daemon_client::run_daemon_status(session).await?;
+                }
+                Some(DaemonSubcommand::Logs(_)) => {
+                    bubbaloop::cli::daemon_client::run_daemon_logs()?;
+                }
+                Some(DaemonSubcommand::Fix(_)) => {
+                    drop(
+                        env_logger::Builder::from_env(
+                            env_logger::Env::default().default_filter_or("warn,zenoh=warn"),
+                        )
+                        .try_init(),
+                    );
+                    let session =
+                        match bubbaloop::agent::create_agent_session(cmd.zenoh_endpoint.as_deref())
+                            .await
+                        {
+                            Ok(s) => s,
+                            Err(e) => {
+                                eprintln!("Error: Cannot connect to Zenoh — is zenohd running?");
+                                eprintln!("  {}", e);
+                                return Ok(());
+                            }
+                        };
+                    bubbaloop::cli::daemon_client::run_daemon_fix(session).await?;
+                }
+            }
         }
         Some(Command::Mcp(args)) => {
             run_mcp_command(args).await?;
@@ -277,34 +366,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         }
         Some(Command::Agent(cmd)) => {
-            // Suppress noisy Zenoh logs — agent only needs warn-level from Zenoh
+            // First-run onboarding: interactive interview BEFORE anything else.
+            // Pure stdin/stdout — no Zenoh, no daemon needed.
+            if matches!(
+                &cmd.subcommand,
+                bubbaloop::cli::agent::AgentSubcommand::Chat(c) if c.message.is_none()
+            ) {
+                let soul_dir = bubbaloop::agent::soul::soul_directory();
+                bubbaloop::agent::soul::Soul::ensure_defaults();
+                if bubbaloop::agent::soul::Soul::is_first_run(&soul_dir) {
+                    if let Err(e) = bubbaloop::agent::soul::Soul::run_onboarding(&soul_dir) {
+                        eprintln!("Warning: onboarding failed: {}", e);
+                    }
+                }
+            }
+
+            // Suppress noisy Zenoh logs
             drop(
                 env_logger::Builder::from_env(
-                    env_logger::Env::default().default_filter_or("info,zenoh=warn"),
+                    env_logger::Env::default().default_filter_or("warn,zenoh=warn"),
                 )
                 .try_init(),
             );
-            println!("Connecting to Zenoh...");
+
+            // Create Zenoh client session for all agent subcommands
             let session =
                 match bubbaloop::agent::create_agent_session(cmd.zenoh_endpoint.as_deref()).await {
                     Ok(s) => s,
                     Err(e) => {
-                        eprintln!("Error: {}", e);
+                        eprintln!("Error: Cannot connect to Zenoh — is zenohd running?");
+                        eprintln!("  {}", e);
                         return Ok(());
                     }
                 };
-            let node_manager = bubbaloop::daemon::NodeManager::new_with_graceful_fallback().await;
-            if let Err(e) = bubbaloop::agent::run_agent(
-                bubbaloop::agent::AgentConfig {
-                    model: cmd.model,
-                    provider: cmd.provider,
-                },
-                session,
-                node_manager,
-            )
-            .await
+
+            let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+            let local_machine_id = bubbaloop::daemon::util::get_machine_id();
+
+            // Check daemon is reachable
+            if !bubbaloop::cli::agent_client::is_daemon_running(&session, &scope, &local_machine_id)
+                .await
             {
-                eprintln!("Error: {}", e);
+                eprintln!("Error: Daemon is not running.");
+                eprintln!("  Start it with: bubbaloop daemon start");
+                return Ok(());
+            }
+
+            match cmd.subcommand {
+                bubbaloop::cli::agent::AgentSubcommand::Chat(chat_cmd) => {
+                    let (agent, target_machine) =
+                        parse_agent_target(chat_cmd.agent.as_deref(), &local_machine_id);
+                    if let Err(e) = bubbaloop::cli::agent_client::run_agent_client(
+                        session,
+                        &scope,
+                        target_machine,
+                        agent,
+                        chat_cmd.message.as_deref(),
+                    )
+                    .await
+                    {
+                        let err_str = e.to_string();
+                        if err_str != "timeout" {
+                            eprintln!("Error: {}", e);
+                        }
+                    }
+                }
+                bubbaloop::cli::agent::AgentSubcommand::List(list_cmd) => {
+                    if let Err(e) = bubbaloop::cli::agent_client::run_agent_list(
+                        session,
+                        &scope,
+                        &local_machine_id,
+                        list_cmd.all,
+                    )
+                    .await
+                    {
+                        eprintln!("Error: {}", e);
+                    }
+                }
             }
         }
         Some(Command::Up(cmd)) => {
@@ -354,4 +492,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Parse "agent@machine" syntax. Returns (agent_id, machine_id).
+/// - `Some("camera-expert@jetson_orin")` → `(Some("camera-expert"), "jetson_orin")`
+/// - `Some("camera-expert")` → `(Some("camera-expert"), local_machine_id)`
+/// - `None` → `(None, local_machine_id)`
+fn parse_agent_target<'a>(agent: Option<&'a str>, local: &'a str) -> (Option<&'a str>, &'a str) {
+    match agent {
+        Some(s) if s.contains('@') => {
+            let (name, machine) = s.split_once('@').unwrap();
+            (Some(name), machine)
+        }
+        other => (other, local),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_agent_target_with_machine() {
+        let (agent, machine) = parse_agent_target(Some("cam@jetson_orin"), "local_host");
+        assert_eq!(agent, Some("cam"));
+        assert_eq!(machine, "jetson_orin");
+    }
+
+    #[test]
+    fn parse_agent_target_without_machine() {
+        let (agent, machine) = parse_agent_target(Some("cam"), "local_host");
+        assert_eq!(agent, Some("cam"));
+        assert_eq!(machine, "local_host");
+    }
+
+    #[test]
+    fn parse_agent_target_none() {
+        let (agent, machine) = parse_agent_target(None, "local_host");
+        assert_eq!(agent, None);
+        assert_eq!(machine, "local_host");
+    }
 }

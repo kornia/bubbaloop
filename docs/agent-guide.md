@@ -22,6 +22,191 @@ MCP server runs on `http://127.0.0.1:8088/mcp` when daemon is active.
 
 **Rate limits:** 100 request burst, ~1 req/sec sustained replenishment.
 
+## Creating and Managing Agents
+
+Bubbaloop runs a multi-agent runtime inside the daemon. Each agent is an independent LLM reasoning loop with its own identity (Soul), memory, and capabilities. The CLI is a thin Zenoh pub/sub client — all LLM processing happens daemon-side.
+
+### How It Works
+
+```
+┌──────────────┐     Zenoh pub/sub      ┌─────────────────────────────────────┐
+│  CLI client   │◄─────────────────────►│          Daemon (bubbaloop up)       │
+│               │   inbox → shared      │                                     │
+│ agent chat    │   outbox ← per-agent  │  ┌───────────┐  ┌───────────┐      │
+│ agent list    │                       │  │ jean-clawd │  │cam-expert │ ...  │
+└──────────────┘                        │  │ Soul+Mem   │  │ Soul+Mem  │      │
+                                        │  └───────────┘  └───────────┘      │
+                                        │       ▲ shared DaemonPlatform       │
+                                        │       │ (MCP tools, node mgr)       │
+                                        └───────────────────────────────────┘
+```
+
+1. **CLI** publishes a JSON message to the shared inbox Zenoh topic
+2. **Runtime** (inside daemon) routes the message to the right agent
+3. **Agent** processes the turn (LLM calls, tool use) and streams events to its outbox topic
+4. **CLI** subscribes to all outbox topics, filters by correlation ID, and renders the response
+
+### Step 1: Configure Agents
+
+Create `~/.bubbaloop/agents.toml`:
+
+```toml
+# The default agent — receives all unaddressed messages
+[agents.jean-clawd]
+enabled = true
+default = true
+
+# A specialist agent — target with `bubbaloop agent chat -a camera-expert`
+[agents.camera-expert]
+enabled = true
+capabilities = ["camera", "rtsp", "video"]
+```
+
+**Fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Whether the agent starts with the daemon |
+| `default` | bool | `false` | Routes unaddressed messages here (exactly one should be `true`) |
+| `capabilities` | string[] | `[]` | Keyword tags (future: capability-based routing) |
+
+If no `agents.toml` exists, the runtime creates a single default agent named `jean-clawd`.
+
+### Step 2: Customize the Agent's Soul
+
+Each agent has a per-agent directory at `~/.bubbaloop/agents/{agent_id}/`. Create the soul files:
+
+**`~/.bubbaloop/agents/camera-expert/soul/identity.md`** — system prompt:
+
+```markdown
+You are CamBot, an AI agent specialized in video surveillance and RTSP cameras
+through the Bubbaloop skill runtime.
+
+Your focus: managing RTSP camera feeds, diagnosing video issues, configuring streams.
+
+When given a task, DO it — use your tools, get results, report back.
+Be concise. Report what you did and the result.
+```
+
+**`~/.bubbaloop/agents/camera-expert/soul/capabilities.toml`** — model and tuning:
+
+```toml
+model_name = "claude-sonnet-4-20250514"
+max_turns = 15
+allow_internet = true
+
+# Heartbeat tuning (adaptive interval in seconds)
+heartbeat_base_interval = 60
+heartbeat_min_interval = 5
+heartbeat_decay_factor = 0.7
+
+# "auto" = execute immediately, "propose" = save for human approval
+default_approval_mode = "auto"
+
+# Retry / circuit breaker
+max_retries = 3
+
+# Memory retention: delete episodic logs older than N days (0 = keep forever)
+episodic_log_retention_days = 30
+```
+
+If soul files don't exist, the agent falls back to the global soul at `~/.bubbaloop/soul/`, then to compiled-in defaults.
+
+Soul files are **hot-reloaded** — edit them while the daemon is running and changes take effect on the next turn.
+
+### Step 3: Start the Daemon
+
+```bash
+bubbaloop up
+```
+
+The daemon starts the agent runtime, which:
+1. Reads `~/.bubbaloop/agents.toml` (or uses default config)
+2. For each enabled agent: creates `~/.bubbaloop/agents/{id}/` directory, loads Soul, initializes Claude provider, opens per-agent Memory (episodic NDJSON + semantic SQLite)
+3. Subscribes to the shared Zenoh inbox
+4. Registers per-agent manifest queryables
+5. Spawns per-agent tokio tasks (event loops)
+
+Look for these log lines to confirm:
+```
+[Runtime] Agent 'jean-clawd' ready (default=true)
+[Runtime] Agent 'camera-expert' ready (default=false)
+[Runtime] Agent runtime started: 2 agent(s), inbox=bubbaloop/local/{machine}/agent/inbox
+```
+
+### Step 4: Interact via CLI
+
+```bash
+# Single message (exits after response)
+bubbaloop agent chat "what is the system status?"
+
+# Interactive REPL
+bubbaloop agent chat
+
+# Target a specific agent
+bubbaloop agent chat -a camera-expert "describe the video feed"
+
+# List all running agents
+bubbaloop agent list
+```
+
+`agent list` queries all manifest Zenoh queryables and prints:
+```
+ID                   NAME                      DEFAULT    MODEL                          CAPABILITIES
+-----------------------------------------------------------------------------------------------
+jean-clawd           Bubbaloop                 yes        claude-sonnet-4-20250514
+camera-expert        CamBot                               claude-sonnet-4-20250514       camera, rtsp, video
+```
+
+### Per-Agent Directory Layout
+
+```
+~/.bubbaloop/agents/{agent_id}/
+├── soul/
+│   ├── identity.md          # System prompt (markdown)
+│   └── capabilities.toml    # Model config, heartbeat tuning
+├── memory/                  # Episodic logs (NDJSON, one file per day)
+└── memory.db                # Semantic memory (SQLite: jobs, search index)
+```
+
+Each agent owns its memory exclusively — no sharing between agents.
+
+### Zenoh Gateway Topics
+
+```
+bubbaloop/{scope}/{machine}/agent/inbox                ← shared intake (all messages)
+bubbaloop/{scope}/{machine}/agent/{agent_id}/outbox    ← per-agent streamed response
+bubbaloop/{scope}/{machine}/agent/{agent_id}/manifest  ← agent capabilities (queryable)
+```
+
+**Wire format (JSON):**
+
+Inbox (CLI → Daemon):
+```json
+{"id": "uuid", "text": "user message", "agent": "camera-expert"}
+```
+
+Outbox (Daemon → CLI):
+```json
+{"id": "uuid", "type": "delta", "text": "token..."}
+{"id": "uuid", "type": "tool", "text": "get_system_status"}
+{"id": "uuid", "type": "tool_result", "text": "..."}
+{"id": "uuid", "type": "error", "text": "API error: 429"}
+{"id": "uuid", "type": "done"}
+```
+
+### Message Routing
+
+1. If the inbox message has an explicit `agent` field → route to that agent
+2. Otherwise → route to the default agent (`default = true` in config)
+3. If the target agent's inbox is full (capacity 32) → message is dropped with a warning
+
+### Building a Channel Adapter
+
+Because the gateway is a Zenoh convention (not hardcoded to the CLI), you can build adapters for any channel by publishing to the inbox topic and subscribing to outbox topics. The wire format is the same regardless of source.
+
+---
+
 ## Quick Start Workflow
 
 1. `list_nodes` → see all skillets with status
@@ -569,6 +754,93 @@ Get recent agent events (rule triggers, actions taken). Returns the last N event
 
 ---
 
+### Memory Tools
+
+Memory tools operate on the agent's **per-agent** SQLite database at `~/.bubbaloop/agents/{agent_id}/memory.db`. Each agent has isolated memory — no shared global state.
+
+#### `memory_search`
+
+**Tier:** Viewer
+
+Search episodic memory for past conversations, tool results, and agent observations. Uses BM25 full-text search with temporal decay.
+
+**Parameters:**
+- `query` (string, required): Search query (keywords or phrases)
+- `limit` (integer, optional): Maximum results to return (default: 10)
+
+---
+
+#### `memory_forget`
+
+**Tier:** Admin
+
+Remove matching entries from episodic memory search index. Use for PII removal, correcting false memories, or user-requested deletion. Creates an audit trail.
+
+**Parameters:**
+- `query` (string, required): Search query to match entries to forget
+- `reason` (string, required): Reason for forgetting (logged in audit trail)
+
+---
+
+#### `schedule_task`
+
+**Tier:** Operator
+
+Schedule a task for the agent to execute later. Supports one-off and recurring tasks via cron expressions. Uses `tokio::Notify` for immediate pickup — no waiting for heartbeat tick.
+
+**Parameters:**
+- `prompt` (string, required): The instruction for the agent to execute
+- `cron_schedule` (string, optional): Cron expression for recurring tasks (5 or 6 field)
+- `recurrence` (boolean, optional): Whether this is a recurring task (default: false)
+
+---
+
+#### `list_jobs`
+
+**Tier:** Viewer
+
+List scheduled jobs. Optionally filter by status.
+
+**Parameters:**
+- `status` (string, optional): Filter by status — pending, running, completed, failed, failed_requires_approval
+
+---
+
+#### `delete_job`
+
+**Tier:** Admin
+
+Delete a scheduled job by ID.
+
+**Parameters:**
+- `job_id` (string, required): The job ID to delete
+
+---
+
+#### `create_proposal`
+
+**Tier:** Operator
+
+Create a proposal for human approval before executing a risky action. Use for destructive operations like removing nodes or changing configs.
+
+**Parameters:**
+- `skill` (string, required): The tool or action category (e.g., "restart_node", "remove_node")
+- `description` (string, required): Human-readable description of what will happen
+- `actions` (string, required): JSON array of tool calls to execute if approved
+
+---
+
+#### `list_proposals`
+
+**Tier:** Viewer
+
+List proposals for human-in-the-loop approval.
+
+**Parameters:**
+- `status` (string, optional): Filter by status — pending, approved, rejected, expired
+
+---
+
 ### System Tools
 
 #### `get_system_status`
@@ -637,6 +909,65 @@ Query a Zenoh key expression (admin only). Key must start with `bubbaloop/`. Ret
 
 ---
 
+#### `read_file`
+
+**Tier:** Operator
+
+Read the contents of a file. Returns up to 500 lines. Use for config files, logs, scripts, or any text file on the system.
+
+**Parameters:**
+- `path` (string, required): Absolute or relative file path (supports `~/` expansion)
+
+**Returns:** File contents as plain text. Long files are truncated at 500 lines.
+
+**Security:** Sensitive files are blocked: SSH keys (`id_rsa`, `id_ed25519`), `.pem`/`.key`/`.p12` files, `.env` (not `.env.example`), `/etc/shadow`, `/etc/sudoers`, `master.key`.
+
+**Example:** `read_file(path="/etc/hostname")`
+
+---
+
+#### `write_file`
+
+**Tier:** Operator
+
+Write content to a file inside `~/.bubbaloop/workspace/`. Creates parent directories if needed. Writes outside the workspace are blocked.
+
+**Parameters:**
+- `path` (string, required): File path (relative paths resolve inside workspace)
+- `content` (string, required): File content to write
+
+**Returns:** Confirmation with byte count and path.
+
+**Security:** All writes are scoped to `~/.bubbaloop/workspace/`. Symlink escape prevention via path canonicalization. Directory auto-created on first use.
+
+**Example:**
+```json
+{
+  "path": "scripts/monitor.py",
+  "content": "#!/usr/bin/env python3\nprint('Hello')"
+}
+```
+
+---
+
+#### `run_command`
+
+**Tier:** Operator
+
+Run a shell command and return its output. Captures both stdout and stderr. Use for diagnostics, system inspection, or any task requiring shell access.
+
+**Parameters:**
+- `command` (string, required): Shell command to execute (passed to `/bin/sh -c`)
+- `timeout_secs` (integer, optional): Timeout in seconds (default: 30, max: 300)
+
+**Returns:** Command output (stdout + stderr). Long output truncated at 50KB.
+
+**Security:** 10-category blocklist enforced (see Security Model section below). Safe operations like `ls`, `df`, `cat`, `pixi`, `cargo` are allowed.
+
+**Example:** `run_command(command="df -h")`
+
+---
+
 ## RBAC Tiers
 
 Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to execute.
@@ -644,7 +975,7 @@ Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to e
 | Tier | Access Level | Example Tools |
 |------|--------------|---------------|
 | **Viewer** | Read-only monitoring | `list_nodes`, `get_node_health`, `get_system_status`, `list_agent_rules`, `discover_nodes` |
-| **Operator** | Day-to-day operations | `start_node`, `stop_node`, `send_command`, `add_rule`, `remove_rule`, `get_node_config` |
+| **Operator** | Day-to-day operations | `start_node`, `stop_node`, `send_command`, `add_rule`, `remove_rule`, `get_node_config`, `read_file`, `write_file`, `run_command` |
 | **Admin** | System modification | `build_node`, `query_zenoh`, `install_node`, `remove_node` |
 
 **Default tier:** In single-user localhost mode, all requests are granted Admin tier.
@@ -652,6 +983,38 @@ Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to e
 **Token format:** `~/.bubbaloop/mcp-token` contains `<token>:<tier>` (e.g., `bb_abc123:operator`)
 
 **Permission model:** Higher tiers inherit lower tier permissions (Admin can do everything, Operator can do Viewer tasks).
+
+---
+
+## Security Model
+
+The agent's system tools (`read_file`, `write_file`, `run_command`) enforce
+defence-in-depth security to prevent damage to existing platforms.
+
+### Read Access
+- Can read any file on the filesystem
+- **Blocked:** SSH keys (`id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa`), `.pem`/`.key`/`.p12`/`.pfx`/`.jks` files,
+  `.env` (not `.env.example`/`.env.template`/`.env.sample`), `/etc/shadow`, `/etc/sudoers`, `master.key`
+
+### Write Access
+- **Scoped to `~/.bubbaloop/workspace/`** — all writes outside are rejected
+- Symlink escape prevention via path canonicalization
+- Directory auto-created on first use
+
+### Shell Commands
+
+10-category blocklist:
+
+1. **Privilege escalation** — `sudo`, `su` (requires manual execution)
+2. **Destructive filesystem** — `rm -rf /`, `mkfs`, `dd if=`, fork bombs
+3. **System control** — `shutdown`, `reboot`, `kill`, `killall`, `pkill`, `iptables`, `mount`
+4. **Non-bubbaloop service management** — `systemctl stop/disable/mask <non-bubbaloop>` blocked; bubbaloop services allowed
+5. **System package managers** — `apt`, `apt-get`, `dpkg`, `yum`, `dnf`, `pacman`, `snap`, `flatpak` (use `pixi`/`pip` for project deps)
+6. **Network mutation** — `ifconfig up/down`, `ip link set`, `ip route`, `ip addr`
+7. **Remote code execution** — `curl | sh`, `wget | bash` (plain curl/wget for data is fine)
+8. **Container destruction** — `docker rm/stop/kill`, `podman rm/stop/kill` (`docker ps/logs/inspect` allowed)
+9. **Git destructive ops** — `push --force`, `reset --hard`, `clean -f` (normal git operations allowed)
+10. **`rm` scoped** — only files in `~/.bubbaloop/workspace/` and `/tmp` can be removed
 
 ---
 
@@ -892,9 +1255,9 @@ get_system_status → get_node_logs
 ### Tool Count by Tier
 
 - **Viewer:** 13 tools (read-only)
-- **Operator:** 12 tools (operations)
+- **Operator:** 15 tools (operations)
 - **Admin:** 6 tools (system modification)
-- **Total:** 24 tools
+- **Total:** 34 tools
 
 ### Key Paths
 
@@ -938,7 +1301,7 @@ Now the daemon continuously monitors temperature and logs alerts without further
 
 ## Summary
 
-- **24 tools** across 3 RBAC tiers (Viewer, Operator, Admin)
+- **34 tools** across 3 RBAC tiers (Viewer, Operator, Admin)
 - **Dual-plane architecture:** MCP for control, Zenoh for data
 - **Rules engine** for autonomous behavior (no polling loops)
 - **Self-describing nodes** with manifests, schemas, commands

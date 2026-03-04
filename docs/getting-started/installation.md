@@ -16,12 +16,12 @@ This installs:
 |-----------|-------------|
 | `zenohd` | Zenoh router for pub/sub messaging |
 | `zenoh-bridge` | WebSocket bridge for browser access |
-| `bubbaloop` | Single binary: CLI, TUI, and daemon |
+| `bubbaloop` | Single binary: CLI, daemon, MCP server, agent runtime |
 
 After installation, start a new terminal or source your shell config, then run:
 
 ```bash
-bubbaloop
+bubbaloop status
 ```
 
 ### Requirements
@@ -35,8 +35,8 @@ bubbaloop
 systemctl --user status zenohd
 systemctl --user status bubbaloop-daemon
 
-# Run TUI
-bubbaloop
+# Check status
+bubbaloop status
 ```
 
 ### Upgrading
@@ -121,7 +121,6 @@ pixi run up
 
 # Or run individually
 pixi run daemon      # Start daemon
-pixi run tui         # Start TUI
 pixi run dashboard   # Start web dashboard
 ```
 

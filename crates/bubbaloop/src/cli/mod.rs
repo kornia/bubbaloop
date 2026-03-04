@@ -1,6 +1,8 @@
 //! CLI module for Bubbaloop commands
 
 pub mod agent;
+pub mod agent_client;
+pub mod daemon;
 pub mod daemon_client;
 pub mod debug;
 pub mod doctor;
@@ -12,6 +14,7 @@ pub mod status;
 pub mod up;
 
 pub use agent::AgentCommand;
+pub use daemon::DaemonCommand;
 pub use debug::{DebugCommand, DebugError};
 pub use login::{LoginCommand, LogoutCommand};
 pub use marketplace::MarketplaceCommand;

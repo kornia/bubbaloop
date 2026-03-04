@@ -635,35 +635,42 @@ async fn check_systemd_service(service_name: &str) -> String {
     }
 }
 
-/// Check daemon HTTP connectivity (replaces Zenoh connectivity checks)
+/// Check daemon connectivity via Zenoh manifest query.
 async fn check_daemon_connectivity() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
 
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let port = std::env::var("BUBBALOOP_MCP_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(crate::mcp::MCP_PORT);
-
-    match client.health().await {
-        Ok(resp) => {
-            results.push(DiagnosticResult::pass_with_details(
-                "Daemon HTTP",
-                &format!("reachable on port {} (v{})", port, resp.version),
-                serde_json::json!({
-                    "port": port,
-                    "status": resp.status,
-                    "version": resp.version,
-                    "nodes_total": resp.nodes_total,
-                    "nodes_running": resp.nodes_running,
-                }),
-            ));
-        }
+    match crate::cli::daemon_client::DaemonClient::connect().await {
+        Ok(client) => match client.health().await {
+            Ok(manifest) => {
+                results.push(DiagnosticResult::pass_with_details(
+                    "Daemon Zenoh",
+                    &format!(
+                        "reachable (v{}, uptime={}s)",
+                        manifest.version, manifest.uptime_secs
+                    ),
+                    serde_json::json!({
+                        "version": manifest.version,
+                        "machine_id": manifest.machine_id,
+                        "uptime_secs": manifest.uptime_secs,
+                        "node_count": manifest.node_count,
+                        "agent_count": manifest.agent_count,
+                        "mcp_port": manifest.mcp_port,
+                    }),
+                ));
+            }
+            Err(_) => {
+                results.push(DiagnosticResult::fail(
+                    "Daemon Zenoh",
+                    "not reachable via Zenoh",
+                    "Is the daemon running? Check: systemctl --user status bubbaloop-daemon",
+                ));
+            }
+        },
         Err(_) => {
             results.push(DiagnosticResult::fail(
-                "Daemon HTTP",
-                &format!("not reachable on port {}", port),
-                "Is the daemon running? Check: systemctl --user status bubbaloop-daemon",
+                "Daemon Zenoh",
+                "cannot connect to Zenoh",
+                "Is zenohd running? Check: bubbaloop doctor -c zenoh",
             ));
         }
     }
@@ -674,20 +681,28 @@ async fn check_daemon_connectivity() -> Vec<DiagnosticResult> {
 async fn check_daemon_health() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
 
-    let client = crate::cli::daemon_client::DaemonClient::new();
+    let client = match crate::cli::daemon_client::DaemonClient::connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            results.push(DiagnosticResult::fail(
+                "Daemon health",
+                &format!("cannot connect: {}", e),
+                "Check if daemon is running. Run: systemctl --user status bubbaloop-daemon",
+            ));
+            return results;
+        }
+    };
 
-    // Check health endpoint
+    // Check health via manifest query
     match client.health().await {
-        Ok(resp) => {
-            if resp.status == "ok" {
-                results.push(DiagnosticResult::pass("Daemon health", "ok"));
-            } else {
-                results.push(DiagnosticResult::fail(
-                    "Daemon health",
-                    &format!("unexpected status: {}", resp.status),
-                    "Run: systemctl --user restart bubbaloop-daemon",
-                ));
-            }
+        Ok(manifest) => {
+            results.push(DiagnosticResult::pass(
+                "Daemon health",
+                &format!(
+                    "ok (v{}, {} nodes, {} agents)",
+                    manifest.version, manifest.node_count, manifest.agent_count
+                ),
+            ));
         }
         Err(e) => {
             results.push(DiagnosticResult::fail(
@@ -698,19 +713,21 @@ async fn check_daemon_health() -> Vec<DiagnosticResult> {
         }
     }
 
-    // Check nodes endpoint
+    // Check nodes via gateway command
     match client.list_nodes().await {
-        Ok(data) => {
+        Ok(json) => {
+            let nodes: Vec<crate::mcp::platform::NodeInfo> =
+                serde_json::from_str(&json).unwrap_or_default();
             results.push(DiagnosticResult::pass(
                 "Node list",
-                &format!("accessible ({} nodes)", data.nodes.len()),
+                &format!("accessible ({} nodes)", nodes.len()),
             ));
         }
         Err(e) => {
             results.push(DiagnosticResult::fail(
                 "Node list",
                 &format!("query failed: {}", e),
-                "Check if daemon REST API is responding",
+                "Check if daemon gateway is responding",
             ));
         }
     }

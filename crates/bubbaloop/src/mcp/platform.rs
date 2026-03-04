@@ -22,7 +22,7 @@ pub enum PlatformError {
 }
 
 /// Node summary for list operations.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NodeInfo {
     pub name: String,
     pub status: String,
@@ -187,6 +187,21 @@ pub struct DaemonPlatform {
     pub session: Arc<Session>,
     pub scope: String,
     pub machine_id: String,
+}
+
+impl DaemonPlatform {
+    /// Return the memory.db path for the default agent.
+    ///
+    /// Per-agent memory lives at `~/.bubbaloop/agents/{id}/memory.db`.
+    /// MCP tools operate on the default agent's memory (from agents.toml).
+    fn default_agent_db_path() -> std::path::PathBuf {
+        let config = crate::agent::runtime::AgentsConfig::load_or_default();
+        let agent_id = config.default_agent().unwrap_or("jean-clawd").to_string();
+        crate::daemon::registry::get_bubbaloop_home()
+            .join("agents")
+            .join(agent_id)
+            .join("memory.db")
+    }
 }
 
 impl PlatformOperations for DaemonPlatform {
@@ -533,7 +548,7 @@ impl PlatformOperations for DaemonPlatform {
     }
 
     async fn list_proposals(&self, status_filter: Option<&str>) -> PlatformResult<String> {
-        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let db_path = Self::default_agent_db_path();
         let store = crate::agent::memory::semantic::SemanticStore::open(&db_path)
             .map_err(|e| PlatformError::Internal(e.to_string()))?;
         let proposals = store
@@ -543,7 +558,7 @@ impl PlatformOperations for DaemonPlatform {
     }
 
     async fn approve_proposal(&self, id: &str, decided_by: &str) -> PlatformResult<String> {
-        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let db_path = Self::default_agent_db_path();
         let store = crate::agent::memory::semantic::SemanticStore::open(&db_path)
             .map_err(|e| PlatformError::Internal(e.to_string()))?;
         store
@@ -553,7 +568,7 @@ impl PlatformOperations for DaemonPlatform {
     }
 
     async fn reject_proposal(&self, id: &str, decided_by: &str) -> PlatformResult<String> {
-        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let db_path = Self::default_agent_db_path();
         let store = crate::agent::memory::semantic::SemanticStore::open(&db_path)
             .map_err(|e| PlatformError::Internal(e.to_string()))?;
         store
@@ -569,7 +584,7 @@ impl PlatformOperations for DaemonPlatform {
         recurrence: bool,
     ) -> PlatformResult<String> {
         use crate::agent::memory::semantic::{Job, SemanticStore};
-        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let db_path = Self::default_agent_db_path();
         let store =
             SemanticStore::open(&db_path).map_err(|e| PlatformError::Internal(e.to_string()))?;
         let next_run = match cron_schedule {
@@ -599,7 +614,7 @@ impl PlatformOperations for DaemonPlatform {
     }
 
     async fn list_jobs(&self, status_filter: Option<&str>) -> PlatformResult<String> {
-        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let db_path = Self::default_agent_db_path();
         let store = crate::agent::memory::semantic::SemanticStore::open(&db_path)
             .map_err(|e| PlatformError::Internal(e.to_string()))?;
         let jobs = store
@@ -609,7 +624,7 @@ impl PlatformOperations for DaemonPlatform {
     }
 
     async fn delete_job(&self, id: &str) -> PlatformResult<String> {
-        let db_path = crate::daemon::registry::get_bubbaloop_home().join("memory.db");
+        let db_path = Self::default_agent_db_path();
         let store = crate::agent::memory::semantic::SemanticStore::open(&db_path)
             .map_err(|e| PlatformError::Internal(e.to_string()))?;
         store
@@ -619,9 +634,9 @@ impl PlatformOperations for DaemonPlatform {
     }
 
     async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {
-        let base = crate::daemon::registry::get_bubbaloop_home();
+        let db_path = Self::default_agent_db_path();
+        let base = db_path.parent().unwrap_or(std::path::Path::new("."));
         let log_dir = base.join("memory");
-        let db_path = base.join("memory.db");
 
         let episodic = crate::agent::memory::episodic::EpisodicLog::new(&log_dir, &db_path)
             .map_err(|e| PlatformError::Internal(e.to_string()))?;

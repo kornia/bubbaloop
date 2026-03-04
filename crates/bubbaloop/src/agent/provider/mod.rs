@@ -190,6 +190,28 @@ impl ModelResponse {
     }
 }
 
+// ── Stream events ────────────────────────────────────────────────────
+
+/// Events emitted during streaming response generation.
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    /// Incremental text chunk.
+    TextDelta(String),
+    /// A complete tool_use block (accumulated from start + deltas).
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+    /// Stream complete with usage info.
+    Done {
+        usage: Usage,
+        stop_reason: Option<String>,
+    },
+    /// Error during streaming.
+    Error(String),
+}
+
 // ── ModelProvider trait ──────────────────────────────────────────────
 
 /// Trait abstracting LLM provider backends.
@@ -203,6 +225,45 @@ pub trait ModelProvider: Send + Sync {
         messages: &[Message],
         tools: &[ToolDefinition],
     ) -> impl std::future::Future<Output = Result<ModelResponse>> + Send;
+
+    /// Streaming variant. Default impl wraps `generate()` for backward compat.
+    fn generate_stream(
+        &self,
+        system: Option<&str>,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+    ) -> impl std::future::Future<Output = Result<tokio::sync::mpsc::Receiver<StreamEvent>>> + Send
+    {
+        let system = system.map(|s| s.to_string());
+        let messages = messages.to_vec();
+        let tools = tools.to_vec();
+        async move {
+            let response = self.generate(system.as_deref(), &messages, &tools).await?;
+            let (tx, rx) = tokio::sync::mpsc::channel(32);
+            // Emit text as single delta
+            let text = response.text();
+            if !text.is_empty() {
+                let _ = tx.send(StreamEvent::TextDelta(text)).await;
+            }
+            // Emit tool uses
+            for tc in response.tool_calls() {
+                let _ = tx
+                    .send(StreamEvent::ToolUse {
+                        id: tc.id,
+                        name: tc.name,
+                        input: tc.input,
+                    })
+                    .await;
+            }
+            let _ = tx
+                .send(StreamEvent::Done {
+                    usage: response.usage,
+                    stop_reason: response.stop_reason,
+                })
+                .await;
+            Ok(rx)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -372,5 +433,125 @@ mod tests {
         };
         assert!(!resp.has_tool_calls());
         assert!(resp.tool_calls().is_empty());
+    }
+
+    #[test]
+    fn stream_event_debug_display() {
+        let event = StreamEvent::TextDelta("hello".to_string());
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("TextDelta"));
+
+        let event = StreamEvent::ToolUse {
+            id: "t1".to_string(),
+            name: "list_nodes".to_string(),
+            input: json!({}),
+        };
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("list_nodes"));
+
+        let event = StreamEvent::Done {
+            usage: Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+            },
+            stop_reason: Some("end_turn".to_string()),
+        };
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("Done"));
+
+        let event = StreamEvent::Error("test error".to_string());
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("test error"));
+    }
+
+    /// Mock provider for testing the default generate_stream implementation.
+    struct MockProvider {
+        response: ModelResponse,
+    }
+
+    impl ModelProvider for MockProvider {
+        async fn generate(
+            &self,
+            _system: Option<&str>,
+            _messages: &[Message],
+            _tools: &[ToolDefinition],
+        ) -> Result<ModelResponse> {
+            Ok(self.response.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn default_generate_stream_text_only() {
+        let provider = MockProvider {
+            response: ModelResponse {
+                content: vec![ContentBlock::Text {
+                    text: "Hello world".to_string(),
+                }],
+                usage: Usage {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                },
+                stop_reason: Some("end_turn".to_string()),
+            },
+        };
+
+        let mut rx = provider.generate_stream(None, &[], &[]).await.unwrap();
+
+        // Should get TextDelta then Done
+        match rx.recv().await.unwrap() {
+            StreamEvent::TextDelta(text) => assert_eq!(text, "Hello world"),
+            other => panic!("expected TextDelta, got {:?}", other),
+        }
+        match rx.recv().await.unwrap() {
+            StreamEvent::Done { usage, stop_reason } => {
+                assert_eq!(usage.input_tokens, 10);
+                assert_eq!(stop_reason.as_deref(), Some("end_turn"));
+            }
+            other => panic!("expected Done, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn default_generate_stream_with_tool_use() {
+        let provider = MockProvider {
+            response: ModelResponse {
+                content: vec![
+                    ContentBlock::Text {
+                        text: "Let me check.".to_string(),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "t1".to_string(),
+                        name: "list_nodes".to_string(),
+                        input: json!({"status": "all"}),
+                    },
+                ],
+                usage: Usage {
+                    input_tokens: 50,
+                    output_tokens: 30,
+                },
+                stop_reason: Some("tool_use".to_string()),
+            },
+        };
+
+        let mut rx = provider.generate_stream(None, &[], &[]).await.unwrap();
+
+        match rx.recv().await.unwrap() {
+            StreamEvent::TextDelta(text) => assert_eq!(text, "Let me check."),
+            other => panic!("expected TextDelta, got {:?}", other),
+        }
+        match rx.recv().await.unwrap() {
+            StreamEvent::ToolUse { id, name, input } => {
+                assert_eq!(id, "t1");
+                assert_eq!(name, "list_nodes");
+                assert_eq!(input["status"], "all");
+            }
+            other => panic!("expected ToolUse, got {:?}", other),
+        }
+        match rx.recv().await.unwrap() {
+            StreamEvent::Done { stop_reason, .. } => {
+                assert_eq!(stop_reason.as_deref(), Some("tool_use"));
+            }
+            other => panic!("expected Done, got {:?}", other),
+        }
     }
 }

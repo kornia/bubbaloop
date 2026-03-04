@@ -17,6 +17,7 @@ pub fn build_system_prompt(
     node_inventory: &str,
     active_jobs: &[Job],
     relevant_episodes: &[LogEntry],
+    recent_plan: Option<&str>,
 ) -> String {
     let mut parts = Vec::new();
 
@@ -27,12 +28,55 @@ pub fn build_system_prompt(
     parts.push(format!(
         "\n## Configuration\n\n\
          - Model: {}\n\
-         - Max turns per job: {}\n\
-         - Approval mode: {}",
-        soul.capabilities.model_name,
-        soul.capabilities.max_turns,
-        soul.capabilities.default_approval_mode,
+         - Max turns per job: {}",
+        soul.capabilities.model_name, soul.capabilities.max_turns,
     ));
+
+    // Operating mode directive
+    if soul.capabilities.default_approval_mode == "propose" {
+        parts.push(
+            "\n## Operating Mode: Propose\n\n\
+             For state-changing actions, explain what you plan to do and why, then\n\
+             wait for approval. Read-only operations execute immediately."
+                .to_string(),
+        );
+    } else {
+        parts.push(
+            "\n## Operating Mode: Autonomous (Ralph Loop)\n\n\
+             You run in an autonomous loop. For every task:\n\n\
+             1. **Plan** — Break the task into concrete steps. State them briefly.\n\
+             2. **Execute** — Do step 1 with tools. Then step 2. Keep going.\n\
+             3. **Evaluate** — After each step, check: did it work? Is the goal met?\n\
+             4. **Iterate** — If not done, adjust and continue. If done, report results.\n\n\
+             ### Rules\n\n\
+             - **Act, don't ask.** Never say \"Would you like me to...?\" or \"Should I...?\" — do it.\n\
+             - **Keep going.** Don't stop after one tool call if the task needs more.\n\
+             - **Verify.** After making a change, confirm it worked (check health, read output, etc).\n\
+             - **Be concise.** Report what you did and the result. Skip preamble.\n\
+             - **Chain tools.** Use multiple tools in sequence to complete complex tasks.\n\n\
+             ### Examples of Autonomous Behavior\n\n\
+             User: \"Set up a temperature monitor\"\n\
+             → Plan: install node, build, start, verify health\n\
+             → Execute: install_node → build_node → start_node → get_node_health\n\
+             → Report: \"Installed and started openmeteo. Health: Healthy.\"\n\n\
+             User: \"Check why the camera is down\"\n\
+             → get_node_health → get_node_logs → diagnose → restart_node → verify\n\
+             → Report: \"Camera crashed (OOM). Restarted. Now healthy.\""
+                .to_string(),
+        );
+    }
+
+    // Scope — tells the LLM what tools it has
+    parts.push(
+        "\n## Tools\n\n\
+         You have 30 tools across three categories:\n\
+         - **Node management:** install, build, start, stop, restart, configure, monitor, query nodes\n\
+         - **System:** read and write files, run shell commands\n\
+         - **Memory:** search and manage episodic memory\n\n\
+         Use the right tool for the job. For node operations, use the dedicated node tools.\n\
+         For everything else, use read_file, write_file, or run_command."
+            .to_string(),
+    );
 
     // Current node inventory
     parts.push(format!(
@@ -74,6 +118,11 @@ pub fn build_system_prompt(
         parts.push(ep_lines.join("\n"));
     }
 
+    // Current plan (persisted from a previous turn, survives context compaction)
+    if let Some(plan) = recent_plan {
+        parts.push(format!("\n## Current Plan\n\n{}", plan));
+    }
+
     parts.join("\n")
 }
 
@@ -84,7 +133,7 @@ mod tests {
     #[test]
     fn prompt_with_default_soul() {
         let soul = Soul::default();
-        let prompt = build_system_prompt(&soul, "", &[], &[]);
+        let prompt = build_system_prompt(&soul, "", &[], &[], None);
         assert!(prompt.contains("Bubbaloop"));
         assert!(prompt.contains("No sensors installed."));
         assert!(prompt.contains("claude-sonnet-4-20250514"));
@@ -101,11 +150,16 @@ mod tests {
                 ..Default::default()
             },
         };
-        let prompt =
-            build_system_prompt(&soul, "1 node(s) registered:\n  - cam [Running]", &[], &[]);
+        let prompt = build_system_prompt(
+            &soul,
+            "1 node(s) registered:\n  - cam [Running]",
+            &[],
+            &[],
+            None,
+        );
         assert!(prompt.contains("I am a test agent."));
         assert!(prompt.contains("test-model"));
-        assert!(prompt.contains("propose"));
+        assert!(prompt.contains("Operating Mode: Propose"));
         assert!(prompt.contains("cam"));
         assert!(!prompt.contains("No sensors installed."));
     }
@@ -123,7 +177,7 @@ mod tests {
             retry_count: 0,
             last_error: None,
         }];
-        let prompt = build_system_prompt(&soul, "", &jobs, &[]);
+        let prompt = build_system_prompt(&soul, "", &jobs, &[], None);
         assert!(prompt.contains("Active Jobs"));
         assert!(prompt.contains("health patrol"));
         assert!(prompt.contains("*/15 * * * *"));
@@ -139,7 +193,7 @@ mod tests {
             job_id: Some("job-1".to_string()),
             flush: None,
         }];
-        let prompt = build_system_prompt(&soul, "", &[], &episodes);
+        let prompt = build_system_prompt(&soul, "", &[], &episodes, None);
         assert!(prompt.contains("Relevant Context"));
         assert!(prompt.contains("front-door camera"));
     }
@@ -157,7 +211,7 @@ mod tests {
             retry_count: 0,
             last_error: None,
         }];
-        let prompt = build_system_prompt(&soul, "", &jobs, &[]);
+        let prompt = build_system_prompt(&soul, "", &jobs, &[], None);
         assert!(!prompt.contains("Active Jobs"));
     }
 
@@ -173,8 +227,93 @@ mod tests {
                 flush: None,
             })
             .collect();
-        let prompt = build_system_prompt(&soul, "", &[], &episodes);
+        let prompt = build_system_prompt(&soul, "", &[], &episodes, None);
         let count = prompt.matches("message ").count();
         assert_eq!(count, 5, "should limit episodic context to 5 entries");
+    }
+
+    #[test]
+    fn prompt_auto_mode_includes_autonomous_directive() {
+        let soul = Soul::default(); // default is auto mode
+        let prompt = build_system_prompt(&soul, "", &[], &[], None);
+        assert!(
+            prompt.contains("Autonomous (Ralph Loop)"),
+            "auto mode should include autonomous directive"
+        );
+        assert!(
+            prompt.contains("Act, don't ask"),
+            "auto mode should include 'Act, don't ask' instruction"
+        );
+        assert!(
+            prompt.contains("Plan"),
+            "auto mode should include planning step"
+        );
+        assert!(
+            prompt.contains("Evaluate"),
+            "auto mode should include evaluation step"
+        );
+    }
+
+    #[test]
+    fn prompt_includes_scope_boundary() {
+        let soul = Soul::default();
+        let prompt = build_system_prompt(&soul, "", &[], &[], None);
+        assert!(
+            prompt.contains("## Tools"),
+            "prompt should include Tools section"
+        );
+        assert!(
+            prompt.contains("Node management"),
+            "prompt should mention node management tools"
+        );
+        assert!(
+            prompt.contains("read_file"),
+            "prompt should mention system tools"
+        );
+    }
+
+    #[test]
+    fn prompt_propose_mode_includes_propose_directive() {
+        let soul = Soul {
+            identity: "You are TestBot, a test agent.".to_string(),
+            capabilities: crate::agent::soul::Capabilities {
+                default_approval_mode: "propose".to_string(),
+                ..Default::default()
+            },
+        };
+        let prompt = build_system_prompt(&soul, "", &[], &[], None);
+        assert!(
+            prompt.contains("Operating Mode: Propose"),
+            "propose mode should include propose directive"
+        );
+        assert!(
+            prompt.contains("wait for approval"),
+            "propose mode should mention waiting for approval"
+        );
+    }
+
+    #[test]
+    fn prompt_with_plan_includes_current_plan() {
+        let soul = Soul::default();
+        let plan_text = "1. Install camera node\n2. Build and start\n3. Verify health";
+        let prompt = build_system_prompt(&soul, "", &[], &[], Some(plan_text));
+        assert!(
+            prompt.contains("## Current Plan"),
+            "prompt should include Current Plan section"
+        );
+        assert!(
+            prompt.contains("Install camera node"),
+            "prompt should include the plan content"
+        );
+    }
+
+    #[test]
+    fn prompt_without_plan_omits_section() {
+        let soul = Soul::default();
+        let prompt = build_system_prompt(&soul, "", &[], &[], None);
+        assert!(
+            !prompt.contains("Current Plan"),
+            "prompt should not include Current Plan when None"
+        );
     }
 }

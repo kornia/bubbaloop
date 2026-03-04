@@ -102,7 +102,7 @@ Time since the last message was received:
 2. Select "Stats" panel type
 3. Panel displays all topic metrics
 
-Or use the TUI `/topics` command for a terminal-based view.
+Or use `bubbaloop debug topics` for a terminal-based view.
 
 ## Diagnostic Use Cases
 
@@ -151,12 +151,12 @@ Information about the Zenoh router:
 - Protocol version
 - Session ID
 
-## Comparing with TUI
+## Comparing with CLI
 
-The Stats panel provides similar information to the TUI `/topics` command:
+The Stats panel provides similar information to `bubbaloop debug topics`:
 
-| Feature | Dashboard Stats | TUI /topics |
-|---------|-----------------|-------------|
+| Feature | Dashboard Stats | CLI debug topics |
+|---------|-----------------|------------------|
 | Topic list | Yes | Yes |
 | Frequency | Yes | Yes |
 | Count | Yes | Yes |
@@ -196,11 +196,11 @@ The Stats panel provides similar information to the TUI `/topics` command:
 
 1. Verify service is publishing
 2. Check topic name/pattern
-3. Use TUI `/topics` to compare
+3. Use `bubbaloop debug topics` to compare
 
 ## Next Steps
 
 - [Messaging](../../concepts/messaging.md) — Understanding Zenoh topics
 - [Topics](../../concepts/topics.md) — Topic naming conventions
-- [CLI Commands](../../reference/cli.md) — TUI topic monitoring
+- [CLI Commands](../../reference/cli.md) — CLI topic monitoring
 - [Troubleshooting](../../reference/troubleshooting.md) — Common issues

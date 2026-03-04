@@ -165,11 +165,15 @@ pub(crate) fn try_download_precompiled(entry: &registry::RegistryNode) -> Result
 /// install it as a systemd service (existing behavior). Otherwise, look up the
 /// name in the marketplace registry, clone, register, build, and install.
 pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
-    // First, check if node is already registered with the daemon via REST API
-    let client = crate::cli::daemon_client::DaemonClient::new();
+    // First, check if node is already registered with the daemon via Zenoh
+    let client = crate::cli::daemon_client::DaemonClient::connect().await?;
 
     let is_registered = match client.list_nodes().await {
-        Ok(data) => data.nodes.iter().any(|n| n.name == args.name),
+        Ok(json) => {
+            let nodes: Vec<crate::mcp::platform::NodeInfo> =
+                serde_json::from_str(&json).unwrap_or_default();
+            nodes.iter().any(|n| n.name == args.name)
+        }
         Err(_) => false,
     };
 
@@ -231,13 +235,8 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
         Ok(node_path) => {
             println!("Downloaded precompiled binary for '{}'", args.name);
 
-            // Register with daemon via REST API
-            let resp = client.add_node(&node_path, None, None).await?;
-            if !resp.success {
-                return Err(NodeError::CommandFailed(
-                    "Failed to register node with daemon".into(),
-                ));
-            }
+            // Register with daemon via Zenoh gateway
+            client.add_node(&node_path, None, None).await?;
 
             println!("Registered node: {}", args.name);
 
@@ -276,13 +275,8 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
     // Copy canonical header.proto if protos/ directory exists
     copy_canonical_header_proto(Path::new(&node_path));
 
-    // Register with daemon via REST API
-    let resp = client.add_node(&node_path, None, None).await?;
-    if !resp.success {
-        return Err(NodeError::CommandFailed(
-            "Failed to register node with daemon".into(),
-        ));
-    }
+    // Register with daemon via Zenoh gateway
+    client.add_node(&node_path, None, None).await?;
 
     log::info!("node install: registered '{}' with daemon", args.name);
     println!("Registered node: {}", args.name);

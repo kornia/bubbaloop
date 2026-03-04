@@ -456,17 +456,10 @@ impl NodeCommand {
 }
 
 pub(crate) async fn send_command(name: &str, command: &str) -> Result<()> {
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let resp = client.send_command(name, command).await?;
-    if resp.success {
-        println!("{}", resp.message);
-        if !resp.output.is_empty() {
-            println!("{}", resp.output);
-        }
-        Ok(())
-    } else {
-        Err(NodeError::CommandFailed(resp.message))
-    }
+    let client = crate::cli::daemon_client::DaemonClient::connect().await?;
+    let msg = client.send_node_command(name, command).await?;
+    println!("{}", msg);
+    Ok(())
 }
 
 pub(crate) fn truncate(s: &str, max: usize) -> String {
@@ -609,25 +602,32 @@ async fn list_nodes(args: ListArgs) -> Result<()> {
         ));
     }
 
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let data = client.list_nodes().await?;
+    let client = crate::cli::daemon_client::DaemonClient::connect().await?;
+    let result = client.list_nodes().await?;
 
     if args.format == "json" {
-        println!("{}", serde_json::to_string_pretty(&data.nodes)?);
-    } else if data.nodes.is_empty() {
+        println!("{}", result);
+    } else if result.contains("[]") || result.is_empty() {
         println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
     } else {
-        println!(
-            "{:<20} {:<10} {:<12} {:<8} HEALTH",
-            "NAME", "STATUS", "TYPE", "BUILT"
-        );
-        println!("{}", "-".repeat(70));
-        for node in &data.nodes {
-            let built = if node.is_built { "yes" } else { "no" };
+        // Parse the JSON node list from the gateway response
+        let nodes: Vec<crate::mcp::platform::NodeInfo> =
+            serde_json::from_str(&result).unwrap_or_default();
+        if nodes.is_empty() {
+            println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
+        } else {
             println!(
-                "{:<20} {:<10} {:<12} {:<8} {}",
-                node.name, node.status, node.node_type, built, node.health,
+                "{:<20} {:<10} {:<12} {:<8} HEALTH",
+                "NAME", "STATUS", "TYPE", "BUILT"
             );
+            println!("{}", "-".repeat(70));
+            for node in &nodes {
+                let built = if node.is_built { "yes" } else { "no" };
+                println!(
+                    "{:<20} {:<10} {:<12} {:<8} {}",
+                    node.name, node.status, node.node_type, built, node.health,
+                );
+            }
         }
     }
 
@@ -750,14 +750,11 @@ async fn add_node(args: AddArgs) -> Result<()> {
     // Resolve the actual node path (handles --subdir and multi-node discovery)
     let node_path = resolve_node_path(&base_path, args.subdir.as_deref())?;
 
-    // Add to daemon via REST API
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let resp = client
+    // Add to daemon via Zenoh gateway
+    let client = crate::cli::daemon_client::DaemonClient::connect().await?;
+    let _resp = client
         .add_node(&node_path, args.name.as_deref(), args.config.as_deref())
         .await?;
-    if !resp.success {
-        return Err(NodeError::CommandFailed(resp.message));
-    }
     println!("Added node from: {}", node_path);
 
     let node_name = install::extract_node_name(&node_path).ok();
@@ -782,13 +779,9 @@ async fn add_node(args: AddArgs) -> Result<()> {
 }
 
 async fn remove_node(args: RemoveArgs) -> Result<()> {
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let resp = client.remove_node(&args.name).await?;
-    if resp.success {
-        println!("Removed node: {}", args.name);
-    } else {
-        return Err(NodeError::CommandFailed(resp.message));
-    }
+    let client = crate::cli::daemon_client::DaemonClient::connect().await?;
+    client.remove_node(&args.name).await?;
+    println!("Removed node: {}", args.name);
 
     if args.delete_files {
         eprintln!("Note: File deletion not implemented yet. Remove files manually.");
@@ -840,12 +833,14 @@ async fn create_instance(args: InstanceArgs) -> Result<()> {
     // Build the full instance name: base-suffix
     let instance_name = format!("{}-{}", args.base_node, args.suffix);
 
-    // Query daemon for base node via REST API list
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let data = client.list_nodes().await?;
+    // Query daemon for base node via Zenoh gateway
+    let client = crate::cli::daemon_client::DaemonClient::connect().await?;
+    let nodes_json = client.list_nodes().await?;
+    let nodes: Vec<crate::mcp::platform::NodeInfo> =
+        serde_json::from_str(&nodes_json).unwrap_or_default();
 
     // Find the base node - check it exists
-    let base_exists = data.nodes.iter().any(|n| n.name == args.base_node);
+    let base_exists = nodes.iter().any(|n| n.name == args.base_node);
     if !base_exists {
         return Err(NodeError::NotFound(format!(
             "Base node '{}' not found. Add it first with: bubbaloop node add <path>",
@@ -915,17 +910,14 @@ async fn create_instance(args: InstanceArgs) -> Result<()> {
         None
     };
 
-    // Register the instance with the daemon via REST API
-    let resp = client
+    // Register the instance with the daemon via Zenoh gateway
+    client
         .add_node(
             &args.base_node,
             Some(&instance_name),
             config_path.as_deref(),
         )
         .await?;
-    if !resp.success {
-        return Err(NodeError::CommandFailed(resp.message));
-    }
     println!(
         "Created instance '{}' from base node '{}'",
         instance_name, args.base_node
@@ -1033,12 +1025,15 @@ async fn discover_nodes(args: DiscoverArgs) -> Result<()> {
     }
     let all_marketplace = registry::load_cached_registry();
 
-    // Query daemon for registered nodes via REST API
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let registered = match client.list_nodes().await {
-        Ok(data) => data.nodes,
-        Err(_) => vec![],
-    };
+    // Query daemon for registered nodes via Zenoh gateway
+    let registered: Vec<crate::mcp::platform::NodeInfo> =
+        match crate::cli::daemon_client::DaemonClient::connect().await {
+            Ok(client) => match client.list_nodes().await {
+                Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+                Err(_) => vec![],
+            },
+            Err(_) => vec![],
+        };
 
     if all_marketplace.is_empty() {
         println!(

@@ -30,7 +30,7 @@ bubbaloop status
 This installs:
 - **zenohd** — Pub/sub router on port 7447
 - **zenoh-bridge-remote-api** — WebSocket bridge on port 10001
-- **bubbaloop** — Single 7MB binary (CLI + TUI + daemon)
+- **bubbaloop** — Single ~12 MB binary (CLI + daemon + MCP server + agent runtime)
 - **Dashboard** — Web UI at http://localhost:8080
 
 All run as systemd user services with autostart enabled.
@@ -40,9 +40,9 @@ All run as systemd user services with autostart enabled.
 ```mermaid
 flowchart TB
     subgraph Clients
-        tui[TUI - ratatui]
+        agent_cli[Agent CLI - Zenoh pub/sub]
         dash[Dashboard - React]
-        cli[CLI]
+        mcp_client[MCP Client - Claude Code]
     end
 
     subgraph Messaging
@@ -52,7 +52,8 @@ flowchart TB
 
     subgraph Daemon
         nm[Node Manager]
-        reg[Registry]
+        mcp[MCP Server - 25+ tools]
+        runtime[Agent Runtime - multi-agent]
         sysd[systemd D-Bus]
     end
 
@@ -62,11 +63,11 @@ flowchart TB
         custom[custom nodes...]
     end
 
-    tui --> zenohd
-    cli --> zenohd
+    agent_cli --> zenohd
+    mcp_client --> mcp
     dash --> bridge --> zenohd
     zenohd <--> nm
-    nm --> reg
+    zenohd <--> runtime
     nm --> sysd
     zenohd <--> cam
     zenohd <--> weather
@@ -88,13 +89,16 @@ flowchart TB
 ## Basic Usage
 
 ```bash
-# Launch interactive TUI
-bubbaloop
+# Start daemon (agent runtime + MCP server + node manager)
+bubbaloop up
 
-# Non-interactive status (for scripts/agents)
+# Talk to your hardware via AI agents
+bubbaloop agent chat "What sensors do I have?"
+bubbaloop agent chat                  # Interactive REPL
+bubbaloop agent list                  # Show running agents
+
+# System status and diagnostics
 bubbaloop status
-
-# System diagnostics with auto-fix
 bubbaloop doctor --fix
 
 # Node lifecycle
@@ -120,11 +124,13 @@ Dashboard: http://localhost:5173
 
 | Command | Description |
 |---------|-------------|
+| `bubbaloop up` | Start daemon (agent runtime + MCP + nodes) |
+| `bubbaloop agent chat` | Chat with AI agents (daemon-side LLM) |
+| `bubbaloop agent list` | List running agents and capabilities |
 | `bubbaloop status` | Show system and node status |
 | `bubbaloop doctor` | Run diagnostics (--fix for auto-repair) |
 | `bubbaloop node list` | List all nodes |
 | `bubbaloop node add` | Add node from path or GitHub |
-| `bubbaloop node instance` | Create multi-instance node |
 | `bubbaloop marketplace list` | List node sources |
 
 See [CLI Reference](reference/cli.md) for complete command documentation.

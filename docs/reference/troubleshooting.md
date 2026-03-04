@@ -178,7 +178,7 @@ Services running but no data in dashboard.
 
 **Debug steps:**
 
-1. Check `/topics` in TUI
+1. Check `bubbaloop debug topics`
 2. Verify services are publishing
 3. Check Zenoh connectivity
 

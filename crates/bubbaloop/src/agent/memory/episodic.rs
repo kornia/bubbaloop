@@ -404,6 +404,39 @@ impl EpisodicLog {
         Ok(pruned)
     }
 
+    /// Retrieve the most recent plan entry from episodic memory.
+    ///
+    /// Plans are stored with `role = "plan"` by the agent turn loop when the model
+    /// outputs both text (reasoning) and tool calls (execution) in the same response.
+    pub fn latest_plan(&self) -> super::Result<Option<LogEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT content, id, role, timestamp, job_id \
+             FROM fts_episodic \
+             WHERE role = 'plan' \
+             ORDER BY timestamp DESC \
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map([], |row| {
+            let job_id: String = row.get(4)?;
+            Ok(LogEntry {
+                content: row.get(0)?,
+                role: row.get(2)?,
+                timestamp: row.get(3)?,
+                job_id: if job_id.is_empty() {
+                    None
+                } else {
+                    Some(job_id)
+                },
+                flush: None,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(entry)) => Ok(Some(entry)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
     /// Create a flush entry (for pre-compaction memory persistence).
     pub fn make_flush_entry(content: &str, job_id: Option<&str>) -> LogEntry {
         LogEntry {
@@ -789,5 +822,72 @@ mod tests {
         let (log, _dir) = test_episodic();
         let pruned = log.prune_old_logs(30).unwrap();
         assert_eq!(pruned, 0);
+    }
+
+    #[test]
+    fn latest_plan_returns_none_when_empty() {
+        let (log, _dir) = test_episodic();
+        assert!(log.latest_plan().unwrap().is_none());
+    }
+
+    #[test]
+    fn latest_plan_returns_most_recent() {
+        let (log, _dir) = test_episodic();
+        // Non-plan entries should be ignored
+        log.append(&LogEntry {
+            timestamp: "2026-03-03T10:00:00Z".to_string(),
+            role: "assistant".to_string(),
+            content: "I checked the sensors.".to_string(),
+            job_id: None,
+            flush: None,
+        })
+        .unwrap();
+        // First plan
+        log.append(&LogEntry {
+            timestamp: "2026-03-03T10:01:00Z".to_string(),
+            role: "plan".to_string(),
+            content: "Step 1: install node. Step 2: build.".to_string(),
+            job_id: None,
+            flush: None,
+        })
+        .unwrap();
+        // Second (newer) plan
+        log.append(&LogEntry {
+            timestamp: "2026-03-03T10:05:00Z".to_string(),
+            role: "plan".to_string(),
+            content: "Revised plan: restart camera first.".to_string(),
+            job_id: Some("job-42".to_string()),
+            flush: None,
+        })
+        .unwrap();
+
+        let plan = log.latest_plan().unwrap().expect("should find a plan");
+        assert_eq!(plan.role, "plan");
+        assert!(plan.content.contains("Revised plan"));
+        assert_eq!(plan.job_id.as_deref(), Some("job-42"));
+    }
+
+    #[test]
+    fn latest_plan_ignores_non_plan_roles() {
+        let (log, _dir) = test_episodic();
+        log.append(&LogEntry {
+            timestamp: "2026-03-03T10:00:00Z".to_string(),
+            role: "user".to_string(),
+            content: "plan something".to_string(),
+            job_id: None,
+            flush: None,
+        })
+        .unwrap();
+        log.append(&LogEntry {
+            timestamp: "2026-03-03T10:01:00Z".to_string(),
+            role: "assistant".to_string(),
+            content: "here is a plan".to_string(),
+            job_id: None,
+            flush: None,
+        })
+        .unwrap();
+
+        // No entries with role="plan" exist
+        assert!(log.latest_plan().unwrap().is_none());
     }
 }
