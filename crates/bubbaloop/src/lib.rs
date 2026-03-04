@@ -35,9 +35,6 @@ pub mod skills;
 /// Agent layer: Claude API chat, SQLite memory, scheduling
 pub mod agent;
 
-/// Camera pipeline for edge local detection and LLM escalation
-pub mod camera;
-
 /// Protobuf schemas for bubbaloop
 pub mod schemas {
     pub mod header {

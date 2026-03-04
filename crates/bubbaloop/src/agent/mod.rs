@@ -43,6 +43,8 @@ pub enum AgentError {
     Zenoh(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Unknown provider: {0}")]
+    InvalidProvider(String),
 }
 
 pub type Result<T> = std::result::Result<T, AgentError>;
@@ -53,8 +55,6 @@ pub struct AgentConfig {
     pub model: Option<String>,
     /// Provider selection (claude, ollama)
     pub provider: Option<String>,
-    /// Optional camera pipeline configuration.
-    pub camera_pipeline: Option<crate::camera::pipeline::CameraPipelineConfig>,
 }
 
 /// Create a lightweight Zenoh session for the agent.
@@ -134,12 +134,12 @@ pub async fn run_agent(
     node_manager: Arc<crate::daemon::node_manager::NodeManager>,
 ) -> Result<()> {
     // 1. Initialise client based on provider
-    // If no provider is explicitly set, default to Claude for zero-regression behavior.
-    // Unrecognized string values will also safely fall back to ClaudeClient initialization.
-    let provider_name = config.provider.as_deref().unwrap_or("claude");
-    let client = match provider_name {
-        "ollama" => LlmClient::Ollama(ollama::OllamaClient::from_env(config.model.as_deref())?),
-        _ => LlmClient::Claude(ClaudeClient::from_env(config.model.as_deref())?),
+    let client = match config.provider.as_deref() {
+        Some("ollama") => {
+            LlmClient::Ollama(ollama::OllamaClient::from_env(config.model.as_deref())?)
+        }
+        Some(other) => return Err(AgentError::InvalidProvider(other.to_string())),
+        None => LlmClient::Claude(ClaudeClient::from_env(config.model.as_deref())?),
     };
 
     // 2. Create dispatcher with DaemonPlatform
@@ -244,20 +244,6 @@ pub async fn run_agent(
         shutdown_rx.clone(),
     ));
 
-    // 5a. Start camera pipeline in background if configured
-    if let Some(camera_config) = config.camera_pipeline {
-        let mem = Memory::open(&memory_path)?;
-        tokio::spawn(crate::camera::pipeline::run_camera_pipeline(
-            camera_config,
-            session.clone(),
-            platform.clone(),
-            Arc::new(std::sync::Mutex::new(mem)),
-            scope.clone(),
-            machine_id.clone(),
-            shutdown_rx.clone(),
-        ));
-    }
-
     // 5b. Bridge node events to memory
     let event_memory = Memory::open(&memory_path)?;
     let mut event_rx = node_manager_ref.subscribe();
@@ -281,10 +267,13 @@ pub async fn run_agent(
     });
 
     // 6. Welcome message
-    let model_name = config.model.as_deref().unwrap_or(match provider_name {
-        "ollama" => ollama::DEFAULT_MODEL,
-        _ => claude::DEFAULT_MODEL,
-    });
+    let model_name = config
+        .model
+        .as_deref()
+        .unwrap_or(match config.provider.as_deref() {
+            Some("ollama") => ollama::DEFAULT_MODEL,
+            _ => claude::DEFAULT_MODEL,
+        });
     let node_count = match dispatcher.get_node_inventory().await {
         ref s if s.starts_with("No nodes") => "0".to_string(),
         ref s => s
