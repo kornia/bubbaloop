@@ -232,10 +232,13 @@ pub struct NodesRegistry {
     pub nodes: Vec<NodeEntry>,
 }
 
-/// Get the bubbaloop home directory
+/// Get the bubbaloop home directory.
+///
+/// Panics if home directory cannot be determined. Callers should ensure
+/// $HOME is set rather than silently falling back to /tmp (security risk).
 pub fn get_bubbaloop_home() -> PathBuf {
     dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .expect("Cannot determine home directory — set $HOME")
         .join(".bubbaloop")
 }
 
@@ -256,14 +259,31 @@ pub fn load_registry() -> Result<NodesRegistry> {
     Ok(registry)
 }
 
-/// Save the nodes registry
+/// Save the nodes registry with restricted permissions (0o600 on Unix).
 pub fn save_registry(registry: &NodesRegistry) -> Result<()> {
     let home = get_bubbaloop_home();
     fs::create_dir_all(&home)?;
 
     let path = get_nodes_file();
     let content = serde_json::to_string_pretty(registry)?;
-    fs::write(path, content)?;
+
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)?;
+        write!(file, "{}", content)?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(&path, content)?;
+    }
+
     Ok(())
 }
 
@@ -340,6 +360,30 @@ pub fn register_node(
         }
     }
 
+    // Validate config_override if provided (prevent path traversal and shell metacharacters)
+    if let Some(config) = config_override {
+        if config.contains('\0') {
+            return Err(RegistryError::InvalidNode(
+                "Config path cannot contain null bytes".to_string(),
+            ));
+        }
+        if config.contains("..") {
+            return Err(RegistryError::InvalidNode(
+                "Config path cannot contain '..' (path traversal)".to_string(),
+            ));
+        }
+        // Reject shell metacharacters
+        const DANGEROUS_CHARS: &[char] = &[
+            '$', '`', '|', ';', '&', '>', '<', '(', ')', '{', '}', '!', '\n', '\r',
+        ];
+        if let Some(bad_char) = config.chars().find(|c| DANGEROUS_CHARS.contains(c)) {
+            return Err(RegistryError::InvalidNode(format!(
+                "Config path contains dangerous character '{}'",
+                bad_char
+            )));
+        }
+    }
+
     // Load registry
     let mut registry = load_registry()?;
 
@@ -354,9 +398,13 @@ pub fn register_node(
         }
     }
 
+    // Require successful path canonicalization to prevent symlink attacks
     let canonical = path
         .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
+        .map_err(|e| RegistryError::InvalidNode(format!(
+            "Cannot resolve node path '{}': {}",
+            node_path, e
+        )))?
         .to_string_lossy()
         .to_string();
 

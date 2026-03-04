@@ -26,7 +26,6 @@ pub const MCP_PORT: u16 = 8088;
 /// and tests can plug in `MockPlatform`.
 pub struct BubbaLoopMcpServer<P: PlatformOperations = platform::DaemonPlatform> {
     platform: Arc<P>,
-    #[allow(dead_code)] // TODO(phase-2): Enforce in call_tool(). Currently single-user localhost.
     auth_token: Option<String>,
     tool_router: ToolRouter<Self>,
     scope: String,
@@ -819,8 +818,30 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         // RBAC authorization check
         let required = rbac::required_tier(&request.name);
-        // TODO(phase-2): Extract tier from auth token. Currently single-user localhost grants admin.
-        let caller_tier = rbac::Tier::Admin;
+        // Enforce auth: if the server has a token, require it; grant Admin if valid.
+        // Stdio mode has no token (auth_token=None) — implicitly Admin per MCP spec.
+        let caller_tier = if let Some(ref expected) = self.auth_token {
+            // HTTP mode: require valid token
+            let auth_header = context
+                .extensions
+                .get::<String>()
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            if auth::validate_token(auth_header, expected) {
+                log::info!("[MCP] auth=valid tool={}", request.name);
+                rbac::Tier::Admin // TODO: extract tier from token metadata
+            } else {
+                log::warn!("[MCP] auth=denied tool={} (invalid or missing token)", request.name);
+                return Err(rmcp::model::ErrorData::new(
+                    rmcp::model::ErrorCode::INVALID_REQUEST,
+                    "Authentication required: provide a valid Bearer token (see ~/.bubbaloop/mcp-token)",
+                    None,
+                ));
+            }
+        } else {
+            // Stdio mode: no auth needed, process boundary provides implicit trust
+            rbac::Tier::Admin
+        };
         if !caller_tier.has_permission(required) {
             log::warn!(
                 "RBAC denied: tool '{}' requires {} tier, caller has {} tier",
@@ -911,12 +932,10 @@ pub async fn run_mcp_server(
     let token =
         auth::load_or_generate_token().map_err(|e| format!("Failed to load MCP token: {}", e))?;
     log::info!("MCP authentication enabled (token in ~/.bubbaloop/mcp-token)");
-    log::warn!("RBAC not yet enforced — all callers granted admin tier (single-user localhost)");
+    log::info!("MCP auth enforcement active — bearer token required for HTTP mode");
 
     let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = crate::daemon::util::get_machine_id();
-
-    let health_manager = node_manager.clone();
 
     let platform = Arc::new(platform::DaemonPlatform {
         node_manager,
@@ -925,7 +944,7 @@ pub async fn run_mcp_server(
         machine_id: machine_id.clone(),
     });
 
-    let api_router = crate::api::api_router(platform.clone());
+    let api_router = crate::api::api_router(platform.clone(), token.clone());
 
     let mcp_service = StreamableHttpService::new(
         move || {
@@ -940,10 +959,10 @@ pub async fn run_mcp_server(
         Default::default(),
     );
 
-    // Rate limiting: burst of 100 requests, ~1 req/sec sustained replenishment
+    // Rate limiting: burst of 10 requests, ~2 req/sec sustained replenishment
     let governor_conf = tower_governor::governor::GovernorConfigBuilder::default()
-        .per_second(1)
-        .burst_size(100)
+        .per_second(2)
+        .burst_size(10)
         .finish()
         .ok_or("Failed to configure rate limiter")?;
 
@@ -964,23 +983,10 @@ pub async fn run_mcp_server(
     let router = axum::Router::new()
         .route(
             "/health",
-            axum::routing::get(move || {
-                let mgr = health_manager.clone();
-                async move {
-                    use crate::schemas::NodeStatus;
-                    let node_list = mgr.get_node_list().await;
-                    let running = node_list
-                        .nodes
-                        .iter()
-                        .filter(|n| NodeStatus::try_from(n.status) == Ok(NodeStatus::Running))
-                        .count();
-                    axum::Json(serde_json::json!({
-                        "status": "ok",
-                        "version": env!("CARGO_PKG_VERSION"),
-                        "nodes_total": node_list.nodes.len(),
-                        "nodes_running": running,
-                    }))
-                }
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!({
+                    "status": "ok",
+                }))
             }),
         )
         .nest("/api/v1", api_router)
@@ -990,7 +996,7 @@ pub async fn run_mcp_server(
     let bind_addr = format!("127.0.0.1:{}", port);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     log::info!(
-        "MCP server listening on http://{}/mcp (rate limit: 100 burst, 1/sec sustained)",
+        "MCP server listening on http://{}/mcp (rate limit: 10 burst, 2/sec sustained)",
         bind_addr
     );
 

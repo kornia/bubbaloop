@@ -128,11 +128,36 @@ pub fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     }
 }
 
-/// Set a file as executable (chmod 755).
+/// Set a file as executable (chmod 755). No-op on Windows.
+#[cfg(unix)]
 pub fn set_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let perms = std::fs::Permissions::from_mode(0o755);
     std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn set_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Validate that no existing path components are symlinks (prevent symlink attacks).
+fn validate_no_symlinks_in_path(path: &Path) -> Result<()> {
+    let mut current = std::path::PathBuf::new();
+    for component in path.components() {
+        current.push(component);
+        if current.exists() {
+            if let Ok(meta) = std::fs::symlink_metadata(&current) {
+                if meta.file_type().is_symlink() {
+                    return Err(MarketplaceError::DownloadFailed(format!(
+                        "Symlink detected in path (potential attack): {}",
+                        current.display()
+                    )));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -157,6 +182,15 @@ pub fn download_precompiled(entry: &RegistryNode) -> Result<String> {
 
     let url = registry::precompiled_url(entry, arch)
         .ok_or_else(|| MarketplaceError::NoBinary(entry.name.clone()))?;
+
+    // Validate the download URL points to github.com to prevent SSRF
+    if !url.starts_with("https://github.com/") {
+        return Err(MarketplaceError::DownloadFailed(format!(
+            "Download URL must point to github.com, got: {}",
+            url
+        )));
+    }
+
     let checksum_url = format!("{}.sha256", url);
 
     // Create node directory: ~/.bubbaloop/nodes/<repo-name>/<subdir>/
@@ -170,6 +204,9 @@ pub fn download_precompiled(entry: &RegistryNode) -> Result<String> {
         .join(repo_name)
         .join(&entry.subdir);
     let binary_dir = node_dir.join("target").join("release");
+
+    // Validate no symlinks in the path before creating directories
+    validate_no_symlinks_in_path(&node_dir)?;
     std::fs::create_dir_all(&binary_dir)?;
 
     // Write a minimal node.yaml so the daemon can read it
@@ -183,13 +220,20 @@ pub fn download_precompiled(entry: &RegistryNode) -> Result<String> {
     log::info!("Downloading checksum from {}", checksum_url);
     let expected_checksum = download_text(&checksum_url)?;
 
-    // Download binary
-    let binary_path = binary_dir.join(binary_name);
+    // Atomic download: write to temp file, verify checksum, then rename
+    let temp_path = binary_dir.join(format!(".{}.tmp", binary_name));
     log::info!("Downloading binary from {}", url);
-    download_file(&url, &binary_path)?;
+    download_file(&url, &temp_path)?;
 
-    // Verify checksum
-    verify_sha256(&binary_path, &expected_checksum)?;
+    // Verify checksum before making available
+    if let Err(e) = verify_sha256(&temp_path, &expected_checksum) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(e);
+    }
+
+    // Atomically move to final location
+    let binary_path = binary_dir.join(binary_name);
+    std::fs::rename(&temp_path, &binary_path)?;
 
     // Make executable
     set_executable(&binary_path)?;

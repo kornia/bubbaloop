@@ -52,6 +52,16 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>, zeno
         .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
         .expect("Failed to set Zenoh endpoint");
 
+    // SECURITY: Zenoh transport is unencrypted (plaintext). Acceptable for localhost-only
+    // deployments. For distributed deployments, enable Zenoh TLS transport.
+    if ep != "tcp/127.0.0.1:7447" {
+        log::warn!(
+            "Zenoh endpoint is not localhost ({}) — traffic is unencrypted. \
+             Consider enabling TLS for production deployments.",
+            ep
+        );
+    }
+
     // Disable all scouting to prevent connecting to remote peers via Tailscale/VPN
     config
         .insert_json5("scouting/multicast/enabled", "false")

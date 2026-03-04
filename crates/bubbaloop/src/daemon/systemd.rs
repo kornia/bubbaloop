@@ -485,10 +485,12 @@ fn extract_node_name(unit: &str) -> Option<String> {
     }
 }
 
-/// Get the systemd user directory path
+/// Get the systemd user directory path.
+///
+/// Panics if home directory cannot be determined rather than falling back to /tmp.
 pub fn get_systemd_user_dir() -> PathBuf {
     dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .expect("Cannot determine home directory — set $HOME")
         .join(".config/systemd/user")
 }
 

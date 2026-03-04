@@ -61,9 +61,15 @@ pub fn load_or_generate_token_at(path: &std::path::Path) -> Result<String, std::
 }
 
 /// Validate a bearer token from an Authorization header.
+///
+/// Logs authentication attempts for audit trail.
 pub fn validate_token(header_value: &str, expected: &str) -> bool {
     let token = header_value.strip_prefix("Bearer ").unwrap_or(header_value);
-    constant_time_eq(token.as_bytes(), expected.as_bytes())
+    let valid = constant_time_eq(token.as_bytes(), expected.as_bytes());
+    if !valid && !header_value.is_empty() {
+        log::warn!("[AUTH] failed authentication attempt (invalid token)");
+    }
+    valid
 }
 
 /// Constant-time byte comparison.
