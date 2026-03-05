@@ -187,11 +187,7 @@ async fn remove_node<P: PlatformOperations>(
 }
 
 /// Bearer token auth middleware for /api/v1.
-async fn auth_middleware(
-    State(token): State<String>,
-    req: Request,
-    next: Next,
-) -> Response {
+async fn auth_middleware(State(token): State<String>, req: Request, next: Next) -> Response {
     let auth_header = req
         .headers()
         .get("authorization")

@@ -483,7 +483,12 @@ fn save_file_0600(path: &PathBuf, content: &str) -> Result<()> {
         // This is a best-effort hardening — icacls may not be available in all environments
         let path_str = path.to_string_lossy();
         let _ = std::process::Command::new("icacls")
-            .args([&*path_str, "/inheritance:r", "/grant:r", &format!("{}:F", whoami::username())])
+            .args([
+                &*path_str,
+                "/inheritance:r",
+                "/grant:r",
+                &format!("{}:F", whoami::username()),
+            ])
             .output();
     }
     Ok(())

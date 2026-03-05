@@ -401,10 +401,9 @@ pub fn register_node(
     // Require successful path canonicalization to prevent symlink attacks
     let canonical = path
         .canonicalize()
-        .map_err(|e| RegistryError::InvalidNode(format!(
-            "Cannot resolve node path '{}': {}",
-            node_path, e
-        )))?
+        .map_err(|e| {
+            RegistryError::InvalidNode(format!("Cannot resolve node path '{}': {}", node_path, e))
+        })?
         .to_string_lossy()
         .to_string();
 

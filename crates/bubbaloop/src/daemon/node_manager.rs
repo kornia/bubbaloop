@@ -1160,9 +1160,9 @@ async fn run_build_command(
 
     // Split command into program + args to avoid shell injection via sh -c
     let parts: Vec<&str> = cmd.split_whitespace().collect();
-    let program = parts.first().ok_or_else(|| {
-        NodeManagerError::BuildError("Empty build command".to_string())
-    })?;
+    let program = parts
+        .first()
+        .ok_or_else(|| NodeManagerError::BuildError("Empty build command".to_string()))?;
     let args = &parts[1..];
 
     let mut child = Command::new(program)

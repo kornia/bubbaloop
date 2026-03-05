@@ -831,7 +831,10 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
                 log::info!("[MCP] auth=valid tool={}", request.name);
                 rbac::Tier::Admin // TODO: extract tier from token metadata
             } else {
-                log::warn!("[MCP] auth=denied tool={} (invalid or missing token)", request.name);
+                log::warn!(
+                    "[MCP] auth=denied tool={} (invalid or missing token)",
+                    request.name
+                );
                 return Err(rmcp::model::ErrorData::new(
                     rmcp::model::ErrorCode::INVALID_REQUEST,
                     "Authentication required: provide a valid Bearer token (see ~/.bubbaloop/mcp-token)",
