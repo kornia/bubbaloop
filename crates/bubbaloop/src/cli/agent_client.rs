@@ -75,6 +75,7 @@ async fn send_and_render(
 
     // Render outbox events, filtering by correlation ID
     let mut got_first = false;
+    let mut shown_agent_header = false;
     loop {
         let timeout = if got_first {
             Duration::from_secs(120) // generous timeout during streaming
@@ -86,6 +87,13 @@ async fn send_and_render(
             result = subscriber.recv_async() => {
                 match result {
                     Ok(sample) => {
+                        // Extract agent_id from topic key expression:
+                        // bubbaloop/{scope}/{machine}/agent/{agent_id}/outbox
+                        let agent_id_from_topic = sample.key_expr().as_str()
+                            .split('/')
+                            .nth(4)
+                            .unwrap_or("agent");
+
                         let bytes = sample.payload().to_bytes();
                         if let Ok(event) = serde_json::from_slice::<AgentEvent>(&bytes) {
                             if event.id != correlation_id {
@@ -94,6 +102,10 @@ async fn send_and_render(
                             got_first = true;
                             match event.event_type {
                                 AgentEventType::Delta => {
+                                    if !shown_agent_header {
+                                        println!("\n[{}]", agent_id_from_topic);
+                                        shown_agent_header = true;
+                                    }
                                     if let Some(text) = &event.text {
                                         print!("{}", text);
                                         std::io::Write::flush(&mut std::io::stdout()).ok();
@@ -113,6 +125,7 @@ async fn send_and_render(
                                     }
                                 }
                                 AgentEventType::Done => {
+                                    println!();
                                     return Ok(());
                                 }
                             }

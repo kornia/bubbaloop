@@ -654,10 +654,7 @@ mod tests {
     fn timeout_constants_are_sane() {
         assert_eq!(TURN_TIMEOUT_SECS, 120);
         assert_eq!(TOOL_CALL_TIMEOUT_SECS, 30);
-        assert!(
-            TOOL_CALL_TIMEOUT_SECS < TURN_TIMEOUT_SECS,
-            "tool timeout must be shorter than turn timeout"
-        );
+        const { assert!(TOOL_CALL_TIMEOUT_SECS < TURN_TIMEOUT_SECS) };
     }
 
     #[test]
