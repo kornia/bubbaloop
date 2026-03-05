@@ -92,6 +92,7 @@ impl LogoutCommand {
     pub fn run(&self) -> Result<()> {
         let key_path = key_file_path()?;
         let oauth_path = oauth_credentials_path().ok();
+        let mcp_token_path = crate::mcp::auth::token_path();
 
         let mut removed = false;
 
@@ -107,6 +108,13 @@ impl LogoutCommand {
                 println!("Removed OAuth credentials from {}", oauth_path.display());
                 removed = true;
             }
+        }
+
+        // Also remove MCP token so it cannot be reused after logout
+        if mcp_token_path.exists() {
+            std::fs::remove_file(&mcp_token_path)?;
+            println!("Removed MCP token from {}", mcp_token_path.display());
+            removed = true;
         }
 
         if !removed {
@@ -233,12 +241,11 @@ async fn run_setup_token_login() -> Result<()> {
         return Err(LoginError::OAuth("empty token".to_string()));
     }
 
-    // Validate token format
+    // Validate token format (never leak token content in errors)
     if !token.starts_with(SETUP_TOKEN_PREFIX) {
         return Err(LoginError::OAuth(format!(
-            "expected token starting with '{}', got '{}'",
-            SETUP_TOKEN_PREFIX,
-            &token[..token.len().min(8)]
+            "expected token starting with '{}', got invalid token",
+            SETUP_TOKEN_PREFIX
         )));
     }
 
@@ -462,7 +469,27 @@ fn save_file_0600(path: &PathBuf, content: &str) -> Result<()> {
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(path, content)?;
+        use std::io::Write;
+        // Write the file first
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
+        write!(file, "{}", content)?;
+        drop(file);
+
+        // On Windows, restrict ACL to owner-only via icacls
+        // This is a best-effort hardening — icacls may not be available in all environments
+        let path_str = path.to_string_lossy();
+        let _ = std::process::Command::new("icacls")
+            .args([
+                &*path_str,
+                "/inheritance:r",
+                "/grant:r",
+                &format!("{}:F", whoami::username()),
+            ])
+            .output();
     }
     Ok(())
 }

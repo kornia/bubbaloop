@@ -837,13 +837,14 @@ impl NodeManager {
             .as_ref()
             .ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))?;
 
-        // If config_override is set, append -c <config> to the command
+        // If config_override is set, append -c '<config>' to the command (quoted to prevent injection)
         let command = if let Some(ref config_path) = node.config_override {
             let base_cmd = manifest
                 .command
                 .as_deref()
                 .unwrap_or("./target/release/unknown");
-            Some(format!("{} -c {}", base_cmd, config_path))
+            let safe_path = config_path.replace('\'', "'\\''");
+            Some(format!("{} -c '{}'", base_cmd, safe_path))
         } else {
             manifest.command.clone()
         };
@@ -1163,15 +1164,41 @@ async fn run_build_command(
 
     // Build a PATH that includes user tool directories (pixi, cargo, etc.)
     // so build commands like "pixi run build" work under systemd's minimal env.
-    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/home/user"));
+    let home = dirs::home_dir().ok_or_else(|| {
+        NodeManagerError::BuildError("Cannot determine home directory".to_string())
+    })?;
+
+    // Validate PATH directories are not symlinks to prevent trojanized build tools
+    let cargo_bin = home.join(".cargo/bin");
+    let pixi_bin = home.join(".pixi/bin");
+    for dir in [&cargo_bin, &pixi_bin] {
+        if dir.exists() {
+            if let Ok(meta) = std::fs::symlink_metadata(dir) {
+                if meta.file_type().is_symlink() {
+                    return Err(NodeManagerError::BuildError(format!(
+                        "PATH directory is a symlink (potential attack): {}",
+                        dir.display()
+                    )));
+                }
+            }
+        }
+    }
+
     let build_path = format!(
         "{}:{}:/usr/local/bin:/usr/bin:/bin",
-        home.join(".cargo/bin").display(),
-        home.join(".pixi/bin").display(),
+        cargo_bin.display(),
+        pixi_bin.display(),
     );
 
-    let mut child = Command::new("sh")
-        .args(["-c", cmd])
+    // Split command into program + args to avoid shell injection via sh -c
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    let program = parts
+        .first()
+        .ok_or_else(|| NodeManagerError::BuildError("Empty build command".to_string()))?;
+    let args = &parts[1..];
+
+    let mut child = Command::new(program)
+        .args(args)
         .current_dir(path)
         .env("PATH", &build_path)
         .stdout(std::process::Stdio::piped())

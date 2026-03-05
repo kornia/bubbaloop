@@ -2,9 +2,12 @@
 //!
 //! Lightweight HTTP endpoints that expose `PlatformOperations` to the CLI client.
 //! These run alongside MCP on the same axum router (port 8088) and are
-//! localhost-only, unauthenticated (same security model as the /health endpoint).
+//! localhost-only, authenticated with the same bearer token as MCP.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Request, State};
+use axum::http::StatusCode;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -183,14 +186,40 @@ async fn remove_node<P: PlatformOperations>(
     command_response(platform.remove_node(&name).await)
 }
 
+/// Bearer token auth middleware for /api/v1.
+async fn auth_middleware(State(token): State<String>, req: Request, next: Next) -> Response {
+    let auth_header = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !crate::mcp::auth::validate_token(auth_header, &token) {
+        log::warn!("[API] auth=denied uri={}", req.uri());
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiCommandResponse {
+                success: false,
+                message: "Authentication required: provide a valid Bearer token (see ~/.bubbaloop/mcp-token)".to_string(),
+                output: String::new(),
+            }),
+        )
+            .into_response();
+    }
+
+    log::info!("[API] auth=valid uri={}", req.uri());
+    next.run(req).await
+}
+
 /// Build the `/api/v1` router. Caller nests this under `/api/v1`.
-pub fn api_router<P: PlatformOperations>(platform: Arc<P>) -> Router {
+pub fn api_router<P: PlatformOperations>(platform: Arc<P>, token: String) -> Router {
     Router::new()
         .route("/nodes", get(list_nodes::<P>))
         .route("/nodes/{name}/command", post(node_command::<P>))
         .route("/nodes/add", post(add_node::<P>))
         .route("/nodes/install", post(install_marketplace::<P>))
         .route("/nodes/{name}", delete(remove_node::<P>))
+        .layer(middleware::from_fn_with_state(token, auth_middleware))
         .with_state(platform)
 }
 

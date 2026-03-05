@@ -1,7 +1,8 @@
 //! Role-Based Access Control for MCP tools.
 //!
 //! Three tiers: viewer (read-only), operator (day-to-day), admin (system).
-//! TODO(phase-2): Parse tier from token file. Currently all callers get Admin on localhost.
+//! Auth enforcement is active: bearer tokens are validated in call_tool().
+//! Currently all valid tokens grant Admin tier. Future: per-token tier metadata.
 
 use serde::{Deserialize, Serialize};
 

@@ -531,27 +531,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn client_from_env_missing_key() {
-        // When ANTHROPIC_API_KEY is unset, from_env() may still succeed
-        // if OAuth credentials or a key file exist on disk.
-        let saved = std::env::var("ANTHROPIC_API_KEY").ok();
-        // SAFETY: This test is not run concurrently with other env-mutating tests.
-        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
-
-        let result = ClaudeClient::from_env(None);
-        match result {
-            Err(ClaudeError::MissingApiKey) => {} // Expected when no credentials on disk
-            Ok(_) => {}                           // Valid if OAuth or key file exists
-            Err(e) => panic!("unexpected error: {e:?}"),
-        }
-
-        // Restore if it was set
-        if let Some(key) = saved {
-            // SAFETY: Restoring the env var after test.
-            unsafe { std::env::set_var("ANTHROPIC_API_KEY", key) };
-        }
-    }
+    // NOTE: client_from_env_missing_key test removed because it required unsafe
+    // env var mutation (std::env::remove_var / set_var) which is not thread-safe.
+    // The ClaudeClient::from_env() code path is exercised by integration tests.
 
     #[test]
     fn tool_definition_serialization() {

@@ -71,10 +71,14 @@ pub(crate) fn extract_node_name(path: &str) -> Result<String> {
 }
 
 pub(crate) fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -> Result<String> {
-    // Prevent argument injection via branch or URL starting with '-'
-    if branch.starts_with('-') {
+    // Validate branch name with strict allowlist to prevent argument injection
+    if branch.is_empty()
+        || !branch
+            .chars()
+            .all(|c| c.is_alphanumeric() || "._/-".contains(c))
+    {
         return Err(NodeError::InvalidUrl(format!(
-            "Invalid branch name: {}",
+            "Invalid branch name (only alphanumeric, '.', '_', '/', '-' allowed): {}",
             branch
         )));
     }
@@ -90,11 +94,13 @@ pub(crate) fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -
         .next()
         .ok_or_else(|| NodeError::InvalidUrl(url.to_string()))?;
 
-    // Determine target directory
+    // Determine target directory — require $HOME instead of falling back to /tmp
     let target_dir = if let Some(out) = output {
         PathBuf::from(out)
     } else {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let home = std::env::var("HOME").map_err(|_| {
+            NodeError::CommandFailed("Cannot determine home directory — set $HOME".to_string())
+        })?;
         PathBuf::from(home)
             .join(".bubbaloop")
             .join("nodes")
