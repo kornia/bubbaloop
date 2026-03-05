@@ -344,11 +344,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if matches!(
                 &cmd.subcommand,
                 bubbaloop::cli::agent::AgentSubcommand::Chat(c) if c.message.is_none()
-            ) {
+            ) && bubbaloop::agent::soul::Soul::is_first_run()
+            {
                 let soul_dir = bubbaloop::agent::soul::soul_directory();
                 bubbaloop::agent::soul::Soul::ensure_defaults();
-                if bubbaloop::agent::soul::Soul::is_first_run(&soul_dir) {
-                    if let Err(e) = bubbaloop::agent::soul::Soul::run_onboarding(&soul_dir) {
+                match bubbaloop::agent::soul::Soul::run_onboarding(&soul_dir) {
+                    Ok(_name) => {
+                        bubbaloop::agent::soul::Soul::mark_onboarded();
+
+                        // Initialize default agent directory + memory so
+                        // everything is ready before the daemon starts.
+                        let config = bubbaloop::agent::runtime::AgentsConfig::load_or_default();
+                        let default_id = config.default_agent().unwrap_or("jean-clawd");
+                        let agent_dir = bubbaloop::daemon::registry::get_bubbaloop_home()
+                            .join("agents")
+                            .join(default_id);
+                        if let Err(e) = bubbaloop::agent::memory::Memory::open(&agent_dir) {
+                            log::warn!("Failed to initialize agent memory: {}", e);
+                        }
+                    }
+                    Err(e) => {
                         eprintln!("Warning: onboarding failed: {}", e);
                     }
                 }

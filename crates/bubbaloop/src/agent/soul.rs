@@ -165,28 +165,33 @@ impl Soul {
         }
     }
 
-    /// Returns `true` if this is a first-run (no customized identity yet).
+    /// Returns `true` if onboarding hasn't been completed yet.
     ///
-    /// First-run is detected when `identity.md` doesn't exist or matches the
-    /// compiled-in default exactly. A customized identity is the marker.
-    pub fn is_first_run(soul_dir: &Path) -> bool {
-        let identity_path = soul_dir.join("identity.md");
-        match std::fs::read_to_string(&identity_path) {
-            Ok(content) => content.trim() == DEFAULT_IDENTITY.trim(),
-            Err(_) => true,
-        }
+    /// Uses a `.onboarded` marker file in `~/.bubbaloop/`. This is more
+    /// reliable than content comparison — immune to daemon file creation
+    /// and partial resets.
+    pub fn is_first_run() -> bool {
+        let marker = crate::daemon::registry::get_bubbaloop_home().join(".onboarded");
+        !marker.exists()
+    }
+
+    /// Mark onboarding as complete by writing the marker file.
+    pub fn mark_onboarded() {
+        let marker = crate::daemon::registry::get_bubbaloop_home().join(".onboarded");
+        let _ = std::fs::write(&marker, "");
     }
 
     /// Interactive first-run onboarding. Asks name, focus, and approval mode,
     /// then writes personalized `identity.md` and updates `capabilities.toml`.
     ///
+    /// Returns the chosen agent name on success.
     /// Uses stdin/stdout directly — must run before the REPL thread starts.
-    pub fn run_onboarding(soul_dir: &Path) -> std::io::Result<()> {
+    pub fn run_onboarding(soul_dir: &Path) -> std::io::Result<String> {
         println!();
         println!("  Welcome to Bubbaloop! Let's set up your agent.");
         println!();
 
-        let name = prompt_with_default("  What should I call your agent?", "Bubbaloop")?;
+        let name = prompt_with_default("  What should I call your agent?", "jean-clawd")?;
 
         let focus = prompt_with_default(
             "  Describe your agent's focus (e.g., \"home security cameras\",\n  \"weather monitoring station\", \"robot fleet\")",
@@ -239,9 +244,10 @@ impl Soul {
         println!("  Agent configured: {} ({})", name, focus);
         println!("  Approval mode: {}", approval_mode);
         println!("  Edit ~/.bubbaloop/soul/ anytime to customize.");
+        println!("  To reset: rm ~/.bubbaloop/.onboarded");
         println!();
 
-        Ok(())
+        Ok(name)
     }
 
     /// Extract the agent name from the identity text.
@@ -289,6 +295,35 @@ impl Soul {
                 Capabilities::default()
             }
         }
+    }
+}
+
+/// Sanitize a display name into a valid agent ID (1-64 chars, [a-z0-9_-]).
+pub fn sanitize_agent_id(name: &str) -> String {
+    let id: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Collapse multiple hyphens, trim leading/trailing hyphens
+    let mut result = String::new();
+    for c in id.chars() {
+        if c == '-' && result.ends_with('-') {
+            continue;
+        }
+        result.push(c);
+    }
+    let result = result.trim_matches('-').to_string();
+    if result.is_empty() {
+        "agent".to_string()
+    } else {
+        result[..result.len().min(64)].to_string()
     }
 }
 
@@ -525,27 +560,8 @@ default_approval_mode = "auto"
     }
 
     #[test]
-    fn is_first_run_no_file() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(Soul::is_first_run(dir.path()));
-    }
-
-    #[test]
-    fn is_first_run_default_identity() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("identity.md"), DEFAULT_IDENTITY).unwrap();
-        assert!(Soul::is_first_run(dir.path()));
-    }
-
-    #[test]
-    fn is_first_run_custom_identity() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("identity.md"),
-            "You are TestBot, a custom agent.",
-        )
-        .unwrap();
-        assert!(!Soul::is_first_run(dir.path()));
+    fn sanitize_agent_id_default_name() {
+        assert_eq!(sanitize_agent_id("jean-clawd"), "jean-clawd");
     }
 
     #[test]
@@ -571,5 +587,35 @@ default_approval_mode = "auto"
             capabilities: Capabilities::default(),
         };
         assert_eq!(soul.name(), "Bubbaloop");
+    }
+
+    #[test]
+    fn sanitize_agent_id_simple() {
+        assert_eq!(sanitize_agent_id("jean clawd"), "jean-clawd");
+    }
+
+    #[test]
+    fn sanitize_agent_id_mixed_case() {
+        assert_eq!(sanitize_agent_id("Rosie"), "rosie");
+    }
+
+    #[test]
+    fn sanitize_agent_id_special_chars() {
+        assert_eq!(sanitize_agent_id("My Agent!@#$%"), "my-agent");
+    }
+
+    #[test]
+    fn sanitize_agent_id_empty() {
+        assert_eq!(sanitize_agent_id(""), "agent");
+    }
+
+    #[test]
+    fn sanitize_agent_id_underscores() {
+        assert_eq!(sanitize_agent_id("camera_bot"), "camera_bot");
+    }
+
+    #[test]
+    fn sanitize_agent_id_collapses_hyphens() {
+        assert_eq!(sanitize_agent_id("a - - b"), "a-b");
     }
 }
