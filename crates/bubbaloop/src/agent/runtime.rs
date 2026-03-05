@@ -8,6 +8,8 @@ use crate::agent::gateway::{self, AgentEvent, AgentManifest, AgentMessage};
 use crate::agent::heartbeat::{ArousalSource, ArousalState, HeartbeatState};
 use crate::agent::memory::Memory;
 use crate::agent::provider::claude::ClaudeProvider;
+use crate::agent::provider::ollama::OllamaProvider;
+use crate::agent::provider::ModelProvider;
 use crate::agent::soul::Soul;
 use crate::agent::{run_agent_turn, AgentTurnInput, EventSink};
 use crate::daemon::registry::get_bubbaloop_home;
@@ -20,6 +22,28 @@ use tokio::sync::{mpsc, Notify, RwLock};
 
 /// Bounded inbox channel capacity per agent.
 const AGENT_INBOX_CAPACITY: usize = 32;
+
+// ── Provider dispatch ────────────────────────────────────────────
+
+/// Enum dispatch for model providers (avoids `dyn` — RPITIT traits aren't object-safe).
+enum AnyProvider {
+    Claude(ClaudeProvider),
+    Ollama(OllamaProvider),
+}
+
+impl ModelProvider for AnyProvider {
+    async fn generate(
+        &self,
+        system: Option<&str>,
+        messages: &[crate::agent::provider::Message],
+        tools: &[crate::agent::provider::ToolDefinition],
+    ) -> crate::agent::provider::Result<crate::agent::provider::ModelResponse> {
+        match self {
+            Self::Claude(p) => p.generate(system, messages, tools).await,
+            Self::Ollama(p) => p.generate(system, messages, tools).await,
+        }
+    }
+}
 
 // ── Config ───────────────────────────────────────────────────────
 
@@ -43,6 +67,13 @@ pub struct AgentEntry {
     /// Capability keywords for routing.
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Provider backend: "claude" (default) or "ollama".
+    #[serde(default = "default_provider")]
+    pub provider: String,
+}
+
+fn default_provider() -> String {
+    "claude".to_string()
 }
 
 fn default_true() -> bool {
@@ -102,6 +133,7 @@ impl AgentsConfig {
                 enabled: true,
                 default: true,
                 capabilities: vec![],
+                provider: default_provider(),
             },
         );
         Self { agents }
@@ -216,18 +248,31 @@ impl AgentRuntime {
             };
             let soul = Arc::new(RwLock::new(soul));
 
-            // Initialize provider from Soul's model config
+            // Initialize provider based on config (claude or ollama)
             let model_name = soul.read().await.capabilities.model_name.clone();
-            let provider = match ClaudeProvider::from_env(Some(&model_name)) {
-                Ok(p) => p,
-                Err(e) => {
-                    log::error!(
-                        "[Runtime] Agent '{}' failed to init provider: {}",
-                        agent_id,
-                        e
-                    );
-                    continue;
-                }
+            let provider: AnyProvider = match entry.provider.as_str() {
+                "ollama" => match OllamaProvider::from_env(Some(&model_name)) {
+                    Ok(p) => AnyProvider::Ollama(p),
+                    Err(e) => {
+                        log::error!(
+                            "[Runtime] Agent '{}' failed to init Ollama provider: {}",
+                            agent_id,
+                            e
+                        );
+                        continue;
+                    }
+                },
+                _ => match ClaudeProvider::from_env(Some(&model_name)) {
+                    Ok(p) => AnyProvider::Claude(p),
+                    Err(e) => {
+                        log::error!(
+                            "[Runtime] Agent '{}' failed to init Claude provider: {}",
+                            agent_id,
+                            e
+                        );
+                        continue;
+                    }
+                },
             };
 
             // Open per-agent memory
@@ -444,7 +489,7 @@ impl AgentRuntime {
 #[allow(clippy::too_many_arguments)]
 async fn agent_loop(
     agent_id: String,
-    provider: ClaudeProvider,
+    provider: AnyProvider,
     dispatcher: Dispatcher<DaemonPlatform>,
     mut memory: Memory,
     soul: Arc<RwLock<Soul>>,
@@ -682,5 +727,26 @@ default = true
         assert!(dir
             .to_string_lossy()
             .contains(".bubbaloop/agents/jean-clawd"));
+    }
+
+    #[test]
+    fn agents_config_provider_defaults_to_claude() {
+        let toml_str = r#"
+[agents.agent1]
+enabled = true
+"#;
+        let config: AgentsConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agents["agent1"].provider, "claude");
+    }
+
+    #[test]
+    fn agents_config_provider_ollama() {
+        let toml_str = r#"
+[agents.local-agent]
+enabled = true
+provider = "ollama"
+"#;
+        let config: AgentsConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agents["local-agent"].provider, "ollama");
     }
 }
