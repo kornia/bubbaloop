@@ -23,7 +23,9 @@ Key source files in `crates/bubbaloop/src/`:
 - `agent/gateway.rs` — Zenoh gateway wire format (AgentMessage, AgentEvent, topic builders)
 - `agent/runtime.rs` — Multi-agent runtime: AgentsConfig, AgentRuntime, ZenohSink, agent_loop
 - `agent/soul.rs` — Soul struct, first-run onboarding, notify hot-reload (`~/.bubbaloop/soul/`)
+- `agent/provider/mod.rs` — ModelProvider trait, Message, ContentBlock, ToolDefinition, StreamEvent
 - `agent/provider/claude.rs` — Claude API client with dual auth (API key + OAuth bearer token)
+- `agent/provider/ollama.rs` — Ollama local LLM client with tool calling (`/api/chat`)
 - `agent/memory/` — 3-tier: short-term (RAM) + episodic (NDJSON) + semantic (SQLite)
 - `agent/heartbeat.rs` — Adaptive heartbeat: arousal + decay + state collection
 - `agent/dispatch.rs` — Internal MCP tool dispatch (37 tools, includes telemetry)

@@ -299,7 +299,7 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 
 These are out of scope but represent natural evolution:
 
-- **Local LLM** — Ollama support for fully offline agent operation
+- ~~**Local LLM** — Ollama support for fully offline agent operation~~ ✅ Done (ModelProvider trait + Ollama with tool calling)
 - **Hardware discovery** — USB/V4L2/mDNS auto-detection of connected sensors
 - **Multi-channel** — WhatsApp/Telegram/Discord (via bridge or native)
 - **Fleet** — Cloud sync of memory and schedules across machines
@@ -342,7 +342,7 @@ These are out of scope but represent natural evolution:
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
 | systemd | zbus (D-Bus) | No subprocess spawning, safe |
-| LLM | Claude API (reqwest) | Best tool-use, zero new deps |
+| LLM | ModelProvider trait (reqwest) | Claude (cloud) + Ollama (local), both with tool calling |
 
 ---
 

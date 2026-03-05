@@ -288,7 +288,7 @@ MCP is the **sole control interface**. 34 tools across 6 categories:
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
 | systemd | zbus (D-Bus) | No subprocess spawning, safe |
-| LLM | Claude API (reqwest) | Best tool-use, OAuth + API key auth |
+| LLM | ModelProvider trait (reqwest) | Claude (OAuth + API key) and Ollama (local, tool calling) |
 | HTTP | axum | Dashboard + MCP HTTP transport |
 
 **Removed technologies:**
