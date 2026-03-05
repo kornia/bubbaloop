@@ -112,7 +112,7 @@ pub async fn run_storage_flusher(
         }
     };
 
-    let mut last_flush_count: usize = 0;
+    let mut last_flushed_ts: i64 = 0;
     let mut prune_counter: u32 = 0;
 
     loop {
@@ -123,19 +123,27 @@ pub async fn run_storage_flusher(
             _ = shutdown_rx.changed() => break,
         }
 
-        // Collect new snapshots since last flush
+        // Collect new snapshots since last flush — track by timestamp, not count,
+        // because the ring buffer evicts old entries after wrapping.
         let snapshots: Vec<TelemetrySnapshot> = {
             let ring_guard = ring.read().await;
-            ring_guard.iter().skip(last_flush_count).cloned().collect()
+            ring_guard
+                .iter()
+                .filter(|s| s.system.timestamp_ms > last_flushed_ts)
+                .cloned()
+                .collect()
         };
 
         if !snapshots.is_empty() {
-            match insert_batch(&conn, &snapshots) {
-                Ok(n) => {
-                    log::debug!("[WATCHDOG] Flushed {} snapshots to telemetry DB", n);
-                    last_flush_count = ring.read().await.len();
+            if let Some(last) = snapshots.last() {
+                let new_ts = last.system.timestamp_ms;
+                match insert_batch(&conn, &snapshots) {
+                    Ok(n) => {
+                        log::debug!("[WATCHDOG] Flushed {} snapshots to telemetry DB", n);
+                        last_flushed_ts = new_ts;
+                    }
+                    Err(e) => log::warn!("[WATCHDOG] Failed to flush telemetry: {}", e),
                 }
-                Err(e) => log::warn!("[WATCHDOG] Failed to flush telemetry: {}", e),
             }
         }
 

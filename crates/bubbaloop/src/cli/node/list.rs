@@ -15,7 +15,9 @@ pub(crate) async fn list_nodes(format: &str, _base: bool, _instances: bool) -> R
     } else {
         // Parse the JSON node list from the gateway response
         let nodes: Vec<crate::mcp::platform::NodeInfo> =
-            serde_json::from_str(&result).unwrap_or_default();
+            serde_json::from_str(&result).map_err(|e| {
+                super::NodeError::CommandFailed(format!("Invalid daemon response: {}", e))
+            })?;
         if nodes.is_empty() {
             println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
         } else {
@@ -101,7 +103,10 @@ pub(crate) async fn discover_nodes(format: &str) -> Result<()> {
     let registered: Vec<crate::mcp::platform::NodeInfo> =
         match crate::cli::daemon_client::DaemonClient::connect().await {
             Ok(client) => match client.list_nodes().await {
-                Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+                Ok(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
+                    log::warn!("Failed to parse daemon node list: {}", e);
+                    vec![]
+                }),
                 Err(_) => vec![],
             },
             Err(_) => vec![],

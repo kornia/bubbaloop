@@ -125,8 +125,8 @@ pub(crate) async fn create_instance(
     // Query daemon for base node via Zenoh gateway
     let client = crate::cli::daemon_client::DaemonClient::connect().await?;
     let nodes_json = client.list_nodes().await?;
-    let nodes: Vec<crate::mcp::platform::NodeInfo> =
-        serde_json::from_str(&nodes_json).unwrap_or_default();
+    let nodes: Vec<crate::mcp::platform::NodeInfo> = serde_json::from_str(&nodes_json)
+        .map_err(|e| NodeError::CommandFailed(format!("Invalid daemon response: {}", e)))?;
 
     // Find the base node - check it exists
     let base_exists = nodes.iter().any(|n| n.name == base_node);

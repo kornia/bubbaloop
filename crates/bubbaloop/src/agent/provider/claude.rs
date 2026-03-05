@@ -426,6 +426,12 @@ impl SseParser {
                                         delta.get("partial_json").and_then(|t| t.as_str())
                                     {
                                         self.tool_input_json.push_str(partial);
+                                        // Safety limit: tool input JSON should not exceed 1MB
+                                        if self.tool_input_json.len() > 1_048_576 {
+                                            return Err(
+                                                "Tool input JSON exceeded 1MB limit".to_string()
+                                            );
+                                        }
                                     }
                                 }
                                 _ => {}

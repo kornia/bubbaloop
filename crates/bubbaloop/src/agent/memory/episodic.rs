@@ -85,7 +85,7 @@ impl EpisodicLog {
     /// Append an entry — dual-writes to NDJSON file + FTS5 index.
     pub fn append(&self, entry: &LogEntry) -> super::Result<()> {
         // 1. Write to NDJSON file
-        let date = &entry.timestamp[..10]; // YYYY-MM-DD
+        let date = entry.timestamp.get(..10).unwrap_or("unknown"); // YYYY-MM-DD
         let filename = format!("daily_logs_{}.jsonl", date);
         let path = self.log_dir.join(filename);
 
@@ -409,14 +409,15 @@ impl EpisodicLog {
     /// Plans are stored with `role = "plan"` by the agent turn loop when the model
     /// outputs both text (reasoning) and tool calls (execution) in the same response.
     pub fn latest_plan(&self) -> super::Result<Option<LogEntry>> {
+        // FTS5 UNINDEXED columns can't be reliably filtered with WHERE in all
+        // SQLite versions. Fetch recent entries and filter in Rust.
         let mut stmt = self.conn.prepare(
             "SELECT content, id, role, timestamp, job_id \
              FROM fts_episodic \
-             WHERE role = 'plan' \
-             ORDER BY timestamp DESC \
-             LIMIT 1",
+             ORDER BY rowid DESC \
+             LIMIT 100",
         )?;
-        let mut rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map([], |row| {
             let job_id: String = row.get(4)?;
             Ok(LogEntry {
                 content: row.get(0)?,
@@ -430,11 +431,13 @@ impl EpisodicLog {
                 flush: None,
             })
         })?;
-        match rows.next() {
-            Some(Ok(entry)) => Ok(Some(entry)),
-            Some(Err(e)) => Err(e.into()),
-            None => Ok(None),
+        for row in rows {
+            let entry = row?;
+            if entry.role == "plan" {
+                return Ok(Some(entry));
+            }
         }
+        Ok(None)
     }
 
     /// Retrieve the most recent flush entry from episodic memory.

@@ -246,6 +246,17 @@ async fn dispatch_daemon_command(
     let id = &cmd.id;
     let mut events = Vec::new();
 
+    // Helper: validate node names from Zenoh messages before dispatching
+    macro_rules! validate_name {
+        ($name:expr) => {
+            if let Err(e) = crate::validation::validate_node_name($name) {
+                events.push(gateway::DaemonEvent::error(id, &e));
+                events.push(gateway::DaemonEvent::done(id));
+                return events;
+            }
+        };
+    }
+
     match &cmd.command {
         gateway::DaemonCommandType::ListNodes => match platform.list_nodes().await {
             Ok(nodes) => {
@@ -257,6 +268,7 @@ async fn dispatch_daemon_command(
             }
         },
         gateway::DaemonCommandType::StartNode { name } => {
+            validate_name!(name);
             match platform
                 .execute_command(name, crate::mcp::platform::NodeCommand::Start)
                 .await
@@ -266,6 +278,7 @@ async fn dispatch_daemon_command(
             }
         }
         gateway::DaemonCommandType::StopNode { name } => {
+            validate_name!(name);
             match platform
                 .execute_command(name, crate::mcp::platform::NodeCommand::Stop)
                 .await
@@ -275,6 +288,7 @@ async fn dispatch_daemon_command(
             }
         }
         gateway::DaemonCommandType::RestartNode { name } => {
+            validate_name!(name);
             match platform
                 .execute_command(name, crate::mcp::platform::NodeCommand::Restart)
                 .await
@@ -284,6 +298,7 @@ async fn dispatch_daemon_command(
             }
         }
         gateway::DaemonCommandType::GetLogs { name } => {
+            validate_name!(name);
             match platform
                 .execute_command(name, crate::mcp::platform::NodeCommand::GetLogs)
                 .await
@@ -293,6 +308,7 @@ async fn dispatch_daemon_command(
             }
         }
         gateway::DaemonCommandType::BuildNode { name } => {
+            validate_name!(name);
             match platform
                 .execute_command(name, crate::mcp::platform::NodeCommand::Build)
                 .await
@@ -302,6 +318,7 @@ async fn dispatch_daemon_command(
             }
         }
         gateway::DaemonCommandType::UninstallNode { name } => {
+            validate_name!(name);
             match platform
                 .execute_command(name, crate::mcp::platform::NodeCommand::Uninstall)
                 .await
@@ -311,6 +328,7 @@ async fn dispatch_daemon_command(
             }
         }
         gateway::DaemonCommandType::CleanNode { name } => {
+            validate_name!(name);
             match platform
                 .execute_command(name, crate::mcp::platform::NodeCommand::Clean)
                 .await
@@ -320,6 +338,7 @@ async fn dispatch_daemon_command(
             }
         }
         gateway::DaemonCommandType::EnableAutostart { name } => {
+            validate_name!(name);
             match platform
                 .execute_command(name, crate::mcp::platform::NodeCommand::EnableAutostart)
                 .await
@@ -329,6 +348,7 @@ async fn dispatch_daemon_command(
             }
         }
         gateway::DaemonCommandType::DisableAutostart { name } => {
+            validate_name!(name);
             match platform
                 .execute_command(name, crate::mcp::platform::NodeCommand::DisableAutostart)
                 .await
@@ -350,10 +370,13 @@ async fn dispatch_daemon_command(
                 Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
             }
         }
-        gateway::DaemonCommandType::RemoveNode { name } => match platform.remove_node(name).await {
-            Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
-            Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
-        },
+        gateway::DaemonCommandType::RemoveNode { name } => {
+            validate_name!(name);
+            match platform.remove_node(name).await {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
         gateway::DaemonCommandType::Health => {
             let node_list = platform.list_nodes().await.unwrap_or_default();
             let manifest = gateway::DaemonManifest {

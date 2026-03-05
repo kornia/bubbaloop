@@ -414,23 +414,19 @@ pub async fn run_daemon_start() -> std::result::Result<(), Box<dyn std::error::E
     std::fs::write(&service_path, service_content)?;
     println!("Installed service: {}", service_path.display());
 
-    // Reload and start
-    let reload = std::process::Command::new("systemctl")
-        .args(["--user", "daemon-reload"])
-        .status()?;
-    if !reload.success() {
-        eprintln!("Warning: systemctl daemon-reload failed");
+    // Reload and start via zbus (D-Bus) — never spawn systemctl as subprocess
+    let systemd = crate::daemon::systemd::SystemdClient::new().await.map_err(|e| {
+        format!("Failed to connect to systemd user session via D-Bus: {}. Is the user session active?", e)
+    })?;
+    if let Err(e) = systemd.daemon_reload().await {
+        eprintln!("Warning: systemd daemon-reload failed: {}", e);
     }
-
-    let start = std::process::Command::new("systemctl")
-        .args(["--user", "start", "bubbaloop-daemon.service"])
-        .status()?;
-    if start.success() {
-        println!("Daemon started as systemd service.");
-    } else {
-        eprintln!(
-            "Failed to start daemon service. Check: systemctl --user status bubbaloop-daemon"
-        );
+    match systemd.start_unit("bubbaloop-daemon.service").await {
+        Ok(()) => println!("Daemon started as systemd service."),
+        Err(e) => eprintln!(
+            "Failed to start daemon service: {}. Check: systemctl --user status bubbaloop-daemon",
+            e
+        ),
     }
 
     Ok(())

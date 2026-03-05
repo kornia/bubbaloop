@@ -53,7 +53,7 @@ impl AgentsConfig {
     /// Load from `~/.bubbaloop/agents.toml` or create a default single-agent config.
     pub fn load_or_default() -> Self {
         let path = get_bubbaloop_home().join("agents.toml");
-        let config = match std::fs::read_to_string(&path) {
+        let mut config = match std::fs::read_to_string(&path) {
             Ok(content) => match toml::from_str(&content) {
                 Ok(config) => config,
                 Err(e) => {
@@ -66,29 +66,31 @@ impl AgentsConfig {
                 Self::single_default()
             }
         };
-        // Validate agent IDs to prevent path traversal (agents/{id}/ directories)
-        config.validate_agent_ids();
+        // Validate agent IDs — reject invalid ones to prevent path traversal
+        config.filter_invalid_agent_ids();
         config
     }
 
     /// Validate all agent IDs: 1-64 chars, [a-zA-Z0-9_-], no path separators.
-    fn validate_agent_ids(&self) {
-        for id in self.agents.keys() {
-            if id.is_empty()
-                || id.len() > 64
-                || id.contains('/')
-                || id.contains('\\')
-                || id.contains("..")
-                || !id
+    /// Invalid IDs are removed from the config entirely.
+    fn filter_invalid_agent_ids(&mut self) {
+        self.agents.retain(|id, _| {
+            let valid = !id.is_empty()
+                && id.len() <= 64
+                && !id.contains('/')
+                && !id.contains('\\')
+                && !id.contains("..")
+                && id
                     .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            {
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            if !valid {
                 log::error!(
-                    "Invalid agent ID '{}': must be 1-64 chars, [a-zA-Z0-9_-]. Skipping.",
+                    "Invalid agent ID '{}': must be 1-64 chars, [a-zA-Z0-9_-]. Removing from config.",
                     id
                 );
             }
-        }
+            valid
+        });
     }
 
     /// Default: single agent named "jean-clawd".

@@ -28,13 +28,17 @@ pub(crate) fn workspace_dir() -> PathBuf {
 
 /// Block reads of sensitive files (secrets, keys, credentials, system internals).
 pub(crate) fn validate_read_path(path: &Path) -> Result<(), String> {
+    // Canonicalize to resolve symlinks — prevents bypassing checks via symlinks
+    // pointing to sensitive files. For non-existent paths, use the raw path.
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
     // Block /proc and /sys — contain sensitive system info (env vars, kernel params)
-    let path_str = path.to_string_lossy();
+    let path_str = resolved.to_string_lossy();
     if path_str.starts_with("/proc") || path_str.starts_with("/sys") {
         return Err("Blocked: /proc and /sys contain sensitive system information".to_string());
     }
 
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let name = resolved.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
     const SENSITIVE_NAMES: &[&str] = &[
         // SSH keys
@@ -92,7 +96,7 @@ pub(crate) fn validate_read_path(path: &Path) -> Result<(), String> {
     }
 
     // Block cloud provider credential directories
-    if let Some(parent) = path
+    if let Some(parent) = resolved
         .parent()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
@@ -137,6 +141,48 @@ pub(crate) fn validate_write_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Check a single command word against the blocked commands list.
+fn validate_single_command_word(cmd_base: &str) -> Result<(), String> {
+    const BLOCKED_COMMANDS: &[&str] = &[
+        "shutdown",
+        "reboot",
+        "halt",
+        "poweroff",
+        "kill",
+        "killall",
+        "pkill",
+        "iptables",
+        "ip6tables",
+        "nft",
+        "mount",
+        "umount",
+        "fdisk",
+        "parted",
+        "cfdisk",
+        "useradd",
+        "userdel",
+        "usermod",
+        "passwd",
+        "groupadd",
+        "groupdel",
+        "init",
+        "telinit",
+        "eval",
+        "exec",
+        "source",
+        "sudo",
+        "su",
+        "sh",
+        "bash",
+        "zsh",
+        "dash",
+    ];
+    if BLOCKED_COMMANDS.contains(&cmd_base) {
+        return Err(format!("Blocked: '{}' requires manual execution", cmd_base));
+    }
+    Ok(())
+}
+
 /// Block dangerous shell commands that could damage the system.
 ///
 /// Defence-in-depth: commands are checked against multiple categories.
@@ -144,7 +190,33 @@ pub(crate) fn validate_write_path(path: &Path) -> Result<(), String> {
 pub(crate) fn validate_command(command: &str) -> Result<(), String> {
     let cmd = command.to_lowercase();
 
-    // ── 0. Block shell meta-programming that bypasses other checks ──
+    // ── 0a. Block command chaining operators ──────────────────────
+    // Newlines act as command separators in shell — block them outright.
+    if cmd.contains('\n') {
+        return Err(
+            "Blocked: newlines in commands are not allowed. Run commands separately.".to_string(),
+        );
+    }
+    // Normalize tabs to spaces to prevent IFS-based bypasses.
+    let normalized = cmd.replace('\t', " ");
+    for sep in &[";", "&&", "||"] {
+        if normalized.contains(sep) {
+            return Err(format!(
+                "Blocked: command chaining ('{}') is not allowed. Run commands separately.",
+                sep
+            ));
+        }
+    }
+    // Pipe chains: validate each segment's first word against blocked commands
+    if normalized.contains(" | ") {
+        for segment in normalized.split(" | ") {
+            let seg_first = segment.split_whitespace().next().unwrap_or("");
+            let seg_base = seg_first.rsplit('/').next().unwrap_or(seg_first);
+            validate_single_command_word(seg_base)?;
+        }
+    }
+
+    // ── 0b. Block shell meta-programming that bypasses other checks ──
     let first_word = cmd.split_whitespace().next().unwrap_or("");
     let first_cmd_base = first_word.rsplit('/').next().unwrap_or(first_word);
     const META_COMMANDS: &[&str] = &["eval", "exec", "source"];
@@ -458,5 +530,30 @@ mod tests {
         assert!(validate_command("free -m").is_ok());
         assert!(validate_command("top -bn1").is_ok());
         assert!(validate_command("journalctl -u bubbaloop --no-pager -n 50").is_ok());
+    }
+
+    #[test]
+    fn command_blocks_chaining_operators() {
+        // Semicolons
+        assert!(validate_command("ls; cat /etc/shadow").is_err());
+        assert!(validate_command("echo test; kill -9 1234").is_err());
+        // Double-ampersand
+        assert!(validate_command("ls && rm -rf /").is_err());
+        // Double-pipe
+        assert!(validate_command("false || kill 1").is_err());
+        // Pipe to dangerous commands
+        assert!(validate_command("echo test | kill 1234").is_err());
+        assert!(validate_command("echo test | killall nginx").is_err());
+        // Safe pipes are allowed
+        assert!(validate_command("ls -la | grep test").is_ok());
+        assert!(validate_command("cat file.txt | wc -l").is_ok());
+    }
+
+    #[test]
+    fn command_blocks_whitespace_bypasses() {
+        // Tab-separated commands should be normalized
+        assert!(validate_command("ls;\tcat /etc/shadow").is_err());
+        // Newline-embedded commands
+        assert!(validate_command("ls\nkill 1").is_err());
     }
 }

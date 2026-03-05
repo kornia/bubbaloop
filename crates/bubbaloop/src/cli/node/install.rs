@@ -170,8 +170,11 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
 
     let is_registered = match client.list_nodes().await {
         Ok(json) => {
-            let nodes: Vec<crate::mcp::platform::NodeInfo> =
-                serde_json::from_str(&json).unwrap_or_default();
+            let nodes: Vec<crate::mcp::platform::NodeInfo> = serde_json::from_str(&json)
+                .unwrap_or_else(|e| {
+                    log::warn!("Failed to parse daemon node list: {}", e);
+                    vec![]
+                });
             nodes.iter().any(|n| n.name == args.name)
         }
         Err(_) => false,
