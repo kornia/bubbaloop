@@ -61,7 +61,9 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "list_commands"
         | "discover_capabilities"
         | "list_proposals"
-        | "list_jobs" => Tier::Viewer,
+        | "list_jobs"
+        | "get_system_telemetry"
+        | "get_telemetry_history" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
         "start_node" | "stop_node" | "restart_node" | "get_node_config" | "send_command"
@@ -75,7 +77,8 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "query_zenoh"
         | "uninstall_node"
         | "clean_node"
-        | "clear_episodic_memory" => Tier::Admin,
+        | "clear_episodic_memory"
+        | "update_telemetry_config" => Tier::Admin,
 
         // Unknown tools default to admin (principle of least privilege)
         _ => Tier::Admin,

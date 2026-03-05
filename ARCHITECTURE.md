@@ -48,13 +48,14 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 │  │  Short-term (RAM) | Episodic (NDJSON) | Semantic DB │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (34 tools) — sole control interface      │  │
+│  │  MCP Server (37 tools) — sole control interface      │  │
 │  │  RBAC (Viewer/Operator/Admin) | Bearer token auth   │  │
 │  │  PlatformOperations trait | Rate limiting            │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  Daemon (skill runtime + agent host)                │  │
 │  │  Node manager | systemd/D-Bus | Marketplace         │  │
+│  │  Telemetry watchdog (memory/CPU/disk monitoring)    │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  Zenoh Data Plane (zero-copy, real-time)            │  │
@@ -129,6 +130,34 @@ Nodes that support imperative actions MUST declare `{topic_prefix}/command` quer
 {"command": "capture_frame", "params": {"resolution": "1080p"}}
 → {"result": "frame captured", "error": null}
 ```
+
+---
+
+## Telemetry Watchdog
+
+The daemon runs a cross-platform resource watchdog (`daemon/telemetry/`) that prevents OOM crashes on edge devices. Uses the `sysinfo` crate (Linux ARM/x86, macOS).
+
+**Architecture:**
+- **Sampler** — Adaptive sysinfo reads (5-30s based on pressure), feeds in-memory ring buffer
+- **Circuit Breaker** — Hard safety net, kills nodes at Red/Critical thresholds (~100ms, no LLM needed)
+- **Storage** — SQLite cold store (`~/.bubbaloop/telemetry.db`), 7-day retention, batch flush
+- **Agent Bridge** — 3 dispatch tools + alert events + system prompt injection
+
+**Threshold levels:**
+
+| Level | Memory Used | Action |
+|-------|------------|--------|
+| Green | < 60% | Normal (30s sampling) |
+| Yellow | 60-80% | Warn agent (10s sampling) |
+| Orange | 80-90% | Urgent alert (5s sampling) |
+| Red | 90-95% | Kill largest non-essential node |
+| Critical | > 95% | Kill ALL non-essential nodes |
+
+**Agent tools:** `get_system_telemetry`, `get_telemetry_history`, `update_telemetry_config`
+
+**Hot-reload:** Config at `~/.bubbaloop/telemetry.toml`, file-watched with guardrails (critical threshold 80-98%, min sampling 2s). Agent can tune thresholds at runtime.
+
+**Design doc:** `docs/plans/2026-03-05-telemetry-watchdog-design.md`
 
 ---
 

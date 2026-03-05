@@ -16,6 +16,7 @@ pub mod gateway;
 pub mod node_manager;
 pub mod registry;
 pub mod systemd;
+pub mod telemetry;
 pub mod util;
 
 pub use node_manager::NodeManager;
@@ -119,12 +120,12 @@ async fn run_daemon_gateway(
     let start_time = std::time::Instant::now();
 
     // Create platform for dispatching commands
-    let platform = std::sync::Arc::new(crate::mcp::platform::DaemonPlatform {
-        node_manager: node_manager.clone(),
-        session: session.clone(),
-        scope: scope.clone(),
-        machine_id: machine_id.clone(),
-    });
+    let platform = std::sync::Arc::new(crate::mcp::platform::DaemonPlatform::new(
+        node_manager.clone(),
+        session.clone(),
+        scope.clone(),
+        machine_id.clone(),
+    ));
 
     // 1. Register manifest queryable
     let manifest_key = gateway::manifest_topic(&scope, &machine_id);
@@ -291,6 +292,51 @@ async fn dispatch_daemon_command(
                 Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
             }
         }
+        gateway::DaemonCommandType::BuildNode { name } => {
+            match platform
+                .execute_command(name, crate::mcp::platform::NodeCommand::Build)
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
+        gateway::DaemonCommandType::UninstallNode { name } => {
+            match platform
+                .execute_command(name, crate::mcp::platform::NodeCommand::Uninstall)
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
+        gateway::DaemonCommandType::CleanNode { name } => {
+            match platform
+                .execute_command(name, crate::mcp::platform::NodeCommand::Clean)
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
+        gateway::DaemonCommandType::EnableAutostart { name } => {
+            match platform
+                .execute_command(name, crate::mcp::platform::NodeCommand::EnableAutostart)
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
+        gateway::DaemonCommandType::DisableAutostart { name } => {
+            match platform
+                .execute_command(name, crate::mcp::platform::NodeCommand::DisableAutostart)
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
         gateway::DaemonCommandType::InstallNode {
             source,
             name,
@@ -395,11 +441,17 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
     log::info!("Starting health monitor...");
     if let Err(e) = node_manager
         .clone()
-        .start_health_monitor(session.clone())
+        .start_health_monitor(session.clone(), shutdown_rx.clone())
         .await
     {
         log::warn!("Failed to start health monitor: {}", e);
     }
+
+    // Start telemetry watchdog
+    log::info!("Starting telemetry watchdog...");
+    let telemetry_service = std::sync::Arc::new(
+        telemetry::TelemetryService::start(node_manager.clone(), shutdown_rx.clone()).await,
+    );
 
     // Start MCP server (HTTP on port 8088)
     let mcp_port: u16 = std::env::var("BUBBALOOP_MCP_PORT")
@@ -425,11 +477,13 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         let agent_session = session.clone();
         let agent_manager = node_manager.clone();
         let agent_shutdown = shutdown_rx.clone();
+        let agent_telemetry = Some(telemetry_service.clone());
         tokio::spawn(async move {
             if let Err(e) = crate::agent::runtime::run_agent_runtime(
                 agent_session,
                 agent_manager,
                 agent_shutdown,
+                agent_telemetry,
             )
             .await
             {
@@ -465,15 +519,16 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
     log::info!("  Daemon gateway: active");
     log::info!("  Nodes: {} registered", initial_list.nodes.len());
     log::info!("  Health monitor: active (Zenoh heartbeats)");
+    log::info!("  Telemetry watchdog: active");
 
     // Wait for shutdown signal
     let mut shutdown_wait = shutdown_rx.clone();
     shutdown_wait.changed().await.ok();
 
-    // Abort MCP server, agent runtime, and gateway
-    mcp_task.abort();
-    agent_task.abort();
-    gateway_task.abort();
+    log::info!("Shutdown signal received, waiting for tasks to gracefully finish...");
+
+    // Wait for all tasks to complete gracefully (they all listen to shutdown_rx)
+    let _ = tokio::join!(mcp_task, agent_task, gateway_task);
 
     log::info!("Bubbaloop daemon stopped.");
 

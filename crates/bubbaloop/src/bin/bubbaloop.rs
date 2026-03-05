@@ -134,10 +134,7 @@ async fn run_mcp_command(args: McpArgs) -> Result<(), Box<dyn std::error::Error>
         );
     } else {
         // HTTP mode: logs to stderr at info level
-        drop(
-            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-                .try_init(),
-        );
+        init_logger("info");
     }
 
     // Create Zenoh session
@@ -166,9 +163,34 @@ async fn run_mcp_command(args: McpArgs) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
+/// Initialize the env_logger with a default filter string.
+///
+/// Uses `try_init` so it is safe to call multiple times (later calls are no-ops).
+/// This is the standard pattern for CLI subcommands that override the log level set
+/// in `main()`.
+fn init_logger(default_filter: &str) {
+    drop(
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_filter))
+            .try_init(),
+    );
+}
+
+/// Create a Zenoh client session, printing a user-friendly error and returning
+/// `None` if the connection fails (e.g. zenohd is not running).
+async fn try_zenoh_session(endpoint: Option<&str>) -> Option<std::sync::Arc<zenoh::Session>> {
+    match bubbaloop::cli::zenoh_session::create_zenoh_session(endpoint).await {
+        Ok(s) => Some(s),
+        Err(e) => {
+            eprintln!("Error: Cannot connect to Zenoh — is zenohd running?");
+            eprintln!("  {}", e);
+            None
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
+    // Initialize logging — warn level by default; subcommands may override via init_logger().
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
         .target(env_logger::Target::Stderr)
         .init();
@@ -249,95 +271,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // `bubbaloop daemon` with no subcommand = run in foreground (backward compat)
                 None | Some(DaemonSubcommand::Run(_)) => {
                     // Re-initialize logging for daemon (info level, not warn)
-                    drop(
-                        env_logger::Builder::from_env(
-                            env_logger::Env::default().default_filter_or("info"),
-                        )
-                        .try_init(),
-                    );
+                    init_logger("info");
                     bubbaloop::daemon::run(cmd.zenoh_endpoint).await?;
                 }
                 Some(DaemonSubcommand::Start(_)) => {
                     bubbaloop::cli::daemon_client::run_daemon_start().await?;
                 }
                 Some(DaemonSubcommand::Stop(_)) => {
-                    // Suppress noisy Zenoh logs
-                    drop(
-                        env_logger::Builder::from_env(
-                            env_logger::Env::default().default_filter_or("warn,zenoh=warn"),
-                        )
-                        .try_init(),
-                    );
-                    let session =
-                        match bubbaloop::agent::create_agent_session(cmd.zenoh_endpoint.as_deref())
-                            .await
-                        {
-                            Ok(s) => s,
-                            Err(e) => {
-                                eprintln!("Error: Cannot connect to Zenoh — is zenohd running?");
-                                eprintln!("  {}", e);
-                                return Ok(());
-                            }
-                        };
+                    init_logger("warn,zenoh=warn");
+                    let Some(session) = try_zenoh_session(cmd.zenoh_endpoint.as_deref()).await
+                    else {
+                        return Ok(());
+                    };
                     bubbaloop::cli::daemon_client::run_daemon_stop(session).await?;
                 }
                 Some(DaemonSubcommand::Restart(_)) => {
-                    // Stop then start
-                    drop(
-                        env_logger::Builder::from_env(
-                            env_logger::Env::default().default_filter_or("warn,zenoh=warn"),
-                        )
-                        .try_init(),
-                    );
-                    if let Ok(session) =
-                        bubbaloop::agent::create_agent_session(cmd.zenoh_endpoint.as_deref()).await
-                    {
+                    // Stop (best-effort) then start
+                    init_logger("warn,zenoh=warn");
+                    if let Some(session) = try_zenoh_session(cmd.zenoh_endpoint.as_deref()).await {
                         let _ = bubbaloop::cli::daemon_client::run_daemon_stop(session).await;
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     }
                     bubbaloop::cli::daemon_client::run_daemon_start().await?;
                 }
                 Some(DaemonSubcommand::Status(_)) => {
-                    drop(
-                        env_logger::Builder::from_env(
-                            env_logger::Env::default().default_filter_or("warn,zenoh=warn"),
-                        )
-                        .try_init(),
-                    );
-                    let session =
-                        match bubbaloop::agent::create_agent_session(cmd.zenoh_endpoint.as_deref())
-                            .await
-                        {
-                            Ok(s) => s,
-                            Err(e) => {
-                                eprintln!("Error: Cannot connect to Zenoh — is zenohd running?");
-                                eprintln!("  {}", e);
-                                return Ok(());
-                            }
-                        };
+                    init_logger("warn,zenoh=warn");
+                    let Some(session) = try_zenoh_session(cmd.zenoh_endpoint.as_deref()).await
+                    else {
+                        return Ok(());
+                    };
                     bubbaloop::cli::daemon_client::run_daemon_status(session).await?;
                 }
                 Some(DaemonSubcommand::Logs(_)) => {
                     bubbaloop::cli::daemon_client::run_daemon_logs()?;
                 }
                 Some(DaemonSubcommand::Fix(_)) => {
-                    drop(
-                        env_logger::Builder::from_env(
-                            env_logger::Env::default().default_filter_or("warn,zenoh=warn"),
-                        )
-                        .try_init(),
-                    );
-                    let session =
-                        match bubbaloop::agent::create_agent_session(cmd.zenoh_endpoint.as_deref())
-                            .await
-                        {
-                            Ok(s) => s,
-                            Err(e) => {
-                                eprintln!("Error: Cannot connect to Zenoh — is zenohd running?");
-                                eprintln!("  {}", e);
-                                return Ok(());
-                            }
-                        };
+                    init_logger("warn,zenoh=warn");
+                    let Some(session) = try_zenoh_session(cmd.zenoh_endpoint.as_deref()).await
+                    else {
+                        return Ok(());
+                    };
                     bubbaloop::cli::daemon_client::run_daemon_fix(session).await?;
                 }
             }
@@ -382,23 +355,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Suppress noisy Zenoh logs
-            drop(
-                env_logger::Builder::from_env(
-                    env_logger::Env::default().default_filter_or("warn,zenoh=warn"),
-                )
-                .try_init(),
-            );
+            init_logger("warn,zenoh=warn");
 
             // Create Zenoh client session for all agent subcommands
-            let session =
-                match bubbaloop::agent::create_agent_session(cmd.zenoh_endpoint.as_deref()).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("Error: Cannot connect to Zenoh — is zenohd running?");
-                        eprintln!("  {}", e);
-                        return Ok(());
-                    }
-                };
+            let Some(session) = try_zenoh_session(cmd.zenoh_endpoint.as_deref()).await else {
+                return Ok(());
+            };
 
             let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
             let local_machine_id = bubbaloop::daemon::util::get_machine_id();

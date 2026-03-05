@@ -504,23 +504,7 @@ pub fn get_service_path(node_name: &str) -> PathBuf {
 
 /// Validate node name for systemd service naming
 fn validate_node_name(name: &str) -> Result<()> {
-    // Node names should be alphanumeric with hyphens/underscores only
-    if !name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(SystemdError::InvalidNodeName(format!(
-            "'{}' contains invalid characters (only alphanumeric, hyphens, and underscores allowed)",
-            name
-        )));
-    }
-    if name.is_empty() || name.len() > 64 {
-        return Err(SystemdError::InvalidNodeName(format!(
-            "'{}' has invalid length (must be 1-64 characters)",
-            name
-        )));
-    }
-    Ok(())
+    crate::validation::validate_node_name(name).map_err(SystemdError::InvalidNodeName)
 }
 
 /// Sanitize a string for use in systemd unit file Description field
@@ -877,7 +861,7 @@ mod tests {
         let result = validate_node_name("");
         assert!(result.is_err());
         if let Err(SystemdError::InvalidNodeName(msg)) = result {
-            assert!(msg.contains("invalid length"));
+            assert!(msg.contains("1-64 characters"));
         }
     }
 
@@ -887,7 +871,7 @@ mod tests {
         let result = validate_node_name(&long_name);
         assert!(result.is_err());
         if let Err(SystemdError::InvalidNodeName(msg)) = result {
-            assert!(msg.contains("invalid length"));
+            assert!(msg.contains("1-64 characters"));
         }
     }
 

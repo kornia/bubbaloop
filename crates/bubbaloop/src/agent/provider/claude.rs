@@ -164,6 +164,16 @@ impl ClaudeProvider {
         }
     }
 
+    /// Create a provider directly from an API key (for testing and explicit configuration).
+    /// Does not read any environment variables or files.
+    pub fn with_api_key(api_key: impl Into<String>, model: Option<&str>) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            auth: AuthMethod::ApiKey(api_key.into()),
+            model: model.unwrap_or(DEFAULT_MODEL).to_string(),
+        }
+    }
+
     /// Get the model name this provider is configured with.
     pub fn model(&self) -> &str {
         &self.model
@@ -190,10 +200,7 @@ impl ClaudeProvider {
     }
 
     /// Send a request and return the response, converting HTTP errors to ProviderError.
-    async fn send_request(
-        &self,
-        body: &ApiRequest<'_>,
-    ) -> super::Result<reqwest::Response> {
+    async fn send_request(&self, body: &ApiRequest<'_>) -> super::Result<reqwest::Response> {
         let response = self.build_request().json(body).send().await?;
 
         let status = response.status();
@@ -212,10 +219,7 @@ impl ClaudeProvider {
     }
 
     /// Send a request with retry for transient errors (429, 5xx, network).
-    async fn send_with_retry(
-        &self,
-        body: &ApiRequest<'_>,
-    ) -> super::Result<reqwest::Response> {
+    async fn send_with_retry(&self, body: &ApiRequest<'_>) -> super::Result<reqwest::Response> {
         let mut last_err = None;
         for attempt in 0..MAX_RETRIES {
             match self.send_request(body).await {
@@ -298,6 +302,197 @@ impl ModelProvider for ClaudeProvider {
     }
 }
 
+/// Incremental SSE parser that accumulates line-oriented state and emits `StreamEvent`s.
+///
+/// Holds all mutable parsing state so callers can feed chunks one at a time via
+/// `process_chunk` and then call `finish` after the stream ends.
+struct SseParser {
+    /// Incomplete line data carried over from previous chunks.
+    line_buffer: String,
+    /// The `event:` field of the SSE block currently being parsed.
+    current_event_type: String,
+    /// `id` of the tool-use block being accumulated (empty when not in a tool block).
+    tool_id: String,
+    /// `name` of the tool-use block being accumulated.
+    tool_name: String,
+    /// Accumulated `input_json_delta` fragments for the current tool block.
+    tool_input_json: String,
+    /// Whether we are currently inside a `tool_use` content block.
+    in_tool_block: bool,
+    /// Token usage counters, updated by `message_start` / `message_delta` events.
+    usage: Usage,
+    /// Stop reason received from the `message_delta` event, if any.
+    stop_reason: Option<String>,
+}
+
+impl SseParser {
+    fn new() -> Self {
+        Self {
+            line_buffer: String::new(),
+            current_event_type: String::new(),
+            tool_id: String::new(),
+            tool_name: String::new(),
+            tool_input_json: String::new(),
+            in_tool_block: false,
+            usage: Usage {
+                input_tokens: 0,
+                output_tokens: 0,
+            },
+            stop_reason: None,
+        }
+    }
+
+    /// Feed a raw byte chunk into the parser.
+    ///
+    /// Returns the events produced by all complete SSE lines in `chunk`, plus a
+    /// boolean that is `true` when a `message_stop` event was encountered (i.e.
+    /// the stream is finished and the caller should stop reading).
+    ///
+    /// Returns `Err` if the internal line buffer exceeds the 10 MB safety limit.
+    fn process_chunk(
+        &mut self,
+        chunk: &[u8],
+    ) -> std::result::Result<(Vec<StreamEvent>, bool), String> {
+        const MAX_SSE_BUFFER: usize = 10 * 1024 * 1024; // 10 MB
+
+        let chunk_str = String::from_utf8_lossy(chunk);
+        self.line_buffer.push_str(&chunk_str);
+
+        if self.line_buffer.len() > MAX_SSE_BUFFER {
+            return Err("SSE stream buffer exceeded 10MB limit".to_string());
+        }
+
+        let mut events = Vec::new();
+        let mut stream_done = false;
+
+        // Process complete lines (SSE format: lines ending with \n)
+        while let Some(newline_pos) = self.line_buffer.find('\n') {
+            let line = self.line_buffer[..newline_pos]
+                .trim_end_matches('\r')
+                .to_string();
+            self.line_buffer = self.line_buffer[newline_pos + 1..].to_string();
+
+            if line.is_empty() {
+                // Empty line = end of event block, reset event type
+                self.current_event_type.clear();
+                continue;
+            }
+
+            if let Some(event_type) = line.strip_prefix("event: ") {
+                self.current_event_type = event_type.to_string();
+                continue;
+            }
+
+            if let Some(data) = line.strip_prefix("data: ") {
+                let parsed: serde_json::Value = match serde_json::from_str(data) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                match self.current_event_type.as_str() {
+                    "content_block_start" => {
+                        if let Some(block) = parsed.get("content_block") {
+                            match block.get("type").and_then(|t| t.as_str()) {
+                                Some("tool_use") => {
+                                    self.in_tool_block = true;
+                                    self.tool_id = block
+                                        .get("id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    self.tool_name = block
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    self.tool_input_json.clear();
+                                }
+                                _ => {
+                                    self.in_tool_block = false;
+                                }
+                            }
+                        }
+                    }
+                    "content_block_delta" => {
+                        if let Some(delta) = parsed.get("delta") {
+                            match delta.get("type").and_then(|t| t.as_str()) {
+                                Some("text_delta") => {
+                                    if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
+                                        events.push(StreamEvent::TextDelta(text.to_string()));
+                                    }
+                                }
+                                Some("input_json_delta") => {
+                                    if let Some(partial) =
+                                        delta.get("partial_json").and_then(|t| t.as_str())
+                                    {
+                                        self.tool_input_json.push_str(partial);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "content_block_stop" => {
+                        if self.in_tool_block {
+                            let input: serde_json::Value =
+                                serde_json::from_str(&self.tool_input_json)
+                                    .unwrap_or_else(|_| serde_json::json!({}));
+                            events.push(StreamEvent::ToolUse {
+                                id: self.tool_id.clone(),
+                                name: self.tool_name.clone(),
+                                input,
+                            });
+                            self.in_tool_block = false;
+                            self.tool_input_json.clear();
+                        }
+                    }
+                    "message_delta" => {
+                        if let Some(d) = parsed.get("delta") {
+                            if let Some(sr) = d.get("stop_reason").and_then(|v| v.as_str()) {
+                                self.stop_reason = Some(sr.to_string());
+                            }
+                        }
+                        if let Some(u) = parsed.get("usage") {
+                            if let Some(out) = u.get("output_tokens").and_then(|v| v.as_u64()) {
+                                self.usage.output_tokens = out as u32;
+                            }
+                        }
+                    }
+                    "message_start" => {
+                        if let Some(msg) = parsed.get("message") {
+                            if let Some(u) = msg.get("usage") {
+                                if let Some(inp) = u.get("input_tokens").and_then(|v| v.as_u64()) {
+                                    self.usage.input_tokens = inp as u32;
+                                }
+                            }
+                        }
+                    }
+                    "message_stop" => {
+                        events.push(StreamEvent::Done {
+                            usage: self.usage.clone(),
+                            stop_reason: self.stop_reason.clone(),
+                        });
+                        stream_done = true;
+                        // Stop processing further lines in this chunk.
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok((events, stream_done))
+    }
+
+    /// Produce a terminal `Done` event for streams that end without `message_stop`.
+    fn finish(self) -> StreamEvent {
+        StreamEvent::Done {
+            usage: self.usage,
+            stop_reason: self.stop_reason,
+        }
+    }
+}
+
 /// Process an SSE byte stream into StreamEvents.
 ///
 /// Reads SSE-formatted lines from the stream and converts them to `StreamEvent`s.
@@ -308,161 +503,26 @@ async fn process_sse_stream(
 ) -> std::result::Result<(), String> {
     tokio::pin!(stream);
 
-    const MAX_SSE_BUFFER: usize = 10 * 1024 * 1024; // 10 MB
-    let mut line_buffer = String::new();
-    let mut current_event_type = String::new();
-
-    // State for accumulating tool input JSON deltas
-    let mut tool_id = String::new();
-    let mut tool_name = String::new();
-    let mut tool_input_json = String::new();
-    let mut in_tool_block = false;
-
-    let mut usage = Usage {
-        input_tokens: 0,
-        output_tokens: 0,
-    };
-    let mut stop_reason: Option<String> = None;
+    let mut parser = SseParser::new();
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.map_err(|e: reqwest::Error| e.to_string())?;
-        let chunk_str = String::from_utf8_lossy(chunk.as_ref());
-        line_buffer.push_str(&chunk_str);
 
-        if line_buffer.len() > MAX_SSE_BUFFER {
-            return Err("SSE stream buffer exceeded 10MB limit".to_string());
+        let (events, stream_done) = parser.process_chunk(chunk.as_ref())?;
+
+        for event in events {
+            if tx.send(event).await.is_err() {
+                return Ok(());
+            }
         }
 
-        // Process complete lines (SSE format: lines ending with \n)
-        while let Some(newline_pos) = line_buffer.find('\n') {
-            let line = line_buffer[..newline_pos]
-                .trim_end_matches('\r')
-                .to_string();
-            line_buffer = line_buffer[newline_pos + 1..].to_string();
-
-            if line.is_empty() {
-                // Empty line = end of event block, reset event type
-                current_event_type.clear();
-                continue;
-            }
-
-            if let Some(event_type) = line.strip_prefix("event: ") {
-                current_event_type = event_type.to_string();
-                continue;
-            }
-
-            if let Some(data) = line.strip_prefix("data: ") {
-                let parsed: serde_json::Value = match serde_json::from_str(data) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-
-                match current_event_type.as_str() {
-                    "content_block_start" => {
-                        if let Some(block) = parsed.get("content_block") {
-                            match block.get("type").and_then(|t| t.as_str()) {
-                                Some("tool_use") => {
-                                    in_tool_block = true;
-                                    tool_id = block
-                                        .get("id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    tool_name = block
-                                        .get("name")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    tool_input_json.clear();
-                                }
-                                _ => {
-                                    in_tool_block = false;
-                                }
-                            }
-                        }
-                    }
-                    "content_block_delta" => {
-                        if let Some(delta) = parsed.get("delta") {
-                            match delta.get("type").and_then(|t| t.as_str()) {
-                                Some("text_delta") => {
-                                    if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
-                                        if tx
-                                            .send(StreamEvent::TextDelta(text.to_string()))
-                                            .await
-                                            .is_err()
-                                        {
-                                            return Ok(());
-                                        }
-                                    }
-                                }
-                                Some("input_json_delta") => {
-                                    if let Some(partial) =
-                                        delta.get("partial_json").and_then(|t| t.as_str())
-                                    {
-                                        tool_input_json.push_str(partial);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    "content_block_stop" => {
-                        if in_tool_block {
-                            let input: serde_json::Value = serde_json::from_str(&tool_input_json)
-                                .unwrap_or_else(|_| serde_json::json!({}));
-                            if tx
-                                .send(StreamEvent::ToolUse {
-                                    id: tool_id.clone(),
-                                    name: tool_name.clone(),
-                                    input,
-                                })
-                                .await
-                                .is_err()
-                            {
-                                return Ok(());
-                            }
-                            in_tool_block = false;
-                            tool_input_json.clear();
-                        }
-                    }
-                    "message_delta" => {
-                        if let Some(d) = parsed.get("delta") {
-                            if let Some(sr) = d.get("stop_reason").and_then(|v| v.as_str()) {
-                                stop_reason = Some(sr.to_string());
-                            }
-                        }
-                        if let Some(u) = parsed.get("usage") {
-                            if let Some(out) = u.get("output_tokens").and_then(|v| v.as_u64()) {
-                                usage.output_tokens = out as u32;
-                            }
-                        }
-                    }
-                    "message_start" => {
-                        if let Some(msg) = parsed.get("message") {
-                            if let Some(u) = msg.get("usage") {
-                                if let Some(inp) = u.get("input_tokens").and_then(|v| v.as_u64()) {
-                                    usage.input_tokens = inp as u32;
-                                }
-                            }
-                        }
-                    }
-                    "message_stop" => {
-                        let _ = tx
-                            .send(StreamEvent::Done {
-                                usage: usage.clone(),
-                                stop_reason: stop_reason.clone(),
-                            })
-                            .await;
-                        return Ok(());
-                    }
-                    _ => {}
-                }
-            }
+        if stream_done {
+            return Ok(());
         }
     }
 
     // If we exit without message_stop, still send Done
-    let _ = tx.send(StreamEvent::Done { usage, stop_reason }).await;
+    let _ = tx.send(parser.finish()).await;
     Ok(())
 }
 
@@ -522,20 +582,13 @@ mod tests {
 
     #[test]
     fn client_from_env_missing_key() {
-        let saved = std::env::var("ANTHROPIC_API_KEY").ok();
-        // SAFETY: This test is not run concurrently with other env-mutating tests.
-        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
-
+        // from_env() either succeeds (if credentials exist on this machine)
+        // or returns MissingCredentials — both are valid outcomes.
+        // We no longer manipulate env vars here to avoid unsafe in multi-threaded tests.
         let result = ClaudeProvider::from_env(None);
         match result {
-            Err(ProviderError::MissingCredentials) => {}
-            Ok(_) => {} // Valid if OAuth or key file exists
+            Ok(_) | Err(ProviderError::MissingCredentials) => {}
             Err(e) => panic!("unexpected error: {e:?}"),
-        }
-
-        if let Some(key) = saved {
-            // SAFETY: Restoring the env var after test.
-            unsafe { std::env::set_var("ANTHROPIC_API_KEY", key) };
         }
     }
 
@@ -549,12 +602,18 @@ mod tests {
         let auth = AuthMethod::ApiKey("sk-ant-test-secret".to_string());
         let debug = format!("{:?}", auth);
         assert!(debug.contains("ApiKey"));
-        assert!(!debug.contains("sk-ant-test"), "API key must be redacted in Debug output");
+        assert!(
+            !debug.contains("sk-ant-test"),
+            "API key must be redacted in Debug output"
+        );
 
         let auth = AuthMethod::OAuthToken("sk-ant-oat01-secret".to_string());
         let debug = format!("{:?}", auth);
         assert!(debug.contains("OAuthToken"));
-        assert!(!debug.contains("sk-ant-oat01"), "OAuth token must be redacted in Debug output");
+        assert!(
+            !debug.contains("sk-ant-oat01"),
+            "OAuth token must be redacted in Debug output"
+        );
     }
 
     #[test]
@@ -581,19 +640,9 @@ mod tests {
 
     #[test]
     fn provider_model_name() {
-        // Only test when API key is available (otherwise from_env fails)
-        let saved = std::env::var("ANTHROPIC_API_KEY").ok();
-        // SAFETY: test env manipulation
-        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key") };
-
-        let provider = ClaudeProvider::from_env(Some("claude-haiku-4-5-20251001")).unwrap();
+        // Use with_api_key to avoid unsafe env var manipulation in tests.
+        let provider = ClaudeProvider::with_api_key("test-key", Some("claude-haiku-4-5-20251001"));
         assert_eq!(provider.model(), "claude-haiku-4-5-20251001");
-
-        // SAFETY: restore env
-        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
-        if let Some(key) = saved {
-            unsafe { std::env::set_var("ANTHROPIC_API_KEY", key) };
-        }
     }
 
     #[test]

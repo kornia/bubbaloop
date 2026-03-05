@@ -236,12 +236,12 @@ impl UpCommand {
                     let actions_json =
                         serde_json::to_string(&skill.actions).unwrap_or_else(|_| "[]".to_string());
                     let prompt = format!("[skill:{}] {}", skill.name, actions_json);
-                    let next_run = crate::agent::scheduler::next_run_after(
+                    let next_run: i64 = crate::agent::scheduler::next_run_after(
                         schedule_expr,
                         crate::agent::scheduler::now_epoch_secs(),
                     )
-                    .map(|ts| ts.to_string())
-                    .unwrap_or_else(|_| "0".to_string());
+                    .map(|ts| ts as i64)
+                    .unwrap_or(0);
                     let job = crate::agent::memory::semantic::Job {
                         id: uuid::Uuid::new_v4().to_string(),
                         cron_schedule: Some(schedule_expr.clone()),

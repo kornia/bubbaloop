@@ -13,8 +13,8 @@ pub struct Job {
     pub id: String,
     /// Optional cron expression for recurring jobs.
     pub cron_schedule: Option<String>,
-    /// Next scheduled run time (epoch seconds as string).
-    pub next_run_at: String,
+    /// Next scheduled run time (epoch seconds).
+    pub next_run_at: i64,
     /// The instruction to execute.
     pub prompt_payload: String,
     /// Status: pending, running, completed, failed, dead_letter.
@@ -64,11 +64,25 @@ impl SemanticStore {
         conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
         conn.query_row("PRAGMA busy_timeout=5000", [], |_| Ok(()))?;
 
+        // Migrate jobs table: if next_run_at is TEXT, drop and recreate with INTEGER.
+        // Jobs are transient — dropping is safe.
+        let needs_migration: bool = conn
+            .query_row(
+                "SELECT type FROM pragma_table_info('jobs') WHERE name = 'next_run_at'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map(|col_type| col_type.to_uppercase() != "INTEGER")
+            .unwrap_or(false); // false = table doesn't exist yet, no migration needed
+        if needs_migration {
+            conn.execute_batch("DROP TABLE IF EXISTS jobs;")?;
+        }
+
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS jobs (
                 id              TEXT PRIMARY KEY,
                 cron_schedule   TEXT,
-                next_run_at     TEXT NOT NULL,
+                next_run_at     INTEGER NOT NULL,
                 prompt_payload  TEXT NOT NULL,
                 status          TEXT DEFAULT 'pending',
                 recurrence      BOOLEAN DEFAULT 0,
@@ -124,7 +138,7 @@ impl SemanticStore {
 
     /// Get all pending jobs that are due (next_run_at <= now).
     pub fn pending_jobs(&self) -> super::Result<Vec<Job>> {
-        let now = super::now_epoch_secs().to_string();
+        let now = super::now_epoch_secs() as i64;
         let mut stmt = self.conn.prepare(
             "SELECT id, cron_schedule, next_run_at, prompt_payload, status, recurrence, retry_count, last_error \
              FROM jobs WHERE status = 'pending' AND next_run_at <= ?1 \
@@ -157,7 +171,7 @@ impl SemanticStore {
 
     /// Mark a job as completed. Resets retry_count and clears last_error.
     /// If recurring, sets next_run_at and resets to pending.
-    pub fn complete_job(&self, id: &str, next_run_at: Option<&str>) -> super::Result<()> {
+    pub fn complete_job(&self, id: &str, next_run_at: Option<i64>) -> super::Result<()> {
         match next_run_at {
             Some(next) => {
                 self.conn.execute(
@@ -215,7 +229,7 @@ impl SemanticStore {
             let next_run = super::now_epoch_secs() + backoff_secs;
             self.conn.execute(
                 "UPDATE jobs SET status = 'pending', retry_count = ?1, last_error = ?2, next_run_at = ?3 WHERE id = ?4",
-                params![new_count, error, next_run.to_string(), id],
+                params![new_count, error, next_run as i64, id],
             )?;
             Ok(FailureOutcome::Retrying {
                 retry_count: new_count,
@@ -283,7 +297,7 @@ impl SemanticStore {
         let cutoff = super::now_epoch_secs().saturating_sub(u64::from(retention_days) * 86400);
         let count = self.conn.execute(
             "DELETE FROM jobs WHERE status IN ('completed', 'failed', 'dead_letter') AND next_run_at <= ?1",
-            params![cutoff.to_string()],
+            params![cutoff as i64],
         )?;
         Ok(count)
     }
@@ -430,7 +444,7 @@ mod tests {
         let job = Job {
             id: "job-1".to_string(),
             cron_schedule: None,
-            next_run_at: "0".to_string(), // due immediately
+            next_run_at: 0, // due immediately
             prompt_payload: "check camera health".to_string(),
             status: "pending".to_string(),
             recurrence: false,
@@ -458,7 +472,7 @@ mod tests {
         let job = Job {
             id: "job-2".to_string(),
             cron_schedule: Some("*/15 * * * *".to_string()),
-            next_run_at: "0".to_string(),
+            next_run_at: 0,
             prompt_payload: "health patrol".to_string(),
             status: "pending".to_string(),
             recurrence: true,
@@ -469,7 +483,9 @@ mod tests {
         store.start_job("job-2").unwrap();
 
         // Complete with next run
-        store.complete_job("job-2", Some("9999999999")).unwrap();
+        store
+            .complete_job("job-2", Some(9_999_999_999_i64))
+            .unwrap();
 
         // Should still exist in DB with pending status and future run time
         // (won't appear in pending_jobs since next_run_at > now)
@@ -483,7 +499,7 @@ mod tests {
         let job = Job {
             id: "job-3".to_string(),
             cron_schedule: None,
-            next_run_at: "0".to_string(),
+            next_run_at: 0,
             prompt_payload: "failing task".to_string(),
             status: "pending".to_string(),
             recurrence: false,
@@ -509,7 +525,7 @@ mod tests {
         let job = Job {
             id: "job-4".to_string(),
             cron_schedule: None,
-            next_run_at: "0".to_string(),
+            next_run_at: 0,
             prompt_payload: "always fails".to_string(),
             status: "pending".to_string(),
             recurrence: false,
@@ -538,7 +554,7 @@ mod tests {
         let job = Job {
             id: "job-backoff".to_string(),
             cron_schedule: None,
-            next_run_at: "0".to_string(),
+            next_run_at: 0,
             prompt_payload: "backoff test".to_string(),
             status: "pending".to_string(),
             recurrence: false,
@@ -575,7 +591,7 @@ mod tests {
         let job = Job {
             id: "job-dl".to_string(),
             cron_schedule: None,
-            next_run_at: "0".to_string(),
+            next_run_at: 0,
             prompt_payload: "dead letter test".to_string(),
             status: "pending".to_string(),
             recurrence: false,
@@ -601,7 +617,7 @@ mod tests {
         let job = Job {
             id: "job-5".to_string(),
             cron_schedule: None,
-            next_run_at: "0".to_string(),
+            next_run_at: 0,
             prompt_payload: "temp task".to_string(),
             status: "pending".to_string(),
             recurrence: false,
@@ -741,7 +757,7 @@ mod tests {
                 .create_job(&Job {
                     id: format!("job-{}", i),
                     cron_schedule: None,
-                    next_run_at: "0".to_string(),
+                    next_run_at: 0,
                     prompt_payload: format!("task {}", i),
                     status: if i == 0 { "completed" } else { "pending" }.to_string(),
                     recurrence: false,
@@ -761,7 +777,7 @@ mod tests {
             .create_job(&Job {
                 id: "j-1".to_string(),
                 cron_schedule: None,
-                next_run_at: "0".to_string(),
+                next_run_at: 0,
                 prompt_payload: "done".to_string(),
                 status: "completed".to_string(),
                 recurrence: false,
@@ -773,7 +789,7 @@ mod tests {
             .create_job(&Job {
                 id: "j-2".to_string(),
                 cron_schedule: None,
-                next_run_at: "0".to_string(),
+                next_run_at: 0,
                 prompt_payload: "waiting".to_string(),
                 status: "pending".to_string(),
                 recurrence: false,
@@ -819,7 +835,7 @@ mod tests {
             .create_job(&Job {
                 id: "old-done".to_string(),
                 cron_schedule: None,
-                next_run_at: "0".to_string(),
+                next_run_at: 0,
                 prompt_payload: "done".to_string(),
                 status: "completed".to_string(),
                 recurrence: false,
@@ -832,7 +848,7 @@ mod tests {
             .create_job(&Job {
                 id: "still-pending".to_string(),
                 cron_schedule: None,
-                next_run_at: "0".to_string(),
+                next_run_at: 0,
                 prompt_payload: "waiting".to_string(),
                 status: "pending".to_string(),
                 recurrence: false,

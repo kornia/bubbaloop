@@ -3,8 +3,8 @@
 //! Extracts reusable helpers from `cli/node.rs` so both CLI and MCP
 //! can install nodes from the official marketplace registry.
 
-use crate::registry::{self, RegistryNode};
-use std::path::{Path, PathBuf};
+use crate::registry::{self, find_curl, RegistryNode};
+use std::path::Path;
 use std::process::Command;
 
 /// Errors from marketplace download operations.
@@ -35,17 +35,6 @@ pub fn detect_arch() -> Result<&'static str> {
         "aarch64" => Ok("arm64"),
         other => Err(MarketplaceError::UnsupportedArch(other.to_string())),
     }
-}
-
-/// Find curl in standard system paths to avoid PATH hijacking.
-pub fn find_curl() -> Option<PathBuf> {
-    for dir in &["/usr/bin", "/usr/local/bin", "/bin"] {
-        let path = Path::new(dir).join("curl");
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    None
 }
 
 /// Download a file from a URL to a local path using curl.

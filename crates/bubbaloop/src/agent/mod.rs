@@ -10,6 +10,7 @@
 //! - `scheduler` — Job poller integrated with heartbeat
 
 pub mod dispatch;
+pub(crate) mod dispatch_security;
 pub mod gateway;
 pub mod heartbeat;
 pub mod memory;
@@ -29,7 +30,6 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Notify;
 
 // ── EventSink trait ──────────────────────────────────────────────
 
@@ -97,7 +97,6 @@ const TOOL_CALL_TIMEOUT_SECS: u64 = 30;
 /// Maximum characters in a tool result before truncation.
 const MAX_TOOL_RESULT_CHARS: usize = 4096;
 
-
 /// Compute a u64 hash key for a (tool_name, input_json) pair.
 fn tool_call_hash(name: &str, input: &serde_json::Value) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -107,6 +106,20 @@ fn tool_call_hash(name: &str, input: &serde_json::Value) -> u64 {
         .unwrap_or_default()
         .hash(&mut hasher);
     hasher.finish()
+}
+
+/// Per-call input for `run_agent_turn`, grouping the request-specific parameters.
+pub struct AgentTurnInput<'a> {
+    pub user_input: Option<&'a str>,
+    pub job_id: Option<&'a str>,
+    pub correlation_id: &'a str,
+}
+
+/// Internal context passed to `run_turn_loop`, grouping agent-config parameters.
+struct TurnContext<'a> {
+    soul: &'a Soul,
+    system_prompt: &'a str,
+    tools: &'a [provider::ToolDefinition],
 }
 
 /// Errors from agent operations.
@@ -167,7 +180,6 @@ pub async fn create_agent_session(endpoint: Option<&str>) -> Result<Arc<zenoh::S
 /// The `sink` parameter controls where output goes (stdout, Zenoh, etc.).
 /// The `correlation_id` tags all emitted events for response correlation.
 /// The `job_notify` wakes the agent loop immediately when a near-future job is scheduled.
-#[allow(clippy::too_many_arguments)]
 pub async fn run_agent_turn<
     M: ModelProvider,
     P: crate::mcp::platform::PlatformOperations,
@@ -177,37 +189,45 @@ pub async fn run_agent_turn<
     dispatcher: &Dispatcher<P>,
     memory: &mut Memory,
     soul: &Soul,
-    user_input: Option<&str>,
-    job_id: Option<&str>,
     sink: &S,
-    correlation_id: &str,
-    job_notify: Option<&Arc<Notify>>,
+    input: &AgentTurnInput<'_>,
 ) -> Result<()> {
+    let user_input = input.user_input;
+    let job_id = input.job_id;
+    let correlation_id = input.correlation_id;
     // 1. Build system prompt
     let inventory = dispatcher.get_node_inventory().await;
-    let active_jobs = memory.semantic.pending_jobs().unwrap_or_default();
-    let decay_half_life = soul.capabilities.episodic_decay_half_life_days;
-    let relevant_episodes = match user_input {
-        Some(input) => memory
+    let (active_jobs, relevant_episodes, recent_plan, recovered_context) = {
+        let backend = memory.backend.lock().await;
+        let active_jobs = backend.semantic.pending_jobs().unwrap_or_default();
+        let decay_half_life = soul.capabilities.episodic_decay_half_life_days;
+        let relevant_episodes = match user_input {
+            Some(input) => backend
+                .episodic
+                .search_with_decay(input, 5, decay_half_life)
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let recent_plan = backend
             .episodic
-            .search_with_decay(input, 5, decay_half_life)
-            .unwrap_or_default(),
-        None => Vec::new(),
+            .latest_plan()
+            .ok()
+            .flatten()
+            .map(|e| e.content);
+        let recovered_context = backend
+            .episodic
+            .latest_flush()
+            .ok()
+            .flatten()
+            .map(|e| EpisodicLog::strip_flush_prefix(&e.content).to_string());
+        (
+            active_jobs,
+            relevant_episodes,
+            recent_plan,
+            recovered_context,
+        )
     };
-    // Retrieve the most recent persisted plan (survives context compaction)
-    let recent_plan = memory
-        .episodic
-        .latest_plan()
-        .ok()
-        .flatten()
-        .map(|e| e.content);
-    // Recover context from the most recent flush entry (post-compaction continuity)
-    let recovered_context = memory
-        .episodic
-        .latest_flush()
-        .ok()
-        .flatten()
-        .map(|e| EpisodicLog::strip_flush_prefix(&e.content).to_string());
+    let resource_summary = dispatcher.telemetry_prompt_summary().await;
     let system_prompt = prompt::build_system_prompt(
         soul,
         &inventory,
@@ -215,6 +235,7 @@ pub async fn run_agent_turn<
         &relevant_episodes,
         recent_plan.as_deref(),
         recovered_context.as_deref(),
+        resource_summary.as_deref(),
     );
 
     // Add user input to short-term memory
@@ -222,7 +243,8 @@ pub async fn run_agent_turn<
         memory.short_term.push(Message::user(input));
         // Log to episodic
         let entry = EpisodicLog::make_entry("user", input, job_id);
-        if let Err(e) = memory.episodic.append(&entry) {
+        let backend = memory.backend.lock().await;
+        if let Err(e) = backend.episodic.append(&entry) {
             log::warn!("Failed to log user message to episodic: {}", e);
         }
     }
@@ -236,13 +258,13 @@ pub async fn run_agent_turn<
             provider,
             dispatcher,
             memory,
-            soul,
-            &system_prompt,
-            &tools,
-            job_id,
+            &TurnContext {
+                soul,
+                system_prompt: &system_prompt,
+                tools: &tools,
+            },
             sink,
-            correlation_id,
-            job_notify,
+            input,
         ),
     )
     .await;
@@ -250,10 +272,7 @@ pub async fn run_agent_turn<
     match turn_result {
         Ok(inner) => inner?,
         Err(_elapsed) => {
-            log::error!(
-                "[Agent] Turn timed out after {}s",
-                TURN_TIMEOUT_SECS
-            );
+            log::error!("[Agent] Turn timed out after {}s", TURN_TIMEOUT_SECS);
             sink.emit(AgentEvent::error(
                 correlation_id,
                 &format!("Turn timed out after {}s", TURN_TIMEOUT_SECS),
@@ -276,7 +295,6 @@ pub async fn run_agent_turn<
 }
 
 /// Inner turn loop extracted for timeout wrapping.
-#[allow(clippy::too_many_arguments)]
 async fn run_turn_loop<
     M: ModelProvider,
     P: crate::mcp::platform::PlatformOperations,
@@ -285,14 +303,15 @@ async fn run_turn_loop<
     provider: &M,
     dispatcher: &Dispatcher<P>,
     memory: &mut Memory,
-    soul: &Soul,
-    system_prompt: &str,
-    tools: &[provider::ToolDefinition],
-    job_id: Option<&str>,
+    ctx: &TurnContext<'_>,
     sink: &S,
-    correlation_id: &str,
-    job_notify: Option<&Arc<Notify>>,
+    input: &AgentTurnInput<'_>,
 ) -> Result<()> {
+    let soul = ctx.soul;
+    let system_prompt = ctx.system_prompt;
+    let tools = ctx.tools;
+    let job_id = input.job_id;
+    let correlation_id = input.correlation_id;
     let mut last_input_tokens = 0u32;
     let mut tool_call_counts: HashMap<u64, u32> = HashMap::new();
     let mut loop_detected = false;
@@ -376,7 +395,8 @@ async fn run_turn_loop<
         let text = text_buffer;
         if !text.is_empty() {
             let entry = EpisodicLog::make_entry("assistant", &text, job_id);
-            if let Err(e) = memory.episodic.append(&entry) {
+            let backend = memory.backend.lock().await;
+            if let Err(e) = backend.episodic.append(&entry) {
                 log::warn!("Failed to log assistant message to episodic: {}", e);
             }
         }
@@ -387,7 +407,8 @@ async fn run_turn_loop<
         // likely a plan/reasoning (Ralph Loop: Plan → Execute). Persist it.
         if !text.is_empty() && !tool_calls.is_empty() {
             let plan_entry = EpisodicLog::make_entry("plan", &text, job_id);
-            if let Err(e) = memory.episodic.append(&plan_entry) {
+            let backend = memory.backend.lock().await;
+            if let Err(e) = backend.episodic.append(&plan_entry) {
                 log::warn!("Failed to persist plan to episodic: {}", e);
             }
         }
@@ -419,10 +440,11 @@ async fn run_turn_loop<
                     ),
                 ))
                 .await;
-                memory.short_term.push(Message::user(
-                    "SYSTEM: Loop detected — you've called the same tool 6 times with identical \
-                     arguments. Stop repeating and summarize what you've accomplished so far.",
-                ));
+                memory.short_term.push(Message::user(&format!(
+                    "SYSTEM: Loop detected — you've called the same tool {} times with identical \
+                         arguments. Stop repeating and summarize what you've accomplished so far.",
+                    LOOP_BREAK_THRESHOLD
+                )));
                 loop_detected = true;
                 break;
             }
@@ -430,242 +452,27 @@ async fn run_turn_loop<
             sink.emit(AgentEvent::tool(correlation_id, &tc.name)).await;
             log::info!("[Agent] calling tool: {}", tc.name);
 
-            // Memory tools are handled inline (EpisodicLog holds !Send Connection)
-            let result = match tc.name.as_str() {
-                "memory_search" => {
-                    let query = tc.input.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                    let limit =
-                        tc.input.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-                    let decay = soul.capabilities.episodic_decay_half_life_days;
-                    match memory.episodic.search_with_decay(query, limit, decay) {
-                        Ok(entries) if entries.is_empty() => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: "No matching entries found.".to_string(),
-                            is_error: None,
-                        },
-                        Ok(entries) => {
-                            let text = entries
-                                .iter()
-                                .map(|e| format!("[{}] {}: {}", e.timestamp, e.role, e.content))
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            ContentBlock::ToolResult {
-                                tool_use_id: tc.id.clone(),
-                                content: text,
-                                is_error: None,
-                            }
-                        }
-                        Err(e) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: format!("Error: {}", e),
-                            is_error: Some(true),
-                        },
-                    }
-                }
-                "memory_forget" => {
-                    let query = tc.input.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                    let reason = tc
-                        .input
-                        .get("reason")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("agent requested");
-                    match memory.episodic.forget(query, reason) {
-                        Ok(0) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: "No matching entries found to forget.".to_string(),
-                            is_error: None,
-                        },
-                        Ok(n) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: format!("Forgot {} entries matching '{}'.", n, query),
-                            is_error: None,
-                        },
-                        Err(e) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: format!("Error: {}", e),
-                            is_error: Some(true),
-                        },
-                    }
-                }
-                // ── Semantic memory tools (per-agent SQLite) ──────────
-                "schedule_task" => {
-                    let prompt = tc
-                        .input
-                        .get("prompt")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let cron_schedule = tc.input.get("cron_schedule").and_then(|v| v.as_str());
-                    let recurrence = tc
-                        .input
-                        .get("recurrence")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    let next_run = match cron_schedule {
-                        Some(cron) => match crate::agent::scheduler::next_run_after(
-                            cron,
-                            crate::agent::scheduler::now_epoch_secs(),
-                        ) {
-                            Ok(ts) => ts.to_string(),
-                            Err(e) => {
-                                tool_results.push((
-                                    tc.id.clone(),
-                                    format!("Error: invalid cron expression: {}", e),
-                                    Some(true),
-                                ));
-                                continue;
-                            }
-                        },
-                        None => crate::agent::scheduler::now_epoch_secs().to_string(),
-                    };
-                    let job_id_new = uuid::Uuid::new_v4().to_string();
-                    let job = memory::semantic::Job {
-                        id: job_id_new.clone(),
-                        cron_schedule: cron_schedule.map(|s| s.to_string()),
-                        next_run_at: next_run,
-                        prompt_payload: prompt.to_string(),
-                        status: "pending".to_string(),
-                        recurrence,
-                        retry_count: 0,
-                        last_error: None,
-                    };
-                    match memory.semantic.create_job(&job) {
-                        Ok(()) => {
-                            if let Some(n) = job_notify {
-                                n.notify_one();
-                            }
-                            ContentBlock::ToolResult {
-                                tool_use_id: tc.id.clone(),
-                                content: format!("Job '{}' scheduled", job_id_new),
-                                is_error: None,
-                            }
-                        }
-                        Err(e) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: format!("Error: {}", e),
-                            is_error: Some(true),
-                        },
-                    }
-                }
-                "list_jobs" => {
-                    let status = tc.input.get("status").and_then(|v| v.as_str());
-                    match memory.semantic.list_jobs(status) {
-                        Ok(jobs) if jobs.is_empty() => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: "No jobs found.".to_string(),
-                            is_error: None,
-                        },
-                        Ok(jobs) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: serde_json::to_string_pretty(&jobs)
-                                .unwrap_or_else(|_| "Error serializing jobs".to_string()),
-                            is_error: None,
-                        },
-                        Err(e) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: format!("Error: {}", e),
-                            is_error: Some(true),
-                        },
-                    }
-                }
-                "delete_job" => {
-                    let target_id = tc
-                        .input
-                        .get("job_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    match memory.semantic.delete_job(target_id) {
-                        Ok(()) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: format!("Job '{}' deleted", target_id),
-                            is_error: None,
-                        },
-                        Err(e) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: format!("Error: {}", e),
-                            is_error: Some(true),
-                        },
-                    }
-                }
-                "create_proposal" => {
-                    let skill = tc.input.get("skill").and_then(|v| v.as_str()).unwrap_or("");
-                    let description = tc
-                        .input
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let actions = tc
-                        .input
-                        .get("actions")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("[]");
-                    let proposal = memory::semantic::Proposal {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        timestamp: memory::now_rfc3339(),
-                        skill: skill.to_string(),
-                        description: description.to_string(),
-                        actions: actions.to_string(),
-                        status: "pending".to_string(),
-                        decided_by: None,
-                        decided_at: None,
-                    };
-                    let pid = proposal.id.clone();
-                    match memory.semantic.create_proposal(&proposal) {
-                        Ok(()) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: format!("Proposal '{}' created (pending approval)", pid),
-                            is_error: None,
-                        },
-                        Err(e) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: format!("Error: {}", e),
-                            is_error: Some(true),
-                        },
-                    }
-                }
-                "list_proposals" => {
-                    let status = tc.input.get("status").and_then(|v| v.as_str());
-                    match memory.semantic.list_proposals(status) {
-                        Ok(proposals) if proposals.is_empty() => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: "No proposals found.".to_string(),
-                            is_error: None,
-                        },
-                        Ok(proposals) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: serde_json::to_string_pretty(&proposals)
-                                .unwrap_or_else(|_| "Error serializing proposals".to_string()),
-                            is_error: None,
-                        },
-                        Err(e) => ContentBlock::ToolResult {
-                            tool_use_id: tc.id.clone(),
-                            content: format!("Error: {}", e),
-                            is_error: Some(true),
-                        },
-                    }
-                }
-                _ => {
-                    match tokio::time::timeout(
-                        Duration::from_secs(TOOL_CALL_TIMEOUT_SECS),
-                        dispatcher.call_tool(&tc.id, &tc.name, &tc.input),
-                    )
-                    .await
-                    {
-                        Ok(r) => r,
-                        Err(_elapsed) => {
-                            log::warn!(
-                                "[Agent] Tool '{}' timed out after {}s",
-                                tc.name,
-                                TOOL_CALL_TIMEOUT_SECS
-                            );
-                            ContentBlock::ToolResult {
-                                tool_use_id: tc.id.clone(),
-                                content: format!(
-                                    "Error: tool '{}' timed out after {}s",
-                                    tc.name, TOOL_CALL_TIMEOUT_SECS
-                                ),
-                                is_error: Some(true),
-                            }
-                        }
+            // All tools dispatched through the Dispatcher (memory tools included)
+            let result = match tokio::time::timeout(
+                Duration::from_secs(TOOL_CALL_TIMEOUT_SECS),
+                dispatcher.call_tool(&tc.id, &tc.name, &tc.input),
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(_elapsed) => {
+                    log::warn!(
+                        "[Agent] Tool '{}' timed out after {}s",
+                        tc.name,
+                        TOOL_CALL_TIMEOUT_SECS
+                    );
+                    ContentBlock::ToolResult {
+                        tool_use_id: tc.id.clone(),
+                        content: format!(
+                            "Error: tool '{}' timed out after {}s",
+                            tc.name, TOOL_CALL_TIMEOUT_SECS
+                        ),
+                        is_error: Some(true),
                     }
                 }
             };
@@ -681,7 +488,8 @@ async fn run_turn_loop<
                 tool_results.push((tool_use_id.clone(), content.clone(), *is_error));
                 // Log tool result to episodic
                 let entry = EpisodicLog::make_entry("tool", &content, job_id);
-                if let Err(e) = memory.episodic.append(&entry) {
+                let backend = memory.backend.lock().await;
+                if let Err(e) = backend.episodic.append(&entry) {
                     log::warn!("Failed to log tool result to episodic: {}", e);
                 }
             }
@@ -721,7 +529,8 @@ async fn run_turn_loop<
             if is_flush_substantive(&flush_text) {
                 // Log flush to episodic with flush: true tag
                 let entry = EpisodicLog::make_flush_entry(&flush_text, job_id);
-                if let Err(e) = memory.episodic.append(&entry) {
+                let backend = memory.backend.lock().await;
+                if let Err(e) = backend.episodic.append(&entry) {
                     log::warn!("Failed to log flush to episodic: {}", e);
                 }
                 log::info!("[Agent] Flush persisted ({} chars)", flush_text.len());

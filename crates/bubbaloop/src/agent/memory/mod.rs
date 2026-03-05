@@ -10,6 +10,7 @@ pub mod semantic;
 use crate::agent::provider::Message;
 use chrono::SecondsFormat;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Errors from memory operations.
 #[derive(Debug, thiserror::Error)]
@@ -24,14 +25,22 @@ pub enum MemoryError {
 
 pub type Result<T> = std::result::Result<T, MemoryError>;
 
-/// Unified memory facade combining all three tiers.
-pub struct Memory {
-    /// Tier 1: Short-term conversation messages (RAM).
-    pub short_term: Vec<Message>,
+/// Backend storage wrapping episodic + semantic tiers.
+/// Wrapped in `Arc<tokio::sync::Mutex<MemoryBackend>>` by the runtime
+/// to make the `!Send` rusqlite::Connection safely accessible from async code.
+pub struct MemoryBackend {
     /// Tier 2: Episodic log (NDJSON + FTS5).
     pub episodic: episodic::EpisodicLog,
     /// Tier 3: Semantic store (SQLite jobs + proposals).
     pub semantic: semantic::SemanticStore,
+}
+
+/// Unified memory facade combining all three tiers.
+pub struct Memory {
+    /// Tier 1: Short-term conversation messages (RAM).
+    pub short_term: Vec<Message>,
+    /// Tier 2+3: Episodic + semantic backend behind Arc<Mutex>.
+    pub backend: Arc<tokio::sync::Mutex<MemoryBackend>>,
 }
 
 impl Memory {
@@ -49,8 +58,10 @@ impl Memory {
 
         Ok(Self {
             short_term: Vec::new(),
-            episodic,
-            semantic,
+            backend: Arc::new(tokio::sync::Mutex::new(MemoryBackend {
+                episodic,
+                semantic,
+            })),
         })
     }
 
@@ -62,14 +73,18 @@ impl Memory {
     /// Run startup cleanup: prune old episodic logs and completed jobs.
     ///
     /// Called once after `Memory::open()` in the agent main loop.
-    pub fn startup_cleanup(&self, episodic_retention_days: u32) {
-        match self.episodic.prune_old_logs(episodic_retention_days) {
+    pub async fn startup_cleanup(&self, episodic_retention_days: u32) {
+        let backend = self.backend.lock().await;
+        match backend.episodic.prune_old_logs(episodic_retention_days) {
             Ok(0) => {}
             Ok(n) => log::info!("[Memory] Startup pruned {} old episodic log file(s)", n),
             Err(e) => log::warn!("[Memory] Startup episodic prune failed: {}", e),
         }
 
-        match self.semantic.prune_completed_jobs(episodic_retention_days) {
+        match backend
+            .semantic
+            .prune_completed_jobs(episodic_retention_days)
+        {
             Ok(0) => {}
             Ok(n) => log::info!("[Memory] Startup pruned {} completed/failed job(s)", n),
             Err(e) => log::warn!("[Memory] Startup semantic prune failed: {}", e),
@@ -113,14 +128,14 @@ mod tests {
         assert!(mem.short_term.is_empty());
     }
 
-    #[test]
-    fn startup_cleanup_runs_without_error() {
+    #[tokio::test]
+    async fn startup_cleanup_runs_without_error() {
         let dir = tempfile::tempdir().unwrap();
         let mem = Memory::open(dir.path()).unwrap();
         // Should not panic or error with empty memory
-        mem.startup_cleanup(30);
+        mem.startup_cleanup(30).await;
         // 0 retention should also be fine (no-op)
-        mem.startup_cleanup(0);
+        mem.startup_cleanup(0).await;
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::agent::heartbeat::{ArousalSource, ArousalState, HeartbeatState};
 use crate::agent::memory::Memory;
 use crate::agent::provider::claude::ClaudeProvider;
 use crate::agent::soul::Soul;
-use crate::agent::{run_agent_turn, EventSink};
+use crate::agent::{run_agent_turn, AgentTurnInput, EventSink};
 use crate::daemon::registry::get_bubbaloop_home;
 use crate::mcp::platform::DaemonPlatform;
 use serde::Deserialize;
@@ -178,18 +178,19 @@ impl AgentRuntime {
         session: Arc<zenoh::Session>,
         node_manager: Arc<crate::daemon::node_manager::NodeManager>,
         mut shutdown_rx: tokio::sync::watch::Receiver<()>,
+        telemetry: Option<Arc<crate::daemon::telemetry::TelemetryService>>,
     ) -> Result<(), crate::agent::AgentError> {
         let config = AgentsConfig::load_or_default();
         let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
         let machine_id = crate::daemon::util::get_machine_id();
 
         // Create shared platform for all agents
-        let platform = Arc::new(DaemonPlatform {
+        let platform = Arc::new(DaemonPlatform::new(
             node_manager,
-            session: session.clone(),
-            scope: scope.clone(),
-            machine_id: machine_id.clone(),
-        });
+            session.clone(),
+            scope.clone(),
+            machine_id.clone(),
+        ));
 
         let mut handles = HashMap::new();
 
@@ -241,7 +242,7 @@ impl AgentRuntime {
             };
             {
                 let retention = soul.read().await.capabilities.episodic_log_retention_days;
-                memory.startup_cleanup(retention);
+                memory.startup_cleanup(retention).await;
             }
 
             // Create outbox sink
@@ -258,8 +259,24 @@ impl AgentRuntime {
                 }
             };
 
-            // Create dispatcher
-            let dispatcher = Dispatcher::new(platform.clone(), scope.clone(), machine_id.clone());
+            // Create job notify and dispatcher with memory backend
+            let job_notify = Arc::new(Notify::new());
+            let decay = soul.read().await.capabilities.episodic_decay_half_life_days;
+            let dispatcher = {
+                let d = Dispatcher::new_with_memory(
+                    platform.clone(),
+                    scope.clone(),
+                    machine_id.clone(),
+                    memory.backend.clone(),
+                    Some(job_notify.clone()),
+                    decay,
+                );
+                if let Some(ref telem) = telemetry {
+                    d.with_telemetry(telem.clone())
+                } else {
+                    d
+                }
+            };
 
             // Create inbox channel
             let (tx, rx) = mpsc::channel(AGENT_INBOX_CAPACITY);
@@ -316,8 +333,12 @@ impl AgentRuntime {
                 } else {
                     None // Falls back to global soul_directory()
                 };
-                crate::agent::soul::soul_watcher(soul_for_watcher, soul_watcher_shutdown, watch_dir)
-                    .await;
+                crate::agent::soul::soul_watcher(
+                    soul_for_watcher,
+                    soul_watcher_shutdown,
+                    watch_dir,
+                )
+                .await;
             });
 
             tokio::spawn(agent_loop(
@@ -329,6 +350,7 @@ impl AgentRuntime {
                 rx,
                 sink,
                 agent_shutdown,
+                job_notify,
             ));
 
             log::info!(
@@ -427,10 +449,10 @@ async fn agent_loop(
     mut inbox_rx: mpsc::Receiver<AgentMessage>,
     sink: ZenohSink,
     mut shutdown_rx: tokio::sync::watch::Receiver<()>,
+    job_notify: Arc<Notify>,
 ) {
     let initial_caps = soul.read().await.capabilities.clone();
     let mut arousal = ArousalState::new(&initial_caps);
-    let job_notify = Arc::new(Notify::new());
 
     log::info!("[Agent:{}] Event loop started", agent_id);
 
@@ -452,11 +474,12 @@ async fn agent_loop(
                     &dispatcher,
                     &mut memory,
                     &soul_snapshot,
-                    Some(&msg.text),
-                    None,
                     &sink,
-                    &msg.id,
-                    Some(&job_notify),
+                    &AgentTurnInput {
+                        user_input: Some(&msg.text),
+                        job_id: None,
+                        correlation_id: &msg.id,
+                    },
                 ).await {
                     log::error!("[Agent:{}] Turn failed: {}", agent_id, e);
                     sink.emit(AgentEvent::error(&msg.id, &e.to_string())).await;
@@ -485,7 +508,10 @@ async fn agent_loop(
 
         // Poll pending jobs (triggered by heartbeat tick or job_notify)
         if poll_jobs {
-            let jobs = memory.semantic.pending_jobs().unwrap_or_default();
+            let jobs = {
+                let backend = memory.backend.lock().await;
+                backend.semantic.pending_jobs().unwrap_or_default()
+            };
             let has_jobs = !jobs.is_empty();
 
             let state = if has_jobs {
@@ -501,7 +527,17 @@ async fn agent_loop(
 
             for job in &jobs {
                 let soul_snapshot = soul.read().await.clone();
-                memory.semantic.start_job(&job.id).ok();
+                {
+                    let backend = memory.backend.lock().await;
+                    if let Err(e) = backend.semantic.start_job(&job.id) {
+                        log::warn!(
+                            "[Agent:{}] Failed to mark job {} as started: {}",
+                            agent_id,
+                            job.id,
+                            e
+                        );
+                    }
+                }
                 let cid = uuid::Uuid::new_v4().to_string();
 
                 if let Err(e) = run_agent_turn(
@@ -509,22 +545,31 @@ async fn agent_loop(
                     &dispatcher,
                     &mut memory,
                     &soul_snapshot,
-                    Some(&job.prompt_payload),
-                    Some(&job.id),
                     &sink,
-                    &cid,
-                    Some(&job_notify),
+                    &AgentTurnInput {
+                        user_input: Some(&job.prompt_payload),
+                        job_id: Some(&job.id),
+                        correlation_id: &cid,
+                    },
                 )
                 .await
                 {
                     log::error!("[Agent:{}] Job {} failed: {}", agent_id, job.id, e);
                     let max_retries = soul_snapshot.capabilities.max_retries;
-                    memory
+                    let backend = memory.backend.lock().await;
+                    if let Err(fe) = backend
                         .semantic
                         .fail_job(&job.id, &e.to_string(), max_retries)
-                        .ok();
+                    {
+                        log::warn!(
+                            "[Agent:{}] Failed to mark job {} as failed: {}",
+                            agent_id,
+                            job.id,
+                            fe
+                        );
+                    }
                 } else {
-                    let next_run = if job.recurrence {
+                    let next_run: Option<i64> = if job.recurrence {
                         job.cron_schedule
                             .as_deref()
                             .and_then(|cron| {
@@ -534,14 +579,19 @@ async fn agent_loop(
                                 )
                                 .ok()
                             })
-                            .map(|ts| ts.to_string())
+                            .map(|ts| ts as i64)
                     } else {
                         None
                     };
-                    memory
-                        .semantic
-                        .complete_job(&job.id, next_run.as_deref())
-                        .ok();
+                    let backend = memory.backend.lock().await;
+                    if let Err(e) = backend.semantic.complete_job(&job.id, next_run) {
+                        log::warn!(
+                            "[Agent:{}] Failed to mark job {} as complete: {}",
+                            agent_id,
+                            job.id,
+                            e
+                        );
+                    }
                 }
                 memory.clear_short_term();
             }
@@ -559,8 +609,9 @@ pub async fn run_agent_runtime(
     session: Arc<zenoh::Session>,
     node_manager: Arc<crate::daemon::node_manager::NodeManager>,
     shutdown_rx: tokio::sync::watch::Receiver<()>,
+    telemetry: Option<Arc<crate::daemon::telemetry::TelemetryService>>,
 ) -> crate::agent::Result<()> {
-    AgentRuntime::start(session, node_manager, shutdown_rx).await
+    AgentRuntime::start(session, node_manager, shutdown_rx, telemetry).await
 }
 
 #[cfg(test)]

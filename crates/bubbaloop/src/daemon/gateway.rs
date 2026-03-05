@@ -39,6 +39,16 @@ pub enum DaemonCommandType {
     },
     /// Remove a node by name.
     RemoveNode { name: String },
+    /// Build a node by name.
+    BuildNode { name: String },
+    /// Uninstall a node by name.
+    UninstallNode { name: String },
+    /// Clean build artifacts for a node.
+    CleanNode { name: String },
+    /// Enable autostart for a node.
+    EnableAutostart { name: String },
+    /// Disable autostart for a node.
+    DisableAutostart { name: String },
     /// Query daemon health.
     Health,
     /// Graceful daemon shutdown.
@@ -226,6 +236,21 @@ mod tests {
                 config: None,
             },
             DaemonCommandType::RemoveNode {
+                name: "cam".to_string(),
+            },
+            DaemonCommandType::BuildNode {
+                name: "cam".to_string(),
+            },
+            DaemonCommandType::UninstallNode {
+                name: "cam".to_string(),
+            },
+            DaemonCommandType::CleanNode {
+                name: "cam".to_string(),
+            },
+            DaemonCommandType::EnableAutostart {
+                name: "cam".to_string(),
+            },
+            DaemonCommandType::DisableAutostart {
                 name: "cam".to_string(),
             },
             DaemonCommandType::Health,

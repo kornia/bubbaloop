@@ -473,10 +473,7 @@ impl EpisodicLog {
             if !entry.content.starts_with(FLUSH_PREFIX) {
                 continue;
             }
-            if best
-                .as_ref()
-                .map_or(true, |b| entry.timestamp > b.timestamp)
-            {
+            if best.as_ref().is_none_or(|b| entry.timestamp > b.timestamp) {
                 best = Some(entry);
             }
         }
@@ -499,9 +496,7 @@ impl EpisodicLog {
 
     /// Strip the flush prefix from a flush entry's content.
     pub fn strip_flush_prefix(content: &str) -> &str {
-        content
-            .strip_prefix(FLUSH_PREFIX)
-            .unwrap_or(content)
+        content.strip_prefix(FLUSH_PREFIX).unwrap_or(content)
     }
 }
 

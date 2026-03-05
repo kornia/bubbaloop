@@ -11,7 +11,9 @@ pub mod login;
 pub mod marketplace;
 pub mod node;
 pub mod status;
+pub mod system_utils;
 pub mod up;
+pub mod zenoh_session;
 
 pub use agent::AgentCommand;
 pub use daemon::DaemonCommand;

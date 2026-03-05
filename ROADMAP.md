@@ -91,7 +91,7 @@ bubbaloop agent chat   # interactive REPL
 ### v0.0.1–v0.0.6: MCP-Native Sensor Runtime
 
 - [x] Single binary: CLI + daemon + MCP server
-- [x] 25 MCP tools (discovery, lifecycle, data, config, system)
+- [x] 37 MCP tools (discovery, lifecycle, data, config, system, memory, telemetry)
 - [x] MCP is sole control interface — Zenoh for data only
 - [x] Marketplace with precompiled binaries (ARM64 + x86_64)
 - [x] Full node lifecycle via MCP: install, uninstall, start, stop, restart, autostart
@@ -258,6 +258,29 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 
 ---
 
+### Phase 4b: Telemetry Watchdog (OOM Prevention)
+
+**Goal:** Never reboot. Prevent OOM crashes on resource-constrained edge devices.
+
+**Deliverables:**
+- [x] Cross-platform resource monitoring via `sysinfo` (Linux ARM/x86, macOS)
+- [x] Adaptive sampling (5-30s based on memory pressure level)
+- [x] Circuit breaker: auto-kill nodes at Red (90%) / Critical (95%) memory thresholds
+- [x] SQLite cold storage (`~/.bubbaloop/telemetry.db`, 7-day retention)
+- [x] In-memory ring buffer for zero-latency circuit breaker reads
+- [x] Agent tools: `get_system_telemetry`, `get_telemetry_history`, `update_telemetry_config`
+- [x] System prompt injection: resource summary in every agent turn
+- [x] Hot-reloadable config (`~/.bubbaloop/telemetry.toml`) with guardrails
+- [x] Agent-decided restarts (no auto-restart loops)
+- [ ] GPU memory tracking (Jetson unified memory)
+- [ ] Dashboard telemetry visualization
+
+**New deps:** `sysinfo`. **New code:** ~1500 lines. **New tests:** 30.
+
+**Design doc:** `docs/plans/2026-03-05-telemetry-watchdog-design.md`
+
+---
+
 ### Phase 5: Polish + "5 Minutes to Magic"
 
 **Goal:** Install → configure → chat in under 5 minutes.
@@ -314,7 +337,7 @@ These are out of scope but represent natural evolution:
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 25 tools |
+| Control | MCP (rmcp) | Standard AI agent interface, 37 tools |
 | Memory | SQLite (rusqlite) | Embedded, +1-2 MB, battle-tested everywhere |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
@@ -325,6 +348,8 @@ These are out of scope but represent natural evolution:
 
 ## Design Documents
 
+- `docs/plans/2026-03-05-telemetry-watchdog-design.md` — Telemetry watchdog design (circuit breaker, agent bridge, hot-reload config)
+- `docs/plans/2026-03-05-telemetry-watchdog-implementation.md` — Telemetry watchdog implementation plan (11 tasks)
 - `docs/plans/2026-03-03-openclaw-agent-rewrite-design.md` — OpenClaw agent rewrite (Soul, 3-tier memory, adaptive heartbeat, proposals)
 - `docs/plans/2026-02-27-hardware-ai-agent-design.md` — Full agent design (architecture, memory, scheduling, security)
 - `docs/plans/2026-02-28-agent-implementation-design.md` — Agent implementation design (Phases 2-4)

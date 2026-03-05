@@ -228,24 +228,11 @@ impl Soul {
         // Update approval mode in capabilities.toml (preserve other settings)
         let caps_path = soul_dir.join("capabilities.toml");
         let caps_content = std::fs::read_to_string(&caps_path).unwrap_or_default();
-        let updated = if caps_content.contains("default_approval_mode") {
-            caps_content
-                .lines()
-                .map(|line| {
-                    if line.starts_with("default_approval_mode") {
-                        format!("default_approval_mode = \"{}\"", approval_mode)
-                    } else {
-                        line.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            format!(
-                "{}\ndefault_approval_mode = \"{}\"\n",
-                caps_content, approval_mode
-            )
-        };
+        let mut caps: toml::Value = toml::from_str(&caps_content)
+            .unwrap_or_else(|_| toml::from_str(DEFAULT_CAPABILITIES_TOML).unwrap());
+        caps["default_approval_mode"] = toml::Value::String(approval_mode.to_string());
+        let updated = toml::to_string_pretty(&caps)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         std::fs::write(&caps_path, updated)?;
 
         println!();

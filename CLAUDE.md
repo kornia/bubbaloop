@@ -26,13 +26,14 @@ Key source files in `crates/bubbaloop/src/`:
 - `agent/provider/claude.rs` — Claude API client with dual auth (API key + OAuth bearer token)
 - `agent/memory/` — 3-tier: short-term (RAM) + episodic (NDJSON) + semantic (SQLite)
 - `agent/heartbeat.rs` — Adaptive heartbeat: arousal + decay + state collection
-- `agent/dispatch.rs` — Internal MCP tool dispatch (34 tools)
+- `agent/dispatch.rs` — Internal MCP tool dispatch (37 tools, includes telemetry)
 - `cli/agent_client.rs` — Thin Zenoh CLI client for agent chat/list (pub/sub, no LLM)
 - `cli/node/mod.rs` — node CRUD, validation, list/add/remove
 - `cli/node/install.rs` — install, precompiled binary download, GitHub clone
 - `cli/node/lifecycle.rs` — start, stop, restart, logs
 - `cli/node/build.rs` — build node
-- `daemon/mod.rs` — skill runtime: registry + lifecycle + health + MCP
+- `daemon/mod.rs` — skill runtime: registry + lifecycle + health + MCP + telemetry watchdog
+- `daemon/telemetry/` — Resource watchdog: sampler (sysinfo), circuit breaker, SQLite storage, hot-reload config
 - `daemon/node_manager.rs` (57KB) — node lifecycle, build queue, health
 - `daemon/systemd.rs` (38KB) — D-Bus/zbus integration
 - `daemon/registry.rs` — `~/.bubbaloop/nodes.json` management

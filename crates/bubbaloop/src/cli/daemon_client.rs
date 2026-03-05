@@ -265,15 +265,21 @@ impl DaemonClient {
                 name: None,
                 config: None,
             },
-            "build" | "uninstall" | "clean" | "enable_autostart" | "disable_autostart" => {
-                // For commands not in the gateway protocol, install the node first
-                // then send as a generic command via the install path
-                DaemonCommandType::InstallNode {
-                    source: name.to_string(),
-                    name: None,
-                    config: None,
-                }
-            }
+            "build" => DaemonCommandType::BuildNode {
+                name: name.to_string(),
+            },
+            "uninstall" => DaemonCommandType::UninstallNode {
+                name: name.to_string(),
+            },
+            "clean" => DaemonCommandType::CleanNode {
+                name: name.to_string(),
+            },
+            "enable_autostart" => DaemonCommandType::EnableAutostart {
+                name: name.to_string(),
+            },
+            "disable_autostart" => DaemonCommandType::DisableAutostart {
+                name: name.to_string(),
+            },
             _ => {
                 return Err(DaemonClientError::Request(format!(
                     "Unknown command: {}",
