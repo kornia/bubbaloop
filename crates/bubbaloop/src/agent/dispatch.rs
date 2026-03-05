@@ -242,14 +242,14 @@ impl<P: PlatformOperations> Dispatcher<P> {
             ToolDefinition {
                 name: "list_jobs".to_string(),
                 description: "List scheduled jobs. Optionally filter by status: pending, running, \
-                    completed, failed, failed_requires_approval."
+                    completed, failed, dead_letter."
                     .to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "status": {
                             "type": "string",
-                            "description": "Filter by status (optional). One of: pending, running, completed, failed, failed_requires_approval"
+                            "description": "Filter by status (optional). One of: pending, running, completed, failed, dead_letter"
                         }
                     },
                     "required": []
@@ -859,21 +859,43 @@ impl<P: PlatformOperations> Dispatcher<P> {
         }
     }
 
-    /// Block reads of sensitive files (secrets, keys, credentials).
+    /// Block reads of sensitive files (secrets, keys, credentials, system internals).
     fn validate_read_path(path: &std::path::Path) -> Result<(), String> {
+        // Block /proc and /sys — contain sensitive system info (env vars, kernel params)
+        let path_str = path.to_string_lossy();
+        if path_str.starts_with("/proc") || path_str.starts_with("/sys") {
+            return Err("Blocked: /proc and /sys contain sensitive system information".to_string());
+        }
+
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         const SENSITIVE_NAMES: &[&str] = &[
+            // SSH keys
             "id_rsa",
             "id_ed25519",
             "id_ecdsa",
             "id_dsa",
+            "authorized_keys",
+            "known_hosts",
+            // System files
             "shadow",
             "sudoers",
             "master.key",
+            // Credential files
+            "credentials",
+            "credentials.json",
+            "token.json",
+            "mcp-token",
+            "anthropic-key",
+            "oauth-credentials.json",
+            // Package manager auth
+            ".npmrc",
+            ".netrc",
+            ".pypirc",
         ];
 
-        const SENSITIVE_EXTENSIONS: &[&str] = &[".pem", ".key", ".p12", ".pfx", ".jks"];
+        const SENSITIVE_EXTENSIONS: &[&str] =
+            &[".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".truststore"];
 
         if SENSITIVE_NAMES.contains(&name) {
             return Err(format!("Blocked: {} is a sensitive file", name));
@@ -893,6 +915,15 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 && !name.contains("sample"))
         {
             return Err("Blocked: .env files may contain secrets".to_string());
+        }
+
+        // Block cloud provider credential directories
+        if let Some(parent) = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) {
+            if (parent == ".aws" || parent == ".gcloud" || parent == ".azure")
+                && (name == "credentials" || name == "config" || name == "token")
+            {
+                return Err("Blocked: cloud provider credential files".to_string());
+            }
         }
 
         Ok(())
@@ -946,6 +977,44 @@ impl<P: PlatformOperations> Dispatcher<P> {
     fn validate_command(command: &str) -> Result<(), String> {
         let cmd = command.to_lowercase();
 
+        // ── 0. Block shell meta-programming that bypasses other checks ──
+        let first_word = cmd.split_whitespace().next().unwrap_or("");
+        let first_cmd_base = first_word.rsplit('/').next().unwrap_or(first_word);
+        const META_COMMANDS: &[&str] = &["eval", "exec", "source"];
+        if META_COMMANDS.contains(&first_cmd_base) {
+            return Err(
+                "Blocked: shell meta-commands (eval/exec/source) are not allowed".to_string(),
+            );
+        }
+
+        // Block shell interpreters used to bypass checks (sh -c, bash -c, python -c, etc.)
+        const SHELL_INTERPRETERS: &[&str] =
+            &["sh", "bash", "zsh", "dash", "python", "python3", "perl", "ruby", "node"];
+        if SHELL_INTERPRETERS.contains(&first_cmd_base)
+            && (cmd.contains(" -c ") || cmd.contains(" -c'") || cmd.contains(" -c\""))
+        {
+            return Err(
+                "Blocked: executing commands via shell interpreters (-c) is not allowed".to_string(),
+            );
+        }
+
+        // Block /usr/bin/env used to bypass first-command checks
+        if first_cmd_base == "env" {
+            return Err(
+                "Blocked: 'env' command can bypass safety checks — run commands directly"
+                    .to_string(),
+            );
+        }
+
+        // Block backtick and $() subshell execution
+        let unquoted = cmd.replace('\'', "").replace('"', "");
+        if unquoted.contains('`') || unquoted.contains("$(") {
+            return Err(
+                "Blocked: subshell execution (backticks, $()) is not allowed in commands"
+                    .to_string(),
+            );
+        }
+
         // ── 1. Privilege escalation ─────────────────────────────────
         if cmd.starts_with("sudo ") || cmd.starts_with("su ") || cmd.contains("| sudo ") {
             return Err(
@@ -973,9 +1042,8 @@ impl<P: PlatformOperations> Dispatcher<P> {
         }
 
         // ── 3. System control commands ──────────────────────────────
-        // Extract the base command name (handles /usr/bin/cmd, pipes, etc.)
-        let first_word = cmd.split_whitespace().next().unwrap_or("");
-        let first_cmd = first_word.rsplit('/').next().unwrap_or(first_word);
+        // first_cmd_base already extracted above (handles /usr/bin/cmd)
+        let first_cmd = first_cmd_base;
 
         const BLOCKED_COMMANDS: &[&str] = &[
             // Power management

@@ -255,7 +255,7 @@ MCP is the **sole control interface**. 34 tools across 6 categories:
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
 | Control | MCP (rmcp) | Standard AI agent interface, 34 tools |
-| Memory | SQLite (rusqlite) + NDJSON | 3-tier: RAM + episodic (NDJSON/FTS5) + semantic (SQLite) |
+| Memory | SQLite (rusqlite) + NDJSON | 3-tier: RAM + episodic (NDJSON/FTS5) + semantic (SQLite). Episodic FTS5 index and semantic store share `memory.db` per agent. |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
 | systemd | zbus (D-Bus) | No subprocess spawning, safe |

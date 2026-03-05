@@ -18,11 +18,24 @@ pub fn build_system_prompt(
     active_jobs: &[Job],
     relevant_episodes: &[LogEntry],
     recent_plan: Option<&str>,
+    recovered_context: Option<&str>,
 ) -> String {
     let mut parts = Vec::new();
 
     // Soul identity (the core of the agent's personality)
     parts.push(soul.identity.clone());
+
+    // Post-compaction context recovery from episodic memory.
+    // When the LLM context window is truncated, this section restores
+    // the most recent flush entry so the agent can maintain continuity.
+    if let Some(ctx) = recovered_context {
+        parts.push(format!(
+            "\n## Previously Persisted Context (recovered from memory)\n\n\
+             The following was saved before your last context compaction. \
+             This is recovered state, not current conversation.\n\n{}",
+            ctx
+        ));
+    }
 
     // Capabilities summary
     parts.push(format!(
@@ -133,7 +146,7 @@ mod tests {
     #[test]
     fn prompt_with_default_soul() {
         let soul = Soul::default();
-        let prompt = build_system_prompt(&soul, "", &[], &[], None);
+        let prompt = build_system_prompt(&soul, "", &[], &[], None, None);
         assert!(prompt.contains("Bubbaloop"));
         assert!(prompt.contains("No sensors installed."));
         assert!(prompt.contains("claude-sonnet-4-20250514"));
@@ -156,6 +169,7 @@ mod tests {
             &[],
             &[],
             None,
+            None,
         );
         assert!(prompt.contains("I am a test agent."));
         assert!(prompt.contains("test-model"));
@@ -177,7 +191,7 @@ mod tests {
             retry_count: 0,
             last_error: None,
         }];
-        let prompt = build_system_prompt(&soul, "", &jobs, &[], None);
+        let prompt = build_system_prompt(&soul, "", &jobs, &[], None, None);
         assert!(prompt.contains("Active Jobs"));
         assert!(prompt.contains("health patrol"));
         assert!(prompt.contains("*/15 * * * *"));
@@ -193,7 +207,7 @@ mod tests {
             job_id: Some("job-1".to_string()),
             flush: None,
         }];
-        let prompt = build_system_prompt(&soul, "", &[], &episodes, None);
+        let prompt = build_system_prompt(&soul, "", &[], &episodes, None, None);
         assert!(prompt.contains("Relevant Context"));
         assert!(prompt.contains("front-door camera"));
     }
@@ -211,7 +225,7 @@ mod tests {
             retry_count: 0,
             last_error: None,
         }];
-        let prompt = build_system_prompt(&soul, "", &jobs, &[], None);
+        let prompt = build_system_prompt(&soul, "", &jobs, &[], None, None);
         assert!(!prompt.contains("Active Jobs"));
     }
 
@@ -227,7 +241,7 @@ mod tests {
                 flush: None,
             })
             .collect();
-        let prompt = build_system_prompt(&soul, "", &[], &episodes, None);
+        let prompt = build_system_prompt(&soul, "", &[], &episodes, None, None);
         let count = prompt.matches("message ").count();
         assert_eq!(count, 5, "should limit episodic context to 5 entries");
     }
@@ -235,7 +249,7 @@ mod tests {
     #[test]
     fn prompt_auto_mode_includes_autonomous_directive() {
         let soul = Soul::default(); // default is auto mode
-        let prompt = build_system_prompt(&soul, "", &[], &[], None);
+        let prompt = build_system_prompt(&soul, "", &[], &[], None, None);
         assert!(
             prompt.contains("Autonomous (Ralph Loop)"),
             "auto mode should include autonomous directive"
@@ -257,7 +271,7 @@ mod tests {
     #[test]
     fn prompt_includes_scope_boundary() {
         let soul = Soul::default();
-        let prompt = build_system_prompt(&soul, "", &[], &[], None);
+        let prompt = build_system_prompt(&soul, "", &[], &[], None, None);
         assert!(
             prompt.contains("## Tools"),
             "prompt should include Tools section"
@@ -281,7 +295,7 @@ mod tests {
                 ..Default::default()
             },
         };
-        let prompt = build_system_prompt(&soul, "", &[], &[], None);
+        let prompt = build_system_prompt(&soul, "", &[], &[], None, None);
         assert!(
             prompt.contains("Operating Mode: Propose"),
             "propose mode should include propose directive"
@@ -296,7 +310,7 @@ mod tests {
     fn prompt_with_plan_includes_current_plan() {
         let soul = Soul::default();
         let plan_text = "1. Install camera node\n2. Build and start\n3. Verify health";
-        let prompt = build_system_prompt(&soul, "", &[], &[], Some(plan_text));
+        let prompt = build_system_prompt(&soul, "", &[], &[], Some(plan_text), None);
         assert!(
             prompt.contains("## Current Plan"),
             "prompt should include Current Plan section"
@@ -310,10 +324,57 @@ mod tests {
     #[test]
     fn prompt_without_plan_omits_section() {
         let soul = Soul::default();
-        let prompt = build_system_prompt(&soul, "", &[], &[], None);
+        let prompt = build_system_prompt(&soul, "", &[], &[], None, None);
         assert!(
             !prompt.contains("Current Plan"),
             "prompt should not include Current Plan when None"
+        );
+    }
+
+    #[test]
+    fn prompt_with_recovered_context() {
+        let soul = Soul::default();
+        let recovered = "Camera node was restarted. Job health-patrol is running.";
+        let prompt = build_system_prompt(&soul, "", &[], &[], None, Some(recovered));
+        assert!(
+            prompt.contains("Previously Persisted Context"),
+            "prompt should include recovered context section"
+        );
+        assert!(
+            prompt.contains("recovered from memory"),
+            "prompt should label context as recovered"
+        );
+        assert!(
+            prompt.contains("Camera node was restarted"),
+            "prompt should include the recovered content"
+        );
+    }
+
+    #[test]
+    fn prompt_without_recovered_context_omits_section() {
+        let soul = Soul::default();
+        let prompt = build_system_prompt(&soul, "", &[], &[], None, None);
+        assert!(
+            !prompt.contains("Previously Persisted Context"),
+            "prompt should not include recovered context when None"
+        );
+    }
+
+    #[test]
+    fn prompt_recovered_context_appears_after_identity() {
+        let soul = Soul::default();
+        let recovered = "Some recovered state";
+        let prompt = build_system_prompt(&soul, "", &[], &[], None, Some(recovered));
+        let identity_pos = prompt.find("Bubbaloop").unwrap();
+        let recovered_pos = prompt.find("Previously Persisted Context").unwrap();
+        let config_pos = prompt.find("## Configuration").unwrap();
+        assert!(
+            recovered_pos > identity_pos,
+            "recovered context should appear after identity"
+        );
+        assert!(
+            recovered_pos < config_pos,
+            "recovered context should appear before configuration"
         );
     }
 }

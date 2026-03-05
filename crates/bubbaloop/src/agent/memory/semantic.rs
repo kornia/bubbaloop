@@ -17,7 +17,7 @@ pub struct Job {
     pub next_run_at: String,
     /// The instruction to execute.
     pub prompt_payload: String,
-    /// Status: pending, running, completed, failed, failed_requires_approval.
+    /// Status: pending, running, completed, failed, dead_letter.
     pub status: String,
     /// Whether this is a recurring job.
     pub recurrence: bool,
@@ -177,7 +177,7 @@ impl SemanticStore {
 
     /// Record a job failure with retry logic.
     ///
-    /// If retry_count >= max_retries, sets status to `failed_requires_approval`.
+    /// If retry_count >= max_retries, sets status to `dead_letter`.
     /// Otherwise, increments retry_count and schedules next attempt with exponential backoff.
     pub fn fail_job(
         &self,
@@ -195,17 +195,23 @@ impl SemanticStore {
         let new_count = retry_count + 1;
 
         if new_count as u32 >= max_retries {
-            // Circuit breaker: park the job
+            // Dead letter: park the job permanently after exhausting retries
             self.conn.execute(
-                "UPDATE jobs SET status = 'failed_requires_approval', retry_count = ?1, last_error = ?2 WHERE id = ?3",
+                "UPDATE jobs SET status = 'dead_letter', retry_count = ?1, last_error = ?2 WHERE id = ?3",
                 params![new_count, error, id],
             )?;
-            Ok(FailureOutcome::CircuitBroken {
+            log::warn!(
+                "[SemanticStore] Job '{}' dead-lettered after {} retries. Last error: {}",
+                id,
+                new_count,
+                error
+            );
+            Ok(FailureOutcome::DeadLettered {
                 retry_count: new_count,
             })
         } else {
-            // Exponential backoff: 10s * 2^retry_count (20s, 40s, 80s)
-            let backoff_secs = 10u64 * 2u64.pow(new_count as u32);
+            // Exponential backoff: 30s * 2^retry_count (30s, 60s, 120s)
+            let backoff_secs = 30u64 * 2u64.pow(new_count as u32);
             let next_run = super::now_epoch_secs() + backoff_secs;
             self.conn.execute(
                 "UPDATE jobs SET status = 'pending', retry_count = ?1, last_error = ?2, next_run_at = ?3 WHERE id = ?4",
@@ -266,9 +272,9 @@ impl SemanticStore {
         Ok(())
     }
 
-    /// Delete completed/failed jobs older than `retention_days`.
+    /// Delete completed/failed/dead-lettered jobs older than `retention_days`.
     ///
-    /// Only prunes jobs with status 'completed' or 'failed'. Pending/running jobs are kept.
+    /// Only prunes terminal jobs. Pending/running jobs are kept.
     /// Returns the number of deleted jobs.
     pub fn prune_completed_jobs(&self, retention_days: u32) -> super::Result<usize> {
         if retention_days == 0 {
@@ -276,7 +282,7 @@ impl SemanticStore {
         }
         let cutoff = super::now_epoch_secs().saturating_sub(u64::from(retention_days) * 86400);
         let count = self.conn.execute(
-            "DELETE FROM jobs WHERE status IN ('completed', 'failed') AND next_run_at <= ?1",
+            "DELETE FROM jobs WHERE status IN ('completed', 'failed', 'dead_letter') AND next_run_at <= ?1",
             params![cutoff.to_string()],
         )?;
         Ok(count)
@@ -388,8 +394,8 @@ impl SemanticStore {
 pub enum FailureOutcome {
     /// Job will be retried after backoff delay.
     Retrying { retry_count: i32, next_run_at: u64 },
-    /// Circuit breaker tripped — needs human approval.
-    CircuitBroken { retry_count: i32 },
+    /// Job permanently dead-lettered after exhausting retries.
+    DeadLettered { retry_count: i32 },
 }
 
 #[cfg(test)]
@@ -519,11 +525,74 @@ mod tests {
         let outcome = store.fail_job("job-4", "error 3", 3).unwrap(); // retry_count = 3
 
         match outcome {
-            FailureOutcome::CircuitBroken { retry_count } => {
+            FailureOutcome::DeadLettered { retry_count } => {
                 assert_eq!(retry_count, 3);
             }
-            _ => panic!("expected CircuitBroken"),
+            _ => panic!("expected DeadLettered"),
         }
+    }
+
+    #[test]
+    fn job_failure_backoff_30s_base() {
+        let (store, _dir) = test_store();
+        let job = Job {
+            id: "job-backoff".to_string(),
+            cron_schedule: None,
+            next_run_at: "0".to_string(),
+            prompt_payload: "backoff test".to_string(),
+            status: "pending".to_string(),
+            recurrence: false,
+            retry_count: 0,
+            last_error: None,
+        };
+        store.create_job(&job).unwrap();
+        store.start_job("job-backoff").unwrap();
+
+        let before = crate::agent::memory::now_epoch_secs();
+        let outcome = store.fail_job("job-backoff", "timeout", 3).unwrap();
+
+        match outcome {
+            FailureOutcome::Retrying {
+                retry_count,
+                next_run_at,
+            } => {
+                assert_eq!(retry_count, 1);
+                // 30s * 2^1 = 60s backoff
+                let expected_min = before + 60;
+                assert!(
+                    next_run_at >= expected_min,
+                    "backoff should be at least 60s, got {}s from now",
+                    next_run_at.saturating_sub(before)
+                );
+            }
+            _ => panic!("expected Retrying"),
+        }
+    }
+
+    #[test]
+    fn job_dead_letter_status_in_db() {
+        let (store, _dir) = test_store();
+        let job = Job {
+            id: "job-dl".to_string(),
+            cron_schedule: None,
+            next_run_at: "0".to_string(),
+            prompt_payload: "dead letter test".to_string(),
+            status: "pending".to_string(),
+            recurrence: false,
+            retry_count: 0,
+            last_error: None,
+        };
+        store.create_job(&job).unwrap();
+        store.start_job("job-dl").unwrap();
+
+        // Exhaust retries (max_retries = 1)
+        store.fail_job("job-dl", "fatal error", 1).unwrap();
+
+        // Verify the job has dead_letter status in DB
+        let jobs = store.list_jobs(Some("dead_letter")).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, "job-dl");
+        assert_eq!(jobs[0].last_error.as_deref(), Some("fatal error"));
     }
 
     #[test]

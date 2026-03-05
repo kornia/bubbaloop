@@ -437,17 +437,76 @@ impl EpisodicLog {
         }
     }
 
+    /// Retrieve the most recent flush entry from episodic memory.
+    ///
+    /// Flush entries are written before context compaction to persist key state.
+    /// After compaction, the agent can recover this context to maintain continuity.
+    /// Flush entries are identified by the `CONTEXT_FLUSH:` prefix in their content.
+    pub fn latest_flush(&self) -> super::Result<Option<LogEntry>> {
+        // Search FTS5 for the flush marker token, then filter by prefix.
+        let mut stmt = self.conn.prepare(
+            "SELECT content, role, timestamp, job_id \
+             FROM fts_episodic \
+             WHERE fts_episodic MATCH '\"CONTEXT_FLUSH\"' \
+             ORDER BY rank \
+             LIMIT 5",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let job_id: String = row.get(3)?;
+            Ok(LogEntry {
+                content: row.get(0)?,
+                role: row.get(1)?,
+                timestamp: row.get(2)?,
+                job_id: if job_id.is_empty() {
+                    None
+                } else {
+                    Some(job_id)
+                },
+                flush: Some(true),
+            })
+        })?;
+
+        // Return the most recent flush entry (by timestamp, descending).
+        let mut best: Option<LogEntry> = None;
+        for row in rows {
+            let entry = row?;
+            if !entry.content.starts_with(FLUSH_PREFIX) {
+                continue;
+            }
+            if best
+                .as_ref()
+                .map_or(true, |b| entry.timestamp > b.timestamp)
+            {
+                best = Some(entry);
+            }
+        }
+        Ok(best)
+    }
+
     /// Create a flush entry (for pre-compaction memory persistence).
+    ///
+    /// The content is prefixed with `CONTEXT_FLUSH:` so it can be identified
+    /// and retrieved by `latest_flush()` via FTS5 search.
     pub fn make_flush_entry(content: &str, job_id: Option<&str>) -> LogEntry {
         LogEntry {
             timestamp: super::now_rfc3339(),
             role: "system".to_string(),
-            content: content.to_string(),
+            content: format!("{}{}", FLUSH_PREFIX, content),
             job_id: job_id.map(|s| s.to_string()),
             flush: Some(true),
         }
     }
+
+    /// Strip the flush prefix from a flush entry's content.
+    pub fn strip_flush_prefix(content: &str) -> &str {
+        content
+            .strip_prefix(FLUSH_PREFIX)
+            .unwrap_or(content)
+    }
 }
+
+/// Prefix used to identify flush entries in FTS5.
+const FLUSH_PREFIX: &str = "CONTEXT_FLUSH: ";
 
 /// Build an FTS5 MATCH expression by quoting each word and joining with `separator`.
 ///
@@ -605,6 +664,11 @@ mod tests {
         assert_eq!(entry.role, "system");
         assert_eq!(entry.flush, Some(true));
         assert_eq!(entry.job_id.as_deref(), Some("job-123"));
+        assert!(entry.content.starts_with(FLUSH_PREFIX));
+        assert_eq!(
+            EpisodicLog::strip_flush_prefix(&entry.content),
+            "flush content"
+        );
     }
 
     #[test]
@@ -889,5 +953,79 @@ mod tests {
 
         // No entries with role="plan" exist
         assert!(log.latest_plan().unwrap().is_none());
+    }
+
+    #[test]
+    fn latest_flush_returns_none_when_empty() {
+        let (log, _dir) = test_episodic();
+        assert!(log.latest_flush().unwrap().is_none());
+    }
+
+    #[test]
+    fn latest_flush_finds_flush_entry() {
+        let (log, _dir) = test_episodic();
+        // Regular entry
+        log.append(&LogEntry {
+            timestamp: "2026-03-03T10:00:00Z".to_string(),
+            role: "user".to_string(),
+            content: "hello world".to_string(),
+            job_id: None,
+            flush: None,
+        })
+        .unwrap();
+        // Flush entry
+        let flush = EpisodicLog::make_flush_entry("Camera is healthy. Job patrol running.", None);
+        log.append(&flush).unwrap();
+
+        let result = log.latest_flush().unwrap().expect("should find flush");
+        assert!(result.content.starts_with(FLUSH_PREFIX));
+        assert_eq!(
+            EpisodicLog::strip_flush_prefix(&result.content),
+            "Camera is healthy. Job patrol running."
+        );
+    }
+
+    #[test]
+    fn latest_flush_returns_most_recent() {
+        let (log, _dir) = test_episodic();
+        // First flush
+        let mut flush1 = EpisodicLog::make_flush_entry("first flush state", None);
+        flush1.timestamp = "2026-03-03T10:00:00Z".to_string();
+        log.append(&flush1).unwrap();
+        // Second (newer) flush
+        let mut flush2 = EpisodicLog::make_flush_entry("second flush state", Some("job-42"));
+        flush2.timestamp = "2026-03-03T11:00:00Z".to_string();
+        log.append(&flush2).unwrap();
+
+        let result = log.latest_flush().unwrap().expect("should find flush");
+        assert!(
+            EpisodicLog::strip_flush_prefix(&result.content).contains("second flush state"),
+            "should return the most recent flush"
+        );
+    }
+
+    #[test]
+    fn latest_flush_ignores_non_flush_system_entries() {
+        let (log, _dir) = test_episodic();
+        // Regular system message (no CONTEXT_FLUSH prefix)
+        log.append(&LogEntry {
+            timestamp: "2026-03-03T10:00:00Z".to_string(),
+            role: "system".to_string(),
+            content: "System initialized".to_string(),
+            job_id: None,
+            flush: None,
+        })
+        .unwrap();
+
+        // No flush entries exist
+        assert!(log.latest_flush().unwrap().is_none());
+    }
+
+    #[test]
+    fn strip_flush_prefix_on_non_flush_content() {
+        assert_eq!(
+            EpisodicLog::strip_flush_prefix("regular content"),
+            "regular content"
+        );
     }
 }

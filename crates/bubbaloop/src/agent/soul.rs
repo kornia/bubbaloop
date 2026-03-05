@@ -331,10 +331,14 @@ fn prompt_with_default(prompt: &str, default: &str) -> std::io::Result<String> {
 ///
 /// Updates the shared `Arc<RwLock<Soul>>` when files change.
 /// Returns when the shutdown signal fires.
-pub async fn soul_watcher(soul: Arc<RwLock<Soul>>, mut shutdown: tokio::sync::watch::Receiver<()>) {
+pub async fn soul_watcher(
+    soul: Arc<RwLock<Soul>>,
+    mut shutdown: tokio::sync::watch::Receiver<()>,
+    watch_dir: Option<std::path::PathBuf>,
+) {
     use notify::{Event, EventKind, RecursiveMode, Watcher};
 
-    let dir = soul_directory();
+    let dir = watch_dir.unwrap_or_else(soul_directory);
     if !dir.exists() {
         log::info!("Soul directory does not exist, watcher not started");
         // Just wait for shutdown

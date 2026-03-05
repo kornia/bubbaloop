@@ -22,6 +22,20 @@ pub enum ProviderError {
     Format(String),
 }
 
+impl ProviderError {
+    /// Whether this error is retryable (transient server/network errors).
+    ///
+    /// Retryable: 429, 500, 502, 503, 504, network errors.
+    /// Non-retryable: 400, 401, 403, format errors, missing credentials.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Http(_) => true, // network-level errors are transient
+            Self::Api { status, .. } => matches!(status, 429 | 500 | 502 | 503 | 504),
+            Self::MissingCredentials | Self::Format(_) => false,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, ProviderError>;
 
 // ── Content blocks ──────────────────────────────────────────────────
@@ -553,5 +567,73 @@ mod tests {
             }
             other => panic!("expected Done, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn provider_error_retryable_api_5xx() {
+        for status in [500, 502, 503, 504] {
+            let err = ProviderError::Api {
+                status,
+                message: "server error".to_string(),
+            };
+            assert!(err.is_retryable(), "status {} should be retryable", status);
+        }
+    }
+
+    #[test]
+    fn provider_error_retryable_api_429() {
+        let err = ProviderError::Api {
+            status: 429,
+            message: "rate limited".to_string(),
+        };
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn provider_error_retryable_api_500() {
+        let err = ProviderError::Api {
+            status: 500,
+            message: "internal server error".to_string(),
+        };
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn provider_error_retryable_api_502() {
+        let err = ProviderError::Api {
+            status: 502,
+            message: "bad gateway".to_string(),
+        };
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn provider_error_not_retryable_api_401() {
+        let err = ProviderError::Api {
+            status: 401,
+            message: "unauthorized".to_string(),
+        };
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn provider_error_not_retryable_api_400() {
+        let err = ProviderError::Api {
+            status: 400,
+            message: "bad request".to_string(),
+        };
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn provider_error_not_retryable_missing_credentials() {
+        let err = ProviderError::MissingCredentials;
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn provider_error_not_retryable_format() {
+        let err = ProviderError::Format("bad json".to_string());
+        assert!(!err.is_retryable());
     }
 }

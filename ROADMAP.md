@@ -282,7 +282,12 @@ These are out of scope but represent natural evolution:
 - **Fleet** — Cloud sync of memory and schedules across machines
 - **Voice** — Speech-to-text for hands-free robot control
 - **Visual** — Camera frame analysis in Claude conversations (multimodal)
-- **Security hardening** — Zenoh mTLS, per-node ACLs, Python sandboxing
+- **Security hardening:**
+  - [ ] Zenoh message authentication (HMAC or shared secret on inbox/outbox/daemon topics)
+  - [ ] Daemon command auth (prevent unauthenticated shutdown via Zenoh)
+  - [ ] RBAC enforcement in agent dispatcher (wire tier checks into `call_tool()`)
+  - [ ] Zenoh mTLS transport for cross-network deployments
+  - [ ] Per-node ACLs, Python sandboxing
 
 ---
 

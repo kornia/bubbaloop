@@ -53,7 +53,7 @@ impl AgentsConfig {
     /// Load from `~/.bubbaloop/agents.toml` or create a default single-agent config.
     pub fn load_or_default() -> Self {
         let path = get_bubbaloop_home().join("agents.toml");
-        match std::fs::read_to_string(&path) {
+        let config = match std::fs::read_to_string(&path) {
             Ok(content) => match toml::from_str(&content) {
                 Ok(config) => config,
                 Err(e) => {
@@ -64,6 +64,29 @@ impl AgentsConfig {
             Err(_) => {
                 log::info!("No agents.toml found, using single default agent");
                 Self::single_default()
+            }
+        };
+        // Validate agent IDs to prevent path traversal (agents/{id}/ directories)
+        config.validate_agent_ids();
+        config
+    }
+
+    /// Validate all agent IDs: 1-64 chars, [a-zA-Z0-9_-], no path separators.
+    fn validate_agent_ids(&self) {
+        for id in self.agents.keys() {
+            if id.is_empty()
+                || id.len() > 64
+                || id.contains('/')
+                || id.contains('\\')
+                || id.contains("..")
+                || !id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                log::error!(
+                    "Invalid agent ID '{}': must be 1-64 chars, [a-zA-Z0-9_-]. Skipping.",
+                    id
+                );
             }
         }
     }
@@ -288,12 +311,13 @@ impl AgentRuntime {
             let soul_dir_clone = soul_dir.clone();
             let soul_for_watcher = soul.clone();
             tokio::spawn(async move {
-                if soul_dir_clone.join("identity.md").exists() {
-                    crate::agent::soul::soul_watcher(soul_for_watcher, soul_watcher_shutdown).await;
+                let watch_dir = if soul_dir_clone.join("identity.md").exists() {
+                    Some(soul_dir_clone)
                 } else {
-                    // Watch the global soul dir
-                    crate::agent::soul::soul_watcher(soul_for_watcher, soul_watcher_shutdown).await;
-                }
+                    None // Falls back to global soul_directory()
+                };
+                crate::agent::soul::soul_watcher(soul_for_watcher, soul_watcher_shutdown, watch_dir)
+                    .await;
             });
 
             tokio::spawn(agent_loop(

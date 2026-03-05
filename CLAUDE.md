@@ -151,3 +151,5 @@ Exception: views with their own fallback decode chain (like JsonView) don't need
 - Zenoh session: MUST use `"client"` mode for router routing; check `BUBBALOOP_ZENOH_ENDPOINT` env var
 - Dashboard schema race: subscriptions start before schemas load — always use `useSchemaReady()` gating
 - OAuth tokens require Claude CLI identity headers (user-agent, x-app, anthropic-beta) — see `agent/provider/claude.rs::OAUTH_BETA_HEADERS`
+- Agent robustness constants in `agent/mod.rs`: `TURN_TIMEOUT_SECS=120`, `TOOL_CALL_TIMEOUT_SECS=30`, `MAX_TOOL_RESULT_CHARS=4096` — change these to tune agent behavior
+- `run_turn_loop()` is the inner async fn wrapped by `tokio::time::timeout` — keep turn-level logic there, finalization (Done event, trim) in `run_agent_turn()`

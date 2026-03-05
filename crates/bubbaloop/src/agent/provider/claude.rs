@@ -9,6 +9,7 @@ use super::{
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -28,15 +29,29 @@ const MAX_TOKENS: u32 = 4096;
 /// Without these, Anthropic returns 401 for setup-token auth.
 pub const OAUTH_BETA_HEADERS: &str = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
 
+/// Maximum retries for transient provider errors (429, 5xx, network).
+const MAX_RETRIES: u32 = 3;
+
+/// Base delay for retry backoff (seconds). Backoff: 1s, 4s, 16s.
+const RETRY_BASE_SECS: u64 = 1;
+
 // ── Auth method ─────────────────────────────────────────────────────
 
 /// How the client authenticates with the Anthropic API.
-#[derive(Debug)]
 enum AuthMethod {
     /// Traditional API key (x-api-key header)
     ApiKey(String),
     /// OAuth bearer token (Authorization: Bearer header)
     OAuthToken(String),
+}
+
+impl std::fmt::Debug for AuthMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ApiKey(_) => write!(f, "ApiKey(****)"),
+            Self::OAuthToken(_) => write!(f, "OAuthToken(****)"),
+        }
+    }
 }
 
 // ── API request/response ────────────────────────────────────────────
@@ -153,6 +168,78 @@ impl ClaudeProvider {
     pub fn model(&self) -> &str {
         &self.model
     }
+
+    /// Build an authenticated request to the Messages API.
+    fn build_request(&self) -> reqwest::RequestBuilder {
+        let mut request = self
+            .client
+            .post(API_URL)
+            .header("anthropic-version", API_VERSION)
+            .header("content-type", "application/json");
+
+        request = match &self.auth {
+            AuthMethod::ApiKey(key) => request.header("x-api-key", key),
+            AuthMethod::OAuthToken(token) => request
+                .header("authorization", format!("Bearer {}", token))
+                .header("user-agent", "claude-cli/2.1.62")
+                .header("x-app", "cli")
+                .header("anthropic-beta", OAUTH_BETA_HEADERS),
+        };
+
+        request
+    }
+
+    /// Send a request and return the response, converting HTTP errors to ProviderError.
+    async fn send_request(
+        &self,
+        body: &ApiRequest<'_>,
+    ) -> super::Result<reqwest::Response> {
+        let response = self.build_request().json(body).send().await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            return Err(ProviderError::Api {
+                status: status.as_u16(),
+                message,
+            });
+        }
+
+        Ok(response)
+    }
+
+    /// Send a request with retry for transient errors (429, 5xx, network).
+    async fn send_with_retry(
+        &self,
+        body: &ApiRequest<'_>,
+    ) -> super::Result<reqwest::Response> {
+        let mut last_err = None;
+        for attempt in 0..MAX_RETRIES {
+            match self.send_request(body).await {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    if !e.is_retryable() || attempt + 1 >= MAX_RETRIES {
+                        return Err(e);
+                    }
+                    // Exponential backoff: base * 4^attempt (1s, 4s, 16s)
+                    let delay_secs = RETRY_BASE_SECS * 4u64.pow(attempt);
+                    log::warn!(
+                        "Provider error (attempt {}/{}), retrying in {}s: {}",
+                        attempt + 1,
+                        MAX_RETRIES,
+                        delay_secs,
+                        e
+                    );
+                    tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or(ProviderError::Format("retry exhausted".to_string())))
+    }
 }
 
 impl ModelProvider for ClaudeProvider {
@@ -171,35 +258,7 @@ impl ModelProvider for ClaudeProvider {
             stream: false,
         };
 
-        let mut request = self
-            .client
-            .post(API_URL)
-            .header("anthropic-version", API_VERSION)
-            .header("content-type", "application/json");
-
-        // Apply auth based on method
-        request = match &self.auth {
-            AuthMethod::ApiKey(key) => request.header("x-api-key", key),
-            AuthMethod::OAuthToken(token) => request
-                .header("authorization", format!("Bearer {}", token))
-                .header("user-agent", "claude-cli/2.1.62")
-                .header("x-app", "cli")
-                .header("anthropic-beta", OAUTH_BETA_HEADERS),
-        };
-
-        let response = request.json(&body).send().await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let message = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(ProviderError::Api {
-                status: status.as_u16(),
-                message,
-            });
-        }
+        let response = self.send_with_retry(&body).await?;
 
         let api_response: ApiResponse = response.json().await?;
         Ok(ModelResponse {
@@ -224,34 +283,7 @@ impl ModelProvider for ClaudeProvider {
             stream: true,
         };
 
-        let mut request = self
-            .client
-            .post(API_URL)
-            .header("anthropic-version", API_VERSION)
-            .header("content-type", "application/json");
-
-        request = match &self.auth {
-            AuthMethod::ApiKey(key) => request.header("x-api-key", key),
-            AuthMethod::OAuthToken(token) => request
-                .header("authorization", format!("Bearer {}", token))
-                .header("user-agent", "claude-cli/2.1.62")
-                .header("x-app", "cli")
-                .header("anthropic-beta", OAUTH_BETA_HEADERS),
-        };
-
-        let response = request.json(&body).send().await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let message = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(ProviderError::Api {
-                status: status.as_u16(),
-                message,
-            });
-        }
+        let response = self.send_with_retry(&body).await?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let byte_stream = response.bytes_stream();
@@ -276,6 +308,7 @@ async fn process_sse_stream(
 ) -> std::result::Result<(), String> {
     tokio::pin!(stream);
 
+    const MAX_SSE_BUFFER: usize = 10 * 1024 * 1024; // 10 MB
     let mut line_buffer = String::new();
     let mut current_event_type = String::new();
 
@@ -295,6 +328,10 @@ async fn process_sse_stream(
         let chunk = chunk_result.map_err(|e: reqwest::Error| e.to_string())?;
         let chunk_str = String::from_utf8_lossy(chunk.as_ref());
         line_buffer.push_str(&chunk_str);
+
+        if line_buffer.len() > MAX_SSE_BUFFER {
+            return Err("SSE stream buffer exceeded 10MB limit".to_string());
+        }
 
         // Process complete lines (SSE format: lines ending with \n)
         while let Some(newline_pos) = line_buffer.find('\n') {
@@ -508,14 +545,16 @@ mod tests {
     }
 
     #[test]
-    fn auth_method_debug() {
-        let auth = AuthMethod::ApiKey("sk-ant-test".to_string());
+    fn auth_method_debug_redacted() {
+        let auth = AuthMethod::ApiKey("sk-ant-test-secret".to_string());
         let debug = format!("{:?}", auth);
         assert!(debug.contains("ApiKey"));
+        assert!(!debug.contains("sk-ant-test"), "API key must be redacted in Debug output");
 
-        let auth = AuthMethod::OAuthToken("sk-ant-oat01-test".to_string());
+        let auth = AuthMethod::OAuthToken("sk-ant-oat01-secret".to_string());
         let debug = format!("{:?}", auth);
         assert!(debug.contains("OAuthToken"));
+        assert!(!debug.contains("sk-ant-oat01"), "OAuth token must be redacted in Debug output");
     }
 
     #[test]

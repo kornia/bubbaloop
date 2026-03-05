@@ -28,6 +28,7 @@ use crate::agent::soul::Soul;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Notify;
 
 // ── EventSink trait ──────────────────────────────────────────────
@@ -87,6 +88,16 @@ const LOOP_BREAK_THRESHOLD: u32 = 6;
 /// Number of identical tool calls before logging a warning.
 const LOOP_WARN_THRESHOLD: u32 = 3;
 
+/// Maximum time (seconds) for an entire agent turn before aborting.
+const TURN_TIMEOUT_SECS: u64 = 120;
+
+/// Maximum time (seconds) for a single tool call before returning an error.
+const TOOL_CALL_TIMEOUT_SECS: u64 = 30;
+
+/// Maximum characters in a tool result before truncation.
+const MAX_TOOL_RESULT_CHARS: usize = 4096;
+
+
 /// Compute a u64 hash key for a (tool_name, input_json) pair.
 fn tool_call_hash(name: &str, input: &serde_json::Value) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -109,6 +120,8 @@ pub enum AgentError {
     Zenoh(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Turn timed out after {0}s")]
+    TurnTimeout(u64),
 }
 
 pub type Result<T> = std::result::Result<T, AgentError>;
@@ -188,12 +201,20 @@ pub async fn run_agent_turn<
         .ok()
         .flatten()
         .map(|e| e.content);
+    // Recover context from the most recent flush entry (post-compaction continuity)
+    let recovered_context = memory
+        .episodic
+        .latest_flush()
+        .ok()
+        .flatten()
+        .map(|e| EpisodicLog::strip_flush_prefix(&e.content).to_string());
     let system_prompt = prompt::build_system_prompt(
         soul,
         &inventory,
         &active_jobs,
         &relevant_episodes,
         recent_plan.as_deref(),
+        recovered_context.as_deref(),
     );
 
     // Add user input to short-term memory
@@ -208,7 +229,70 @@ pub async fn run_agent_turn<
 
     let tools = Dispatcher::<P>::tool_definitions();
 
-    // 2. Turn cycle (max_turns)
+    // 2. Turn cycle (max_turns) — wrapped in a turn-level timeout
+    let turn_result = tokio::time::timeout(
+        Duration::from_secs(TURN_TIMEOUT_SECS),
+        run_turn_loop(
+            provider,
+            dispatcher,
+            memory,
+            soul,
+            &system_prompt,
+            &tools,
+            job_id,
+            sink,
+            correlation_id,
+            job_notify,
+        ),
+    )
+    .await;
+
+    match turn_result {
+        Ok(inner) => inner?,
+        Err(_elapsed) => {
+            log::error!(
+                "[Agent] Turn timed out after {}s",
+                TURN_TIMEOUT_SECS
+            );
+            sink.emit(AgentEvent::error(
+                correlation_id,
+                &format!("Turn timed out after {}s", TURN_TIMEOUT_SECS),
+            ))
+            .await;
+            return Err(AgentError::TurnTimeout(TURN_TIMEOUT_SECS));
+        }
+    }
+
+    // 3. Signal turn complete
+    sink.emit(AgentEvent::done(correlation_id)).await;
+
+    // 4. Trim short-term memory
+    if memory.short_term.len() > MAX_CONVERSATION_MESSAGES {
+        let drain_count = memory.short_term.len() - MAX_CONVERSATION_MESSAGES;
+        memory.short_term.drain(..drain_count);
+    }
+
+    Ok(())
+}
+
+/// Inner turn loop extracted for timeout wrapping.
+#[allow(clippy::too_many_arguments)]
+async fn run_turn_loop<
+    M: ModelProvider,
+    P: crate::mcp::platform::PlatformOperations,
+    S: EventSink,
+>(
+    provider: &M,
+    dispatcher: &Dispatcher<P>,
+    memory: &mut Memory,
+    soul: &Soul,
+    system_prompt: &str,
+    tools: &[provider::ToolDefinition],
+    job_id: Option<&str>,
+    sink: &S,
+    correlation_id: &str,
+    job_notify: Option<&Arc<Notify>>,
+) -> Result<()> {
     let mut last_input_tokens = 0u32;
     let mut tool_call_counts: HashMap<u64, u32> = HashMap::new();
     let mut loop_detected = false;
@@ -216,9 +300,9 @@ pub async fn run_agent_turn<
         if loop_detected {
             break;
         }
-        // Stream response from provider
+        // Stream response from provider (retry handled inside ClaudeProvider)
         let mut rx = match provider
-            .generate_stream(Some(&system_prompt), &memory.short_term, &tools)
+            .generate_stream(Some(system_prompt), &memory.short_term, tools)
             .await
         {
             Ok(r) => r,
@@ -423,12 +507,12 @@ pub async fn run_agent_turn<
                         ) {
                             Ok(ts) => ts.to_string(),
                             Err(e) => {
-                                sink.emit(AgentEvent::error(
-                                    correlation_id,
-                                    &format!("Invalid cron: {}", e),
-                                ))
-                                .await;
-                                return Ok(());
+                                tool_results.push((
+                                    tc.id.clone(),
+                                    format!("Error: invalid cron expression: {}", e),
+                                    Some(true),
+                                ));
+                                continue;
                             }
                         },
                         None => crate::agent::scheduler::now_epoch_secs().to_string(),
@@ -559,7 +643,31 @@ pub async fn run_agent_turn<
                         },
                     }
                 }
-                _ => dispatcher.call_tool(&tc.id, &tc.name, &tc.input).await,
+                _ => {
+                    match tokio::time::timeout(
+                        Duration::from_secs(TOOL_CALL_TIMEOUT_SECS),
+                        dispatcher.call_tool(&tc.id, &tc.name, &tc.input),
+                    )
+                    .await
+                    {
+                        Ok(r) => r,
+                        Err(_elapsed) => {
+                            log::warn!(
+                                "[Agent] Tool '{}' timed out after {}s",
+                                tc.name,
+                                TOOL_CALL_TIMEOUT_SECS
+                            );
+                            ContentBlock::ToolResult {
+                                tool_use_id: tc.id.clone(),
+                                content: format!(
+                                    "Error: tool '{}' timed out after {}s",
+                                    tc.name, TOOL_CALL_TIMEOUT_SECS
+                                ),
+                                is_error: Some(true),
+                            }
+                        }
+                    }
+                }
             };
 
             if let ContentBlock::ToolResult {
@@ -568,9 +676,11 @@ pub async fn run_agent_turn<
                 is_error,
             } = &result
             {
+                // Truncate large tool results to prevent context blow-up
+                let content = truncate_tool_result(content);
                 tool_results.push((tool_use_id.clone(), content.clone(), *is_error));
                 // Log tool result to episodic
-                let entry = EpisodicLog::make_entry("tool", content, job_id);
+                let entry = EpisodicLog::make_entry("tool", &content, job_id);
                 if let Err(e) = memory.episodic.append(&entry) {
                     log::warn!("Failed to log tool result to episodic: {}", e);
                 }
@@ -604,7 +714,7 @@ pub async fn run_agent_turn<
         memory.short_term.push(Message::user(flush_instruction));
 
         if let Ok(flush_response) = provider
-            .generate(Some(&system_prompt), &memory.short_term, &tools)
+            .generate(Some(system_prompt), &memory.short_term, tools)
             .await
         {
             let flush_text = flush_response.text();
@@ -621,16 +731,26 @@ pub async fn run_agent_turn<
         }
     }
 
-    // 3. Signal turn complete
-    sink.emit(AgentEvent::done(correlation_id)).await;
-
-    // 4. Trim short-term memory
-    if memory.short_term.len() > MAX_CONVERSATION_MESSAGES {
-        let drain_count = memory.short_term.len() - MAX_CONVERSATION_MESSAGES;
-        memory.short_term.drain(..drain_count);
-    }
-
     Ok(())
+}
+
+/// Truncate a tool result string if it exceeds `MAX_TOOL_RESULT_CHARS`.
+///
+/// Uses char-boundary-safe slicing to avoid panicking on multi-byte UTF-8.
+fn truncate_tool_result(content: &str) -> String {
+    if content.len() <= MAX_TOOL_RESULT_CHARS {
+        content.to_string()
+    } else {
+        // Find the nearest char boundary at or before the limit
+        let end = (0..=MAX_TOOL_RESULT_CHARS)
+            .rev()
+            .find(|&i| content.is_char_boundary(i))
+            .unwrap_or(0);
+        format!(
+            "{}\n\n[Output truncated at {} chars. Use more specific queries to get detailed results.]",
+            &content[..end], MAX_TOOL_RESULT_CHARS
+        )
+    }
 }
 
 /// Check whether flush text is substantive enough to persist.
@@ -719,5 +839,41 @@ mod tests {
         let warn = LOOP_WARN_THRESHOLD;
         let brk = LOOP_BREAK_THRESHOLD;
         assert!(warn < brk, "warn threshold must be below break threshold");
+    }
+
+    #[test]
+    fn timeout_constants_are_sane() {
+        assert_eq!(TURN_TIMEOUT_SECS, 120);
+        assert_eq!(TOOL_CALL_TIMEOUT_SECS, 30);
+        assert!(
+            TOOL_CALL_TIMEOUT_SECS < TURN_TIMEOUT_SECS,
+            "tool timeout must be shorter than turn timeout"
+        );
+    }
+
+    #[test]
+    fn truncate_short_content_unchanged() {
+        let short = "Hello, world!";
+        assert_eq!(truncate_tool_result(short), short);
+    }
+
+    #[test]
+    fn truncate_exact_limit_unchanged() {
+        let exact = "a".repeat(MAX_TOOL_RESULT_CHARS);
+        assert_eq!(truncate_tool_result(&exact), exact);
+    }
+
+    #[test]
+    fn truncate_over_limit_adds_suffix() {
+        let long = "x".repeat(MAX_TOOL_RESULT_CHARS + 100);
+        let result = truncate_tool_result(&long);
+        assert!(result.len() < long.len() + 100); // truncated + suffix
+        assert!(result.starts_with(&"x".repeat(MAX_TOOL_RESULT_CHARS)));
+        assert!(result.contains("[Output truncated at"));
+    }
+
+    #[test]
+    fn truncate_max_tool_result_chars_constant() {
+        assert_eq!(MAX_TOOL_RESULT_CHARS, 4096);
     }
 }
