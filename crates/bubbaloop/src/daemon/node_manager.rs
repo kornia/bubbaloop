@@ -165,8 +165,8 @@ impl CachedNode {
 pub struct NodeManager {
     /// Cached node states
     nodes: RwLock<HashMap<String, CachedNode>>,
-    /// Systemd client
-    systemd: SystemdClient,
+    /// Systemd client (None in stub mode on non-Linux systems)
+    systemd: Option<SystemdClient>,
     /// Channel to broadcast state changes
     event_tx: broadcast::Sender<NodeEvent>,
     /// Nodes currently being built (prevents concurrent builds)
@@ -203,7 +203,7 @@ impl NodeManager {
 
         let manager = Arc::new(Self {
             nodes: RwLock::new(HashMap::new()),
-            systemd,
+            systemd: Some(systemd),
             event_tx,
             building_nodes: Mutex::new(HashSet::new()),
             machine_id,
@@ -215,6 +215,38 @@ impl NodeManager {
         manager.refresh_all().await?;
 
         Ok(manager)
+    }
+
+    /// Create a node manager, falling back to an empty stub if systemd is unavailable.
+    ///
+    /// Used by the `agent` command so it can run on macOS (no systemd) for LLM
+    /// chat without crashing. Node-management tools will simply report 0 nodes.
+    pub async fn new_with_graceful_fallback() -> Arc<Self> {
+        match Self::new().await {
+            Ok(manager) => manager,
+            Err(e) => {
+                log::warn!(
+                    "NodeManager: systemd unavailable ({}). Running in stub mode (0 nodes).",
+                    e
+                );
+                let (event_tx, _) = broadcast::channel(100);
+                let machine_id = super::util::get_machine_id();
+                let machine_hostname = hostname::get()
+                    .map(|h| h.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| "unknown".to_string());
+                let machine_ips = get_machine_ips();
+
+                Arc::new(Self {
+                    nodes: RwLock::new(HashMap::new()),
+                    systemd: None,
+                    event_tx,
+                    building_nodes: Mutex::new(HashSet::new()),
+                    machine_id,
+                    machine_hostname,
+                    machine_ips,
+                })
+            }
+        }
     }
 
     /// Subscribe to node events
@@ -232,7 +264,7 @@ impl NodeManager {
     /// Instead, we collect dirty nodes and schedule a debounced refresh on a
     /// separate task that runs after a short delay, coalescing rapid signal bursts.
     pub async fn start_signal_listener(self: Arc<Self>) -> Result<()> {
-        let mut signal_rx = self.systemd.subscribe_to_signals().await?;
+        let mut signal_rx = self.systemd.as_ref().expect("no systemd").subscribe_to_signals().await?;
 
         tokio::spawn(async move {
             log::info!("Signal listener started");
@@ -319,10 +351,10 @@ impl NodeManager {
         let service_name = systemd::get_service_name(name);
 
         // Get systemd state
-        let active_state = self.systemd.get_active_state(&service_name).await?;
+        let active_state = self.systemd.as_ref().expect("no systemd").get_active_state(&service_name).await?;
         let installed = systemd::is_service_installed(name);
         let autostart_enabled = if installed {
-            self.systemd
+            self.systemd.as_ref().expect("no systemd")
                 .is_enabled(&service_name)
                 .await
                 .unwrap_or(false)
@@ -521,10 +553,10 @@ impl NodeManager {
             let service_name = systemd::get_service_name(&eff_name);
 
             // Get systemd state
-            let active_state = self.systemd.get_active_state(&service_name).await?;
+            let active_state = self.systemd.as_ref().expect("no systemd").get_active_state(&service_name).await?;
             let installed = systemd::is_service_installed(&eff_name);
             let autostart_enabled = if installed {
-                self.systemd
+                self.systemd.as_ref().expect("no systemd")
                     .is_enabled(&service_name)
                     .await
                     .unwrap_or(false)
@@ -770,7 +802,7 @@ impl NodeManager {
     /// Start a node
     async fn start_node(self: &Arc<Self>, name: &str) -> Result<String> {
         let service_name = systemd::get_service_name(name);
-        self.systemd.start_unit(&service_name).await?;
+        self.systemd.as_ref().expect("no systemd").start_unit(&service_name).await?;
         self.spawn_refresh_and_emit("started", name);
         Ok(format!("Started {}", name))
     }
@@ -778,7 +810,7 @@ impl NodeManager {
     /// Stop a node
     async fn stop_node(self: &Arc<Self>, name: &str) -> Result<String> {
         let service_name = systemd::get_service_name(name);
-        self.systemd.stop_unit(&service_name).await?;
+        self.systemd.as_ref().expect("no systemd").stop_unit(&service_name).await?;
         self.spawn_refresh_and_emit("stopped", name);
         Ok(format!("Stopped {}", name))
     }
@@ -786,7 +818,7 @@ impl NodeManager {
     /// Restart a node
     async fn restart_node(self: &Arc<Self>, name: &str) -> Result<String> {
         let service_name = systemd::get_service_name(name);
-        self.systemd.restart_unit(&service_name).await?;
+        self.systemd.as_ref().expect("no systemd").restart_unit(&service_name).await?;
         self.spawn_refresh_and_emit("restarted", name);
         Ok(format!("Restarted {}", name))
     }
@@ -842,10 +874,10 @@ impl NodeManager {
     /// Used before build/clean operations to avoid conflicts with the running binary.
     async fn stop_if_running(&self, name: &str) {
         let service_name = systemd::get_service_name(name);
-        match self.systemd.get_active_state(&service_name).await {
+        match self.systemd.as_ref().expect("no systemd").get_active_state(&service_name).await {
             Ok(ActiveState::Active | ActiveState::Activating) => {
                 log::info!("Stopping {} before build/clean", name);
-                let _ = self.systemd.stop_unit(&service_name).await;
+                let _ = self.systemd.as_ref().expect("no systemd").stop_unit(&service_name).await;
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             Err(e) => {
@@ -975,7 +1007,7 @@ impl NodeManager {
     /// Enable autostart for a node
     async fn enable_autostart(&self, name: &str) -> Result<String> {
         let service_name = systemd::get_service_name(name);
-        self.systemd.enable_unit(&service_name).await?;
+        self.systemd.as_ref().expect("no systemd").enable_unit(&service_name).await?;
 
         self.refresh_all().await?;
         self.emit_event("autostart_enabled", name).await;
@@ -986,7 +1018,7 @@ impl NodeManager {
     /// Disable autostart for a node
     async fn disable_autostart(&self, name: &str) -> Result<String> {
         let service_name = systemd::get_service_name(name);
-        self.systemd.disable_unit(&service_name).await?;
+        self.systemd.as_ref().expect("no systemd").disable_unit(&service_name).await?;
 
         self.refresh_all().await?;
         self.emit_event("autostart_disabled", name).await;

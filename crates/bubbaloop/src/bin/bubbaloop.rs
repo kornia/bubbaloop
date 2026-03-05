@@ -218,6 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("  logout    Remove saved Anthropic API key");
             eprintln!("  agent     Chat with your hardware via Claude AI:");
             eprintln!("              -m, --model <model>: Claude model");
+            eprintln!("              -p, --provider <provider>: LLM provider (claude, ollama)");
             eprintln!("              -z, --zenoh-endpoint <endpoint>: Zenoh endpoint");
             eprintln!("  up        Load skills and ensure sensor nodes are running:");
             eprintln!("              -s, --skills-dir <path>: Skills directory");
@@ -292,9 +293,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     }
                 };
-            let node_manager = bubbaloop::daemon::NodeManager::new().await?;
+            let node_manager = bubbaloop::daemon::NodeManager::new_with_graceful_fallback().await;
             if let Err(e) = bubbaloop::agent::run_agent(
-                bubbaloop::agent::AgentConfig { model: cmd.model },
+                bubbaloop::agent::AgentConfig {
+                    model: cmd.model,
+                    provider: cmd.provider,
+                },
                 session,
                 node_manager,
             )
