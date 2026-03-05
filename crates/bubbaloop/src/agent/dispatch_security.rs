@@ -3,7 +3,7 @@
 //! Contains path validation (read/write), command validation,
 //! and helper utilities for path expansion and workspace scoping.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Expand `~/` to the user's home directory.
 pub(crate) fn expand_home(path: &str) -> PathBuf {
@@ -115,6 +115,12 @@ pub(crate) fn validate_read_path(path: &Path) -> Result<(), String> {
 pub(crate) fn validate_write_path(path: &Path) -> Result<(), String> {
     let workspace = workspace_dir();
 
+    // Reject any path containing ".." — prevents traversal when parent doesn't exist
+    // (create_dir_all would create it, and the raw-path prefix check is insufficient)
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err("Blocked: path traversal ('..') is not allowed in write paths.".to_string());
+    }
+
     // Canonicalize what we can — for new files, check the parent
     let check_path = if path.exists() {
         path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
@@ -207,9 +213,21 @@ pub(crate) fn validate_command(command: &str) -> Result<(), String> {
             ));
         }
     }
-    // Pipe chains: validate each segment's first word against blocked commands
-    if normalized.contains(" | ") {
-        for segment in normalized.split(" | ") {
+    // Block redirection operators — can write arbitrary files
+    if normalized.contains(">>")
+        || normalized.contains("2>")
+        || normalized.contains("1>")
+        || normalized.contains(" > ")
+        || normalized.starts_with("> ")
+        || normalized.contains(" < ")
+    {
+        return Err(
+            "Blocked: shell redirection operators (>, <, >>, 2>) are not allowed.".to_string(),
+        );
+    }
+    // Pipe chains: split on any '|' (not just " | ") to prevent no-space bypasses
+    if normalized.contains('|') {
+        for segment in normalized.split('|') {
             let seg_first = segment.split_whitespace().next().unwrap_or("");
             let seg_base = seg_first.rsplit('/').next().unwrap_or(seg_first);
             validate_single_command_word(seg_base)?;
@@ -547,6 +565,31 @@ mod tests {
         // Safe pipes are allowed
         assert!(validate_command("ls -la | grep test").is_ok());
         assert!(validate_command("cat file.txt | wc -l").is_ok());
+    }
+
+    #[test]
+    fn command_blocks_pipe_without_spaces() {
+        assert!(validate_command("echo test|kill 1234").is_err());
+        assert!(validate_command("cat file|killall nginx").is_err());
+        // Safe pipes still work
+        assert!(validate_command("ls|grep test").is_ok());
+    }
+
+    #[test]
+    fn command_blocks_redirection() {
+        assert!(validate_command("echo test > /etc/passwd").is_err());
+        assert!(validate_command("echo test >> /tmp/log").is_err());
+        assert!(validate_command("cmd 2>/dev/null").is_err());
+        assert!(validate_command("cmd < /etc/shadow").is_err());
+    }
+
+    #[test]
+    fn write_blocks_path_traversal() {
+        let workspace = workspace_dir();
+        let traversal = workspace.join("../escape-dir/file.txt");
+        assert!(validate_write_path(&traversal).is_err());
+        let deep_traversal = workspace.join("sub/../../etc/passwd");
+        assert!(validate_write_path(&deep_traversal).is_err());
     }
 
     #[test]

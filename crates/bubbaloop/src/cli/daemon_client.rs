@@ -61,17 +61,23 @@ impl DaemonClient {
     }
 
     /// Check if the daemon is running by querying its manifest.
+    /// Uses 1s timeout with 3 retries per Zenoh query convention.
     pub async fn is_running(&self) -> bool {
         let pattern = gateway::manifest_topic(&self.scope, &self.machine_id);
-        match self
-            .session
-            .get(&pattern)
-            .timeout(Duration::from_secs(2))
-            .await
-        {
-            Ok(replies) => replies.recv_async().await.is_ok(),
-            Err(_) => false,
+        for _ in 0..3 {
+            if let Ok(replies) = self
+                .session
+                .get(&pattern)
+                .target(zenoh::query::QueryTarget::BestMatching)
+                .timeout(Duration::from_secs(1))
+                .await
+            {
+                if replies.recv_async().await.is_ok() {
+                    return true;
+                }
+            }
         }
+        false
     }
 
     /// Auto-start the daemon if not running.
@@ -222,27 +228,32 @@ impl DaemonClient {
     }
 
     /// Query daemon health (manifest).
+    /// Uses 1s timeout with 3 retries per Zenoh query convention.
     pub async fn health(&self) -> Result<DaemonManifest> {
         let pattern = gateway::manifest_topic(&self.scope, &self.machine_id);
-        let replies = self
-            .session
-            .get(&pattern)
-            .timeout(Duration::from_secs(3))
-            .await
-            .map_err(|e| DaemonClientError::Request(format!("Manifest query failed: {}", e)))?;
-
-        match replies.recv_async().await {
-            Ok(reply) => {
-                if let Ok(sample) = reply.into_result() {
-                    let bytes = sample.payload().to_bytes();
-                    serde_json::from_slice::<DaemonManifest>(&bytes)
-                        .map_err(|e| DaemonClientError::Request(format!("Invalid manifest: {}", e)))
-                } else {
-                    Err(DaemonClientError::NotReachable)
-                }
+        for _ in 0..3 {
+            match self
+                .session
+                .get(&pattern)
+                .target(zenoh::query::QueryTarget::BestMatching)
+                .timeout(Duration::from_secs(1))
+                .await
+            {
+                Ok(replies) => match replies.recv_async().await {
+                    Ok(reply) => {
+                        if let Ok(sample) = reply.into_result() {
+                            let bytes = sample.payload().to_bytes();
+                            return serde_json::from_slice::<DaemonManifest>(&bytes).map_err(|e| {
+                                DaemonClientError::Request(format!("Invalid manifest: {}", e))
+                            });
+                        }
+                    }
+                    Err(_) => continue,
+                },
+                Err(_) => continue,
             }
-            Err(_) => Err(DaemonClientError::NotReachable),
         }
+        Err(DaemonClientError::NotReachable)
     }
 
     /// Send a node command (start, stop, restart, etc.) and return the result message.

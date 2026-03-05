@@ -5,9 +5,9 @@
 
 use anyhow::{anyhow, Result};
 use std::time::Duration;
-use tokio::process::Command;
 
 use crate::cli::system_utils::is_process_running;
+use crate::daemon::systemd::SystemdClient;
 
 /// Actions that can be automatically fixed
 #[derive(Debug, Clone)]
@@ -62,34 +62,24 @@ impl FixAction {
                 }
             }
             FixAction::StartDaemonService => {
-                let output = Command::new("systemctl")
-                    .args(["--user", "start", "bubbaloop-daemon.service"])
-                    .output()
-                    .await?;
-
-                if output.status.success() {
-                    Ok("bubbaloop-daemon service started".to_string())
-                } else {
-                    Err(anyhow!(
-                        "Failed to start: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    ))
-                }
+                let systemd = SystemdClient::new()
+                    .await
+                    .map_err(|e| anyhow!("D-Bus connect failed: {}", e))?;
+                systemd
+                    .start_unit("bubbaloop-daemon.service")
+                    .await
+                    .map_err(|e| anyhow!("Failed to start: {}", e))?;
+                Ok("bubbaloop-daemon service started".to_string())
             }
             FixAction::RestartDaemonService => {
-                let output = Command::new("systemctl")
-                    .args(["--user", "restart", "bubbaloop-daemon.service"])
-                    .output()
-                    .await?;
-
-                if output.status.success() {
-                    Ok("bubbaloop-daemon service restarted".to_string())
-                } else {
-                    Err(anyhow!(
-                        "Failed to restart: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    ))
-                }
+                let systemd = SystemdClient::new()
+                    .await
+                    .map_err(|e| anyhow!("D-Bus connect failed: {}", e))?;
+                systemd
+                    .restart_unit("bubbaloop-daemon.service")
+                    .await
+                    .map_err(|e| anyhow!("Failed to restart: {}", e))?;
+                Ok("bubbaloop-daemon service restarted".to_string())
             }
             FixAction::InstallAndStartDaemon => {
                 // Install systemd service file, then start it
@@ -118,43 +108,31 @@ impl FixAction {
                 let service_path = service_dir.join("bubbaloop-daemon.service");
                 std::fs::write(&service_path, service_content)?;
 
-                // Reload systemd and start
-                let _ = Command::new("systemctl")
-                    .args(["--user", "daemon-reload"])
-                    .output()
-                    .await;
-
-                let output = Command::new("systemctl")
-                    .args(["--user", "start", "bubbaloop-daemon.service"])
-                    .output()
-                    .await?;
-
-                if output.status.success() {
-                    Ok(format!(
-                        "Installed {} and started service",
-                        service_path.display()
-                    ))
-                } else {
-                    Err(anyhow!(
-                        "Service installed but failed to start: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    ))
+                // Reload systemd and start via D-Bus
+                let systemd = SystemdClient::new()
+                    .await
+                    .map_err(|e| anyhow!("D-Bus connect failed: {}", e))?;
+                if let Err(e) = systemd.daemon_reload().await {
+                    log::warn!("systemd daemon-reload failed: {}", e);
                 }
+                systemd
+                    .start_unit("bubbaloop-daemon.service")
+                    .await
+                    .map_err(|e| anyhow!("Service installed but failed to start: {}", e))?;
+                Ok(format!(
+                    "Installed {} and started service",
+                    service_path.display()
+                ))
             }
             FixAction::StartBridgeService => {
-                let output = Command::new("systemctl")
-                    .args(["--user", "start", "bubbaloop-bridge.service"])
-                    .output()
-                    .await?;
-
-                if output.status.success() {
-                    Ok("zenoh-bridge service started".to_string())
-                } else {
-                    Err(anyhow!(
-                        "Failed to start: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    ))
-                }
+                let systemd = SystemdClient::new()
+                    .await
+                    .map_err(|e| anyhow!("D-Bus connect failed: {}", e))?;
+                systemd
+                    .start_unit("bubbaloop-bridge.service")
+                    .await
+                    .map_err(|e| anyhow!("Failed to start: {}", e))?;
+                Ok("zenoh-bridge service started".to_string())
             }
             FixAction::CreateZenohConfig => {
                 let home = dirs::home_dir().ok_or_else(|| anyhow!("HOME not set"))?;

@@ -170,15 +170,19 @@ async fn run_daemon_gateway(
     let cmd_topic = gateway::command_topic(&scope, &machine_id);
     let evt_topic = gateway::events_topic(&scope, &machine_id);
 
-    let subscriber = session
-        .declare_subscriber(&cmd_topic)
-        .await
-        .map_err(|e| format!("Failed to subscribe to command topic: {}", e))?;
+    let subscriber = session.declare_subscriber(&cmd_topic).await.map_err(
+        |e| -> Box<dyn std::error::Error> {
+            format!("Failed to subscribe to command topic: {}", e).into()
+        },
+    )?;
 
-    let publisher = session
-        .declare_publisher(&evt_topic)
-        .await
-        .map_err(|e| format!("Failed to declare events publisher: {}", e))?;
+    let publisher =
+        session
+            .declare_publisher(&evt_topic)
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("Failed to declare events publisher: {}", e).into()
+            })?;
 
     log::info!(
         "[Gateway] Daemon gateway started: cmd={}, events={}, manifest={}",
