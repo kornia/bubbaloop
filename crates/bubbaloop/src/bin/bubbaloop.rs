@@ -293,7 +293,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     }
                 };
-            let node_manager = bubbaloop::daemon::NodeManager::new().await?;
+            let node_manager = bubbaloop::daemon::NodeManager::new_with_graceful_fallback().await;
             if let Err(e) = bubbaloop::agent::run_agent(
                 bubbaloop::agent::AgentConfig {
                     model: cmd.model,
