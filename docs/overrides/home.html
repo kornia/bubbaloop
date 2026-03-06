@@ -2,172 +2,12 @@
 
 {% block tabs %}
   {{ super() }}
-  <style>
-    /* --- Hero layout --- */
-    .md-main__inner { margin-top: 0; }
-
-    .mdx-hero {
-      max-width: 64rem;
-      margin: 0 auto;
-      padding: 4rem 1.2rem 2rem;
-      text-align: center;
-    }
-
-    /* --- Headline: gradient accent on key words --- */
-    .mdx-hero h1 {
-      font-weight: 800;
-      font-size: 3rem;
-      line-height: 1.1;
-      letter-spacing: -0.03em;
-      margin-bottom: 1rem;
-    }
-
-    .mdx-hero h1 strong {
-      background: linear-gradient(135deg, #e07a5f 0%, #f4a261 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-
-    /* --- Tagline --- */
-    .mdx-hero__tagline {
-      font-size: 1.2rem;
-      color: var(--md-default-fg-color--light);
-      max-width: 38rem;
-      margin: 0 auto 2rem;
-      line-height: 1.6;
-    }
-
-    /* --- CTA buttons --- */
-    .mdx-hero__buttons {
-      display: flex;
-      gap: 0.75rem;
-      justify-content: center;
-      flex-wrap: wrap;
-      margin-bottom: 3rem;
-    }
-
-    .mdx-hero__buttons .md-button {
-      border-radius: 8px;
-      padding: 0.7rem 2rem;
-      font-weight: 600;
-      font-size: 0.9rem;
-      transition: all 0.2s ease;
-    }
-
-    .mdx-hero__buttons .md-button--primary {
-      background: #22c55e;
-      border-color: #22c55e;
-      color: #fff;
-    }
-
-    .mdx-hero__buttons .md-button--primary:hover {
-      background: #16a34a;
-      border-color: #16a34a;
-      transform: translateY(-1px);
-      box-shadow: 0 4px 16px rgba(34, 197, 94, 0.3);
-    }
-
-    .mdx-hero__buttons .md-button:not(.md-button--primary):hover {
-      border-color: #e07a5f;
-      color: #e07a5f;
-      transform: translateY(-1px);
-    }
-
-    /* --- Terminal block --- */
-    .mdx-terminal {
-      max-width: 32rem;
-      margin: 0 auto 3rem;
-      text-align: left;
-    }
-
-    .mdx-terminal pre {
-      border-radius: 10px;
-      border: 1px solid var(--md-default-fg-color--lightest);
-      background: var(--md-code-bg-color);
-      padding: 1.2rem 1.4rem;
-      font-size: 0.85rem;
-      line-height: 1.7;
-      margin: 0;
-    }
-
-    .mdx-terminal .prompt { color: var(--md-default-fg-color--light); }
-    .mdx-terminal .cmd { color: var(--md-default-fg-color); }
-    .mdx-terminal .str { color: #e07a5f; }
-    .mdx-terminal .cmt { color: #475569; }
-
-    /* --- CTA card grid --- */
-    .mdx-cta-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 1rem;
-      margin: 0 auto;
-      max-width: 54rem;
-    }
-
-    @media (max-width: 768px) {
-      .mdx-cta-grid { grid-template-columns: 1fr 1fr; }
-      .mdx-hero h1 { font-size: 2rem; }
-      .mdx-hero__tagline { font-size: 1rem; }
-    }
-
-    @media (max-width: 480px) {
-      .mdx-cta-grid { grid-template-columns: 1fr; }
-      .mdx-hero h1 { font-size: 1.6rem; }
-    }
-
-    .mdx-cta-card {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      padding: 1rem 1.2rem;
-      border: 1px solid var(--md-default-fg-color--lightest);
-      border-radius: 10px;
-      text-decoration: none !important;
-      color: var(--md-default-fg-color) !important;
-      background: var(--md-code-bg-color);
-      transition: border-color 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
-      cursor: pointer;
-    }
-
-    .mdx-cta-card:hover {
-      border-color: #e07a5f;
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(224, 122, 95, 0.08);
-    }
-
-    .mdx-cta-card svg {
-      width: 20px;
-      height: 20px;
-      flex-shrink: 0;
-      opacity: 0.7;
-    }
-
-    .mdx-cta-card:hover svg { opacity: 1; }
-
-    .mdx-cta-card__text {
-      display: flex;
-      flex-direction: column;
-    }
-
-    .mdx-cta-card__title {
-      font-weight: 600;
-      font-size: 0.85rem;
-      line-height: 1.3;
-    }
-
-    .mdx-cta-card__desc {
-      font-size: 0.72rem;
-      color: var(--md-default-fg-color--light);
-      line-height: 1.3;
-    }
-  </style>
 
   <section class="mdx-hero">
-    <h1>The open-source<br/><strong>Hardware AI</strong> agent</h1>
+    <h1>The open&#8209;source<br/><strong>Hardware AI</strong> agent</h1>
     <p class="mdx-hero__tagline">
-      Cameras, sensors, robots, and IoT fleets &mdash; orchestrated by AI.
-      Single binary. Runs on Jetson, RPi, any Linux.
+      One binary. Cameras, sensors, robots, and IoT fleets &mdash; orchestrated by AI agents
+      with memory, personality, and real-time telemetry. Runs on Jetson, Raspberry Pi, any Linux.
     </p>
 
     <div class="mdx-hero__buttons">
@@ -183,54 +23,87 @@
     </div>
 
     <div class="mdx-terminal">
-      <pre><code><span class="cmt"># Install + run in 30 seconds</span>
+      <pre><code><span class="cmt"># install + run in 30 seconds</span>
 <span class="prompt">$</span> <span class="cmd">bubbaloop up</span>
-<span class="prompt">$</span> <span class="cmd">bubbaloop agent chat</span> <span class="str">"What sensors do I have?"</span></code></pre>
+<span class="prompt">$</span> <span class="cmd">bubbaloop agent chat</span>
+<span class="out">[jean-clawd]</span>
+<span class="out">Hey! I found 2 cameras and a weather sensor.</span>
+<span class="out">Want me to start monitoring?</span>
+
+<span class="prompt">$</span> <span class="cmd">bubbaloop agent chat</span> <span class="str">"Show me system health"</span>
+<span class="out">[jean-clawd]</span>
+<span class="out">CPU 23% | RAM 41% | Disk 67% | All nodes healthy.</span></code></pre>
     </div>
 
-    <div class="mdx-cta-grid">
-      <a href="{{ 'getting-started/quickstart/' | url }}" class="mdx-cta-card">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        <div class="mdx-cta-card__text">
-          <span class="mdx-cta-card__title">Quick Start</span>
-          <span class="mdx-cta-card__desc">Install and chat in 5 minutes</span>
+    <div class="mdx-divider"><span>Everything you need</span></div>
+
+    <div class="mdx-features">
+      <a href="{{ 'concepts/architecture/' | url }}" class="mdx-feature">
+        <div class="mdx-feature__icon">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
         </div>
+        <span class="mdx-feature__title">Single Binary Runtime</span>
+        <span class="mdx-feature__desc">Agent runtime, MCP server, node manager, telemetry watchdog &mdash; all in ~13 MB.</span>
       </a>
-      <a href="{{ 'concepts/architecture/' | url }}" class="mdx-cta-card">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-        <div class="mdx-cta-card__text">
-          <span class="mdx-cta-card__title">Architecture</span>
-          <span class="mdx-cta-card__desc">Layers, agent runtime, nodes</span>
+
+      <a href="{{ 'agent-guide/' | url }}" class="mdx-feature">
+        <div class="mdx-feature__icon">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93L12 22"/><path d="M12 2a4 4 0 0 0-4 4c0 1.95 1.4 3.58 3.25 3.93"/></svg>
         </div>
+        <span class="mdx-feature__title">Multi-Agent Runtime</span>
+        <span class="mdx-feature__desc">Each agent gets a Soul, 3-tier memory, adaptive heartbeat. Hot-reload personality without restart.</span>
       </a>
-      <a href="{{ 'concepts/memory/' | url }}" class="mdx-cta-card">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93L12 22"/><path d="M12 2a4 4 0 0 0-4 4c0 1.95 1.4 3.58 3.25 3.93"/></svg>
-        <div class="mdx-cta-card__text">
-          <span class="mdx-cta-card__title">3-Tier Memory</span>
-          <span class="mdx-cta-card__desc">RAM, logs, SQLite per agent</span>
+
+      <a href="{{ 'concepts/messaging/' | url }}" class="mdx-feature">
+        <div class="mdx-feature__icon">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.4"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.4"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
         </div>
+        <span class="mdx-feature__title">Zenoh Data Plane</span>
+        <span class="mdx-feature__desc">Pub/sub built for robotics. Camera frames, IMU, commands &mdash; microsecond latency.</span>
       </a>
-      <a href="{{ 'concepts/messaging/' | url }}" class="mdx-cta-card">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.4"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.4"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
-        <div class="mdx-cta-card__text">
-          <span class="mdx-cta-card__title">Messaging</span>
-          <span class="mdx-cta-card__desc">Zenoh pub/sub + agent gateway</span>
+
+      <a href="{{ 'concepts/memory/' | url }}" class="mdx-feature">
+        <div class="mdx-feature__icon">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
         </div>
+        <span class="mdx-feature__title">3-Tier Memory</span>
+        <span class="mdx-feature__desc">RAM for the current turn. NDJSON + FTS5 for yesterday. SQLite for the long game.</span>
       </a>
-      <a href="{{ 'getting-started/configuration/' | url }}" class="mdx-cta-card">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        <div class="mdx-cta-card__text">
-          <span class="mdx-cta-card__title">Configuration</span>
-          <span class="mdx-cta-card__desc">agents.toml, Soul, telemetry</span>
+
+      <a href="{{ 'guides/telemetry-watchdog/' | url }}" class="mdx-feature">
+        <div class="mdx-feature__icon">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
         </div>
+        <span class="mdx-feature__title">Telemetry Watchdog</span>
+        <span class="mdx-feature__desc">CPU, RAM, disk monitoring. 5 severity levels. Automatic circuit breakers.</span>
       </a>
-      <a href="{{ 'reference/cli/' | url }}" class="mdx-cta-card">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-        <div class="mdx-cta-card__text">
-          <span class="mdx-cta-card__title">CLI Reference</span>
-          <span class="mdx-cta-card__desc">All commands documented</span>
+
+      <a href="{{ 'guides/create-your-first-node/' | url }}" class="mdx-feature">
+        <div class="mdx-feature__icon">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
         </div>
+        <span class="mdx-feature__title">Node SDK</span>
+        <span class="mdx-feature__desc">Batteries-included Rust framework. ~50 lines to a self-describing sensor node.</span>
       </a>
+    </div>
+
+    <div class="mdx-stats">
+      <div class="mdx-stat">
+        <div class="mdx-stat__number">37</div>
+        <div class="mdx-stat__label">Tools</div>
+      </div>
+      <div class="mdx-stat">
+        <div class="mdx-stat__number">~13MB</div>
+        <div class="mdx-stat__label">Binary</div>
+      </div>
+      <div class="mdx-stat">
+        <div class="mdx-stat__number">3</div>
+        <div class="mdx-stat__label">Memory Tiers</div>
+      </div>
+      <div class="mdx-stat">
+        <div class="mdx-stat__number">5</div>
+        <div class="mdx-stat__label">Severity Levels</div>
+      </div>
     </div>
   </section>
 {% endblock %}

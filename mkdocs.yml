@@ -25,6 +25,7 @@ theme:
     text: IBM Plex Sans
     code: JetBrains Mono
   features:
+    - announce.dismiss
     - navigation.tabs
     - navigation.tabs.sticky
     - navigation.sections
@@ -33,10 +34,14 @@ theme:
     - navigation.top
     - navigation.instant
     - navigation.instant.progress
+    - navigation.path
+    - navigation.footer
     - content.code.copy
     - content.code.annotate
+    - content.tabs.link
     - search.suggest
     - search.highlight
+    - search.share
     - toc.follow
   logo: assets/logo.svg
   favicon: assets/logo.svg
@@ -120,6 +125,7 @@ nav:
     - Troubleshooting: troubleshooting.md
 
 extra:
+  announce: "New: Multi-agent runtime with Soul, 3-tier memory, and telemetry watchdog"
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/kornia/bubbaloop
