@@ -22,7 +22,7 @@ theme:
         icon: material/brightness-7
         name: Switch to dark mode
   font:
-    text: Inter
+    text: IBM Plex Sans
     code: JetBrains Mono
   features:
     - navigation.tabs

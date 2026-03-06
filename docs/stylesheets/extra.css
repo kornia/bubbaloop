@@ -1,6 +1,8 @@
 /* ============================================================
-   Bubbaloop docs theme — industrial dark + coral accent
-   Designed for developer experience: scannable, clean, modern
+   Bubbaloop docs — Design System
+   Generated via ui-ux-pro-max skill
+   Palette: Slate dark + coral brand + green CTA
+   Typography: IBM Plex Sans (body) + JetBrains Mono (code)
    ============================================================ */
 
 /* --- Color tokens --- */
@@ -8,52 +10,69 @@
   --bb-coral: #e07a5f;
   --bb-coral-dark: #c4573f;
   --bb-coral-glow: rgba(224, 122, 95, 0.12);
+  --bb-green: #22c55e;
+  --bb-green-dark: #16a34a;
+  --bb-green-glow: rgba(34, 197, 94, 0.12);
   --bb-teal: #3d8b8b;
   --bb-blue: #5b9bd5;
-  --bb-green: #6bc77a;
+  --bb-slate-900: #0f172a;
+  --bb-slate-800: #1e293b;
+  --bb-slate-700: #334155;
+  --bb-slate-400: #94a3b8;
+  --bb-slate-50: #f8fafc;
 }
 
 /* --- Light mode --- */
 [data-md-color-scheme="default"] {
-  --md-primary-fg-color: #1a2332;
+  --md-primary-fg-color: var(--bb-slate-900);
   --md-primary-bg-color: #ffffff;
-  --md-accent-fg-color: #e07a5f;
-  --md-typeset-a-color: #c4573f;
+  --md-accent-fg-color: var(--bb-coral);
+  --md-typeset-a-color: var(--bb-coral-dark);
 }
 
-/* --- Dark mode (primary) --- */
+/* --- Dark mode (primary experience) --- */
 [data-md-color-scheme="slate"] {
-  --md-primary-fg-color: #0e1520;
-  --md-primary-bg-color: #171d2b;
-  --md-accent-fg-color: #e07a5f;
-  --md-default-bg-color: #0e1520;
-  --md-typeset-a-color: #e07a5f;
-  --md-code-bg-color: #141a26;
+  --md-primary-fg-color: var(--bb-slate-800);
+  --md-primary-bg-color: var(--bb-slate-800);
+  --md-accent-fg-color: var(--bb-coral);
+  --md-default-bg-color: var(--bb-slate-900);
+  --md-typeset-a-color: var(--bb-coral);
+  --md-code-bg-color: #141c2b;
+  --md-footer-bg-color: #0a0f1a;
+  --md-footer-fg-color: var(--bb-slate-400);
 }
 
-/* --- Typography refinements --- */
+/* --- Typography --- */
 .md-typeset {
-  font-size: 0.82rem;
+  font-size: 0.84rem;
   line-height: 1.7;
 }
 
 .md-typeset h1 {
   font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: 2rem;
+  letter-spacing: -0.03em;
 }
 
 .md-typeset h2 {
   font-weight: 700;
-  margin-top: 2.4em;
-  padding-bottom: 0.3em;
+  font-size: 1.4rem;
+  margin-top: 2.8em;
+  padding-bottom: 0.4em;
   border-bottom: 1px solid var(--md-default-fg-color--lightest);
 }
 
 .md-typeset h3 {
   font-weight: 600;
+  font-size: 1.1rem;
 }
 
-/* --- Code blocks --- */
+/* Body text: ensure readability */
+.md-typeset p {
+  max-width: 75ch;
+}
+
+/* --- Code blocks: rounded, bordered, tight --- */
 .md-typeset pre {
   border-radius: 10px;
   border: 1px solid var(--md-default-fg-color--lightest);
@@ -61,29 +80,57 @@
 
 .md-typeset code {
   border-radius: 4px;
-  font-size: 0.82em;
+  font-size: 0.84em;
+  padding: 0.1em 0.35em;
 }
 
-/* --- Grid cards (Material built-in) --- */
+/* --- Grid cards: hover-lift with coral glow --- */
 .md-typeset .grid.cards > ul > li {
-  border-radius: 10px;
+  border-radius: 12px;
   border: 1px solid var(--md-default-fg-color--lightest);
-  transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+  transition: border-color 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
 }
 
 .md-typeset .grid.cards > ul > li:hover {
   border-color: var(--bb-coral);
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(224, 122, 95, 0.08);
+  cursor: pointer;
 }
 
-/* Icon sizing in cards */
+/* Card title color */
+.md-typeset .grid.cards > ul > li > p:first-child strong {
+  color: var(--md-accent-fg-color);
+}
+
+/* Card icon sizing */
 .md-typeset .grid.cards .twemoji,
 .md-typeset .grid.cards .emojione {
-  height: 1.4rem;
+  height: 1.6rem;
 }
 
-/* --- Tabs accent --- */
+/* --- Buttons --- */
+.md-typeset .md-button {
+  border-radius: 8px;
+  font-weight: 600;
+  padding: 0.6rem 1.6rem;
+  transition: all 0.2s ease;
+}
+
+.md-typeset .md-button--primary {
+  background: var(--bb-green);
+  border-color: var(--bb-green);
+  color: #fff;
+}
+
+.md-typeset .md-button--primary:hover {
+  background: var(--bb-green-dark);
+  border-color: var(--bb-green-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.25);
+}
+
+/* --- Active nav tab + links --- */
 .md-tabs__link--active,
 .md-nav__link--active {
   color: var(--bb-coral) !important;
@@ -100,50 +147,78 @@
   border-color: var(--bb-teal);
 }
 
-/* --- Tables --- */
+.md-typeset .admonition.warning,
+.md-typeset details.warning {
+  border-color: #f59e0b;
+}
+
+/* --- Tables: clean, compact, uppercase headers --- */
 .md-typeset table:not([class]) {
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   border-radius: 8px;
   overflow: hidden;
+  border: 1px solid var(--md-default-fg-color--lightest);
 }
 
 .md-typeset table:not([class]) th {
   background: var(--md-default-fg-color--lightest);
-  font-weight: 600;
-  text-transform: uppercase;
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
-}
-
-/* --- Badges --- */
-.badge {
-  display: inline-block;
-  padding: 0.12rem 0.5rem;
-  border-radius: 999px;
-  font-size: 0.65rem;
   font-weight: 700;
   text-transform: uppercase;
+  font-size: 0.7rem;
   letter-spacing: 0.05em;
+  padding: 0.7em 1em;
+}
+
+.md-typeset table:not([class]) td {
+  padding: 0.6em 1em;
+}
+
+/* --- Badges (pill style) --- */
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   vertical-align: middle;
+  margin-left: 0.3rem;
 }
 
 .badge-agent { background: var(--bb-coral-glow); color: var(--bb-coral); }
 .badge-node  { background: rgba(91, 155, 213, 0.12); color: var(--bb-blue); }
 .badge-mcp   { background: rgba(61, 139, 139, 0.12); color: var(--bb-teal); }
-.badge-new   { background: rgba(107, 199, 122, 0.12); color: var(--bb-green); }
+.badge-new   { background: var(--bb-green-glow); color: var(--bb-green); }
 
-/* --- Navigation polish --- */
+/* --- Header: blur backdrop --- */
 .md-header {
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
+/* --- Tabs bar: subtle border --- */
 .md-tabs {
   border-bottom: 1px solid var(--md-default-fg-color--lightest);
 }
 
-/* --- Footer --- */
+/* --- Footer: clean --- */
 .md-footer {
   border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+
+/* --- Scrollbar (dark mode) --- */
+[data-md-color-scheme="slate"] ::-webkit-scrollbar {
+  width: 6px;
+}
+
+[data-md-color-scheme="slate"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-md-color-scheme="slate"] ::-webkit-scrollbar-thumb {
+  background: var(--bb-slate-700);
+  border-radius: 3px;
 }
 
 /* --- Smooth scrolling --- */
@@ -151,7 +226,13 @@ html {
   scroll-behavior: smooth;
 }
 
-/* --- Home page specific (applied via home.html override) --- */
-.mdx-hero + .md-content .md-typeset h1:first-child {
-  display: none;
+/* --- HR separators --- */
+.md-typeset hr {
+  border-color: var(--md-default-fg-color--lightest);
+  margin: 2.5rem 0;
+}
+
+/* --- Selection highlight --- */
+::selection {
+  background: rgba(224, 122, 95, 0.25);
 }
