@@ -1116,7 +1116,7 @@ All diagnostic commands support JSON output, which is ideal for parsing and anal
 
 ```bash
 # Get system status as JSON
-bubbaloop status --json
+bubbaloop status -f json
 
 # Get full diagnostics as JSON
 bubbaloop doctor --json
@@ -1153,10 +1153,10 @@ bubbaloop doctor --json | jq '{
 **Get Status with Details:**
 ```bash
 # Full status in JSON
-bubbaloop status --json
+bubbaloop status -f json
 
 # Parse node list
-bubbaloop status --json | jq '.nodes[] | {name, status, type: .node_type, version}'
+bubbaloop status -f json | jq '.nodes[] | {name, status, type: .node_type, version}'
 ```
 
 **Monitor Daemon Health:**
@@ -1227,7 +1227,7 @@ When asked to diagnose issues:
 ```bash
 # Always start here
 bubbaloop doctor --json > /tmp/diagnostics.json
-bubbaloop status --json > /tmp/status.json
+bubbaloop status -f json > /tmp/status.json
 ```
 
 **2. Parse results:**
@@ -1387,7 +1387,8 @@ zenoh-cli sub bubbaloop/daemon/nodes
 | Variable | Purpose | Default | Example |
 |----------|---------|---------|---------|
 | `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` | `tcp/192.168.1.100:7447` |
-| `RUST_LOG` | Log level (trace/debug/info/warn/error) | `info` | `RUST_LOG=debug` |
+| `RUST_LOG` | Log level (trace/debug/info/warn/error) | `warn` | `RUST_LOG=debug` |
+| `BUBBALOOP_MCP_PORT` | MCP HTTP server port | `8088` | `9000` |
 | `RUST_BACKTRACE` | Show stack traces on panic | Not set | `1` (short) or `full` (detailed) |
 | `XDG_CONFIG_HOME` | Config directory | `~/.config` | `/home/user/.config` |
 | `XDG_DATA_HOME` | Data directory | `~/.local/share` | `/home/user/.local/share` |

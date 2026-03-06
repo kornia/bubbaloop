@@ -137,13 +137,13 @@ By default, services connect to a local Zenoh router at `tcp/127.0.0.1:7447`.
 pixi run cameras -- -z tcp/192.168.1.100:7447
 
 # Via environment variable
-ZENOH_ENDPOINT=tcp/192.168.1.100:7447 pixi run cameras
+BUBBALOOP_ZENOH_ENDPOINT=tcp/192.168.1.100:7447 pixi run cameras
 ```
 
 ### Priority Order
 
-1. `ZENOH_ENDPOINT` environment variable (highest)
-2. `-z` / `--zenoh-endpoint` CLI flag
+1. `-z` / `--zenoh-endpoint` CLI flag (highest)
+2. `BUBBALOOP_ZENOH_ENDPOINT` environment variable
 3. Default: `tcp/127.0.0.1:7447`
 
 ### Server Configuration
@@ -209,24 +209,44 @@ When I greet users, I always include a shrimp pun.
 Model and behavior settings:
 
 ```toml
-model = "claude-sonnet-4-20250514"
-heartbeat_interval_secs = 300
-heartbeat_arousal_boost = 0.3
-compaction_flush_threshold_tokens = 150000
-memory_search_results = 5
-memory_retention_days = 30
-memory_half_life_days = 7.0
+model_name = "claude-sonnet-4-20250514"
+max_turns = 15
+allow_internet = true
+
+# Heartbeat tuning (adaptive interval)
+heartbeat_base_interval = 60
+heartbeat_min_interval = 5
+heartbeat_decay_factor = 0.7
+
+# Approval mode: "auto" = execute immediately, "propose" = save for approval
+default_approval_mode = "auto"
+
+# Retry / circuit breaker
+max_retries = 3
+
+# Pre-compaction flush threshold (tokens from context limit)
+compaction_flush_threshold_tokens = 4000
+
+# Memory retention: delete episodic logs older than N days (0 = keep forever)
+episodic_log_retention_days = 30
+
+# Temporal decay: half-life in days for search scoring (0 = no decay)
+episodic_decay_half_life_days = 30
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `model` | `claude-sonnet-4-20250514` | LLM model identifier |
-| `heartbeat_interval_secs` | `300` | Base heartbeat interval |
-| `heartbeat_arousal_boost` | `0.3` | Activity boost factor |
-| `compaction_flush_threshold_tokens` | `150000` | Token limit before context flush |
-| `memory_search_results` | `5` | Max results from memory search |
-| `memory_retention_days` | `30` | Days before episodic cleanup |
-| `memory_half_life_days` | `7.0` | Temporal decay half-life |
+| `model_name` | `claude-sonnet-4-20250514` | LLM model identifier |
+| `max_turns` | `15` | Maximum tool-use turns per agent job |
+| `allow_internet` | `true` | Whether the agent can make internet requests |
+| `heartbeat_base_interval` | `60` | Resting heartbeat interval in seconds |
+| `heartbeat_min_interval` | `5` | Minimum heartbeat interval (max arousal) |
+| `heartbeat_decay_factor` | `0.7` | Arousal decay factor per calm beat (0.0-1.0) |
+| `default_approval_mode` | `"auto"` | Approval mode: `"auto"` or `"propose"` |
+| `max_retries` | `3` | Max consecutive failures before circuit breaker |
+| `compaction_flush_threshold_tokens` | `4000` | Tokens from context limit before flush |
+| `episodic_log_retention_days` | `30` | Days before episodic cleanup (0 = keep forever) |
+| `episodic_decay_half_life_days` | `30` | Temporal decay half-life in days (0 = no decay) |
 
 **Fallback chain:** per-agent Soul → global Soul (`~/.bubbaloop/soul/`) → compiled defaults.
 
@@ -237,26 +257,36 @@ memory_half_life_days = 7.0
 System monitoring is configured in `~/.bubbaloop/telemetry.toml`:
 
 ```toml
-[thresholds]
-cpu_warn = 70.0
-cpu_critical = 90.0
-memory_warn = 75.0
-memory_critical = 90.0
-disk_warn = 80.0
-disk_critical = 95.0
-gpu_warn = 80.0
-gpu_critical = 95.0
+[telemetry.thresholds]
+yellow_pct = 60          # Memory used % → Yellow
+orange_pct = 80          # Memory used % → Orange
+red_pct = 90             # Memory used % → Red (kills largest non-essential node)
+critical_pct = 95        # Memory used % → Critical (kills ALL non-essential nodes)
+cpu_warn_pct = 95        # CPU usage % that triggers a warning
+cpu_sustained_secs = 60  # Seconds of sustained CPU before trend alert
+disk_warn_mb = 1024      # Free disk below this → warning
+disk_critical_mb = 200   # Free disk below this → critical
+
+[telemetry.sampling]
+idle_secs = 30           # Green/Yellow sampling interval
+elevated_secs = 10       # Orange/Red sampling interval
+critical_secs = 5        # Critical sampling interval
+ring_capacity = 720      # In-memory ring buffer size
+
+[telemetry.circuit_breaker]
+enabled = true
+cooldown_secs = 30
 ```
 
-Severity levels:
+Severity levels (based on memory usage):
 
-| Level | Color | Meaning |
-|-------|-------|---------|
-| Green | Normal | All metrics within bounds |
-| Yellow | Warn | One metric above warn threshold |
-| Orange | Elevated | Multiple metrics above warn |
-| Red | Critical | One metric above critical threshold |
-| Critical | Emergency | System at risk, circuit breaker may trip |
+| Level | Threshold | Sampling | Action |
+|-------|-----------|----------|--------|
+| Green | < 60% used | 30s | Normal operation |
+| Yellow | 60-80% used | 30s | Warn agent |
+| Orange | 80-90% used | 10s | Urgent alert |
+| Red | 90-95% used | 10s | Kill largest non-essential node |
+| Critical | > 95% used | 5s | Kill ALL non-essential nodes |
 
 Hot-reload: Edit `telemetry.toml` while daemon is running. Agents can also tune thresholds via the `update_telemetry_config` tool.
 
@@ -268,8 +298,8 @@ See [Remote Access](../dashboard/remote-access.md) for detailed setup instructio
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
-| `RUST_LOG` | Logging level | `info` |
+| `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
+| `RUST_LOG` | Logging level | `warn` |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude | — |
 | `BUBBALOOP_MCP_PORT` | MCP HTTP server port | `8088` |
 | `BUBBALOOP_SCOPE` | Zenoh topic scope | `local` |

@@ -48,7 +48,7 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 │  │  Short-term (RAM) | Episodic (NDJSON) | Semantic DB │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (37 tools) — sole control interface      │  │
+│  │  MCP Server (30 tools) — sole control interface      │  │
 │  │  RBAC (Viewer/Operator/Admin) | Bearer token auth   │  │
 │  │  PlatformOperations trait | Rate limiting            │  │
 │  └──────────────────────┬─────────────────────────────┘  │
@@ -148,10 +148,10 @@ The daemon runs a cross-platform resource watchdog (`daemon/telemetry/`) that pr
 | Level | Memory Used | Action |
 |-------|------------|--------|
 | Green | < 60% | Normal (30s sampling) |
-| Yellow | 60-80% | Warn agent (10s sampling) |
-| Orange | 80-90% | Urgent alert (5s sampling) |
-| Red | 90-95% | Kill largest non-essential node |
-| Critical | > 95% | Kill ALL non-essential nodes |
+| Yellow | 60-80% | Warn agent (30s sampling) |
+| Orange | 80-90% | Urgent alert (10s sampling) |
+| Red | 90-95% | Kill largest non-essential node (10s sampling) |
+| Critical | > 95% | Kill ALL non-essential nodes (5s sampling) |
 
 **Agent tools:** `get_system_telemetry`, `get_telemetry_history`, `update_telemetry_config`
 
@@ -188,16 +188,16 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447  # Optional override
 
 ## MCP Server
 
-MCP is the **sole control interface**. 37 tools across 7 categories:
+MCP is the **sole control interface**. 30 MCP tools + 7 agent-internal (37 total) across categories:
 
 | Category | Tools |
 |----------|-------|
 | **Discovery** | list_nodes, discover_nodes, get_node_health, get_node_config, get_node_manifest, get_node_schema, get_stream_info, list_commands, discover_capabilities |
 | **Lifecycle** | install_node, uninstall_node, start_node, stop_node, restart_node, build_node, remove_node, clean_node, enable_autostart, disable_autostart |
 | **Data** | send_command, query_zenoh |
-| **System** | get_system_status, get_machine_info, read_file, write_file, run_command |
-| **Memory** | memory_search, memory_forget, schedule_task, list_jobs, delete_job, create_proposal, list_proposals |
-| **Telemetry** | get_system_telemetry, get_telemetry_history, update_telemetry_config |
+| **System** | get_system_status, get_machine_info |
+| **Memory** | list_jobs, delete_job, list_proposals |
+| **Agent-internal** | read_file, write_file, run_command, memory_search, memory_forget, schedule_task, create_proposal, get_system_telemetry, get_telemetry_history, update_telemetry_config |
 
 ### Transport Options
 
@@ -285,14 +285,14 @@ MCP is the **sole control interface**. 37 tools across 7 categories:
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 37 tools |
+| Control | MCP (rmcp) | Standard AI agent interface, 30 MCP tools + 7 agent-internal |
 | Memory | SQLite (rusqlite) + NDJSON | 3-tier: RAM + episodic (NDJSON/FTS5) + semantic (SQLite). Episodic FTS5 index and semantic store share `memory.db` per agent. |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
 | systemd | zbus (D-Bus) | No subprocess spawning, safe |
 | LLM | ModelProvider trait (reqwest) | Claude (OAuth + API key) and Ollama (local, tool calling) |
 | HTTP | axum | Dashboard + MCP HTTP transport |
-| Telemetry | sysinfo | CPU/RAM/disk/GPU monitoring, cross-platform |
+| Telemetry | sysinfo | CPU/RAM/disk monitoring, cross-platform |
 
 **Removed technologies:**
 - **TUI (ratatui/crossterm)** — Removed in v0.0.6. Codebase simplified to ~14K lines.

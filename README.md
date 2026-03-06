@@ -150,12 +150,10 @@ bubbaloop daemon
 | `get_node_logs` | Read node service logs |
 | `discover_nodes` | Fleet-wide manifest discovery |
 | `query_zenoh` | Query any Zenoh key expression |
-| `memory_search` / `memory_forget` | Search or clear agent episodic memory |
-| `get_system_telemetry` | CPU, RAM, disk, GPU metrics |
-| `schedule_task` | Schedule recurring agent tasks |
-| `create_proposal` | Human-in-the-loop approval queue |
 
-37 tools total (30 MCP + 10 agent-internal). Configure Claude Code via `.mcp.json` (already in project root).
+37 tools total (30 MCP + 7 agent-internal). Configure Claude Code via `.mcp.json` (already in project root).
+
+**Agent-internal tools** (daemon-side only, not exposed via MCP): `memory_search`, `memory_forget`, `schedule_task`, `create_proposal`, `read_file`, `write_file`, `run_command`.
 
 ## Architecture
 
@@ -170,7 +168,8 @@ CLI ───────────────┘               │
                                    │
 Daemon ────────────────────────────┤
   ├─ Node Manager (lifecycle)      │
-  ├─ MCP Server (37 tools)        │
+  ├─ MCP Server (30 tools)         │
+  ├─ Telemetry Watchdog            │
   ├─ Agent Runtime (multi-agent)   │
   └─ Systemd D-Bus (zbus)         │
                                    │
@@ -186,7 +185,7 @@ The daemon hosts the **agent runtime** (multi-agent Zenoh gateway) alongside the
 - **Soul**: `identity.md` (personality) + `capabilities.toml` (model, heartbeat). Hot-reload on file change.
 - **3-Tier Memory**: RAM (current turn) → NDJSON logs (episodic, BM25 search) → SQLite (jobs, proposals).
 - **Adaptive Heartbeat**: Arousal-based decay — active agents check in frequently, idle agents stay quiet.
-- **Telemetry Watchdog**: CPU/RAM/disk/GPU monitoring with circuit breakers and 5 severity levels.
+- **Telemetry Watchdog**: CPU/RAM/disk monitoring with circuit breakers and 5 severity levels.
 
 ## Node Contract
 

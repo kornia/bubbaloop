@@ -89,7 +89,7 @@ Each append dual-writes to an FTS5 virtual table (`fts_episodic`) inside
 `memory.db`. Queries use BM25 ranking via SQLite's `rank` column.
 
 ```sql
-SELECT content, role, timestamp FROM fts_episodic
+SELECT content, role, timestamp, job_id FROM fts_episodic
 WHERE fts_episodic MATCH 'camera restart'
 ORDER BY rank LIMIT 5;
 ```
@@ -144,8 +144,9 @@ WAL mode enabled. Busy timeout: 5000ms.
 | `retry_count`    | INTEGER | Consecutive failure count                     |
 | `last_error`     | TEXT    | Most recent error message                     |
 
-Retry logic: exponential backoff (`30s * 2^retry_count`). After
-`max_retries` consecutive failures the job is parked as `dead_letter`.
+Retry logic: exponential backoff (`30s * 2^(retry_count+1)`). The first
+retry waits 60s, the second waits 120s. After `max_retries` consecutive
+failures the job is parked as `dead_letter`.
 
 **`proposals`** — human-in-the-loop approval queue:
 
@@ -155,7 +156,7 @@ Retry logic: exponential backoff (`30s * 2^retry_count`). After
 | `skill`       | TEXT    | Action category                               |
 | `description` | TEXT    | Human-readable summary                        |
 | `actions`     | TEXT    | JSON array of tool calls to execute           |
-| `status`      | TEXT    | `pending`, `approved`, `rejected`, `expired`  |
+| `status`      | TEXT    | `pending`, `approved`, `rejected`, `expired` (not yet implemented)  |
 | `decided_by`  | TEXT    | `user`, `mcp`, or `timeout`                   |
 | `decided_at`  | TEXT    | ISO 8601 timestamp of decision                |
 
@@ -189,6 +190,10 @@ state between agents.
 `Memory::open(base)` creates `{base}/memory/` for NDJSON files and
 `{base}/memory.db` for the SQLite database. Both are created on first
 open if they do not exist.
+
+Note: `Soul::load_or_default()` checks the per-agent path
+(`~/.bubbaloop/agents/{id}/soul/`) first, then falls back to the global
+`~/.bubbaloop/soul/` directory if no per-agent soul files are found.
 
 ---
 

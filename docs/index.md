@@ -65,7 +65,7 @@ template: home.html
 
     ---
 
-    CPU, RAM, disk, GPU monitoring. 5 severity levels. Circuit breakers. Runtime-tunable.
+    CPU, RAM, disk monitoring. 5 severity levels. Circuit breakers. Runtime-tunable.
 
     [:octicons-arrow-right-24: Telemetry Guide](guides/telemetry-watchdog.md)
 
@@ -103,7 +103,7 @@ flowchart TB
         runtime["Agent Runtime — multi-agent, per-agent memory"]
         mcp["MCP Server — 30 tools, RBAC"]
         nm["Node Manager — lifecycle, health, build"]
-        watchdog["Telemetry Watchdog — CPU/RAM/disk/GPU"]
+        watchdog["Telemetry Watchdog — CPU/RAM/disk"]
     end
 
     subgraph Messaging
@@ -131,16 +131,28 @@ flowchart TB
 
 ## Quick start
 
+### Step 1: Install
+
 ```bash
-# Install (Linux x86_64 / ARM64)
 curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
 source ~/.bashrc
+```
 
-# Login + start
+### Step 2: Authenticate
+
+```bash
 bubbaloop login
-bubbaloop up
+```
 
-# Talk to your hardware
+### Step 3: Start the daemon
+
+```bash
+bubbaloop up
+```
+
+### Step 4: Talk to your hardware
+
+```bash
 bubbaloop agent chat
 ```
 
@@ -151,6 +163,9 @@ First time? The agent introduces itself and asks what you care about. It remembe
 ---
 
 ## Commands
+
+!!! tip
+    Run `bubbaloop --help` for the full list of commands and flags.
 
 | Command | What it does |
 |---------|-------------|
@@ -170,6 +185,9 @@ First time? The agent introduces itself and asks what you care about. It remembe
 
 ## Development
 
+!!! note
+    [pixi](https://prefix.dev/docs/pixi/overview) is required. It manages the Rust toolchain, Python env, and all dev tasks in one lockfile.
+
 ```bash
 git clone https://github.com/kornia/bubbaloop.git && cd bubbaloop
 pixi install && pixi run up
@@ -178,6 +196,8 @@ pixi install && pixi run up
 Dashboard dev server: [localhost:5173](http://localhost:5173)
 
 ---
+
+## Community
 
 <div class="grid" markdown>
 

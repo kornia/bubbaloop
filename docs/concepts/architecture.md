@@ -14,7 +14,7 @@ How the pieces fit together.
   +---------+------------------------------------------------+
   |  Daemon (~12-13 MB single binary)                        |
   |                                                          |
-  |  Agent Runtime  |  MCP Server  |  Node Manager           |
+  |  Agent Runtime | MCP Server | Node Manager | Gateway    |
   |                 |              |                          |
   |  Telemetry Watchdog                                      |
   +---------+------------------------------------------------+
@@ -26,7 +26,7 @@ How the pieces fit together.
   Camera   IMU    Motor   Weather     (self-describing nodes)
 ```
 
-One binary. Four subsystems. One data plane.
+One binary. Five subsystems. One data plane.
 
 ---
 
@@ -87,26 +87,26 @@ Agents defined in `~/.bubbaloop/agents.toml`. Per-agent files at
 
 ## Daemon
 
-Four subsystems run concurrently inside a single async runtime.
+Five subsystems run concurrently inside a single async runtime.
 
 **Node Manager** — builds, installs, starts/stops, and health-monitors nodes via
 systemd. Uses D-Bus (`zbus`) — no subprocess spawning.
 
 **Agent Runtime** — multi-agent Zenoh gateway. Described above.
 
-**MCP Server** — 30 MCP tools + 10 agent-internal tools (37 total), 3-tier RBAC, stdio + HTTP transports.
+**MCP Server** — 30 MCP tools + 7 agent-internal tools (37 total), 3-tier RBAC, stdio + HTTP transports.
 
 **Telemetry Watchdog**
 
-Monitors CPU, RAM, disk, and GPU on ARM64/x86. Five severity levels drive adaptive
+Monitors CPU, RAM, disk on ARM64/x86. Five severity levels drive adaptive
 sampling and automatic circuit breakers.
 
 ```
 Green  < 60% RAM  — normal (30s sampling)
-Yellow  60-80%    — warn agent (10s sampling)
-Orange  80-90%    — urgent alert (5s sampling)
-Red     90-95%    — kill largest non-essential node
-Critical > 95%    — kill ALL non-essential nodes
+Yellow  60-80%    — warn agent (30s sampling)
+Orange  80-90%    — urgent alert (10s sampling)
+Red     90-95%    — kill largest non-essential node (10s sampling)
+Critical > 95%    — kill ALL non-essential nodes (5s sampling)
 ```
 
 Config at `~/.bubbaloop/telemetry.toml`. File-watched. Agent can tune thresholds at
@@ -118,7 +118,7 @@ runtime via `update_telemetry_config`.
 
 The sole control interface. Zenoh is the data plane only.
 
-**37 tools across 7 categories**
+**30 MCP tools + 7 agent-internal tools (37 total) across 7 categories**
 
 | Category | What it covers |
 |---|---|
@@ -138,7 +138,7 @@ The sole control interface. Zenoh is the data plane only.
 | Operator | Viewer + lifecycle, send_command, config writes |
 | Admin | Operator + install/uninstall, system tools |
 
-Default for stdio: Admin. Default for HTTP: Viewer.
+Default for stdio: Admin. Default for HTTP: Admin (Viewer planned for phase 2).
 
 **Dual-plane design**
 
@@ -160,6 +160,8 @@ paths follow the topic hierarchy below.
 {node}/config      -> Current configuration (JSON)
 {node}/command     -> Imperative actions (JSON request/response)
 ```
+
+The Node SDK provides `schema` and `health` queryables automatically. `manifest`, `config`, and `command` are conventions that nodes implement as needed.
 
 AI agents discover nodes via the `bubbaloop/**/manifest` wildcard. They read
 the manifest to find available commands, then call `send_command` to act.

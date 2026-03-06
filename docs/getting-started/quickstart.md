@@ -46,9 +46,9 @@ width: 1280
 height: 720
 EOF
 
-# Create an instance and start it
-bubbaloop node instance rtsp-camera entrance \
-  --config ~/.bubbaloop/configs/entrance.yaml --start
+# Install the node (if not already done) and start it
+bubbaloop node install rtsp-camera
+bubbaloop node start rtsp-camera
 ```
 
 ## Step 4: Verify
@@ -65,7 +65,7 @@ bubbaloop debug subscribe "camera/entrance/compressed"  # See frames
 # Authenticate with Anthropic (needed for AI agent)
 bubbaloop login
 
-# Start the daemon (agent runtime + MCP server + node manager)
+# Start nodes and load skills (start the daemon first via systemd or `bubbaloop daemon start`)
 bubbaloop up
 
 # Chat with the default agent
@@ -82,7 +82,7 @@ bubbaloop agent list
 
 The first time you run `bubbaloop agent chat`, the agent introduces itself and asks:
 - What name you'd like to call it (default: jean-clawd)
-- What hardware you're working with
+- What your agent's focus is
 
 This creates the agent's identity and memory. To reset: `rm ~/.bubbaloop/.onboarded`
 
@@ -117,9 +117,9 @@ I specialize in camera feeds and sensor monitoring.
 
 **Capabilities** (`~/.bubbaloop/agents/{id}/soul/capabilities.toml`):
 ```toml
-model = "claude-sonnet-4-20250514"
-heartbeat_interval_secs = 300
-compaction_flush_threshold_tokens = 150000
+model_name = "claude-sonnet-4-20250514"
+heartbeat_base_interval = 60
+compaction_flush_threshold_tokens = 4000
 ```
 
 Changes take effect on the next turn — no restart needed.

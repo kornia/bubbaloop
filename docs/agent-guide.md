@@ -631,7 +631,7 @@ List scheduled jobs. Optionally filter by status.
 
 #### `delete_job`
 
-**Tier:** Admin
+**Tier:** Operator
 
 Delete a scheduled job by ID.
 
@@ -823,11 +823,11 @@ Run a shell command and return its output. Captures both stdout and stderr. Use 
 
 Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to execute.
 
-| Tier | Access Level | Example Tools |
-|------|--------------|---------------|
-| **Viewer** | Read-only monitoring | `list_nodes`, `get_node_health`, `get_system_status`, `discover_nodes`, `list_jobs` |
-| **Operator** | Day-to-day operations | `start_node`, `stop_node`, `send_command`, `schedule_task`, `get_node_config`, `read_file`, `write_file`, `run_command` |
-| **Admin** | System modification | `build_node`, `query_zenoh`, `install_node`, `remove_node` |
+| Tier | Access Level | MCP Tools |
+|------|--------------|-----------|
+| **Viewer** (14) | Read-only monitoring | `list_nodes`, `get_node_health`, `get_node_schema`, `get_stream_info`, `get_system_status`, `get_machine_info`, `discover_nodes`, `get_node_manifest`, `list_commands`, `discover_capabilities`, `list_proposals`, `list_jobs`, `get_system_telemetry`, `get_telemetry_history` |
+| **Operator** (11) | Day-to-day operations | `start_node`, `stop_node`, `restart_node`, `get_node_config`, `send_command`, `get_node_logs`, `enable_autostart`, `disable_autostart`, `approve_proposal`, `reject_proposal`, `delete_job` |
+| **Admin** (8) | System modification | `install_node`, `remove_node`, `build_node`, `query_zenoh`, `uninstall_node`, `clean_node`, `clear_episodic_memory`, `update_telemetry_config` |
 
 **Default tier:** In single-user localhost mode, all requests are granted Admin tier.
 
@@ -835,7 +835,7 @@ Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to e
 
 **Permission model:** Higher tiers inherit lower tier permissions (Admin can do everything, Operator can do Viewer tasks).
 
-Security enforcement is implemented in `dispatch_security.rs` — all tool calls pass through RBAC validation before execution.
+RBAC enforcement is in `mcp/rbac.rs` and `mcp/mod.rs` — all MCP tool calls pass through tier validation. Path and command validation for agent-internal tools (`read_file`, `write_file`, `run_command`) is in `dispatch_security.rs`.
 
 ---
 
@@ -1065,10 +1065,17 @@ get_system_status → get_node_logs
 
 ### Tool Count by Tier
 
-- **Viewer:** 13 tools (read-only)
-- **Operator:** 15 tools (operations)
-- **Admin:** 9 tools (system modification)
-- **Total:** 37 tools
+**MCP tools** (exposed to external clients via MCP server): 30 tools
+
+- **Viewer:** 14 tools (read-only discovery and status)
+- **Operator:** 11 tools (lifecycle, config, commands)
+- **Admin:** 8 tools (install, build, system)
+
+**Agent-internal tools** (available only to the LLM agent, not via MCP): 7 additional tools
+
+- `memory_search`, `memory_forget`, `schedule_task`, `create_proposal`, `read_file`, `write_file`, `run_command`
+
+**Total:** 37 tools in agent dispatch (30 MCP + 7 agent-only)
 
 ### Key Paths
 
@@ -1111,7 +1118,7 @@ Now the agent autonomously monitors temperature every 15 minutes without further
 
 ## Summary
 
-- **37 tools** across 3 RBAC tiers (Viewer, Operator, Admin)
+- **37 tools** (30 MCP + 7 agent-only) across 3 RBAC tiers (Viewer, Operator, Admin)
 - **Dual-plane architecture:** MCP for control, Zenoh for data
 - **Task scheduling** for autonomous behavior (cron jobs, retry with circuit breaker)
 - **Robustness** — turn/tool timeouts, provider retry, context recovery, result truncation

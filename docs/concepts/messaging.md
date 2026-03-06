@@ -16,16 +16,19 @@ Zenoh is a pub/sub/query protocol built for robotics and IoT. Three core pattern
 
 Low latency. No broker required. Runs over TCP, UDP, WebSocket, or shared memory.
 
-### Client Mode is Mandatory
+### Client Mode for Nodes
 
-**ALWAYS use `mode: "client"`** when connecting nodes to the zenohd router.
+**ALWAYS use `mode: "client"`** when connecting nodes and CLI clients to the zenohd router.
 
-Peer mode does direct P2P — messages never route through the daemon and are invisible to other clients.
+Peer mode does direct P2P — messages never route through the router and are invisible to other clients.
 
 ```
-WRONG: mode = "peer"   <- nodes can't see each other through the router
-RIGHT: mode = "client" <- all traffic flows through zenohd
+Nodes/CLI: mode = "client" <- all traffic flows through zenohd
+Daemon:    mode = "peer"   <- co-located with router, uses peer intentionally
 ```
+
+!!! note
+    The daemon itself uses `"peer"` mode (see `daemon/mod.rs`) because it co-locates with the Zenoh router. This is the only exception — all nodes and CLI clients must use `"client"`.
 
 Rust:
 ```rust
@@ -340,7 +343,7 @@ All nodes connect as clients to the local zenohd. The daemon discovers remote ma
 
 Camera and sensor streams: `BestEffort` + `Drop`. Dropping stale frames is correct.
 
-Agent messages: `Reliable` + `Block`. Commands must not be lost.
+Agent messages: Currently use Zenoh defaults (`BestEffort` + `Drop`). `Reliable` + `Block` is planned but not yet configured.
 
 ---
 
