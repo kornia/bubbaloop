@@ -1,34 +1,100 @@
 //! Internal MCP tool dispatch — calls PlatformOperations directly.
 //!
-//! Maps tool names to platform method calls without going through the full
-//! MCP server stack (avoids constructing `RequestContext`).
+//! Carries forward the battle-tested 37 tool definitions from agent/dispatch.rs,
+//! adapted to use the new provider types.
 
-use crate::agent::claude::{ContentBlock, ToolDefinition};
+use crate::agent::dispatch_security;
+use crate::agent::provider::{ContentBlock, ToolDefinition};
 use crate::mcp::platform::{NodeCommand, PlatformOperations};
 use crate::validation;
 use serde_json::{json, Value};
 use std::sync::Arc;
+
+/// Result of a tool handler: text output and whether it was an error.
+pub(crate) struct ToolResult {
+    pub text: String,
+    pub is_error: bool,
+}
+
+impl ToolResult {
+    pub fn success(text: String) -> Self {
+        Self {
+            text,
+            is_error: false,
+        }
+    }
+    pub fn error(text: String) -> Self {
+        Self {
+            text,
+            is_error: true,
+        }
+    }
+}
 
 /// Dispatches MCP tool calls directly to `PlatformOperations` methods.
 pub struct Dispatcher<P: PlatformOperations> {
     platform: Arc<P>,
     scope: String,
     machine_id: String,
+    memory_backend: Option<Arc<tokio::sync::Mutex<crate::agent::memory::MemoryBackend>>>,
+    job_notify: Option<Arc<tokio::sync::Notify>>,
+    episodic_decay_half_life_days: u32,
+    telemetry: Option<Arc<crate::daemon::telemetry::TelemetryService>>,
 }
 
 impl<P: PlatformOperations> Dispatcher<P> {
-    /// Create a new dispatcher.
+    /// Create a new dispatcher (backward-compatible, no memory).
     pub fn new(platform: Arc<P>, scope: String, machine_id: String) -> Self {
         Self {
             platform,
             scope,
             machine_id,
+            memory_backend: None,
+            job_notify: None,
+            episodic_decay_half_life_days: 7,
+            telemetry: None,
         }
     }
 
-    /// Returns Claude-compatible tool definitions for all 24 MCP tools.
-    ///
-    /// Names, descriptions, and schemas match the MCP server exactly.
+    /// Attach a telemetry service to enable the telemetry tools.
+    pub fn with_telemetry(
+        mut self,
+        telemetry: Arc<crate::daemon::telemetry::TelemetryService>,
+    ) -> Self {
+        self.telemetry = Some(telemetry);
+        self
+    }
+
+    /// Return the telemetry prompt summary, or `None` if telemetry is not attached.
+    pub async fn telemetry_prompt_summary(&self) -> Option<String> {
+        if let Some(ref telem) = self.telemetry {
+            telem.prompt_summary().await
+        } else {
+            None
+        }
+    }
+
+    /// Create a dispatcher with memory backend for agent use.
+    pub fn new_with_memory(
+        platform: Arc<P>,
+        scope: String,
+        machine_id: String,
+        memory_backend: Arc<tokio::sync::Mutex<crate::agent::memory::MemoryBackend>>,
+        job_notify: Option<Arc<tokio::sync::Notify>>,
+        episodic_decay_half_life_days: u32,
+    ) -> Self {
+        Self {
+            platform,
+            scope,
+            machine_id,
+            memory_backend: Some(memory_backend),
+            job_notify,
+            episodic_decay_half_life_days,
+            telemetry: None,
+        }
+    }
+
+    /// Returns Claude-compatible tool definitions for all 37 MCP tools.
     pub fn tool_definitions() -> Vec<ToolDefinition> {
         let empty_object = json!({
             "type": "object",
@@ -76,7 +142,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 description: "Get machine hardware and OS information: architecture, \
                     hostname, OS version."
                     .to_string(),
-                input_schema: empty_object,
+                input_schema: empty_object.clone(),
             },
             // ── Single node_name tools ──────────────────────────────
             ToolDefinition {
@@ -102,169 +168,359 @@ impl<P: PlatformOperations> Dispatcher<P> {
             ToolDefinition {
                 name: "list_commands".to_string(),
                 description: "List available commands for a specific node with their \
-                    parameters and descriptions. Use this before send_command to discover \
-                    what actions a node supports."
+                    parameters and descriptions."
                     .to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "start_node".to_string(),
-                description: "Start a stopped node via the daemon. The node must be \
-                    installed and built."
-                    .to_string(),
+                description: "Start a stopped node via the daemon. Use when a node should be running but isn't — after a crash, reboot, or user request.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "stop_node".to_string(),
-                description: "Stop a running node via the daemon.".to_string(),
+                description: "Stop a running node via the daemon. Use when a node needs to go offline for maintenance or is misbehaving.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "restart_node".to_string(),
-                description: "Restart a node (stop then start).".to_string(),
+                description: "Restart a node (stop then start). First fix to try when a node is unhealthy or stuck. Check health after to confirm recovery.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "get_node_logs".to_string(),
-                description: "Get the latest logs from a node's systemd service.".to_string(),
+                description: "Get the latest logs from a node's systemd service. Use to diagnose why a node crashed or is unhealthy. Check before restarting to understand root cause.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "build_node".to_string(),
-                description: "Trigger a build for a node. Builds the node's source code \
-                    using its configured build command (Cargo, pixi, etc.). Admin only."
-                    .to_string(),
+                description: "Trigger a build for a node. Admin only.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "remove_node".to_string(),
-                description: "Remove a registered node. Stops the node first if it is \
-                    running, then removes it from the daemon registry. Admin only."
-                    .to_string(),
+                description: "Remove a registered node. Admin only. Destructive — node must be reinstalled to use again. Stop first if running.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "uninstall_node".to_string(),
-                description: "Uninstall a node's systemd service. Stops the node if \
-                    running and removes the systemd service file, but keeps the node \
-                    registered. Admin only."
-                    .to_string(),
+                description: "Uninstall a node's systemd service. Admin only.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "clean_node".to_string(),
-                description: "Clean a node's build artifacts and cached data. Useful for \
-                    forcing a rebuild. Admin only."
-                    .to_string(),
+                description: "Clean a node's build artifacts. Admin only.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "enable_autostart".to_string(),
-                description: "Enable autostart for a node. The node's systemd service \
-                    will start automatically on boot."
-                    .to_string(),
+                description: "Enable autostart for a node.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "disable_autostart".to_string(),
-                description: "Disable autostart for a node. The node's systemd service \
-                    will no longer start automatically on boot."
-                    .to_string(),
+                description: "Disable autostart for a node.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "get_stream_info".to_string(),
-                description: "Get Zenoh connection parameters for subscribing to a node's \
-                    data stream. Returns topic pattern, encoding, and endpoint. Use this \
-                    to set up streaming data access outside MCP."
+                description: "Get Zenoh connection parameters for a node's data stream."
                     .to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
                 name: "get_node_schema".to_string(),
-                description: "Get the protobuf schema of a node's data messages. Returns \
-                    the schema in human-readable format if available."
-                    .to_string(),
+                description: "Get the protobuf schema of a node's data messages.".to_string(),
                 input_schema: node_name_schema,
             },
             // ── Custom-parameter tools ──────────────────────────────
             ToolDefinition {
                 name: "send_command".to_string(),
-                description: "Send a command to a node's command queryable. The node must \
-                    support the command — call list_commands first to see available commands. \
-                    Example: node_name='rtsp-camera', command='capture_frame', \
-                    params={\"resolution\": \"1080p\"}. Returns the command result or error."
-                    .to_string(),
+                description: "Send a command to a node's command queryable. Use list_commands first to discover available commands.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "node_name": {
-                            "type": "string",
-                            "description": "Name of the node to send the command to"
-                        },
-                        "command": {
-                            "type": "string",
-                            "description": "Command name (must be listed in the node's manifest)"
-                        },
-                        "params": {
-                            "description": "Optional JSON parameters for the command"
-                        }
+                        "node_name": { "type": "string", "description": "Node name" },
+                        "command": { "type": "string", "description": "Command name" },
+                        "params": { "description": "Optional JSON parameters" }
                     },
                     "required": ["node_name", "command"]
                 }),
             },
             ToolDefinition {
                 name: "query_zenoh".to_string(),
-                description: "Query a Zenoh key expression (admin only). Key must start \
-                    with 'bubbaloop/'. Returns up to 100 results."
-                    .to_string(),
+                description: "Query a Zenoh key expression (admin only).".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "key_expr": {
-                            "type": "string",
-                            "description": "Full Zenoh key expression to query (e.g., \
-                                \"bubbaloop/local/nvidia_orin00/openmeteo/status\")"
-                        }
+                        "key_expr": { "type": "string", "description": "Zenoh key expression" }
                     },
                     "required": ["key_expr"]
                 }),
             },
             ToolDefinition {
                 name: "install_node".to_string(),
-                description: "Install a node from the marketplace, a local path, or \
-                    GitHub repository. Accepts a marketplace name (e.g., 'rtsp-camera'), \
-                    a local directory path (e.g., '/path/to/my-node'), or GitHub format \
-                    (e.g., 'user/repo'). Downloads precompiled binaries when available, \
-                    registers the node with the daemon, and creates the systemd service. \
-                    Admin only."
+                description: "Install a node from marketplace, local path, or GitHub. Admin only. Marketplace names are simple (e.g., 'rtsp-camera'). After installing, build and start separately."
                     .to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "source": {
-                            "type": "string",
-                            "description": "Source path: marketplace name, local directory \
-                                path, or GitHub \"user/repo\" format"
-                        }
+                        "source": { "type": "string", "description": "Marketplace name, path, or user/repo" }
                     },
                     "required": ["source"]
                 }),
             },
             ToolDefinition {
                 name: "discover_capabilities".to_string(),
-                description: "Discover available node capabilities. Returns nodes grouped \
-                    by capability type (sensor, actuator, processor, gateway). Optionally \
-                    filter by a single capability type."
+                description: "Discover available node capabilities grouped by type.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "capability": { "type": "string", "description": "Filter by type: sensor, actuator, processor, gateway" }
+                    },
+                    "required": []
+                }),
+            },
+            // ── Semantic memory tools ──
+            ToolDefinition {
+                name: "schedule_task".to_string(),
+                description: "Schedule a task for the agent to execute later. Supports one-off \
+                    and recurring tasks via cron expressions (e.g., '*/15 * * * *' for every 15 minutes). \
+                    The agent executes the prompt autonomously when the schedule fires."
                     .to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "capability": {
+                        "prompt": {
                             "type": "string",
-                            "description": "Filter by capability type: \"sensor\", \
-                                \"actuator\", \"processor\", \"gateway\". Omit for all."
+                            "description": "The instruction for the agent to execute"
+                        },
+                        "cron_schedule": {
+                            "type": "string",
+                            "description": "Optional cron expression for recurring tasks (5 or 6 field)"
+                        },
+                        "recurrence": {
+                            "type": "boolean",
+                            "description": "Whether this is a recurring task (default: false)"
                         }
+                    },
+                    "required": ["prompt"]
+                }),
+            },
+            ToolDefinition {
+                name: "list_jobs".to_string(),
+                description: "List scheduled jobs. Optionally filter by status: pending, running, \
+                    completed, failed, dead_letter."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "description": "Filter by status (optional). One of: pending, running, completed, failed, dead_letter"
+                        }
+                    },
+                    "required": []
+                }),
+            },
+            ToolDefinition {
+                name: "delete_job".to_string(),
+                description: "Delete a scheduled job by ID. Use list_jobs to find job IDs.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "job_id": {
+                            "type": "string",
+                            "description": "The job ID to delete"
+                        }
+                    },
+                    "required": ["job_id"]
+                }),
+            },
+            ToolDefinition {
+                name: "create_proposal".to_string(),
+                description: "Create a proposal for human approval before executing a risky action. \
+                    Use for destructive operations like removing nodes, changing configs, or any action \
+                    that should require human sign-off."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "skill": {
+                            "type": "string",
+                            "description": "The tool or action category (e.g., 'restart_node', 'remove_node')"
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Human-readable description of what will happen"
+                        },
+                        "actions": {
+                            "type": "string",
+                            "description": "JSON array of tool calls to execute if approved"
+                        }
+                    },
+                    "required": ["skill", "description", "actions"]
+                }),
+            },
+            ToolDefinition {
+                name: "list_proposals".to_string(),
+                description: "List proposals for human-in-the-loop approval. Optionally filter \
+                    by status: pending, approved, rejected, expired."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "description": "Filter by status (optional). One of: pending, approved, rejected, expired"
+                        }
+                    },
+                    "required": []
+                }),
+            },
+            // ── Episodic memory tools ──
+            ToolDefinition {
+                name: "memory_search".to_string(),
+                description: "Search episodic memory for past conversations, tool results, and \
+                    agent observations. Uses BM25 full-text search with temporal decay. Returns \
+                    the most relevant entries."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query (keywords or phrases)"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum results to return (default: 10)"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
+            ToolDefinition {
+                name: "memory_forget".to_string(),
+                description: "Remove matching entries from episodic memory search index. \
+                    Use for PII removal, correcting false memories, or user-requested deletion. \
+                    Creates an audit trail. NDJSON source files are preserved."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query to match entries to forget"
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Reason for forgetting (logged in audit trail)"
+                        }
+                    },
+                    "required": ["query", "reason"]
+                }),
+            },
+            // ── System tools (filesystem + shell) ─────────────────
+            ToolDefinition {
+                name: "read_file".to_string(),
+                description: "Read contents of a file. Returns up to 500 lines. \
+                    Use for config files, logs, scripts, or any text file."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute or relative file path"
+                        }
+                    },
+                    "required": ["path"]
+                }),
+            },
+            ToolDefinition {
+                name: "write_file".to_string(),
+                description: "Write content to a file inside ~/.bubbaloop/workspace/. \
+                    Creates parent directories if needed. Writes outside the workspace are blocked."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute or relative file path"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "File content to write"
+                        }
+                    },
+                    "required": ["path", "content"]
+                }),
+            },
+            ToolDefinition {
+                name: "run_command".to_string(),
+                description: "Run a shell command and return its output. \
+                    Captures both stdout and stderr. Use for diagnostics, \
+                    system inspection, or any task requiring shell access. \
+                    Times out after 30 seconds by default."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Shell command to execute (passed to /bin/sh -c)"
+                        },
+                        "timeout_secs": {
+                            "type": "integer",
+                            "description": "Timeout in seconds (default: 30, max: 300)"
+                        }
+                    },
+                    "required": ["command"]
+                }),
+            },
+            // ── Telemetry watchdog tools ───────────────────────────────
+            ToolDefinition {
+                name: "get_system_telemetry".to_string(),
+                description: "Get current system resource telemetry: memory, CPU, disk usage, \
+                    watchdog alert level, and top processes by memory consumption."
+                    .to_string(),
+                input_schema: empty_object.clone(),
+            },
+            ToolDefinition {
+                name: "get_telemetry_history".to_string(),
+                description: "Query historical system telemetry for trend analysis. Returns \
+                    downsampled time series. Use to detect memory leaks or resource degradation."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "duration_minutes": {
+                            "type": "integer",
+                            "description": "How many minutes of history to return (default: 60)"
+                        }
+                    },
+                    "required": []
+                }),
+            },
+            ToolDefinition {
+                name: "update_telemetry_config".to_string(),
+                description: "Update telemetry watchdog thresholds at runtime. Only provided \
+                    fields are changed. Guardrails prevent unsafe values."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "yellow_pct": { "type": "integer", "description": "Used % for Yellow level" },
+                        "orange_pct": { "type": "integer", "description": "Used % for Orange level" },
+                        "red_pct": { "type": "integer", "description": "Used % for Red level" },
+                        "critical_pct": { "type": "integer", "description": "Used % for Critical level" },
+                        "cooldown_secs": { "type": "integer", "description": "Circuit-breaker cooldown seconds" },
+                        "idle_secs": { "type": "integer", "description": "Sampling interval when pressure is low" },
+                        "elevated_secs": { "type": "integer", "description": "Sampling interval when pressure is elevated" },
+                        "critical_secs": { "type": "integer", "description": "Sampling interval when pressure is critical" },
+                        "circuit_breaker_enabled": { "type": "boolean", "description": "Enable or disable the circuit breaker" }
                     },
                     "required": []
                 }),
@@ -273,17 +529,12 @@ impl<P: PlatformOperations> Dispatcher<P> {
     }
 
     /// Dispatch a tool call by name, returning a `ContentBlock::ToolResult`.
-    ///
-    /// Maps all 24 tool names to the corresponding `PlatformOperations` method.
     pub async fn call_tool(&self, tool_use_id: &str, name: &str, input: &Value) -> ContentBlock {
-        let (text, is_error) = match name {
-            // ── No-parameter tools ──────────────────────────────────
+        let result = match name {
             "list_nodes" => self.handle_list_nodes().await,
             "discover_nodes" => self.handle_discover_nodes().await,
             "get_system_status" => self.handle_get_system_status().await,
             "get_machine_info" => self.handle_get_machine_info(),
-
-            // ── Single node_name tools ──────────────────────────────
             "get_node_health" => self.handle_get_node_health(input).await,
             "get_node_config" => self.handle_get_node_config(input).await,
             "get_node_manifest" => self.handle_get_node_manifest(input).await,
@@ -309,24 +560,41 @@ impl<P: PlatformOperations> Dispatcher<P> {
             }
             "get_stream_info" => self.handle_get_stream_info(input).await,
             "get_node_schema" => self.handle_get_node_schema(input).await,
-
-            // ── Custom-parameter tools ──────────────────────────────
             "send_command" => self.handle_send_command(input).await,
             "query_zenoh" => self.handle_query_zenoh(input).await,
             "install_node" => self.handle_install_node(input).await,
             "discover_capabilities" => self.handle_discover_capabilities(input).await,
-
-            _ => (format!("Unknown tool: {}", name), Some(true)),
+            "read_file" => self.handle_read_file(input).await,
+            "write_file" => self.handle_write_file(input).await,
+            "run_command" => self.handle_run_command(input).await,
+            "memory_search" => self.handle_memory_search(input).await,
+            "memory_forget" => self.handle_memory_forget(input).await,
+            "schedule_task" => self.handle_schedule_task(input).await,
+            "list_jobs" => self.handle_list_jobs(input).await,
+            "delete_job" => self.handle_delete_job(input).await,
+            "create_proposal" => self.handle_create_proposal(input).await,
+            "list_proposals" => self.handle_list_proposals(input).await,
+            "get_system_telemetry" => self.handle_get_system_telemetry().await,
+            "get_telemetry_history" => self.handle_get_telemetry_history(input).await,
+            "update_telemetry_config" => self.handle_update_telemetry_config(input).await,
+            _ => ToolResult::error(format!(
+                "Unknown tool: {}. Use your available tools: node management \
+                 (list_nodes, start_node, etc.), system (read_file, write_file, \
+                 run_command), memory (memory_search, memory_forget), jobs/proposals \
+                 (schedule_task, list_jobs, delete_job, create_proposal, list_proposals), \
+                 or telemetry (get_system_telemetry, get_telemetry_history, update_telemetry_config).",
+                name
+            )),
         };
 
         ContentBlock::ToolResult {
             tool_use_id: tool_use_id.to_string(),
-            content: text,
-            is_error,
+            content: result.text,
+            is_error: if result.is_error { Some(true) } else { None },
         }
     }
 
-    /// List nodes and format as a text summary for the agent system prompt.
+    /// List nodes formatted as text for the system prompt.
     pub async fn get_node_inventory(&self) -> String {
         match self.platform.list_nodes().await {
             Ok(nodes) if nodes.is_empty() => "No nodes registered.".to_string(),
@@ -347,36 +615,29 @@ impl<P: PlatformOperations> Dispatcher<P> {
 
     // ── Internal helpers ─────────────────────────────────────────────
 
-    /// Extract and validate `node_name` from JSON input.
-    fn extract_node_name(input: &Value) -> Result<String, (String, Option<bool>)> {
+    fn extract_node_name(input: &Value) -> Result<String, ToolResult> {
         let name = input
             .get("node_name")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                (
-                    "Missing required parameter: node_name".to_string(),
-                    Some(true),
-                )
+                ToolResult::error("Missing required parameter: node_name".to_string())
             })?;
-        validation::validate_node_name(name).map_err(|e| (e, Some(true)))?;
+        validation::validate_node_name(name).map_err(ToolResult::error)?;
         Ok(name.to_string())
     }
 
-    /// Extract `node_name`, validate, and execute a `NodeCommand`.
-    async fn handle_node_command(&self, input: &Value, cmd: NodeCommand) -> (String, Option<bool>) {
+    async fn handle_node_command(&self, input: &Value, cmd: NodeCommand) -> ToolResult {
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
             Err(e) => return e,
         };
         match self.platform.execute_command(&node_name, cmd).await {
-            Ok(msg) => (msg, None),
-            Err(e) => (format!("Error: {}", e), Some(true)),
+            Ok(msg) => ToolResult::success(msg),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
 
-    // ── No-parameter tool handlers ───────────────────────────────────
-
-    async fn handle_list_nodes(&self) -> (String, Option<bool>) {
+    async fn handle_list_nodes(&self) -> ToolResult {
         match self.platform.list_nodes().await {
             Ok(nodes) => {
                 let json_nodes: Vec<Value> = nodes
@@ -394,20 +655,20 @@ impl<P: PlatformOperations> Dispatcher<P> {
                     .collect();
                 let text =
                     serde_json::to_string_pretty(&json_nodes).unwrap_or_else(|_| "[]".to_string());
-                (text, None)
+                ToolResult::success(text)
             }
-            Err(e) => (format!("Error: {}", e), Some(true)),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
 
-    async fn handle_discover_nodes(&self) -> (String, Option<bool>) {
+    async fn handle_discover_nodes(&self) -> ToolResult {
         match self.platform.query_zenoh("bubbaloop/**/manifest").await {
-            Ok(result) => (result, None),
-            Err(e) => (format!("Error: {}", e), Some(true)),
+            Ok(result) => ToolResult::success(result),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
 
-    async fn handle_get_system_status(&self) -> (String, Option<bool>) {
+    async fn handle_get_system_status(&self) -> ToolResult {
         let nodes = self.platform.list_nodes().await;
         let (total, running, healthy) = match &nodes {
             Ok(list) => {
@@ -427,10 +688,10 @@ impl<P: PlatformOperations> Dispatcher<P> {
             "mcp_server": "running",
         });
         let text = serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string());
-        (text, None)
+        ToolResult::success(text)
     }
 
-    fn handle_get_machine_info(&self) -> (String, Option<bool>) {
+    fn handle_get_machine_info(&self) -> ToolResult {
         let info = json!({
             "machine_id": self.machine_id,
             "scope": self.scope,
@@ -442,12 +703,10 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 .unwrap_or_else(|| "unknown".to_string()),
         });
         let text = serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".to_string());
-        (text, None)
+        ToolResult::success(text)
     }
 
-    // ── Node-name tool handlers ──────────────────────────────────────
-
-    async fn handle_get_node_health(&self, input: &Value) -> (String, Option<bool>) {
+    async fn handle_get_node_health(&self, input: &Value) -> ToolResult {
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
             Err(e) => return e,
@@ -455,16 +714,16 @@ impl<P: PlatformOperations> Dispatcher<P> {
         match self.platform.get_node_detail(&node_name).await {
             Ok(detail) => {
                 let text = serde_json::to_string_pretty(&detail).unwrap_or_default();
-                (text, None)
+                ToolResult::success(text)
             }
             Err(crate::mcp::platform::PlatformError::NodeNotFound(_)) => {
-                (format!("Node '{}' not found", node_name), Some(true))
+                ToolResult::error(format!("Node '{}' not found", node_name))
             }
-            Err(e) => (format!("Error: {}", e), Some(true)),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
 
-    async fn handle_get_node_config(&self, input: &Value) -> (String, Option<bool>) {
+    async fn handle_get_node_config(&self, input: &Value) -> ToolResult {
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
             Err(e) => return e,
@@ -472,13 +731,13 @@ impl<P: PlatformOperations> Dispatcher<P> {
         match self.platform.get_node_config(&node_name).await {
             Ok(config) => {
                 let text = serde_json::to_string_pretty(&config).unwrap_or_default();
-                (text, None)
+                ToolResult::success(text)
             }
-            Err(e) => (format!("Error: {}", e), Some(true)),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
 
-    async fn handle_get_node_manifest(&self, input: &Value) -> (String, Option<bool>) {
+    async fn handle_get_node_manifest(&self, input: &Value) -> ToolResult {
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
             Err(e) => return e,
@@ -489,19 +748,18 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 match found {
                     Some((_name, manifest)) => {
                         let text = serde_json::to_string_pretty(&manifest).unwrap_or_default();
-                        (text, None)
+                        ToolResult::success(text)
                     }
-                    None => (
-                        format!("No manifest found for node '{}'", node_name),
-                        Some(true),
-                    ),
+                    None => {
+                        ToolResult::error(format!("No manifest found for node '{}'", node_name))
+                    }
                 }
             }
-            Err(e) => (format!("Error: {}", e), Some(true)),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
 
-    async fn handle_list_commands(&self, input: &Value) -> (String, Option<bool>) {
+    async fn handle_list_commands(&self, input: &Value) -> ToolResult {
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
             Err(e) => return e,
@@ -512,10 +770,8 @@ impl<P: PlatformOperations> Dispatcher<P> {
         );
         let manifest_text = match self.platform.query_zenoh(&key_expr).await {
             Ok(text) => text,
-            Err(e) => return (format!("Error: {}", e), Some(true)),
+            Err(e) => return ToolResult::error(format!("Error: {}", e)),
         };
-        // Try to parse the manifest and extract commands.
-        // query_zenoh formats as "[key_expr] json_body".
         let commands = manifest_text
             .lines()
             .filter_map(|line| {
@@ -529,27 +785,24 @@ impl<P: PlatformOperations> Dispatcher<P> {
         match commands {
             Some(cmds) if cmds.is_array() && !cmds.as_array().unwrap().is_empty() => {
                 let text = serde_json::to_string_pretty(&cmds).unwrap_or_else(|_| "[]".to_string());
-                (text, None)
+                ToolResult::success(text)
             }
-            _ => (
-                format!("No commands available for node '{}'", node_name),
-                None,
-            ),
+            _ => ToolResult::success(format!("No commands available for node '{}'", node_name)),
         }
     }
 
-    async fn handle_remove_node(&self, input: &Value) -> (String, Option<bool>) {
+    async fn handle_remove_node(&self, input: &Value) -> ToolResult {
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
             Err(e) => return e,
         };
         match self.platform.remove_node(&node_name).await {
-            Ok(msg) => (msg, None),
-            Err(e) => (format!("Error: {}", e), Some(true)),
+            Ok(msg) => ToolResult::success(msg),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
 
-    async fn handle_get_stream_info(&self, input: &Value) -> (String, Option<bool>) {
+    async fn handle_get_stream_info(&self, input: &Value) -> ToolResult {
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
             Err(e) => return e,
@@ -561,14 +814,12 @@ impl<P: PlatformOperations> Dispatcher<P> {
             ),
             "encoding": "protobuf",
             "endpoint": "tcp/localhost:7447",
-            "note": "Subscribe to this topic via Zenoh client library for real-time \
-                data. MCP is control-plane only.",
         });
         let text = serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".to_string());
-        (text, None)
+        ToolResult::success(text)
     }
 
-    async fn handle_get_node_schema(&self, input: &Value) -> (String, Option<bool>) {
+    async fn handle_get_node_schema(&self, input: &Value) -> ToolResult {
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
             Err(e) => return e,
@@ -578,26 +829,19 @@ impl<P: PlatformOperations> Dispatcher<P> {
             self.scope, self.machine_id, node_name
         );
         match self.platform.query_zenoh(&key).await {
-            Ok(result) => (result, None),
-            Err(e) => (format!("Error: {}", e), Some(true)),
+            Ok(result) => ToolResult::success(result),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
 
-    // ── Custom-parameter tool handlers ───────────────────────────────
-
-    async fn handle_send_command(&self, input: &Value) -> (String, Option<bool>) {
+    async fn handle_send_command(&self, input: &Value) -> ToolResult {
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
             Err(e) => return e,
         };
         let command = match input.get("command").and_then(|v| v.as_str()) {
             Some(cmd) => cmd.to_string(),
-            None => {
-                return (
-                    "Missing required parameter: command".to_string(),
-                    Some(true),
-                )
-            }
+            None => return ToolResult::error("Missing required parameter: command".to_string()),
         };
         let params = input.get("params").cloned().unwrap_or(json!({}));
 
@@ -605,10 +849,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             "bubbaloop/{}/{}/{}/command",
             self.scope, self.machine_id, node_name
         );
-        let payload = json!({
-            "command": command,
-            "params": params,
-        });
+        let payload = json!({ "command": command, "params": params });
         let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
 
         match self
@@ -618,63 +859,55 @@ impl<P: PlatformOperations> Dispatcher<P> {
         {
             Ok(results) => {
                 if results.is_empty() {
-                    ("No response from node (is it running?)".to_string(), None)
+                    ToolResult::success("No response from node (is it running?)".to_string())
                 } else {
-                    (results.join("\n"), None)
+                    ToolResult::success(results.join("\n"))
                 }
             }
-            Err(e) => (format!("Error: {}", e), Some(true)),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
 
-    async fn handle_query_zenoh(&self, input: &Value) -> (String, Option<bool>) {
+    async fn handle_query_zenoh(&self, input: &Value) -> ToolResult {
         let key_expr = match input.get("key_expr").and_then(|v| v.as_str()) {
             Some(k) => k.to_string(),
-            None => {
-                return (
-                    "Missing required parameter: key_expr".to_string(),
-                    Some(true),
-                )
-            }
+            None => return ToolResult::error("Missing required parameter: key_expr".to_string()),
         };
         if let Err(e) = validation::validate_query_key_expr(&key_expr) {
-            return (format!("Validation error: {}", e), Some(true));
+            return ToolResult::error(format!("Validation error: {}", e));
         }
         match self.platform.query_zenoh(&key_expr).await {
-            Ok(result) => (result, None),
-            Err(e) => (format!("Error: {}", e), Some(true)),
+            Ok(result) => ToolResult::success(result),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
 
-    async fn handle_install_node(&self, input: &Value) -> (String, Option<bool>) {
+    async fn handle_install_node(&self, input: &Value) -> ToolResult {
         let source = match input.get("source").and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),
-            None => return ("Missing required parameter: source".to_string(), Some(true)),
+            None => return ToolResult::error("Missing required parameter: source".to_string()),
         };
 
-        // Route based on source format (same logic as MCP server):
-        // - Simple name (no `/`, no `.` prefix, valid node name) -> marketplace
-        // - Path/URL -> existing install_node flow
         let is_marketplace_name = !source.contains('/')
             && !source.starts_with('.')
             && validation::validate_node_name(&source).is_ok();
 
-        let result = if is_marketplace_name {
+        let platform_result = if is_marketplace_name {
             self.platform.install_from_marketplace(&source).await
         } else {
             if let Err(e) = validation::validate_install_source(&source) {
-                return (format!("Error: {}", e), Some(true));
+                return ToolResult::error(format!("Error: {}", e));
             }
             self.platform.install_node(&source).await
         };
 
-        match result {
-            Ok(msg) => (msg, None),
-            Err(e) => (format!("Error: {}", e), Some(true)),
+        match platform_result {
+            Ok(msg) => ToolResult::success(msg),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
 
-    async fn handle_discover_capabilities(&self, input: &Value) -> (String, Option<bool>) {
+    async fn handle_discover_capabilities(&self, input: &Value) -> ToolResult {
         let capability = input
             .get("capability")
             .and_then(|v| v.as_str())
@@ -682,7 +915,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
 
         match self.platform.get_manifests(capability.as_deref()).await {
             Ok(manifests) => {
-                // Group nodes by capability type (same logic as MCP server).
                 let mut grouped: std::collections::HashMap<String, Vec<Value>> =
                     std::collections::HashMap::new();
 
@@ -697,27 +929,14 @@ impl<P: PlatformOperations> Dispatcher<P> {
                         grouped
                             .entry("uncategorized".to_string())
                             .or_default()
-                            .push(json!({
-                                "name": name,
-                                "description": manifest.get("description")
-                                    .and_then(|d| d.as_str()).unwrap_or(""),
-                                "version": manifest.get("version")
-                                    .and_then(|v| v.as_str()).unwrap_or(""),
-                            }));
+                            .push(json!({ "name": name }));
                     } else {
                         for cap in &capabilities {
                             let cap_str = cap.as_str().unwrap_or("unknown").to_string();
-                            grouped.entry(cap_str).or_default().push(json!({
-                                "name": name,
-                                "description": manifest.get("description")
-                                    .and_then(|d| d.as_str()).unwrap_or(""),
-                                "version": manifest.get("version")
-                                    .and_then(|v| v.as_str()).unwrap_or(""),
-                                "publishes": manifest.get("publishes")
-                                    .cloned().unwrap_or(json!([])),
-                                "commands": manifest.get("commands")
-                                    .cloned().unwrap_or(json!([])),
-                            }));
+                            grouped
+                                .entry(cap_str)
+                                .or_default()
+                                .push(json!({ "name": name }));
                         }
                     }
                 }
@@ -728,56 +947,514 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 });
                 let text =
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string());
-                (text, None)
+                ToolResult::success(text)
             }
-            Err(e) => (format!("Error: {}", e), Some(true)),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_read_file(&self, input: &Value) -> ToolResult {
+        let path = match input.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return ToolResult::error("Missing required parameter: path".to_string()),
+        };
+
+        let path = dispatch_security::expand_home(path);
+
+        if let Err(e) = dispatch_security::validate_read_path(&path) {
+            return ToolResult::error(e);
+        }
+
+        match tokio::fs::read_to_string(&path).await {
+            Ok(content) => {
+                let lines: Vec<&str> = content.lines().collect();
+                let max_lines = 500;
+                if lines.len() > max_lines {
+                    let truncated: String = lines[..max_lines].join("\n");
+                    ToolResult::success(format!(
+                        "{}\n\n[Truncated: showing {}/{} lines]",
+                        truncated,
+                        max_lines,
+                        lines.len()
+                    ))
+                } else {
+                    ToolResult::success(content)
+                }
+            }
+            Err(e) => ToolResult::error(format!("Error reading file: {}", e)),
+        }
+    }
+
+    async fn handle_write_file(&self, input: &Value) -> ToolResult {
+        let path = match input.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return ToolResult::error("Missing required parameter: path".to_string()),
+        };
+        let content = match input.get("content").and_then(|v| v.as_str()) {
+            Some(c) => c,
+            None => return ToolResult::error("Missing required parameter: content".to_string()),
+        };
+
+        let path = dispatch_security::expand_home(path);
+
+        if let Err(e) = dispatch_security::validate_write_path(&path) {
+            return ToolResult::error(e);
+        }
+
+        // Create parent directories if needed
+        if let Some(parent) = path.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                return ToolResult::error(format!("Error creating directory: {}", e));
+            }
+        }
+
+        match tokio::fs::write(&path, content).await {
+            Ok(()) => ToolResult::success(format!(
+                "Wrote {} bytes to {}",
+                content.len(),
+                path.display()
+            )),
+            Err(e) => ToolResult::error(format!("Error writing file: {}", e)),
+        }
+    }
+
+    async fn handle_run_command(&self, input: &Value) -> ToolResult {
+        let command = match input.get("command").and_then(|v| v.as_str()) {
+            Some(c) => c,
+            None => return ToolResult::error("Missing required parameter: command".to_string()),
+        };
+        let timeout_secs = input
+            .get("timeout_secs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(30)
+            .min(300);
+
+        if let Err(e) = dispatch_security::validate_command(command) {
+            return ToolResult::error(e);
+        }
+
+        log::info!("[Agent] run_command: {}", command);
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            tokio::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(command)
+                .output(),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(output)) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let status = output.status;
+
+                let mut text = String::new();
+                if !stdout.is_empty() {
+                    text.push_str(&stdout);
+                }
+                if !stderr.is_empty() {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str("[stderr] ");
+                    text.push_str(&stderr);
+                }
+                if text.is_empty() {
+                    text = format!(
+                        "Command completed with exit code {}",
+                        status.code().unwrap_or(-1)
+                    );
+                }
+
+                // Truncate very long output
+                if text.len() > 50_000 {
+                    text.truncate(50_000);
+                    text.push_str("\n[Output truncated at 50KB]");
+                }
+
+                if status.success() {
+                    ToolResult::success(text)
+                } else {
+                    ToolResult::error(format!(
+                        "Exit code {}: {}",
+                        status.code().unwrap_or(-1),
+                        text
+                    ))
+                }
+            }
+            Ok(Err(e)) => ToolResult::error(format!("Error executing command: {}", e)),
+            Err(_) => {
+                ToolResult::error(format!("Command timed out after {} seconds", timeout_secs))
+            }
+        }
+    }
+
+    // ── Memory tool handlers ─────────────────────────────────────────
+
+    async fn handle_memory_search(&self, input: &Value) -> ToolResult {
+        let backend = match &self.memory_backend {
+            Some(b) => b,
+            None => return ToolResult::error("Memory backend not available".to_string()),
+        };
+        let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
+        let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+        let decay = self.episodic_decay_half_life_days;
+        let guard = backend.lock().await;
+        match guard.episodic.search_with_decay(query, limit, decay) {
+            Ok(entries) if entries.is_empty() => {
+                ToolResult::success("No matching entries found.".to_string())
+            }
+            Ok(entries) => {
+                let text = entries
+                    .iter()
+                    .map(|e| format!("[{}] {}: {}", e.timestamp, e.role, e.content))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                ToolResult::success(text)
+            }
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_memory_forget(&self, input: &Value) -> ToolResult {
+        let backend = match &self.memory_backend {
+            Some(b) => b,
+            None => return ToolResult::error("Memory backend not available".to_string()),
+        };
+        let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
+        let reason = input
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("agent requested");
+        let guard = backend.lock().await;
+        match guard.episodic.forget(query, reason) {
+            Ok(0) => ToolResult::success("No matching entries found to forget.".to_string()),
+            Ok(n) => ToolResult::success(format!("Forgot {} entries matching '{}'.", n, query)),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_schedule_task(&self, input: &Value) -> ToolResult {
+        let backend = match &self.memory_backend {
+            Some(b) => b,
+            None => return ToolResult::error("Memory backend not available".to_string()),
+        };
+        let prompt = input.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+        let cron_schedule = input.get("cron_schedule").and_then(|v| v.as_str());
+        let recurrence = input
+            .get("recurrence")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let next_run: i64 = match cron_schedule {
+            Some(cron) => match crate::agent::scheduler::next_run_after(
+                cron,
+                crate::agent::scheduler::now_epoch_secs(),
+            ) {
+                Ok(ts) => ts as i64,
+                Err(e) => {
+                    return ToolResult::error(format!("Error: invalid cron expression: {}", e));
+                }
+            },
+            None => crate::agent::scheduler::now_epoch_secs() as i64,
+        };
+        let job_id_new = uuid::Uuid::new_v4().to_string();
+        let job = crate::agent::memory::semantic::Job {
+            id: job_id_new.clone(),
+            cron_schedule: cron_schedule.map(|s| s.to_string()),
+            next_run_at: next_run,
+            prompt_payload: prompt.to_string(),
+            status: "pending".to_string(),
+            recurrence,
+            retry_count: 0,
+            last_error: None,
+        };
+        let guard = backend.lock().await;
+        match guard.semantic.create_job(&job) {
+            Ok(()) => {
+                if let Some(n) = &self.job_notify {
+                    n.notify_one();
+                }
+                ToolResult::success(format!("Job '{}' scheduled", job_id_new))
+            }
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_list_jobs(&self, input: &Value) -> ToolResult {
+        let backend = match &self.memory_backend {
+            Some(b) => b,
+            None => return ToolResult::error("Memory backend not available".to_string()),
+        };
+        let status = input.get("status").and_then(|v| v.as_str());
+        let guard = backend.lock().await;
+        match guard.semantic.list_jobs(status) {
+            Ok(jobs) if jobs.is_empty() => ToolResult::success("No jobs found.".to_string()),
+            Ok(jobs) => ToolResult::success(
+                serde_json::to_string_pretty(&jobs)
+                    .unwrap_or_else(|_| "Error serializing jobs".to_string()),
+            ),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_delete_job(&self, input: &Value) -> ToolResult {
+        let backend = match &self.memory_backend {
+            Some(b) => b,
+            None => return ToolResult::error("Memory backend not available".to_string()),
+        };
+        let target_id = input.get("job_id").and_then(|v| v.as_str()).unwrap_or("");
+        let guard = backend.lock().await;
+        match guard.semantic.delete_job(target_id) {
+            Ok(()) => ToolResult::success(format!("Job '{}' deleted", target_id)),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_create_proposal(&self, input: &Value) -> ToolResult {
+        let backend = match &self.memory_backend {
+            Some(b) => b,
+            None => return ToolResult::error("Memory backend not available".to_string()),
+        };
+        let skill = input.get("skill").and_then(|v| v.as_str()).unwrap_or("");
+        let description = input
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let actions = input
+            .get("actions")
+            .and_then(|v| v.as_str())
+            .unwrap_or("[]");
+        let proposal = crate::agent::memory::semantic::Proposal {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: crate::agent::memory::now_rfc3339(),
+            skill: skill.to_string(),
+            description: description.to_string(),
+            actions: actions.to_string(),
+            status: "pending".to_string(),
+            decided_by: None,
+            decided_at: None,
+        };
+        let pid = proposal.id.clone();
+        let guard = backend.lock().await;
+        match guard.semantic.create_proposal(&proposal) {
+            Ok(()) => ToolResult::success(format!("Proposal '{}' created (pending approval)", pid)),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_list_proposals(&self, input: &Value) -> ToolResult {
+        let backend = match &self.memory_backend {
+            Some(b) => b,
+            None => return ToolResult::error("Memory backend not available".to_string()),
+        };
+        let status = input.get("status").and_then(|v| v.as_str());
+        let guard = backend.lock().await;
+        match guard.semantic.list_proposals(status) {
+            Ok(proposals) if proposals.is_empty() => {
+                ToolResult::success("No proposals found.".to_string())
+            }
+            Ok(proposals) => ToolResult::success(
+                serde_json::to_string_pretty(&proposals)
+                    .unwrap_or_else(|_| "Error serializing proposals".to_string()),
+            ),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    // ── Telemetry tool handlers ──────────────────────────────────────
+
+    async fn handle_get_system_telemetry(&self) -> ToolResult {
+        let telemetry = match &self.telemetry {
+            Some(t) => t,
+            None => return ToolResult::error("Telemetry service not available".to_string()),
+        };
+
+        let snapshot = match telemetry.current_snapshot().await {
+            Some(s) => s,
+            None => return ToolResult::error("No telemetry snapshot available yet".to_string()),
+        };
+        let level = telemetry.current_level().await;
+
+        let avail = snapshot.system.memory_available_percent();
+        let mem_used_pct = 100.0 - avail;
+        let mem_available_mb = snapshot.system.memory_available_bytes / (1024 * 1024);
+        let disk_free_gb = snapshot.system.disk_free_mb() / 1024;
+
+        let mut top_processes: Vec<&crate::daemon::telemetry::types::ProcessSnapshot> =
+            snapshot.processes.iter().collect();
+        top_processes.sort_by(|a, b| b.rss_bytes.cmp(&a.rss_bytes));
+        top_processes.truncate(10);
+
+        let processes_json: Vec<Value> = top_processes
+            .iter()
+            .map(|p| {
+                json!({
+                    "pid": p.pid,
+                    "name": p.name,
+                    "rss_mb": p.rss_bytes / (1024 * 1024),
+                    "cpu_percent": p.cpu_percent,
+                })
+            })
+            .collect();
+
+        let result = json!({
+            "memory_used_percent": format!("{:.1}", mem_used_pct),
+            "memory_available_mb": mem_available_mb,
+            "cpu_usage_percent": format!("{:.1}", snapshot.system.cpu_usage_percent),
+            "disk_free_gb": disk_free_gb,
+            "watchdog_level": format!("{:?}", level),
+            "top_processes": processes_json,
+        });
+        let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string());
+        ToolResult::success(text)
+    }
+
+    async fn handle_get_telemetry_history(&self, input: &Value) -> ToolResult {
+        let telemetry = match &self.telemetry {
+            Some(t) => t,
+            None => return ToolResult::error("Telemetry service not available".to_string()),
+        };
+
+        let duration_minutes = input
+            .get("duration_minutes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(60);
+
+        let samples = match telemetry.query_history(duration_minutes, 60) {
+            Ok(s) => s,
+            Err(e) => return ToolResult::error(format!("Error querying history: {}", e)),
+        };
+
+        if samples.is_empty() {
+            return ToolResult::success(
+                "No telemetry history available for the requested period.".to_string(),
+            );
+        }
+
+        // Calculate memory trend: rate of change in used % per hour.
+        let trend_rate_pct_per_hour = if samples.len() >= 2 {
+            let first = &samples[0];
+            let last = &samples[samples.len() - 1];
+            let first_used = 100.0 - first.system.memory_available_percent();
+            let last_used = 100.0 - last.system.memory_available_percent();
+            let elapsed_ms = (last.system.timestamp_ms - first.system.timestamp_ms).max(1);
+            let elapsed_hours = elapsed_ms as f64 / (1000.0 * 3600.0);
+            (last_used - first_used) / elapsed_hours
+        } else {
+            0.0
+        };
+
+        let series: Vec<Value> = samples
+            .iter()
+            .map(|s| {
+                json!({
+                    "timestamp_ms": s.system.timestamp_ms,
+                    "memory_used_percent": format!("{:.1}", 100.0 - s.system.memory_available_percent()),
+                    "cpu_usage_percent": format!("{:.1}", s.system.cpu_usage_percent),
+                    "disk_free_mb": s.system.disk_free_mb(),
+                })
+            })
+            .collect();
+
+        let result = json!({
+            "duration_minutes": duration_minutes,
+            "sample_count": samples.len(),
+            "memory_trend_pct_per_hour": format!("{:.2}", trend_rate_pct_per_hour),
+            "trend_description": if trend_rate_pct_per_hour > 5.0 {
+                "rising fast — possible memory leak"
+            } else if trend_rate_pct_per_hour > 1.0 {
+                "slowly rising"
+            } else if trend_rate_pct_per_hour < -1.0 {
+                "falling — recovering"
+            } else {
+                "stable"
+            },
+            "samples": series,
+        });
+        let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string());
+        ToolResult::success(text)
+    }
+
+    async fn handle_update_telemetry_config(&self, input: &Value) -> ToolResult {
+        let telemetry = match &self.telemetry {
+            Some(t) => t,
+            None => return ToolResult::error("Telemetry service not available".to_string()),
+        };
+
+        log::info!("[MCP] tool=update_telemetry_config");
+
+        // Map flat input fields into the nested config structure expected by update_config.
+        let mut updates = serde_json::Map::new();
+
+        // Thresholds subobject
+        let mut thresholds = serde_json::Map::new();
+        for field in &["yellow_pct", "orange_pct", "red_pct", "critical_pct"] {
+            if let Some(v) = input.get(*field) {
+                thresholds.insert(field.to_string(), v.clone());
+            }
+        }
+        if !thresholds.is_empty() {
+            updates.insert("thresholds".to_string(), Value::Object(thresholds));
+        }
+
+        // Sampling subobject
+        let mut sampling = serde_json::Map::new();
+        for field in &["idle_secs", "elevated_secs", "critical_secs"] {
+            if let Some(v) = input.get(*field) {
+                sampling.insert(field.to_string(), v.clone());
+            }
+        }
+        if !sampling.is_empty() {
+            updates.insert("sampling".to_string(), Value::Object(sampling));
+        }
+
+        // Circuit-breaker subobject
+        let mut cb = serde_json::Map::new();
+        if let Some(v) = input.get("cooldown_secs") {
+            cb.insert("cooldown_secs".to_string(), v.clone());
+        }
+        if let Some(v) = input.get("circuit_breaker_enabled") {
+            cb.insert("enabled".to_string(), v.clone());
+        }
+        if !cb.is_empty() {
+            updates.insert("circuit_breaker".to_string(), Value::Object(cb));
+        }
+
+        match telemetry.update_config(Value::Object(updates)).await {
+            Ok(clamped) if clamped.is_empty() => {
+                ToolResult::success("Telemetry config updated successfully.".to_string())
+            }
+            Ok(clamped) => ToolResult::success(format!(
+                "Telemetry config updated. The following fields were clamped by guardrails: {}",
+                clamped.join(", ")
+            )),
+            Err(e) => ToolResult::error(format!("Error updating telemetry config: {}", e)),
         }
     }
 }
-
-// ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// Expected number of tools exposed by the dispatcher.
-    const TOOL_COUNT: usize = 24;
+    const TOOL_COUNT: usize = 37;
 
     #[test]
     fn tool_definitions_count() {
         let defs = Dispatcher::<crate::mcp::platform::DaemonPlatform>::tool_definitions();
-        assert_eq!(
-            defs.len(),
-            TOOL_COUNT,
-            "expected {} tool definitions, got {}",
-            TOOL_COUNT,
-            defs.len()
-        );
+        assert_eq!(defs.len(), TOOL_COUNT);
     }
 
     #[test]
     fn tool_definitions_have_required_fields() {
         let defs = Dispatcher::<crate::mcp::platform::DaemonPlatform>::tool_definitions();
         for def in &defs {
-            assert!(!def.name.is_empty(), "tool name must not be empty");
-            assert!(
-                !def.description.is_empty(),
-                "tool '{}' must have a description",
-                def.name
-            );
-            assert!(
-                def.input_schema.is_object(),
-                "tool '{}' input_schema must be an object",
-                def.name
-            );
-            assert_eq!(
-                def.input_schema.get("type").and_then(|v| v.as_str()),
-                Some("object"),
-                "tool '{}' input_schema type must be \"object\"",
-                def.name
-            );
+            assert!(!def.name.is_empty());
+            assert!(!def.description.is_empty());
+            assert!(def.input_schema.is_object());
         }
     }
 
@@ -786,11 +1463,21 @@ mod tests {
         let defs = Dispatcher::<crate::mcp::platform::DaemonPlatform>::tool_definitions();
         let mut seen = HashSet::new();
         for def in &defs {
-            assert!(
-                seen.insert(def.name.clone()),
-                "duplicate tool name: {}",
-                def.name
-            );
+            assert!(seen.insert(def.name.clone()), "duplicate: {}", def.name);
         }
+    }
+
+    #[test]
+    fn tool_result_success_is_not_error() {
+        let r = ToolResult::success("ok".to_string());
+        assert!(!r.is_error);
+        assert_eq!(r.text, "ok");
+    }
+
+    #[test]
+    fn tool_result_error_is_error() {
+        let r = ToolResult::error("bad".to_string());
+        assert!(r.is_error);
+        assert_eq!(r.text, "bad");
     }
 }

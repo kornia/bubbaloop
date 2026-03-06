@@ -110,6 +110,22 @@ fn default_configs_dir() -> PathBuf {
         .join("configs")
 }
 
+/// Return the directory path as a `String` if `dir/node.yaml` exists and its
+/// `name` field matches `node_name`, otherwise `None`.
+fn node_name_matches(dir: &std::path::Path, node_name: &str) -> Option<String> {
+    let node_yaml = dir.join("node.yaml");
+    if !node_yaml.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&node_yaml).ok()?;
+    let manifest: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
+    if manifest.get("name").and_then(|v| v.as_str()) == Some(node_name) {
+        Some(dir.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
 impl LaunchCommand {
     pub async fn run(self) -> Result<()> {
         // 1. Read and parse the launch file
@@ -146,8 +162,11 @@ impl LaunchCommand {
             return Ok(());
         }
 
-        // 2. Resolve the base node's path from the daemon
-        let node_path = self.resolve_node_path(&self.node).await?;
+        // 2. Connect to daemon once and resolve the base node's path
+        let client = crate::cli::daemon_client::DaemonClient::connect()
+            .await
+            .map_err(node::NodeError::from)?;
+        let node_path = self.resolve_node_path(&client, &self.node).await?;
 
         // 3. Write config if present
         let config_path = if let Some(ref config) = launch.config {
@@ -165,8 +184,8 @@ impl LaunchCommand {
             None
         };
 
-        // 5. Register instance via REST API
-        self.register_instance(&node_path, name_override, config_path.as_deref())
+        // 5. Register instance via REST API (reuse the same client)
+        self.register_instance(&client, &node_path, name_override, config_path.as_deref())
             .await?;
         println!("Registered: {}", launch.name);
 
@@ -190,66 +209,54 @@ impl LaunchCommand {
         Ok(())
     }
 
-    async fn resolve_node_path(&self, node_name: &str) -> Result<String> {
-        // The REST API doesn't expose node paths directly.
-        // We check the node exists via the API, then look up the path from
-        // the local nodes directory (~/.bubbaloop/nodes/).
-        let client = crate::cli::daemon_client::DaemonClient::new();
-        let data = client.list_nodes().await.map_err(node::NodeError::from)?;
-
-        let found = data.nodes.iter().any(|n| n.name == node_name);
-        if !found {
+    async fn resolve_node_path(
+        &self,
+        client: &crate::cli::daemon_client::DaemonClient,
+        node_name: &str,
+    ) -> Result<String> {
+        // Verify the node is registered with the daemon.
+        let nodes_json = client.list_nodes().await.map_err(node::NodeError::from)?;
+        let nodes: Vec<crate::mcp::platform::NodeInfo> =
+            serde_json::from_str(&nodes_json).unwrap_or_default();
+        if !nodes.iter().any(|n| n.name == node_name) {
             return Err(LaunchError::Node(node::NodeError::NotFound(format!(
                 "Node '{}' not registered. Register it first with: bubbaloop node add <path>",
                 node_name
             ))));
         }
 
-        // Search for the node path in ~/.bubbaloop/nodes/
+        // Search ~/.bubbaloop/nodes/ for a matching node.yaml (top-level and one level deep).
         let home =
             dirs::home_dir().ok_or_else(|| LaunchError::Instance("HOME not set".to_string()))?;
         let nodes_dir = home.join(".bubbaloop").join("nodes");
+        let entries = match std::fs::read_dir(&nodes_dir) {
+            Ok(e) => e,
+            Err(_) => {
+                return Err(LaunchError::Node(node::NodeError::NotFound(format!(
+                    "Node '{}' is registered but its path could not be resolved from ~/.bubbaloop/nodes/",
+                    node_name
+                ))))
+            }
+        };
 
-        if let Ok(entries) = std::fs::read_dir(&nodes_dir) {
-            for entry in entries.flatten() {
-                let node_yaml = entry.path().join("node.yaml");
-                if node_yaml.exists() {
-                    if let Ok(content) = std::fs::read_to_string(&node_yaml) {
-                        if let Ok(manifest) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
-                            if manifest.get("name").and_then(|v| v.as_str()) == Some(node_name) {
-                                return Ok(entry.path().to_string_lossy().to_string());
-                            }
-                        }
-                    }
-                }
-                // Also check subdirectories (multi-node repos)
-                if entry.path().is_dir() {
-                    if let Ok(sub_entries) = std::fs::read_dir(entry.path()) {
-                        for sub_entry in sub_entries.flatten() {
-                            let sub_yaml = sub_entry.path().join("node.yaml");
-                            if sub_yaml.exists() {
-                                if let Ok(content) = std::fs::read_to_string(&sub_yaml) {
-                                    if let Ok(manifest) =
-                                        serde_yaml::from_str::<serde_yaml::Value>(&content)
-                                    {
-                                        if manifest.get("name").and_then(|v| v.as_str())
-                                            == Some(node_name)
-                                        {
-                                            return Ok(sub_entry
-                                                .path()
-                                                .to_string_lossy()
-                                                .to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
+        for entry in entries.flatten() {
+            // Check top-level node.yaml
+            if let Some(path) = node_name_matches(&entry.path(), node_name) {
+                return Ok(path);
+            }
+            // Check one level of subdirectories (multi-node repos)
+            if !entry.path().is_dir() {
+                continue;
+            }
+            if let Ok(sub_entries) = std::fs::read_dir(entry.path()) {
+                for sub_entry in sub_entries.flatten() {
+                    if let Some(path) = node_name_matches(&sub_entry.path(), node_name) {
+                        return Ok(path);
                     }
                 }
             }
         }
 
-        // Fallback: use the node name as-is (the daemon knows about it)
         Err(LaunchError::Node(node::NodeError::NotFound(format!(
             "Node '{}' is registered but its path could not be resolved from ~/.bubbaloop/nodes/",
             node_name
@@ -258,20 +265,15 @@ impl LaunchCommand {
 
     async fn register_instance(
         &self,
+        client: &crate::cli::daemon_client::DaemonClient,
         node_path: &str,
         name_override: Option<&str>,
         config_path: Option<&str>,
     ) -> Result<()> {
-        let client = crate::cli::daemon_client::DaemonClient::new();
-        let resp = client
+        client
             .add_node(node_path, name_override, config_path)
             .await
             .map_err(node::NodeError::from)?;
-
-        if !resp.success {
-            return Err(LaunchError::Instance(resp.message));
-        }
-
         Ok(())
     }
 }

@@ -40,21 +40,22 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 │  BUBBALOOP  (single binary, ~12-13 MB)                   │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
-│  │  Agent Layer                                        │  │
-│  │  Claude API | Chat | Scheduler (offline Tier 1)     │  │
+│  │  Agent Runtime (multi-agent, Zenoh gateway)        │  │
+│  │  Soul | EventSink | Heartbeat | per-agent Memory   │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  Memory (SQLite, +1-2 MB)                           │  │
-│  │  Conversations | Sensor events | Schedules          │  │
+│  │  3-Tier Memory                                      │  │
+│  │  Short-term (RAM) | Episodic (NDJSON) | Semantic DB │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (23+ tools) — sole control interface    │  │
+│  │  MCP Server (37 tools) — sole control interface      │  │
 │  │  RBAC (Viewer/Operator/Admin) | Bearer token auth   │  │
 │  │  PlatformOperations trait | Rate limiting            │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  Daemon (passive skill runtime)                     │  │
+│  │  Daemon (skill runtime + agent host)                │  │
 │  │  Node manager | systemd/D-Bus | Marketplace         │  │
+│  │  Telemetry watchdog (memory/CPU/disk monitoring)    │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  Zenoh Data Plane (zero-copy, real-time)            │  │
@@ -66,11 +67,12 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
      └────────┘  └────────┘  └────────┘
 ```
 
-**Two entry points, same core:**
-- `bubbaloop agent` — self-contained hardware AI agent
+**Three entry points, same core:**
+- `bubbaloop agent chat` — thin Zenoh CLI client (LLM runs daemon-side)
+- `bubbaloop agent list` — discover running agents via manifest queryables
 - `bubbaloop mcp --stdio` — MCP server for Claude Code / external agents
 
-**Key principle**: Nodes are autonomous and self-describing. The MCP server is the sole control interface — Zenoh is the data plane only. The agent layer adds natural-language hardware control on top.
+**Key principle**: Nodes are autonomous and self-describing. The MCP server is the sole control interface — Zenoh is the data plane only. The agent runtime runs inside the daemon, with agents configured via `~/.bubbaloop/agents.toml` and per-agent state in `~/.bubbaloop/agents/{id}/`.
 
 ---
 
@@ -131,6 +133,34 @@ Nodes that support imperative actions MUST declare `{topic_prefix}/command` quer
 
 ---
 
+## Telemetry Watchdog
+
+The daemon runs a cross-platform resource watchdog (`daemon/telemetry/`) that prevents OOM crashes on edge devices. Uses the `sysinfo` crate (Linux ARM/x86, macOS).
+
+**Architecture:**
+- **Sampler** — Adaptive sysinfo reads (5-30s based on pressure), feeds in-memory ring buffer
+- **Circuit Breaker** — Hard safety net, kills nodes at Red/Critical thresholds (~100ms, no LLM needed)
+- **Storage** — SQLite cold store (`~/.bubbaloop/telemetry.db`), 7-day retention, batch flush
+- **Agent Bridge** — 3 dispatch tools + alert events + system prompt injection
+
+**Threshold levels:**
+
+| Level | Memory Used | Action |
+|-------|------------|--------|
+| Green | < 60% | Normal (30s sampling) |
+| Yellow | 60-80% | Warn agent (10s sampling) |
+| Orange | 80-90% | Urgent alert (5s sampling) |
+| Red | 90-95% | Kill largest non-essential node |
+| Critical | > 95% | Kill ALL non-essential nodes |
+
+**Agent tools:** `get_system_telemetry`, `get_telemetry_history`, `update_telemetry_config`
+
+**Hot-reload:** Config at `~/.bubbaloop/telemetry.toml`, file-watched with guardrails (critical threshold 80-98%, min sampling 2s). Agent can tune thresholds at runtime.
+
+**Design doc:** `docs/plans/2026-03-05-telemetry-watchdog-design.md`
+
+---
+
 ## Topic Hierarchy
 
 ```
@@ -158,15 +188,15 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447  # Optional override
 
 ## MCP Server
 
-MCP is the **sole control interface**. 23+ generic tools across 5 categories:
+MCP is the **sole control interface**. 34 tools across 6 categories:
 
 | Category | Tools |
 |----------|-------|
-| **Discovery** | list_nodes, get_node_detail, get_node_schema, get_stream_info, discover_nodes, get_node_manifest, list_commands |
-| **Lifecycle** | install_node, uninstall_node, start_node, stop_node, restart_node, build_node, enable_autostart, disable_autostart |
-| **Data** | read_sensor, send_command, query_zenoh |
-| **Config** | get_node_config, set_node_config |
-| **System** | get_system_status, get_machine_info, doctor |
+| **Discovery** | list_nodes, discover_nodes, get_node_health, get_node_config, get_node_manifest, get_node_schema, get_stream_info, list_commands, discover_capabilities |
+| **Lifecycle** | install_node, uninstall_node, start_node, stop_node, restart_node, build_node, remove_node, clean_node, enable_autostart, disable_autostart |
+| **Data** | send_command, query_zenoh |
+| **System** | get_system_status, get_machine_info, read_file, write_file, run_command |
+| **Memory** | memory_search, memory_forget, schedule_task, list_jobs, delete_job, create_proposal, list_proposals |
 
 ### Transport Options
 
@@ -253,12 +283,12 @@ MCP is the **sole control interface**. 23+ generic tools across 5 categories:
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 23+ tools |
-| Memory | SQLite (rusqlite, planned) | Embedded, +1-2 MB, battle-tested |
+| Control | MCP (rmcp) | Standard AI agent interface, 34 tools |
+| Memory | SQLite (rusqlite) + NDJSON | 3-tier: RAM + episodic (NDJSON/FTS5) + semantic (SQLite). Episodic FTS5 index and semantic store share `memory.db` per agent. |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
 | systemd | zbus (D-Bus) | No subprocess spawning, safe |
-| LLM | Claude API (reqwest) | Best tool-use, OAuth + API key auth |
+| LLM | ModelProvider trait (reqwest) | Claude (OAuth + API key) and Ollama (local, tool calling) |
 | HTTP | axum | Dashboard + MCP HTTP transport |
 
 **Removed technologies:**
@@ -276,4 +306,5 @@ MCP is the **sole control interface**. 23+ generic tools across 5 categories:
   - `ROADMAP.md` — implementation phases
   - `CONTRIBUTING.md` — workflows and processes
   - `CLAUDE.md` — coding conventions and build commands
+  - `docs/plans/2026-03-03-openclaw-agent-rewrite-design.md` — OpenClaw agent rewrite design
   - `docs/plans/2026-02-27-hardware-ai-agent-design.md` — full agent design

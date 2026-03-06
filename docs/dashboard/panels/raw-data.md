@@ -191,7 +191,7 @@ Nested messages are fully expanded:
 
 1. Verify the topic is correct
 2. Check that the source is publishing
-3. Use `/topics` in TUI to verify activity
+3. Use `bubbaloop debug topics` to verify activity
 
 ### Decoding errors
 

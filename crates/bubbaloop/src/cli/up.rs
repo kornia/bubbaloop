@@ -26,7 +26,7 @@ pub enum UpError {
     #[error("Registry error: {0}")]
     Registry(String),
     #[error("Daemon error: {0}")]
-    Daemon(#[from] crate::cli::daemon_client::DaemonClientError),
+    Daemon(String),
 }
 
 pub type Result<T> = std::result::Result<T, UpError>;
@@ -92,7 +92,9 @@ impl UpCommand {
             registry_nodes = registry::load_cached_registry();
         }
 
-        let client = crate::cli::daemon_client::DaemonClient::new();
+        let client = crate::cli::daemon_client::DaemonClient::connect()
+            .await
+            .map_err(|e| UpError::Daemon(e.to_string()))?;
 
         let mut started_count: usize = 0;
         let mut already_running: usize = 0;
@@ -168,12 +170,8 @@ impl UpCommand {
                 .add_node(&node_path, Some(instance_name), config_path.as_deref())
                 .await
             {
-                Ok(resp) if resp.success => {
-                    log::debug!("Registered {}: {}", instance_name, resp.message);
-                }
-                Ok(resp) => {
-                    // Already registered or other non-fatal issue
-                    log::debug!("add_node {}: {}", instance_name, resp.message);
+                Ok(msg) => {
+                    log::debug!("Registered {}: {}", instance_name, msg);
                 }
                 Err(e) => {
                     println!("  [warn] Could not register with daemon: {}", e);
@@ -183,29 +181,24 @@ impl UpCommand {
             }
 
             // Step 4: Install systemd service
-            match client.send_command(instance_name, "install").await {
-                Ok(resp) if resp.success => {
-                    log::debug!("Installed service for {}", instance_name);
+            match client.send_node_command(instance_name, "install").await {
+                Ok(msg) => {
+                    log::debug!("Installed service for {}: {}", instance_name, msg);
                 }
-                Ok(_) | Err(_) => {
+                Err(_) => {
                     log::debug!("Service install for {} (may already exist)", instance_name);
                 }
             }
 
             // Step 5: Start the node
-            match client.send_command(instance_name, "start").await {
-                Ok(resp) if resp.success => {
-                    println!("  [ok] Started");
-                    started_count += 1;
-                }
-                Ok(resp) => {
-                    // Might already be running
-                    if resp.message.contains("already") || resp.message.contains("Running") {
+            match client.send_node_command(instance_name, "start").await {
+                Ok(msg) => {
+                    if msg.contains("already") || msg.contains("Running") {
                         println!("  [ok] Already running");
                         already_running += 1;
                     } else {
-                        println!("  [warn] Start: {}", resp.message);
-                        skipped_count += 1;
+                        println!("  [ok] Started");
+                        started_count += 1;
                     }
                 }
                 Err(e) => {
@@ -221,10 +214,14 @@ impl UpCommand {
             started_count, already_running, skipped_count, disabled_count
         );
 
-        // 6. Register skill schedules in memory DB
-        let db_path = get_bubbaloop_home().join("memory.db");
-        let mem = match crate::agent::memory::Memory::open(&db_path) {
-            Ok(m) => m,
+        // 6. Register skill schedules as agent jobs (in default agent's memory)
+        let config = crate::agent::runtime::AgentsConfig::load_or_default();
+        let default_agent = config.default_agent().unwrap_or("jean-clawd").to_string();
+        let agent_dir = get_bubbaloop_home().join("agents").join(&default_agent);
+        std::fs::create_dir_all(&agent_dir).ok();
+        let db_path = agent_dir.join("memory.db");
+        let store = match crate::agent::memory::semantic::SemanticStore::open(&db_path) {
+            Ok(s) => s,
             Err(e) => {
                 log::warn!(
                     "Could not open memory DB, skipping schedule registration: {}",
@@ -238,22 +235,29 @@ impl UpCommand {
                 if !skill.actions.is_empty() {
                     let actions_json =
                         serde_json::to_string(&skill.actions).unwrap_or_else(|_| "[]".to_string());
-                    let sched = crate::agent::memory::Schedule {
+                    let prompt = format!("[skill:{}] {}", skill.name, actions_json);
+                    let next_run: i64 = crate::agent::scheduler::next_run_after(
+                        schedule_expr,
+                        crate::agent::scheduler::now_epoch_secs(),
+                    )
+                    .map(|ts| ts as i64)
+                    .unwrap_or(0);
+                    let job = crate::agent::memory::semantic::Job {
                         id: uuid::Uuid::new_v4().to_string(),
-                        name: skill.name.clone(),
-                        cron: schedule_expr.clone(),
-                        actions: actions_json,
-                        tier: 1,
-                        last_run: None,
-                        next_run: None,
-                        created_by: "yaml".to_string(),
+                        cron_schedule: Some(schedule_expr.clone()),
+                        next_run_at: next_run,
+                        prompt_payload: prompt,
+                        status: "pending".to_string(),
+                        recurrence: true,
+                        retry_count: 0,
+                        last_error: None,
                     };
                     if self.dry_run {
                         println!(
                             "  [dry-run] Would register schedule: {} ({})",
                             skill.name, schedule_expr
                         );
-                    } else if let Err(e) = mem.upsert_schedule(&sched) {
+                    } else if let Err(e) = store.create_job(&job) {
                         println!("  [warn] Failed to register schedule: {}", e);
                     } else {
                         println!("  Registered schedule: {} ({})", skill.name, schedule_expr);

@@ -239,7 +239,7 @@ The [Weather Panel](../../dashboard/panels/weather.md) displays OpenMeteo data w
 ### Stale data
 
 1. Check fetch intervals in configuration
-2. Verify service is running: `/topics` in TUI
+2. Verify service is running: `bubbaloop debug topics`
 3. Check for API rate limiting
 
 ## Next Steps

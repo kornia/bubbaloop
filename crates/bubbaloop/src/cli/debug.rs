@@ -63,10 +63,6 @@ struct SubscribeArgs {
     #[argh(positional)]
     topic: String,
 
-    /// decode protobuf messages
-    #[argh(switch)]
-    decode: bool,
-
     /// output as JSON
     #[argh(switch)]
     json: bool,
@@ -106,8 +102,8 @@ struct InfoArgs {
 #[derive(FromArgs)]
 #[argh(subcommand, name = "liveliness")]
 struct LivelinessArgs {
-    /// key expression pattern (default: "@ros2_lv/**")
-    #[argh(positional, default = "String::from(\"@ros2_lv/**\")")]
+    /// key expression pattern (default: "bubbaloop/**")
+    #[argh(positional, default = "String::from(\"bubbaloop/**\")")]
     pattern: String,
 
     /// timeout in seconds (default: 3)
@@ -209,12 +205,7 @@ async fn list_topics(args: TopicsArgs) -> Result<()> {
     // Query the admin space for topic information
     // Note: This requires Zenoh admin API which may not be available in all deployments
     // Fallback to scanning known bubbaloop topics
-    let known_topics = vec![
-        "bubbaloop/daemon/**",
-        "bubbaloop/nodes/**",
-        "/camera/**",
-        "/weather/**",
-    ];
+    let known_topics = vec!["bubbaloop/**"];
 
     let mut found_topics = std::collections::HashSet::new();
 
@@ -295,12 +286,6 @@ async fn subscribe_topic(args: SubscribeArgs) -> Result<()> {
             )?;
         } else {
             println!("[{}] {}", timestamp, key);
-
-            if args.decode {
-                // Try to decode as protobuf (placeholder - would need schema)
-                println!("  Protobuf decoding not yet implemented");
-                println!("  Raw bytes: {} bytes", payload.len());
-            }
 
             // Try to display as string or JSON
             if let Ok(s) = std::str::from_utf8(&payload) {

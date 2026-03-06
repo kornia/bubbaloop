@@ -81,6 +81,8 @@ nav:
     - Header: api/header.md
     - Camera Messages: api/camera.md
     - Weather Messages: api/weather.md
+  - Guides:
+    - Telemetry Watchdog: guides/telemetry-watchdog.md
   - Reference:
     - CLI Commands: reference/cli.md
     - Troubleshooting: reference/troubleshooting.md

@@ -99,7 +99,7 @@ pub fn refresh_cache() -> Result<(), String> {
 }
 
 /// Find curl in standard system paths to avoid PATH hijacking.
-fn find_curl() -> Option<PathBuf> {
+pub fn find_curl() -> Option<PathBuf> {
     for dir in &["/usr/bin", "/usr/local/bin", "/bin"] {
         let path = Path::new(dir).join("curl");
         if path.exists() {

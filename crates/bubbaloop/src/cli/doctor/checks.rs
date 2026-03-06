@@ -1,444 +1,18 @@
-//! Doctor command for system diagnostics
+// doctor spawns systemctl directly for diagnostic independence — if zbus/dbus is broken,
+// doctor must still work
+
+//! Individual diagnostic check functions
 //!
-//! Performs comprehensive health checks on all bubbaloop components:
-//! - System services (zenohd, daemon, bridge)
-//! - Daemon HTTP connectivity and health (via REST API)
-//! - Zenoh data plane availability (port check for node streaming)
-//! - Security posture
-//!
-//! Provides actionable fixes for each issue found.
+//! Each check function returns a `Vec<DiagnosticResult>` containing one or more
+//! results for the checks it performs.
 
-use anyhow::{anyhow, Result};
-use serde::Serialize;
-use std::time::Duration;
-use tokio::process::Command;
+use crate::cli::system_utils::{check_systemd_service, is_process_running};
 
-/// Actions that can be automatically fixed
-#[derive(Debug, Clone)]
-pub enum FixAction {
-    StartZenohd,
-    StartDaemonService,
-    RestartDaemonService,
-    StartBridgeService,
-    CreateZenohConfig,
-    CreateMarketplaceSources,
-}
-
-impl FixAction {
-    fn description(&self) -> &'static str {
-        match self {
-            FixAction::StartZenohd => "Start zenohd router",
-            FixAction::StartDaemonService => "Start bubbaloop-daemon service",
-            FixAction::RestartDaemonService => "Restart bubbaloop-daemon service",
-            FixAction::StartBridgeService => "Start zenoh-bridge service",
-            FixAction::CreateZenohConfig => "Create Zenoh config file",
-            FixAction::CreateMarketplaceSources => {
-                "Create marketplace sources with official registry"
-            }
-        }
-    }
-
-    async fn execute(&self) -> Result<String> {
-        match self {
-            FixAction::StartZenohd => {
-                // Start zenohd in background
-                let mut cmd = Command::new("zenohd");
-                cmd.stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
-
-                let child = cmd.spawn()?;
-                // Detach the process
-                std::mem::forget(child);
-
-                // Wait a moment for it to start
-                tokio::time::sleep(Duration::from_millis(500)).await;
-
-                // Verify it started
-                if is_process_running("zenohd").await {
-                    Ok("zenohd started successfully".to_string())
-                } else {
-                    Err(anyhow!("Failed to start zenohd"))
-                }
-            }
-            FixAction::StartDaemonService => {
-                let output = Command::new("systemctl")
-                    .args(["--user", "start", "bubbaloop-daemon.service"])
-                    .output()
-                    .await?;
-
-                if output.status.success() {
-                    Ok("bubbaloop-daemon service started".to_string())
-                } else {
-                    Err(anyhow!(
-                        "Failed to start: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    ))
-                }
-            }
-            FixAction::RestartDaemonService => {
-                let output = Command::new("systemctl")
-                    .args(["--user", "restart", "bubbaloop-daemon.service"])
-                    .output()
-                    .await?;
-
-                if output.status.success() {
-                    Ok("bubbaloop-daemon service restarted".to_string())
-                } else {
-                    Err(anyhow!(
-                        "Failed to restart: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    ))
-                }
-            }
-            FixAction::StartBridgeService => {
-                let output = Command::new("systemctl")
-                    .args(["--user", "start", "bubbaloop-bridge.service"])
-                    .output()
-                    .await?;
-
-                if output.status.success() {
-                    Ok("zenoh-bridge service started".to_string())
-                } else {
-                    Err(anyhow!(
-                        "Failed to start: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    ))
-                }
-            }
-            FixAction::CreateZenohConfig => {
-                let home = dirs::home_dir().ok_or_else(|| anyhow!("HOME not set"))?;
-                let zenoh_dir = home.join(".bubbaloop/zenoh");
-                std::fs::create_dir_all(&zenoh_dir)?;
-
-                let config_path = zenoh_dir.join("zenohd.json5");
-                let config_content = r#"{
-  mode: "router",
-  listen: {
-    endpoints: ["tcp/127.0.0.1:7447"]
-  },
-  scouting: {
-    multicast: {
-      enabled: false
-    },
-    gossip: {
-      enabled: false
-    }
-  }
-}"#;
-                std::fs::write(&config_path, config_content)?;
-                Ok(format!("Created {}", config_path.display()))
-            }
-            FixAction::CreateMarketplaceSources => {
-                let home = dirs::home_dir().ok_or_else(|| anyhow!("HOME not set"))?;
-                let sources_path = home.join(".bubbaloop/sources.json");
-
-                let sources_content = r#"{
-  "sources": [
-    {
-      "name": "Official Nodes",
-      "path": "kornia/bubbaloop-nodes-official",
-      "type": "builtin",
-      "enabled": true
-    }
-  ]
-}"#;
-                std::fs::write(&sources_path, sources_content)?;
-                Ok(format!(
-                    "Created {} with official nodes registry",
-                    sources_path.display()
-                ))
-            }
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct DiagnosticResult {
-    check: String,
-    passed: bool,
-    message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fix: Option<String>,
-    #[serde(skip)]
-    fix_action: Option<FixAction>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    details: Option<serde_json::Value>,
-}
-
-impl DiagnosticResult {
-    fn pass(check: &str, message: &str) -> Self {
-        Self {
-            check: check.to_string(),
-            passed: true,
-            message: message.to_string(),
-            fix: None,
-            fix_action: None,
-            details: None,
-        }
-    }
-
-    fn pass_with_details(check: &str, message: &str, details: serde_json::Value) -> Self {
-        Self {
-            check: check.to_string(),
-            passed: true,
-            message: message.to_string(),
-            fix: None,
-            fix_action: None,
-            details: Some(details),
-        }
-    }
-
-    fn fail(check: &str, message: &str, fix: &str) -> Self {
-        Self {
-            check: check.to_string(),
-            passed: false,
-            message: message.to_string(),
-            fix: Some(fix.to_string()),
-            fix_action: None,
-            details: None,
-        }
-    }
-
-    fn fail_with_action(check: &str, message: &str, fix: &str, action: FixAction) -> Self {
-        Self {
-            check: check.to_string(),
-            passed: false,
-            message: message.to_string(),
-            fix: Some(fix.to_string()),
-            fix_action: Some(action),
-            details: None,
-        }
-    }
-}
-
-pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
-    let check_type = check.to_lowercase();
-
-    if !json {
-        if fix {
-            println!("bubbaloop doctor --fix");
-            println!("=====================");
-        } else {
-            println!("bubbaloop doctor");
-            println!("================");
-        }
-        println!();
-    }
-
-    let mut results = Vec::new();
-    let mut fixes_applied = 0;
-
-    let run_config = check_type == "all" || check_type == "config";
-    let run_services = check_type == "all" || check_type == "zenoh";
-    let run_connectivity = check_type == "all" || check_type == "zenoh";
-    let run_daemon = check_type == "all" || check_type == "daemon";
-    let run_security = check_type == "all" || check_type == "security";
-
-    // 0. Check configuration files
-    if run_config {
-        if !json {
-            println!("[0/4] Checking configuration...");
-        }
-        results.extend(check_configuration().await);
-
-        if fix && !json {
-            fixes_applied += apply_fixes(&mut results).await;
-        }
-        if !json {
-            println!();
-        }
-    }
-
-    // 1. Check system services
-    if run_services {
-        if !json {
-            println!("[1/4] Checking system services...");
-        }
-        results.extend(check_system_services().await);
-
-        if fix && !json {
-            fixes_applied += apply_fixes(&mut results).await;
-        }
-        if !json {
-            println!();
-        }
-    }
-
-    // 2. Check daemon HTTP connectivity (replaces Zenoh connectivity check)
-    if run_connectivity {
-        if !json {
-            println!("[2/4] Checking daemon connectivity...");
-        }
-        results.extend(check_daemon_connectivity().await);
-
-        if !json {
-            println!();
-        }
-    }
-
-    // 3. Check daemon health
-    if run_daemon {
-        if !json {
-            println!("[3/4] Checking daemon health...");
-        }
-        results.extend(check_daemon_health().await);
-
-        if !json {
-            println!();
-        }
-    }
-
-    // 4. Check Zenoh data plane (optional, for streaming)
-    if check_type == "all" {
-        if !json {
-            println!("[4/5] Checking Zenoh data plane...");
-        }
-        results.extend(check_node_subscriptions().await);
-
-        if !json {
-            println!();
-        }
-    }
-
-    // 5. Security checks
-    if run_security {
-        if !json {
-            println!("[5/5] Checking security posture...");
-        }
-        results.extend(check_security().await);
-        if !json {
-            println!();
-        }
-    }
-
-    if json {
-        print_json_results(&results, fixes_applied)?;
-    } else {
-        print_human_results(&results, fixes_applied, fix)?;
-    }
-
-    Ok(())
-}
-
-fn print_json_results(results: &[DiagnosticResult], fixes_applied: usize) -> Result<()> {
-    let passed = results.iter().filter(|r| r.passed).count();
-    let failed = results.iter().filter(|r| !r.passed).count();
-
-    let output = serde_json::json!({
-        "summary": {
-            "total": results.len(),
-            "passed": passed,
-            "failed": failed,
-            "fixes_applied": fixes_applied,
-        },
-        "checks": results,
-    });
-
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
-}
-
-fn print_human_results(
-    results: &[DiagnosticResult],
-    fixes_applied: usize,
-    fix: bool,
-) -> Result<()> {
-    println!("Summary");
-    println!("=======");
-    println!();
-
-    let mut issues_found = 0;
-
-    for result in results {
-        let symbol = if result.passed { "✓" } else { "✗" };
-        println!("[{}] {}: {}", symbol, result.check, result.message);
-
-        if !result.passed {
-            issues_found += 1;
-            if let Some(fix_hint) = &result.fix {
-                if result.fix_action.is_some() {
-                    println!("    → Auto-fixable: {}", fix_hint);
-                } else {
-                    println!("    → Fix: {}", fix_hint);
-                }
-            }
-        }
-
-        // Print details if available
-        if let Some(details) = &result.details {
-            if let Some(obj) = details.as_object() {
-                for (key, value) in obj {
-                    println!("    {} = {}", key, value);
-                }
-            }
-        }
-    }
-
-    println!();
-    if issues_found == 0 {
-        println!("All checks passed!");
-    } else {
-        println!(
-            "Found {} issue{}",
-            issues_found,
-            if issues_found == 1 { "" } else { "s" }
-        );
-        if fixes_applied > 0 {
-            println!(
-                "Applied {} fix{}",
-                fixes_applied,
-                if fixes_applied == 1 { "" } else { "es" }
-            );
-        } else if !fix {
-            // Count auto-fixable issues
-            let auto_fixable: usize = results
-                .iter()
-                .filter(|r| !r.passed && r.fix_action.is_some())
-                .count();
-            if auto_fixable > 0 {
-                println!();
-                println!(
-                    "Tip: Run 'bubbaloop doctor --fix' to automatically fix {} issue{}",
-                    auto_fixable,
-                    if auto_fixable == 1 { "" } else { "s" }
-                );
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Apply all available fixes and return count of fixes applied
-async fn apply_fixes(results: &mut [DiagnosticResult]) -> usize {
-    let mut fixes_applied = 0;
-
-    for result in results.iter_mut() {
-        if result.passed || result.fix_action.is_none() {
-            continue;
-        }
-
-        let action = result.fix_action.clone().unwrap();
-        println!("    → Fixing: {}", action.description());
-
-        match action.execute().await {
-            Ok(msg) => {
-                println!("      ✓ {}", msg);
-                result.passed = true;
-                result.message = format!("{} (fixed)", result.message);
-                fixes_applied += 1;
-            }
-            Err(e) => {
-                println!("      ✗ Failed: {}", e);
-            }
-        }
-    }
-
-    fixes_applied
-}
+use super::fixes::FixAction;
+use super::DiagnosticResult;
 
 /// Check configuration files exist
-async fn check_configuration() -> Vec<DiagnosticResult> {
+pub async fn check_configuration() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
 
     let home = match dirs::home_dir() {
@@ -542,7 +116,7 @@ async fn check_configuration() -> Vec<DiagnosticResult> {
     results
 }
 
-async fn check_system_services() -> Vec<DiagnosticResult> {
+pub async fn check_system_services() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
 
     // Check zenohd
@@ -570,8 +144,17 @@ async fn check_system_services() -> Vec<DiagnosticResult> {
 
     // Check bubbaloop-daemon
     let daemon_service = check_systemd_service("bubbaloop-daemon.service").await;
+    let daemon_installed = is_service_installed("bubbaloop-daemon.service").await;
     if daemon_service == "active" {
         results.push(DiagnosticResult::pass("bubbaloop-daemon", "service active"));
+    } else if !daemon_installed {
+        // Service not installed — install it first, then start
+        results.push(DiagnosticResult::fail_with_action(
+            "bubbaloop-daemon",
+            "service not installed",
+            "Run: bubbaloop daemon start",
+            FixAction::InstallAndStartDaemon,
+        ));
     } else if daemon_service == "inactive" {
         results.push(DiagnosticResult::fail_with_action(
             "bubbaloop-daemon",
@@ -579,30 +162,39 @@ async fn check_system_services() -> Vec<DiagnosticResult> {
             "Run: systemctl --user start bubbaloop-daemon",
             FixAction::StartDaemonService,
         ));
-    } else if daemon_service == "failed" {
+    } else if daemon_service == "failed" || daemon_service == "activating" {
+        // "activating" means stuck — restart it
         results.push(DiagnosticResult::fail_with_action(
             "bubbaloop-daemon",
-            "service failed",
+            &format!("service {} — restarting", daemon_service),
             "Run: systemctl --user restart bubbaloop-daemon",
             FixAction::RestartDaemonService,
         ));
     } else {
-        results.push(DiagnosticResult::fail(
+        // Unknown state — try restart
+        results.push(DiagnosticResult::fail_with_action(
             "bubbaloop-daemon",
             &format!("service {}", daemon_service),
-            "Run: systemctl --user status bubbaloop-daemon",
+            "Run: systemctl --user restart bubbaloop-daemon",
+            FixAction::RestartDaemonService,
         ));
     }
 
-    // Check zenoh-bridge (optional, so we don't fail hard)
+    // Check zenoh-bridge (optional — only needed for dashboard WebSocket bridge)
     let bridge_service = check_systemd_service("bubbaloop-bridge.service").await;
+    let bridge_installed = is_service_installed("bubbaloop-bridge.service").await;
     if bridge_service == "active" {
         results.push(DiagnosticResult::pass("zenoh-bridge", "service active"));
+    } else if !bridge_installed {
+        results.push(DiagnosticResult::pass(
+            "zenoh-bridge",
+            "not installed (optional — only needed for dashboard)",
+        ));
     } else {
         results.push(DiagnosticResult::fail_with_action(
             "zenoh-bridge",
-            "not running (optional for CLI, required for dashboard)",
-            "Run: systemctl --user start zenoh-bridge",
+            &format!("service {} (required for dashboard)", bridge_service),
+            "Run: systemctl --user start bubbaloop-bridge",
             FixAction::StartBridgeService,
         ));
     }
@@ -610,60 +202,60 @@ async fn check_system_services() -> Vec<DiagnosticResult> {
     results
 }
 
-async fn is_process_running(name: &str) -> bool {
-    let output = Command::new("pgrep").arg("-x").arg(name).output().await;
-
-    matches!(output, Ok(out) if out.status.success())
+/// Check if a systemd service unit file exists (installed).
+async fn is_service_installed(service_name: &str) -> bool {
+    let output = tokio::process::Command::new("systemctl")
+        .args(["--user", "cat", service_name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+    matches!(output, Ok(s) if s.success())
 }
 
-async fn check_port(port: u16) -> bool {
+pub async fn check_port(port: u16) -> bool {
     // Try to connect to the port
     tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
         .await
         .is_ok()
 }
 
-async fn check_systemd_service(service_name: &str) -> String {
-    let output = Command::new("systemctl")
-        .args(["--user", "is-active", service_name])
-        .output()
-        .await;
-
-    match output {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        Err(_) => "unknown".to_string(),
-    }
-}
-
-/// Check daemon HTTP connectivity (replaces Zenoh connectivity checks)
-async fn check_daemon_connectivity() -> Vec<DiagnosticResult> {
+/// Check daemon connectivity via Zenoh manifest query.
+pub async fn check_daemon_connectivity() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
 
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let port = std::env::var("BUBBALOOP_MCP_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(crate::mcp::MCP_PORT);
-
-    match client.health().await {
-        Ok(resp) => {
-            results.push(DiagnosticResult::pass_with_details(
-                "Daemon HTTP",
-                &format!("reachable on port {} (v{})", port, resp.version),
-                serde_json::json!({
-                    "port": port,
-                    "status": resp.status,
-                    "version": resp.version,
-                    "nodes_total": resp.nodes_total,
-                    "nodes_running": resp.nodes_running,
-                }),
-            ));
-        }
+    match crate::cli::daemon_client::DaemonClient::connect().await {
+        Ok(client) => match client.health().await {
+            Ok(manifest) => {
+                results.push(DiagnosticResult::pass_with_details(
+                    "Daemon Zenoh",
+                    &format!(
+                        "reachable (v{}, uptime={}s)",
+                        manifest.version, manifest.uptime_secs
+                    ),
+                    serde_json::json!({
+                        "version": manifest.version,
+                        "machine_id": manifest.machine_id,
+                        "uptime_secs": manifest.uptime_secs,
+                        "node_count": manifest.node_count,
+                        "agent_count": manifest.agent_count,
+                        "mcp_port": manifest.mcp_port,
+                    }),
+                ));
+            }
+            Err(_) => {
+                results.push(DiagnosticResult::fail(
+                    "Daemon Zenoh",
+                    "not reachable via Zenoh",
+                    "Is the daemon running? Check: systemctl --user status bubbaloop-daemon",
+                ));
+            }
+        },
         Err(_) => {
             results.push(DiagnosticResult::fail(
-                "Daemon HTTP",
-                &format!("not reachable on port {}", port),
-                "Is the daemon running? Check: systemctl --user status bubbaloop-daemon",
+                "Daemon Zenoh",
+                "cannot connect to Zenoh",
+                "Is zenohd running? Check: bubbaloop doctor -c zenoh",
             ));
         }
     }
@@ -671,23 +263,31 @@ async fn check_daemon_connectivity() -> Vec<DiagnosticResult> {
     results
 }
 
-async fn check_daemon_health() -> Vec<DiagnosticResult> {
+pub async fn check_daemon_health() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
 
-    let client = crate::cli::daemon_client::DaemonClient::new();
+    let client = match crate::cli::daemon_client::DaemonClient::connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            results.push(DiagnosticResult::fail(
+                "Daemon health",
+                &format!("cannot connect: {}", e),
+                "Check if daemon is running. Run: systemctl --user status bubbaloop-daemon",
+            ));
+            return results;
+        }
+    };
 
-    // Check health endpoint
+    // Check health via manifest query
     match client.health().await {
-        Ok(resp) => {
-            if resp.status == "ok" {
-                results.push(DiagnosticResult::pass("Daemon health", "ok"));
-            } else {
-                results.push(DiagnosticResult::fail(
-                    "Daemon health",
-                    &format!("unexpected status: {}", resp.status),
-                    "Run: systemctl --user restart bubbaloop-daemon",
-                ));
-            }
+        Ok(manifest) => {
+            results.push(DiagnosticResult::pass(
+                "Daemon health",
+                &format!(
+                    "ok (v{}, {} nodes, {} agents)",
+                    manifest.version, manifest.node_count, manifest.agent_count
+                ),
+            ));
         }
         Err(e) => {
             results.push(DiagnosticResult::fail(
@@ -698,19 +298,21 @@ async fn check_daemon_health() -> Vec<DiagnosticResult> {
         }
     }
 
-    // Check nodes endpoint
+    // Check nodes via gateway command
     match client.list_nodes().await {
-        Ok(data) => {
+        Ok(json) => {
+            let nodes: Vec<crate::mcp::platform::NodeInfo> =
+                serde_json::from_str(&json).unwrap_or_default();
             results.push(DiagnosticResult::pass(
                 "Node list",
-                &format!("accessible ({} nodes)", data.nodes.len()),
+                &format!("accessible ({} nodes)", nodes.len()),
             ));
         }
         Err(e) => {
             results.push(DiagnosticResult::fail(
                 "Node list",
                 &format!("query failed: {}", e),
-                "Check if daemon REST API is responding",
+                "Check if daemon gateway is responding",
             ));
         }
     }
@@ -718,7 +320,7 @@ async fn check_daemon_health() -> Vec<DiagnosticResult> {
     results
 }
 
-async fn check_node_subscriptions() -> Vec<DiagnosticResult> {
+pub async fn check_node_subscriptions() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
 
     // Zenoh data plane check: just verify zenohd port is accessible
@@ -740,7 +342,7 @@ async fn check_node_subscriptions() -> Vec<DiagnosticResult> {
 }
 
 /// Check security posture of the deployment
-async fn check_security() -> Vec<DiagnosticResult> {
+pub async fn check_security() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
 
     let home = match dirs::home_dir() {
@@ -916,15 +518,6 @@ fn check_python_sandbox() -> Vec<DiagnosticResult> {
     results
 }
 
-/// Validate a node name: 1-64 chars, [a-zA-Z0-9_-], no null bytes
-fn is_valid_node_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 64
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-}
-
 /// Check that registered node names are valid
 fn check_node_names(bubbaloop_dir: &std::path::Path) -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
@@ -936,7 +529,7 @@ fn check_node_names(bubbaloop_dir: &std::path::Path) -> Vec<DiagnosticResult> {
             if let Some(nodes) = parsed.get("nodes").and_then(|n| n.as_array()) {
                 for node in nodes {
                     if let Some(name) = node.get("name").and_then(|n| n.as_str()) {
-                        if is_valid_node_name(name) {
+                        if crate::validation::validate_node_name(name).is_ok() {
                             results.push(DiagnosticResult::pass(
                                 &format!("Node name ({})", name),
                                 "valid",
@@ -960,45 +553,6 @@ fn check_node_names(bubbaloop_dir: &std::path::Path) -> Vec<DiagnosticResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_diagnostic_result_pass() {
-        let result = DiagnosticResult::pass("test", "all good");
-        assert!(result.passed);
-        assert_eq!(result.check, "test");
-        assert_eq!(result.message, "all good");
-        assert!(result.fix.is_none());
-    }
-
-    #[test]
-    fn test_diagnostic_result_fail() {
-        let result = DiagnosticResult::fail("test", "something wrong", "do this");
-        assert!(!result.passed);
-        assert_eq!(result.check, "test");
-        assert_eq!(result.message, "something wrong");
-        assert_eq!(result.fix, Some("do this".to_string()));
-    }
-
-    // Security check tests
-
-    #[test]
-    fn test_is_valid_node_name_accepts_valid() {
-        assert!(is_valid_node_name("camera"));
-        assert!(is_valid_node_name("rtsp-camera"));
-        assert!(is_valid_node_name("my_node_123"));
-        assert!(is_valid_node_name("A"));
-        assert!(is_valid_node_name("a".repeat(64).as_str()));
-    }
-
-    #[test]
-    fn test_is_valid_node_name_rejects_invalid() {
-        assert!(!is_valid_node_name(""));
-        assert!(!is_valid_node_name("bad node"));
-        assert!(!is_valid_node_name("bad/node"));
-        assert!(!is_valid_node_name("bad.node"));
-        assert!(!is_valid_node_name("bad\0node"));
-        assert!(!is_valid_node_name(&"a".repeat(65)));
-    }
 
     #[test]
     fn test_check_tls_status_with_tls_config() {

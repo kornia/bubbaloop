@@ -4,17 +4,43 @@ Reference for the Bubbaloop command-line interface.
 
 ## bubbaloop Binary
 
-The `bubbaloop` binary is a single 7MB Rust executable that includes CLI, TUI, and daemon.
+The `bubbaloop` binary is a single ~12 MB Rust executable that includes CLI, daemon, MCP server, and agent runtime.
 
 ### Core Commands
 
 | Command | Description |
 |---------|-------------|
 | `bubbaloop` | Show help |
-| `bubbaloop tui` | Launch interactive TUI |
+| `bubbaloop up` | Load skills and start daemon (agent runtime + MCP + nodes) |
 | `bubbaloop status` | Show service and node status |
 | `bubbaloop doctor` | Run system diagnostics |
 | `bubbaloop daemon` | Run the daemon (node manager) |
+
+### Agent Commands
+
+```bash
+bubbaloop agent <subcommand>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `chat [message]` | Send messages to agents (REPL if no message) |
+| `list` | List running agents and capabilities |
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-a, --agent <id>` | Target a specific agent (default: routes to default agent) |
+| `-z, --zenoh <endpoint>` | Zenoh endpoint (default: auto-discover) |
+
+**Examples:**
+```bash
+bubbaloop agent chat "What sensors do I have?"       # Single message
+bubbaloop agent chat                                  # Interactive REPL
+bubbaloop agent chat -a camera-expert "check feeds"   # Target specific agent
+bubbaloop agent list                                  # Show running agents
+```
 
 ### Node Commands
 
@@ -276,7 +302,6 @@ pixi run build               # cargo build --release
 
 # Run Services
 pixi run daemon              # bubbaloop daemon
-pixi run tui                 # bubbaloop tui
 pixi run dashboard           # React dashboard dev server
 
 # Development

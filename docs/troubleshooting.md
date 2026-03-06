@@ -1,6 +1,6 @@
 # Bubbaloop Troubleshooting Guide
 
-This guide helps you diagnose and fix common issues with Bubbaloop services, the daemon, nodes, and the TUI. Start with **Quick Diagnostics** if you're experiencing problems.
+This guide helps you diagnose and fix common issues with Bubbaloop services, the daemon, nodes, and the CLI. Start with **Quick Diagnostics** if you're experiencing problems.
 
 **Table of Contents:**
 1. [Quick Diagnostics](#quick-diagnostics)
@@ -100,7 +100,7 @@ Understanding Bubbaloop's architecture helps diagnose issues:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      TUI / Dashboard                         │
+│                      CLI / Dashboard                         │
 │                   (Client Mode: peer only)                   │
 └──────────────────────────┬──────────────────────────────────┘
                            │ Zenoh queries/subscriptions
@@ -128,19 +128,19 @@ Understanding Bubbaloop's architecture helps diagnose issues:
 
 **1. Query/Reply (Request-Response)**
 - Used for one-time requests: health checks, node commands
-- TUI sends queries to daemon, waits for response
+- CLI sends queries to daemon via Zenoh, waits for response
 - Default timeout: 10 seconds
 - Topics: `bubbaloop/daemon/api/*`
 
 **2. Pub/Sub (Event Stream)**
 - Used for continuous updates: node status, video frames
-- Daemon publishes state changes, TUI subscribes
+- Daemon publishes state changes, CLI/dashboard subscribes
 - No response needed, asynchronous
 - Topics: `bubbaloop/daemon/nodes`, `bubbaloop/nodes/*`
 
 **3. Mode Settings**
 - **zenohd (Router)**: Listens for connections, routes all messages
-- **TUI/Daemon (Client/Peer)**: Connects to zenohd, can send/receive
+- **CLI/Daemon (Client)**: Connects to zenohd in client mode, can send/receive
 - All must connect to the same zenohd instance on the same port
 
 ---
@@ -152,7 +152,7 @@ Understanding Bubbaloop's architecture helps diagnose issues:
 ### "Didn't receive final reply for query: Timeout"
 
 **Symptoms:**
-- TUI shows "Daemon: disconnected"
+- CLI shows connection error
 - CLI commands hang for 10 seconds then timeout
 - Logs show: "Zenoh query failed" or "No reply received"
 - `bubbaloop doctor` shows red X on query/reply check
@@ -427,11 +427,11 @@ sudo iptables-save | sudo iptables-restore
 
 **Symptoms:**
 - `bubbaloop status` times out
-- TUI shows "Daemon: disconnected"
+- CLI shows connection error
 - `bubbaloop doctor` shows red X for daemon health check
 
 **Symptoms:**
-- TUI shows "Daemon: disconnected"
+- CLI shows connection error
 - CLI commands hang for 10 seconds then timeout
 - Logs show: "Zenoh query failed" or "No valid reply received"
 
@@ -1247,8 +1247,8 @@ Shared memory only works locally. For multi-machine:
 RUST_LOG=debug systemctl --user restart bubbaloop-daemon
 journalctl --user -u bubbaloop-daemon -f
 
-# Run TUI with debug logs
-RUST_LOG=debug bubbaloop 2>&1 | tee tui.log
+# Run CLI with debug logs
+RUST_LOG=debug bubbaloop status 2>&1 | tee debug.log
 
 # Run individual node with debug logs
 RUST_LOG=debug systemctl --user restart bubbaloop-rtsp-camera
@@ -1470,7 +1470,7 @@ ps aux | grep bubbaloop | grep -v grep
 ```
 
 **Common Causes:**
-1. TUI polling too fast (should be 250ms)
+1. Client polling too fast
 2. Node in infinite loop
 3. Too many Zenoh subscriptions
 
@@ -1531,7 +1531,7 @@ bubbaloop status
 # Daemon: connected
 # Nodes: (list of nodes and their status)
 
-# 2. View TUI
+# 2. View status
 bubbaloop
 # Should load interactive dashboard
 
@@ -1591,21 +1591,20 @@ sleep 2
 bubbaloop
 ```
 
-### Q: How do I run TUI in a non-interactive environment?
+### Q: How do I use Bubbaloop in a non-interactive environment?
 
-A: The TUI requires an interactive terminal with TTY support. If running in CI/CD or via Claude Code:
+A: Use CLI commands directly (no interactive terminal needed):
 
 ```bash
-# Use CLI instead of TUI
+# Check status
 bubbaloop status
 
-# Or run specific commands
+# Run specific commands
 bubbaloop node start NODENAME
 bubbaloop node logs NODENAME -f
 
-# If you must run TUI, use tmux or screen
-tmux new-session -d -s bubbaloop 'bubbaloop'
-tmux attach -t bubbaloop
+# Single-message agent chat (no REPL)
+bubbaloop agent chat "What sensors are running?"
 ```
 
 ### Q: How do I use a remote Zenoh router?
@@ -1615,9 +1614,8 @@ A: Set `BUBBALOOP_ZENOH_ENDPOINT`:
 # For remote server at 192.168.1.50
 export BUBBALOOP_ZENOH_ENDPOINT=tcp/192.168.1.50:7447
 
-# Then start daemon/TUI
-bubbaloop daemon &
-bubbaloop
+# Then start daemon
+bubbaloop up
 
 # Make it permanent (systemd)
 systemctl --user edit bubbaloop-daemon

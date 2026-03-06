@@ -66,8 +66,14 @@ bubbaloop logout
 # Check system status
 bubbaloop status
 
-# Talk to your hardware via Claude AI
-bubbaloop agent
+# Start daemon (runs agent runtime + MCP server + node manager)
+bubbaloop up
+
+# Talk to your hardware via Claude AI (agents run daemon-side)
+bubbaloop agent chat "What sensors do I have?"
+bubbaloop agent chat                   # Interactive REPL
+bubbaloop agent chat -a camera-expert "describe the video feed"
+bubbaloop agent list                   # Show running agents
 
 # System diagnostics with auto-fix
 bubbaloop doctor --fix
@@ -78,9 +84,6 @@ bubbaloop node add user/repo          # Add from GitHub
 bubbaloop node build my-node          # Build
 bubbaloop node start my-node          # Start service
 bubbaloop node logs my-node -f        # Follow logs
-
-# Load skills and start sensor nodes
-bubbaloop up
 ```
 
 ## Node Lifecycle
@@ -163,8 +166,8 @@ CLI ───────────────┘               │
                                    │
 Daemon ────────────────────────────┤
   ├─ Node Manager (lifecycle)      │
-  ├─ MCP Server (23+ tools)       │
-  ├─ Agent Layer (Claude API)      │
+  ├─ MCP Server (34 tools)       │
+  ├─ Agent Runtime (multi-agent)   │
   └─ Systemd D-Bus (zbus)         │
                                    │
 Nodes (self-describing) ───────────┘
@@ -173,7 +176,7 @@ Nodes (self-describing) ───────────┘
   └─ custom...    [schema|manifest|health|config|command]
 ```
 
-The daemon is a **passive skill runtime** — external AI agents (Claude Code, etc.) control everything through MCP. No autonomous decision-making.
+The daemon hosts the **agent runtime** (multi-agent Zenoh gateway) alongside the MCP server. Agents are configured via `~/.bubbaloop/agents.toml` with per-agent identity and memory in `~/.bubbaloop/agents/{id}/`. The CLI is a thin Zenoh client — all LLM processing runs daemon-side.
 
 ## Node Contract
 
@@ -234,10 +237,11 @@ Common issues:
 
 ## Documentation
 
-- **Full docs**: `pixi run docs` or see [docs/](docs/)
+- **Quickstart**: See [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md)
+- **Agent guide**: See [docs/agent-guide.md](docs/agent-guide.md) for multi-agent setup and MCP tools
 - **Architecture**: See [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions
 - **Roadmap**: See [ROADMAP.md](ROADMAP.md) for what's next
-- **Agent guidelines**: See [CLAUDE.md](CLAUDE.md) for coding standards
+- **Coding standards**: See [CLAUDE.md](CLAUDE.md) for conventions
 - **CLI reference**: `bubbaloop --help` or `bubbaloop node --help`
 
 ## License

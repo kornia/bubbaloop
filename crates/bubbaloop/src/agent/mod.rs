@@ -1,76 +1,152 @@
-/// Raw reqwest Claude API client with tool_use support.
-pub mod claude;
+//! Agent — OpenClaw-inspired architecture with Soul, 3-tier memory, and adaptive heartbeat.
+//!
+//! Module structure (design doc Section 6):
+//! - `soul` — Hot-swappable identity + capabilities
+//! - `provider` — ModelProvider trait + Claude/Ollama backends
+//! - `memory` — 3-tier: short-term (RAM) + episodic (NDJSON) + semantic (SQLite)
+//! - `heartbeat` — Adaptive heartbeat with arousal/decay
+//! - `dispatch` — Internal MCP tool dispatch
+//! - `prompt` — System prompt builder
+//! - `scheduler` — Job poller integrated with heartbeat
 
-/// Minimal local Ollama chat backend.
-pub mod ollama;
-
-/// Internal MCP tool dispatch — calls PlatformOperations directly.
 pub mod dispatch;
-
-/// SQLite memory layer — conversations, sensor events, schedules.
+pub(crate) mod dispatch_security;
+pub mod gateway;
+pub mod heartbeat;
 pub mod memory;
-
-/// System prompt builder — injects live sensor inventory and schedules.
 pub mod prompt;
-
-/// Cron-based scheduler with Tier 1 built-in actions.
+pub mod provider;
+pub mod runtime;
 pub mod scheduler;
+pub mod soul;
 
-use crate::agent::claude::{ClaudeClient, ContentBlock, Message};
 use crate::agent::dispatch::Dispatcher;
+use crate::agent::gateway::AgentEvent;
+use crate::agent::memory::episodic::EpisodicLog;
 use crate::agent::memory::Memory;
-use crate::agent::prompt::build_system_prompt;
-use crate::daemon::registry::get_bubbaloop_home;
-use crate::mcp::platform::DaemonPlatform;
+use crate::agent::provider::{ContentBlock, Message, ModelProvider, StreamEvent, ToolCall, Usage};
+use crate::agent::soul::Soul;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Duration;
 
-/// Maximum number of conversation messages to keep in context.
+// ── EventSink trait ──────────────────────────────────────────────
+
+/// Trait for emitting agent events to an output channel.
 ///
-/// Older messages are dropped to avoid exceeding Claude's context window.
-/// Each pair (user + assistant) counts as 2, so 40 messages ≈ 20 exchanges.
+/// Implementations:
+/// - `StdoutSink` — prints to terminal (preserves current CLI behavior)
+/// - `ZenohSink` — publishes JSON events to a Zenoh outbox topic (runtime)
+pub trait EventSink: Send + Sync {
+    /// Emit an agent event. Implementations should not block.
+    fn emit(&self, event: AgentEvent) -> impl std::future::Future<Output = ()> + Send;
+}
+
+/// Prints agent events to stdout (preserves original CLI behavior).
+pub struct StdoutSink;
+
+impl EventSink for StdoutSink {
+    async fn emit(&self, event: AgentEvent) {
+        use crate::agent::gateway::AgentEventType;
+        match event.event_type {
+            AgentEventType::Delta => {
+                if let Some(text) = &event.text {
+                    print!("{}", text);
+                    std::io::Write::flush(&mut std::io::stdout()).ok();
+                }
+            }
+            AgentEventType::Tool => {
+                if let Some(name) = &event.text {
+                    println!("  [calling {}...]", name);
+                }
+            }
+            AgentEventType::ToolResult => {
+                // Tool results are not printed in the original CLI
+            }
+            AgentEventType::Error => {
+                if let Some(msg) = &event.text {
+                    println!("Error: {}", msg);
+                }
+            }
+            AgentEventType::Done => {
+                // Done is implicit in stdout mode
+            }
+        }
+    }
+}
+
+/// Maximum number of conversation messages to keep in short-term memory.
 const MAX_CONVERSATION_MESSAGES: usize = 40;
+
+/// Default context window size (tokens). Used for flush threshold calculation.
+const DEFAULT_CONTEXT_WINDOW: u32 = 200_000;
+
+/// Number of identical tool calls before injecting a loop-break advisory.
+const LOOP_BREAK_THRESHOLD: u32 = 6;
+
+/// Number of identical tool calls before logging a warning.
+const LOOP_WARN_THRESHOLD: u32 = 3;
+
+/// Maximum time (seconds) for an entire agent turn before aborting.
+const TURN_TIMEOUT_SECS: u64 = 120;
+
+/// Maximum time (seconds) for a single tool call before returning an error.
+const TOOL_CALL_TIMEOUT_SECS: u64 = 30;
+
+/// Maximum characters in a tool result before truncation.
+const MAX_TOOL_RESULT_CHARS: usize = 4096;
+
+/// Compute a u64 hash key for a (tool_name, input_json) pair.
+fn tool_call_hash(name: &str, input: &serde_json::Value) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut hasher);
+    // Canonical JSON string ensures identical inputs produce identical hashes
+    serde_json::to_string(input)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Per-call input for `run_agent_turn`, grouping the request-specific parameters.
+pub struct AgentTurnInput<'a> {
+    pub user_input: Option<&'a str>,
+    pub job_id: Option<&'a str>,
+    pub correlation_id: &'a str,
+}
+
+/// Internal context passed to `run_turn_loop`, grouping agent-config parameters.
+struct TurnContext<'a> {
+    soul: &'a Soul,
+    system_prompt: &'a str,
+    tools: &'a [provider::ToolDefinition],
+}
 
 /// Errors from agent operations.
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    #[error("Claude API error: {0}")]
-    Claude(#[from] claude::ClaudeError),
-    #[error("Ollama API error: {0}")]
-    Ollama(#[from] ollama::OllamaError),
+    #[error("Provider error: {0}")]
+    Provider(#[from] provider::ProviderError),
     #[error("Memory error: {0}")]
     Memory(#[from] memory::MemoryError),
     #[error("Zenoh connection failed: {0}")]
     Zenoh(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Unknown provider: {0}")]
-    InvalidProvider(String),
+    #[error("Turn timed out after {0}s")]
+    TurnTimeout(u64),
 }
 
 pub type Result<T> = std::result::Result<T, AgentError>;
 
-/// Configuration for the interactive agent session.
-pub struct AgentConfig {
-    /// Claude model override (uses default if None).
-    pub model: Option<String>,
-    /// Provider selection (claude, ollama)
-    pub provider: Option<String>,
-}
-
-/// Create a lightweight Zenoh session for the agent.
-///
-/// Uses client mode with disabled scouting for fast startup (~0s instead of
-/// ~5s). Falls back gracefully — tools that need Zenoh will return errors
-/// but the chat loop still works.
+/// Create a lightweight Zenoh session for the agent (client mode).
 pub async fn create_agent_session(endpoint: Option<&str>) -> Result<Arc<zenoh::Session>> {
     let mut config = zenoh::Config::default();
 
-    // Client mode — lighter weight, no routing
     config
         .insert_json5("mode", "\"client\"")
         .expect("Failed to set Zenoh mode");
 
-    // Resolve endpoint
     let env_endpoint = std::env::var("BUBBALOOP_ZENOH_ENDPOINT").ok();
     let ep = endpoint
         .or(env_endpoint.as_deref())
@@ -80,7 +156,6 @@ pub async fn create_agent_session(endpoint: Option<&str>) -> Result<Arc<zenoh::S
         .insert_json5("connect/endpoints", &format!("[\"{}\"]", ep))
         .expect("Failed to set Zenoh endpoint");
 
-    // Disable scouting entirely for instant startup
     config
         .insert_json5("scouting/multicast/enabled", "false")
         .expect("Failed to disable multicast scouting");
@@ -88,7 +163,6 @@ pub async fn create_agent_session(endpoint: Option<&str>) -> Result<Arc<zenoh::S
         .insert_json5("scouting/gossip/enabled", "false")
         .expect("Failed to disable gossip scouting");
 
-    // Single attempt — don't block if router is down
     let session = zenoh::open(config)
         .await
         .map_err(|e| AgentError::Zenoh(e.to_string()))?;
@@ -96,352 +170,516 @@ pub async fn create_agent_session(endpoint: Option<&str>) -> Result<Arc<zenoh::S
     Ok(Arc::new(session))
 }
 
-enum LlmClient {
-    Claude(ClaudeClient),
-    Ollama(ollama::OllamaClient),
-}
-
-impl LlmClient {
-    async fn send(
-        &self,
-        system: Option<&str>,
-        messages: &[crate::agent::claude::Message],
-        tools: &Vec<crate::agent::claude::ToolDefinition>,
-    ) -> Result<crate::agent::claude::ApiResponse> {
-        match self {
-            LlmClient::Claude(c) => c
-                .send(system, messages, tools)
-                .await
-                .map_err(AgentError::Claude),
-            LlmClient::Ollama(c) => c
-                .send(system, messages, tools)
-                .await
-                .map_err(AgentError::Ollama),
-        }
-    }
-}
-
-/// Run the interactive agent REPL.
+/// Run a single agent job (one complete turn cycle).
 ///
-/// Connects to the Claude API, initialises the tool dispatcher and memory
-/// store, then loops reading user input from stdin. Each message is sent
-/// to Claude along with the live system prompt (sensor inventory, schedules,
-/// recent events). Tool-use responses are dispatched and fed back until
-/// the model produces a final text reply.
-pub async fn run_agent(
-    config: AgentConfig,
-    session: Arc<zenoh::Session>,
-    node_manager: Arc<crate::daemon::node_manager::NodeManager>,
+/// State machine:
+/// 1. Hydrate: read Soul, build system prompt with state context
+/// 2. Cycle: max_turns, call provider.generate(), log to episodic, dispatch tools
+/// 3. Finalize: update job status, handle failures
+///
+/// The `sink` parameter controls where output goes (stdout, Zenoh, etc.).
+/// The `correlation_id` tags all emitted events for response correlation.
+/// The `job_notify` wakes the agent loop immediately when a near-future job is scheduled.
+pub async fn run_agent_turn<
+    M: ModelProvider,
+    P: crate::mcp::platform::PlatformOperations,
+    S: EventSink,
+>(
+    provider: &M,
+    dispatcher: &Dispatcher<P>,
+    memory: &mut Memory,
+    soul: &Soul,
+    sink: &S,
+    input: &AgentTurnInput<'_>,
 ) -> Result<()> {
-    // 1. Initialise client based on provider
-    let client = match config.provider.as_deref() {
-        Some("ollama") => {
-            LlmClient::Ollama(ollama::OllamaClient::from_env(config.model.as_deref())?)
-        }
-        Some(other) => return Err(AgentError::InvalidProvider(other.to_string())),
-        None => LlmClient::Claude(ClaudeClient::from_env(config.model.as_deref())?),
+    let user_input = input.user_input;
+    let job_id = input.job_id;
+    let correlation_id = input.correlation_id;
+    // 1. Build system prompt
+    let inventory = dispatcher.get_node_inventory().await;
+    let (active_jobs, relevant_episodes, recent_plan, recovered_context) = {
+        let backend = memory.backend.lock().await;
+        let active_jobs = backend.semantic.pending_jobs().unwrap_or_default();
+        let decay_half_life = soul.capabilities.episodic_decay_half_life_days;
+        let relevant_episodes = match user_input {
+            Some(input) => backend
+                .episodic
+                .search_with_decay(input, 5, decay_half_life)
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let recent_plan = backend
+            .episodic
+            .latest_plan()
+            .ok()
+            .flatten()
+            .map(|e| e.content);
+        let recovered_context = backend
+            .episodic
+            .latest_flush()
+            .ok()
+            .flatten()
+            .map(|e| EpisodicLog::strip_flush_prefix(&e.content).to_string());
+        (
+            active_jobs,
+            relevant_episodes,
+            recent_plan,
+            recovered_context,
+        )
     };
+    let resource_summary = dispatcher.telemetry_prompt_summary().await;
+    let system_prompt = prompt::build_system_prompt(
+        soul,
+        &inventory,
+        &active_jobs,
+        &relevant_episodes,
+        recent_plan.as_deref(),
+        recovered_context.as_deref(),
+        resource_summary.as_deref(),
+    );
 
-    // 2. Create dispatcher with DaemonPlatform
-    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
-    let machine_id = crate::daemon::util::get_machine_id();
-    let node_manager_ref = node_manager.clone();
-    let platform = Arc::new(DaemonPlatform {
-        node_manager,
-        session: session.clone(),
-        scope: scope.clone(),
-        machine_id: machine_id.clone(),
-    });
-    let sched_scope = scope.clone();
-    let sched_machine_id = machine_id.clone();
-    let dispatcher = Dispatcher::new(platform.clone(), scope.clone(), machine_id.clone());
-
-    // 3. Get tool definitions
-    let tools = Dispatcher::<DaemonPlatform>::tool_definitions();
-
-    // 4. Open memory store
-    let memory_path = get_bubbaloop_home().join("memory.db");
-    let memory = Memory::open(&memory_path)?;
-
-    // 4a. Seed conversation history from previous sessions
-    let mut conversation: Vec<Message> = Vec::new();
-    if let Ok(rows) = memory.recent_conversations(20) {
-        for row in rows.into_iter().rev() {
-            // DB returns DESC; reverse to get chronological order
-            match row.role.as_str() {
-                "user" => conversation.push(Message::user(&row.content)),
-                "assistant" if !row.content.is_empty() => {
-                    conversation.push(Message {
-                        role: "assistant".to_string(),
-                        content: vec![ContentBlock::Text { text: row.content }],
-                    });
-                }
-                _ => {} // skip tool-only rows
-            }
-        }
-        if !conversation.is_empty() {
-            log::info!(
-                "Restored {} messages from previous session",
-                conversation.len()
-            );
+    // Add user input to short-term memory
+    if let Some(input) = user_input {
+        memory.short_term.push(Message::user(input));
+        // Log to episodic
+        let entry = EpisodicLog::make_entry("user", input, job_id);
+        let backend = memory.backend.lock().await;
+        if let Err(e) = backend.episodic.append(&entry) {
+            log::warn!("Failed to log user message to episodic: {}", e);
         }
     }
 
-    // 4b. Prune old data (keep 30 days)
-    match memory.prune_old_conversations(30) {
-        Ok(n) if n > 0 => log::info!("Pruned {} old conversation rows", n),
-        Err(e) => log::warn!("Failed to prune conversations: {}", e),
-        _ => {}
-    }
-    match memory.prune_old_events(30) {
-        Ok(n) if n > 0 => log::info!("Pruned {} old event rows", n),
-        Err(e) => log::warn!("Failed to prune events: {}", e),
-        _ => {}
-    }
+    let tools = Dispatcher::<P>::tool_definitions();
 
-    // 4c. Load skill files (agent reads the markdown bodies as context)
-    let skills_dir = get_bubbaloop_home().join("skills");
-    let skills = crate::skills::load_skills(&skills_dir).unwrap_or_else(|e| {
-        log::warn!("Failed to load skills: {}", e);
-        Vec::new()
-    });
+    // 2. Turn cycle (max_turns) — wrapped in a turn-level timeout
+    let turn_result = tokio::time::timeout(
+        Duration::from_secs(TURN_TIMEOUT_SECS),
+        run_turn_loop(
+            provider,
+            dispatcher,
+            memory,
+            &TurnContext {
+                soul,
+                system_prompt: &system_prompt,
+                tools: &tools,
+            },
+            sink,
+            input,
+        ),
+    )
+    .await;
 
-    // 4d. Register skill schedules in memory (so scheduler can run them)
-    for skill in &skills {
-        if let Some(ref schedule_expr) = skill.schedule {
-            if !skill.actions.is_empty() {
-                let actions_json =
-                    serde_json::to_string(&skill.actions).unwrap_or_else(|_| "[]".to_string());
-                let sched = crate::agent::memory::Schedule {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    name: skill.name.clone(),
-                    cron: schedule_expr.clone(),
-                    actions: actions_json,
-                    tier: 1,
-                    last_run: None,
-                    next_run: None,
-                    created_by: "skill".to_string(),
-                };
-                if let Err(e) = memory.upsert_schedule(&sched) {
-                    log::warn!("Failed to register skill schedule '{}': {}", skill.name, e);
-                }
-            }
+    match turn_result {
+        Ok(inner) => inner?,
+        Err(_elapsed) => {
+            log::error!("[Agent] Turn timed out after {}s", TURN_TIMEOUT_SECS);
+            sink.emit(AgentEvent::error(
+                correlation_id,
+                &format!("Turn timed out after {}s", TURN_TIMEOUT_SECS),
+            ))
+            .await;
+            return Err(AgentError::TurnTimeout(TURN_TIMEOUT_SECS));
         }
     }
 
-    // 4e. Index skills for FTS5 full-text search
-    if let Err(e) = memory.index_skills(&skills) {
-        log::warn!("Failed to index skills for search: {}", e);
+    // 3. Signal turn complete
+    sink.emit(AgentEvent::done(correlation_id)).await;
+
+    // 4. Trim short-term memory
+    if memory.short_term.len() > MAX_CONVERSATION_MESSAGES {
+        let drain_count = memory.short_term.len() - MAX_CONVERSATION_MESSAGES;
+        memory.short_term.drain(..drain_count);
     }
 
-    // 5. Start scheduler in background
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
-    tokio::spawn(scheduler::run_scheduler(
-        memory_path.clone(),
-        platform.clone(),
-        sched_scope,
-        sched_machine_id,
-        shutdown_rx.clone(),
-    ));
+    Ok(())
+}
 
-    // 5b. Bridge node events to memory
-    let event_memory = Memory::open(&memory_path)?;
-    let mut event_rx = node_manager_ref.subscribe();
-    let mut event_shutdown_rx = shutdown_tx.subscribe();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                Ok(event) = event_rx.recv() => {
-                    let details = serde_json::to_string(&event.state).ok();
-                    if let Err(e) = event_memory.log_event(
-                        &event.node_name,
-                        &event.event_type,
-                        details.as_deref(),
-                    ) {
-                        log::warn!("Failed to persist node event: {}", e);
-                    }
-                }
-                _ = event_shutdown_rx.changed() => break,
-            }
-        }
-    });
-
-    // 6. Welcome message
-    let model_name = config
-        .model
-        .as_deref()
-        .unwrap_or(match config.provider.as_deref() {
-            Some("ollama") => ollama::DEFAULT_MODEL,
-            _ => claude::DEFAULT_MODEL,
-        });
-    let node_count = match dispatcher.get_node_inventory().await {
-        ref s if s.starts_with("No nodes") => "0".to_string(),
-        ref s => s
-            .lines()
-            .next()
-            .and_then(|l| l.split_whitespace().next())
-            .unwrap_or("0")
-            .to_string(),
-    };
-    println!();
-    println!("  Bubbaloop Agent v{}", env!("CARGO_PKG_VERSION"));
-    println!("  Model: {}", model_name);
-    println!("  Tools: {} | Nodes: {}", tools.len(), node_count);
-    println!();
-    println!("  Type a message to chat, 'quit' to exit.");
-
-    // 7. Main REPL loop
-    let stdin = std::io::stdin();
-
-    loop {
-        // Read user input
-        print!("> ");
-        use std::io::Write;
-        std::io::stdout().flush().ok();
-
-        let mut line = String::new();
-        let bytes_read = stdin.read_line(&mut line)?;
-
-        // EOF (Ctrl-D)
-        if bytes_read == 0 {
-            println!();
+/// Inner turn loop extracted for timeout wrapping.
+async fn run_turn_loop<
+    M: ModelProvider,
+    P: crate::mcp::platform::PlatformOperations,
+    S: EventSink,
+>(
+    provider: &M,
+    dispatcher: &Dispatcher<P>,
+    memory: &mut Memory,
+    ctx: &TurnContext<'_>,
+    sink: &S,
+    input: &AgentTurnInput<'_>,
+) -> Result<()> {
+    let soul = ctx.soul;
+    let system_prompt = ctx.system_prompt;
+    let tools = ctx.tools;
+    let job_id = input.job_id;
+    let correlation_id = input.correlation_id;
+    let mut last_input_tokens = 0u32;
+    let mut tool_call_counts: HashMap<u64, u32> = HashMap::new();
+    let mut loop_detected = false;
+    for _turn in 0..soul.capabilities.max_turns {
+        if loop_detected {
             break;
         }
+        // Stream response from provider (retry handled inside ClaudeProvider)
+        let mut rx = match provider
+            .generate_stream(Some(system_prompt), &memory.short_term, tools)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("Provider error: {}", e);
+                sink.emit(AgentEvent::error(correlation_id, &e.to_string()))
+                    .await;
+                break;
+            }
+        };
 
-        let input = line.trim();
-        if input.is_empty() {
-            continue;
-        }
-        if input == "quit" || input == "exit" {
-            break;
-        }
+        let mut text_buffer = String::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut stream_usage = Usage {
+            input_tokens: 0,
+            output_tokens: 0,
+        };
+        let mut _stop_reason: Option<String> = None;
 
-        // Build live system prompt with recency + relevance context
-        let inventory = dispatcher.get_node_inventory().await;
-        let schedules = memory.list_schedules().unwrap_or_default();
-        let recent_events = memory.recent_events(10).unwrap_or_default();
-
-        // FTS5 semantic search on user input
-        let relevant_convos = memory.search_conversations(input, 5).unwrap_or_default();
-        let relevant_events = memory.search_events(input, 5).unwrap_or_default();
-        let relevant_skills = memory.search_skills(input, 3).unwrap_or_default();
-
-        let system_prompt = build_system_prompt(
-            &inventory,
-            &schedules,
-            &recent_events,
-            &skills,
-            &relevant_convos,
-            &relevant_events,
-            &relevant_skills,
-        );
-
-        // Add user message
-        conversation.push(Message::user(input));
-
-        // Log user message to memory
-        if let Err(e) = memory.log_message("user", input, None) {
-            log::warn!("Failed to log user message: {}", e);
-        }
-
-        // Send to Claude and handle tool-use loop
-        loop {
-            let response = match client
-                .send(Some(&system_prompt), &conversation, &tools)
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    println!("Error: {}", e);
-                    log::error!("Agent API error: {}", e);
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::TextDelta(delta) => {
+                    sink.emit(AgentEvent::delta(correlation_id, &delta)).await;
+                    text_buffer.push_str(&delta);
+                }
+                StreamEvent::ToolUse { id, name, input } => {
+                    tool_calls.push(ToolCall { id, name, input });
+                }
+                StreamEvent::Done {
+                    usage,
+                    stop_reason: sr,
+                } => {
+                    stream_usage = usage;
+                    _stop_reason = sr;
+                }
+                StreamEvent::Error(e) => {
+                    log::error!("Stream error: {}", e);
                     break;
                 }
-            };
-
-            // Build assistant message from response content
-            let assistant_msg = Message {
-                role: "assistant".to_string(),
-                content: response.content.clone(),
-            };
-            conversation.push(assistant_msg);
-
-            // Print any text blocks
-            for block in &response.content {
-                if let ContentBlock::Text { text } = block {
-                    println!("{}", text);
-                }
             }
+        }
+        if !text_buffer.is_empty() {
+            // StdoutSink handles its own newline via Delta events; for Zenoh
+            // the client renders newlines. Emit a final empty delta for newline.
+            sink.emit(AgentEvent::delta(correlation_id, "\n")).await;
+        }
 
-            // Check for tool calls
-            let tool_uses: Vec<_> = response
-                .content
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::ToolUse { id, name, input } => Some((id, name, input)),
-                    _ => None,
-                })
-                .collect();
+        last_input_tokens = stream_usage.input_tokens;
 
-            if tool_uses.is_empty() {
-                // No tool calls — log assistant response and break
-                let response_text: String = response
-                    .content
-                    .iter()
-                    .filter_map(|b| match b {
-                        ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
-                if let Err(e) = memory.log_message("assistant", &response_text, None) {
-                    log::warn!("Failed to log assistant message: {}", e);
-                }
+        // Build assistant message from streamed content
+        let mut content_blocks = Vec::new();
+        if !text_buffer.is_empty() {
+            content_blocks.push(ContentBlock::Text {
+                text: text_buffer.clone(),
+            });
+        }
+        for tc in &tool_calls {
+            content_blocks.push(ContentBlock::ToolUse {
+                id: tc.id.clone(),
+                name: tc.name.clone(),
+                input: tc.input.clone(),
+            });
+        }
+        let assistant_msg = Message {
+            role: "assistant".to_string(),
+            content: content_blocks,
+        };
+        memory.short_term.push(assistant_msg);
+
+        // Log text to episodic
+        let text = text_buffer;
+        if !text.is_empty() {
+            let entry = EpisodicLog::make_entry("assistant", &text, job_id);
+            let backend = memory.backend.lock().await;
+            if let Err(e) = backend.episodic.append(&entry) {
+                log::warn!("Failed to log assistant message to episodic: {}", e);
+            }
+        }
+
+        // Check for tool calls
+
+        // Plan detection: if model outputs BOTH text AND tool calls, the text is
+        // likely a plan/reasoning (Ralph Loop: Plan → Execute). Persist it.
+        if !text.is_empty() && !tool_calls.is_empty() {
+            let plan_entry = EpisodicLog::make_entry("plan", &text, job_id);
+            let backend = memory.backend.lock().await;
+            if let Err(e) = backend.episodic.append(&plan_entry) {
+                log::warn!("Failed to persist plan to episodic: {}", e);
+            }
+        }
+
+        if tool_calls.is_empty() {
+            break; // Text-only response, turn complete
+        }
+
+        // Dispatch tool calls
+        let mut tool_results = Vec::new();
+        for tc in &tool_calls {
+            // Loop detection: hash (name, input) and count duplicates
+            let call_key = tool_call_hash(&tc.name, &tc.input);
+            let count = tool_call_counts.entry(call_key).or_insert(0);
+            *count += 1;
+            if *count == LOOP_WARN_THRESHOLD {
+                log::warn!(
+                    "[Agent] Repeated tool call detected: {} ({}x)",
+                    tc.name,
+                    LOOP_WARN_THRESHOLD
+                );
+            }
+            if *count >= LOOP_BREAK_THRESHOLD {
+                sink.emit(AgentEvent::error(
+                    correlation_id,
+                    &format!(
+                        "loop detected: {} called {}x with same args, stopping",
+                        tc.name, count
+                    ),
+                ))
+                .await;
+                memory.short_term.push(Message::user(&format!(
+                    "SYSTEM: Loop detected — you've called the same tool {} times with identical \
+                         arguments. Stop repeating and summarize what you've accomplished so far.",
+                    LOOP_BREAK_THRESHOLD
+                )));
+                loop_detected = true;
                 break;
             }
 
-            // Dispatch tool calls — show progress to user
-            let mut tool_results = Vec::new();
-            for (id, name, input) in &tool_uses {
-                println!("  [calling {}...]", name);
-                log::info!("[Agent] calling tool: {}", name);
-                let result = dispatcher.call_tool(id, name, input).await;
-                if let ContentBlock::ToolResult {
-                    tool_use_id,
-                    content,
-                    is_error,
-                } = &result
-                {
-                    tool_results.push((tool_use_id.clone(), content.clone(), *is_error));
+            sink.emit(AgentEvent::tool(correlation_id, &tc.name)).await;
+            log::info!("[Agent] calling tool: {}", tc.name);
+
+            // All tools dispatched through the Dispatcher (memory tools included)
+            let result = match tokio::time::timeout(
+                Duration::from_secs(TOOL_CALL_TIMEOUT_SECS),
+                dispatcher.call_tool(&tc.id, &tc.name, &tc.input),
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(_elapsed) => {
+                    log::warn!(
+                        "[Agent] Tool '{}' timed out after {}s",
+                        tc.name,
+                        TOOL_CALL_TIMEOUT_SECS
+                    );
+                    ContentBlock::ToolResult {
+                        tool_use_id: tc.id.clone(),
+                        content: format!(
+                            "Error: tool '{}' timed out after {}s",
+                            tc.name, TOOL_CALL_TIMEOUT_SECS
+                        ),
+                        is_error: Some(true),
+                    }
+                }
+            };
+
+            if let ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } = &result
+            {
+                // Truncate large tool results to prevent context blow-up
+                let content = truncate_tool_result(content);
+                tool_results.push((tool_use_id.clone(), content.clone(), *is_error));
+                // Log tool result to episodic
+                let entry = EpisodicLog::make_entry("tool", &content, job_id);
+                let backend = memory.backend.lock().await;
+                if let Err(e) = backend.episodic.append(&entry) {
+                    log::warn!("Failed to log tool result to episodic: {}", e);
                 }
             }
-
-            // Log tool calls to memory
-            let tool_calls_json = serde_json::to_string(
-                &tool_uses
-                    .iter()
-                    .map(|(_, name, _)| name)
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap_or_default();
-            if let Err(e) = memory.log_message("assistant", "", Some(&tool_calls_json)) {
-                log::warn!("Failed to log tool calls: {}", e);
-            }
-
-            // Add tool results to conversation
-            conversation.push(Message::tool_results(tool_results));
         }
 
-        // Trim conversation to avoid blowing the context window.
-        // Keep the most recent messages, dropping from the front.
-        if conversation.len() > MAX_CONVERSATION_MESSAGES {
-            let drain_count = conversation.len() - MAX_CONVERSATION_MESSAGES;
-            conversation.drain(..drain_count);
+        // Add tool results to short-term memory
+        memory.short_term.push(Message::tool_results(tool_results));
+    }
+
+    // 2.5. Pre-compaction flush (design Section 5.5)
+    //
+    // When context usage approaches the window limit, trigger a silent flush turn.
+    // The flush turn asks the model to persist important state before context compaction.
+    // This does NOT count toward max_turns.
+    let flush_threshold = soul.capabilities.compaction_flush_threshold_tokens as u32;
+    if last_input_tokens > 0
+        && last_input_tokens > DEFAULT_CONTEXT_WINDOW.saturating_sub(flush_threshold)
+    {
+        log::info!(
+            "[Agent] Triggering pre-compaction flush (input_tokens={}, threshold={})",
+            last_input_tokens,
+            DEFAULT_CONTEXT_WINDOW - flush_threshold
+        );
+
+        // Add flush instruction as a user message
+        let flush_instruction =
+            "SYSTEM: Context window is approaching capacity. Persist any important state \
+             to memory before context compaction. Summarize: active proposals, node health \
+             assessments, unresolved decisions, and key reasoning. Be concise.";
+        memory.short_term.push(Message::user(flush_instruction));
+
+        if let Ok(flush_response) = provider
+            .generate(Some(system_prompt), &memory.short_term, tools)
+            .await
+        {
+            let flush_text = flush_response.text();
+            if is_flush_substantive(&flush_text) {
+                // Log flush to episodic with flush: true tag
+                let entry = EpisodicLog::make_flush_entry(&flush_text, job_id);
+                let backend = memory.backend.lock().await;
+                if let Err(e) = backend.episodic.append(&entry) {
+                    log::warn!("Failed to log flush to episodic: {}", e);
+                }
+                log::info!("[Agent] Flush persisted ({} chars)", flush_text.len());
+            } else {
+                log::debug!("[Agent] Flush skipped (not substantive)");
+            }
         }
     }
 
-    // Signal scheduler to shut down
-    drop(shutdown_tx);
-
-    println!("Goodbye.");
     Ok(())
+}
+
+/// Truncate a tool result string if it exceeds `MAX_TOOL_RESULT_CHARS`.
+///
+/// Uses char-boundary-safe slicing to avoid panicking on multi-byte UTF-8.
+fn truncate_tool_result(content: &str) -> String {
+    if content.len() <= MAX_TOOL_RESULT_CHARS {
+        content.to_string()
+    } else {
+        // Find the nearest char boundary at or before the limit
+        let end = (0..=MAX_TOOL_RESULT_CHARS)
+            .rev()
+            .find(|&i| content.is_char_boundary(i))
+            .unwrap_or(0);
+        format!(
+            "{}\n\n[Output truncated at {} chars. Use more specific queries to get detailed results.]",
+            &content[..end], MAX_TOOL_RESULT_CHARS
+        )
+    }
+}
+
+/// Check whether flush text is substantive enough to persist.
+///
+/// Returns false for empty/short text or phrases indicating nothing to save.
+/// This prevents context clutter from trivial flush responses.
+fn is_flush_substantive(text: &str) -> bool {
+    if text.len() < 50 {
+        return false;
+    }
+    let lower = text.to_lowercase();
+    let no_content_phrases = [
+        "nothing to persist",
+        "no important state",
+        "nothing significant",
+        "no active proposals",
+        "nothing noteworthy",
+    ];
+    !no_content_phrases.iter().any(|p| lower.contains(p))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flush_short_text_not_substantive() {
+        assert!(!is_flush_substantive("OK"));
+        assert!(!is_flush_substantive("No state to save."));
+        assert!(!is_flush_substantive("")); // 0 len < 50
+    }
+
+    #[test]
+    fn flush_no_content_phrases() {
+        assert!(!is_flush_substantive(
+            "After reviewing the current state, there is nothing to persist at this time. All systems are nominal."
+        ));
+        assert!(!is_flush_substantive(
+            "I have checked all nodes and proposals. There is no important state to record right now."
+        ));
+        assert!(!is_flush_substantive(
+            "Current status check complete. Nothing significant has changed since the last flush."
+        ));
+    }
+
+    #[test]
+    fn flush_real_content_is_substantive() {
+        assert!(is_flush_substantive(
+            "Active proposals: prop-1 (restart rtsp-camera, pending approval). \
+             Node health: openmeteo degraded (3 consecutive timeouts). \
+             Key reasoning: weather API rate limit may have been hit."
+        ));
+    }
+
+    #[test]
+    fn loop_detection_identical_calls_same_hash() {
+        let input = serde_json::json!({"node": "camera"});
+        let h1 = tool_call_hash("list_nodes", &input);
+        let h2 = tool_call_hash("list_nodes", &input);
+        assert_eq!(h1, h2, "identical tool calls must produce the same hash");
+    }
+
+    #[test]
+    fn loop_detection_different_inputs_different_hash() {
+        let input_a = serde_json::json!({"node": "camera"});
+        let input_b = serde_json::json!({"node": "weather"});
+        let h1 = tool_call_hash("list_nodes", &input_a);
+        let h2 = tool_call_hash("list_nodes", &input_b);
+        assert_ne!(h1, h2, "different inputs must produce different hashes");
+    }
+
+    #[test]
+    fn loop_detection_different_tools_different_hash() {
+        let input = serde_json::json!({});
+        let h1 = tool_call_hash("list_nodes", &input);
+        let h2 = tool_call_hash("get_health", &input);
+        assert_ne!(h1, h2, "different tool names must produce different hashes");
+    }
+
+    #[test]
+    fn loop_detection_thresholds() {
+        assert_eq!(LOOP_WARN_THRESHOLD, 3);
+        assert_eq!(LOOP_BREAK_THRESHOLD, 6);
+        // Verify warn < break (const assertion would be cleaner but clippy
+        // flags assert! on constants in test functions)
+        let warn = LOOP_WARN_THRESHOLD;
+        let brk = LOOP_BREAK_THRESHOLD;
+        assert!(warn < brk, "warn threshold must be below break threshold");
+    }
+
+    #[test]
+    fn timeout_constants_are_sane() {
+        assert_eq!(TURN_TIMEOUT_SECS, 120);
+        assert_eq!(TOOL_CALL_TIMEOUT_SECS, 30);
+        const { assert!(TOOL_CALL_TIMEOUT_SECS < TURN_TIMEOUT_SECS) };
+    }
+
+    #[test]
+    fn truncate_short_content_unchanged() {
+        let short = "Hello, world!";
+        assert_eq!(truncate_tool_result(short), short);
+    }
+
+    #[test]
+    fn truncate_exact_limit_unchanged() {
+        let exact = "a".repeat(MAX_TOOL_RESULT_CHARS);
+        assert_eq!(truncate_tool_result(&exact), exact);
+    }
+
+    #[test]
+    fn truncate_over_limit_adds_suffix() {
+        let long = "x".repeat(MAX_TOOL_RESULT_CHARS + 100);
+        let result = truncate_tool_result(&long);
+        assert!(result.len() < long.len() + 100); // truncated + suffix
+        assert!(result.starts_with(&"x".repeat(MAX_TOOL_RESULT_CHARS)));
+        assert!(result.contains("[Output truncated at"));
+    }
+
+    #[test]
+    fn truncate_max_tool_result_chars_constant() {
+        assert_eq!(MAX_TOOL_RESULT_CHARS, 4096);
+    }
 }

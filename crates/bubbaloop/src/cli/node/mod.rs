@@ -6,12 +6,16 @@
 pub mod build;
 pub mod install;
 pub mod lifecycle;
+mod list;
+mod manage;
+
+// Re-export for use by sibling modules (e.g., install.rs uses super::resolve_node_path)
+pub(crate) use manage::resolve_node_path;
 
 use argh::FromArgs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 
-use crate::registry;
 use crate::templates;
 
 #[derive(Debug, Error)]
@@ -389,16 +393,43 @@ impl NodeCommand {
             }
             Some(NodeAction::Init(args)) => init_node(args),
             Some(NodeAction::Validate(args)) => validate_node(args),
-            Some(NodeAction::List(args)) => list_nodes(args).await,
+            Some(NodeAction::List(args)) => {
+                if args.base && args.instances {
+                    return Err(NodeError::InvalidArgs(
+                        "Cannot use --base and --instances together".into(),
+                    ));
+                }
+                list::list_nodes(&args.format, args.base, args.instances).await
+            }
             Some(NodeAction::Add(args)) => {
                 log::warn!("Note: 'bubbaloop node add' is deprecated. Use MCP tool 'install_node' instead.");
-                add_node(args).await
+                manage::add_node(
+                    &args.source,
+                    args.output.as_deref(),
+                    &args.branch,
+                    args.subdir.as_deref(),
+                    args.name.as_deref(),
+                    args.config.as_deref(),
+                    args.build,
+                    args.install,
+                )
+                .await
             }
             Some(NodeAction::Remove(args)) => {
                 log::warn!("Note: 'bubbaloop node remove' is deprecated. Use MCP tool 'remove_node' instead.");
-                remove_node(args).await
+                manage::remove_node(&args.name, args.delete_files).await
             }
-            Some(NodeAction::Instance(args)) => create_instance(args).await,
+            Some(NodeAction::Instance(args)) => {
+                manage::create_instance(
+                    &args.base_node,
+                    &args.suffix,
+                    args.config.as_deref(),
+                    args.copy_config,
+                    args.install,
+                    args.start,
+                )
+                .await
+            }
             Some(NodeAction::Install(args)) => install::handle_install(args).await,
             Some(NodeAction::Uninstall(args)) => send_command(&args.name, "uninstall").await,
             Some(NodeAction::Start(args)) => {
@@ -418,10 +449,12 @@ impl NodeCommand {
             Some(NodeAction::Logs(args)) => lifecycle::view_logs(args).await,
             Some(NodeAction::Build(args)) => build::build_node(&args.name).await,
             Some(NodeAction::Clean(args)) => send_command(&args.name, "clean").await,
-            Some(NodeAction::Enable(args)) => send_command(&args.name, "enable").await,
-            Some(NodeAction::Disable(args)) => send_command(&args.name, "disable").await,
-            Some(NodeAction::Search(args)) => search_nodes(args),
-            Some(NodeAction::Discover(args)) => discover_nodes(args).await,
+            Some(NodeAction::Enable(args)) => send_command(&args.name, "enable_autostart").await,
+            Some(NodeAction::Disable(args)) => send_command(&args.name, "disable_autostart").await,
+            Some(NodeAction::Search(args)) => {
+                list::search_nodes(&args.query, args.category.as_deref(), args.tag.as_deref())
+            }
+            Some(NodeAction::Discover(args)) => list::discover_nodes(&args.format).await,
         }
     }
 
@@ -456,17 +489,10 @@ impl NodeCommand {
 }
 
 pub(crate) async fn send_command(name: &str, command: &str) -> Result<()> {
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let resp = client.send_command(name, command).await?;
-    if resp.success {
-        println!("{}", resp.message);
-        if !resp.output.is_empty() {
-            println!("{}", resp.output);
-        }
-        Ok(())
-    } else {
-        Err(NodeError::CommandFailed(resp.message))
-    }
+    let client = crate::cli::daemon_client::DaemonClient::connect().await?;
+    let msg = client.send_node_command(name, command).await?;
+    println!("{}", msg);
+    Ok(())
 }
 
 pub(crate) fn truncate(s: &str, max: usize) -> String {
@@ -599,518 +625,6 @@ fn validate_node(args: ValidateArgs) -> Result<()> {
 
     println!();
     println!("Validation passed!");
-    Ok(())
-}
-
-async fn list_nodes(args: ListArgs) -> Result<()> {
-    if args.base && args.instances {
-        return Err(NodeError::InvalidArgs(
-            "Cannot use --base and --instances together".into(),
-        ));
-    }
-
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let data = client.list_nodes().await?;
-
-    if args.format == "json" {
-        println!("{}", serde_json::to_string_pretty(&data.nodes)?);
-    } else if data.nodes.is_empty() {
-        println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
-    } else {
-        println!(
-            "{:<20} {:<10} {:<12} {:<8} HEALTH",
-            "NAME", "STATUS", "TYPE", "BUILT"
-        );
-        println!("{}", "-".repeat(70));
-        for node in &data.nodes {
-            let built = if node.is_built { "yes" } else { "no" };
-            println!(
-                "{:<20} {:<10} {:<12} {:<8} {}",
-                node.name, node.status, node.node_type, built, node.health,
-            );
-        }
-    }
-
-    Ok(())
-}
-
-/// Discover node.yaml files in immediate subdirectories of a path.
-/// Returns Vec<(node_name, subdir_name, node_type)>.
-fn discover_nodes_in_subdirs(base_path: &Path) -> Vec<(String, String, String)> {
-    let manifest_field = |manifest: &serde_yaml::Value, key: &str| -> String {
-        manifest
-            .get(key)
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string()
-    };
-
-    let mut nodes: Vec<_> = std::fs::read_dir(base_path)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .filter_map(|entry| {
-            let yaml_path = entry.path().join("node.yaml");
-            let content = std::fs::read_to_string(&yaml_path).ok()?;
-            match serde_yaml::from_str::<serde_yaml::Value>(&content) {
-                Ok(manifest) => {
-                    let subdir = entry.file_name().to_string_lossy().to_string();
-                    Some((
-                        manifest_field(&manifest, "name"),
-                        subdir,
-                        manifest_field(&manifest, "type"),
-                    ))
-                }
-                Err(e) => {
-                    log::warn!("Skipping {}: invalid node.yaml: {}", yaml_path.display(), e);
-                    None
-                }
-            }
-        })
-        .collect();
-
-    nodes.sort_by(|a, b| a.0.cmp(&b.0));
-    nodes
-}
-
-/// Resolve the node path, applying --subdir if set, or discovering nodes if needed.
-pub(crate) fn resolve_node_path(base_path: &str, subdir: Option<&str>) -> Result<String> {
-    let base = Path::new(base_path);
-
-    if let Some(sub) = subdir {
-        // Validate subdir to prevent path traversal
-        if sub.is_empty()
-            || sub.contains("..")
-            || sub.contains('/')
-            || sub.contains('\\')
-            || sub.starts_with('.')
-        {
-            return Err(NodeError::InvalidArgs(
-                "subdir must be a simple directory name (no paths, no '..')".into(),
-            ));
-        }
-        let node_path = base.join(sub);
-        let manifest = node_path.join("node.yaml");
-        if !manifest.exists() {
-            return Err(NodeError::NotFound(format!(
-                "No node.yaml found at {}/{}",
-                base_path, sub
-            )));
-        }
-        return Ok(node_path.to_string_lossy().to_string());
-    }
-
-    // Check for node.yaml at root
-    let manifest = base.join("node.yaml");
-    if manifest.exists() {
-        return Ok(base_path.to_string());
-    }
-
-    // No node.yaml at root -- discover subdirectories
-    let discovered = discover_nodes_in_subdirs(base);
-    if discovered.is_empty() {
-        return Err(NodeError::NotFound(format!(
-            "No node.yaml found at {} or in any subdirectory",
-            base_path
-        )));
-    }
-
-    let mut msg = format!(
-        "No node.yaml found at repository root.\n\nFound {} node(s) in subdirectories:\n",
-        discovered.len()
-    );
-    for (name, subdir, node_type) in &discovered {
-        msg.push_str(&format!(
-            "  {:<20} (type: {:<6}) -- use: bubbaloop node add <source> --subdir {}\n",
-            name, node_type, subdir
-        ));
-    }
-    msg.push_str("\nHint: Use --subdir <name> to add a specific node.");
-
-    Err(NodeError::NotFound(msg))
-}
-
-async fn add_node(args: AddArgs) -> Result<()> {
-    // Normalize source URL
-    let source = install::normalize_git_url(&args.source);
-
-    let base_path = if install::is_git_url(&source) {
-        // Clone from GitHub
-        install::clone_from_github(&source, args.output.as_deref(), &args.branch)?
-    } else {
-        // Local path
-        let path = Path::new(&args.source);
-        if !path.exists() {
-            return Err(NodeError::NotFound(args.source));
-        }
-        path.canonicalize()?.to_string_lossy().to_string()
-    };
-
-    // Resolve the actual node path (handles --subdir and multi-node discovery)
-    let node_path = resolve_node_path(&base_path, args.subdir.as_deref())?;
-
-    // Add to daemon via REST API
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let resp = client
-        .add_node(&node_path, args.name.as_deref(), args.config.as_deref())
-        .await?;
-    if !resp.success {
-        return Err(NodeError::CommandFailed(resp.message));
-    }
-    println!("Added node from: {}", node_path);
-
-    let node_name = install::extract_node_name(&node_path).ok();
-
-    // Optional: build
-    if args.build {
-        if let Some(ref name) = node_name {
-            println!("Building node...");
-            send_command(name, "build").await?;
-        }
-    }
-
-    // Optional: install
-    if args.install {
-        if let Some(ref name) = node_name {
-            println!("Installing as service...");
-            send_command(name, "install").await?;
-        }
-    }
-
-    Ok(())
-}
-
-async fn remove_node(args: RemoveArgs) -> Result<()> {
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let resp = client.remove_node(&args.name).await?;
-    if resp.success {
-        println!("Removed node: {}", args.name);
-    } else {
-        return Err(NodeError::CommandFailed(resp.message));
-    }
-
-    if args.delete_files {
-        eprintln!("Note: File deletion not implemented yet. Remove files manually.");
-    }
-
-    Ok(())
-}
-
-/// Create an instance of a multi-instance node (like rtsp-camera)
-///
-/// This command creates a named instance from an already-registered base node.
-/// The instance will use the base node's binary but with its own config file.
-///
-/// # Arguments
-/// * `args.base_node` - Name of the registered base node (e.g., "rtsp-camera")
-/// * `args.suffix` - Instance suffix (e.g., "terrace" creates "rtsp-camera-terrace")
-/// * `args.config` - Path to config file for this instance
-/// * `args.copy_config` - Copy example config from base node's configs/ directory
-/// * `args.install` - Install as systemd service after creating
-/// * `args.start` - Start the instance after creating (implies --install)
-///
-/// # Example
-/// ```bash
-/// bubbaloop node instance rtsp-camera terrace --config ~/.bubbaloop/configs/rtsp-camera-terrace.yaml
-/// ```
-async fn create_instance(args: InstanceArgs) -> Result<()> {
-    // Validate suffix (same rules as node names: alphanumeric, hyphens, underscores)
-    if args.suffix.is_empty() || args.suffix.len() > 64 {
-        return Err(NodeError::InvalidArgs(
-            "Instance suffix must be 1-64 characters".into(),
-        ));
-    }
-    if !args
-        .suffix
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(NodeError::InvalidArgs(
-            "Instance suffix can only contain alphanumeric characters, hyphens, and underscores"
-                .into(),
-        ));
-    }
-    if args.suffix.starts_with('-') || args.suffix.starts_with('_') {
-        return Err(NodeError::InvalidArgs(
-            "Instance suffix cannot start with hyphen or underscore".into(),
-        ));
-    }
-
-    // Build the full instance name: base-suffix
-    let instance_name = format!("{}-{}", args.base_node, args.suffix);
-
-    // Query daemon for base node via REST API list
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let data = client.list_nodes().await?;
-
-    // Find the base node - check it exists
-    let base_exists = data.nodes.iter().any(|n| n.name == args.base_node);
-    if !base_exists {
-        return Err(NodeError::NotFound(format!(
-            "Base node '{}' not found. Add it first with: bubbaloop node add <path>",
-            args.base_node
-        )));
-    }
-
-    // Handle config file
-    let config_path = if args.copy_config {
-        // For copy_config we need the base node's path which the API doesn't expose.
-        // Fall back to searching in ~/.bubbaloop/nodes/
-        let home =
-            dirs::home_dir().ok_or_else(|| NodeError::Io(std::io::Error::other("HOME not set")))?;
-        let nodes_dir = home.join(".bubbaloop").join("nodes");
-
-        // Try to find the base node directory
-        let mut found_config: Option<String> = None;
-        if let Ok(entries) = std::fs::read_dir(&nodes_dir) {
-            for entry in entries.flatten() {
-                let node_yaml = entry.path().join("node.yaml");
-                if node_yaml.exists() {
-                    if let Ok(content) = std::fs::read_to_string(&node_yaml) {
-                        if let Ok(manifest) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
-                            if manifest.get("name").and_then(|v| v.as_str())
-                                == Some(&args.base_node)
-                            {
-                                let configs_dir = entry.path().join("configs");
-                                if configs_dir.exists() {
-                                    let example_config = find_example_config(&configs_dir)?;
-                                    let dest_dir = home.join(".bubbaloop").join("configs");
-                                    std::fs::create_dir_all(&dest_dir)?;
-                                    let dest_path =
-                                        dest_dir.join(format!("{}.yaml", instance_name));
-                                    std::fs::copy(&example_config, &dest_path)?;
-                                    println!("Copied example config to: {}", dest_path.display());
-                                    println!(
-                                        "Edit this file to configure your instance before starting."
-                                    );
-                                    found_config = Some(dest_path.to_string_lossy().to_string());
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if found_config.is_none() {
-            return Err(NodeError::NotFound(format!(
-                "Could not find configs/ directory for base node '{}'",
-                args.base_node
-            )));
-        }
-        found_config
-    } else if let Some(ref config) = args.config {
-        // Validate config path exists
-        let config_path = Path::new(config);
-        if !config_path.exists() {
-            return Err(NodeError::NotFound(format!(
-                "Config file not found: {}",
-                config
-            )));
-        }
-        Some(config_path.canonicalize()?.to_string_lossy().to_string())
-    } else {
-        None
-    };
-
-    // Register the instance with the daemon via REST API
-    let resp = client
-        .add_node(
-            &args.base_node,
-            Some(&instance_name),
-            config_path.as_deref(),
-        )
-        .await?;
-    if !resp.success {
-        return Err(NodeError::CommandFailed(resp.message));
-    }
-    println!(
-        "Created instance '{}' from base node '{}'",
-        instance_name, args.base_node
-    );
-
-    // Optional: install and/or start
-    if args.start || args.install {
-        println!("Installing instance as systemd service...");
-        send_command(&instance_name, "install").await?;
-    }
-
-    if args.start {
-        println!("Starting instance...");
-        send_command(&instance_name, "start").await?;
-    }
-
-    Ok(())
-}
-
-/// Find an example config file in the configs/ directory
-fn find_example_config(configs_dir: &Path) -> Result<PathBuf> {
-    let entries: Vec<_> = std::fs::read_dir(configs_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext == "yaml" || ext == "yml")
-                .unwrap_or(false)
-        })
-        .collect();
-
-    if entries.is_empty() {
-        return Err(NodeError::NotFound(format!(
-            "No .yaml config files found in {}",
-            configs_dir.display()
-        )));
-    }
-
-    // Return the first one found
-    Ok(entries[0].path())
-}
-
-fn search_nodes(args: SearchArgs) -> Result<()> {
-    log::info!(
-        "node search: query={:?} category={:?} tag={:?}",
-        args.query,
-        args.category,
-        args.tag
-    );
-    println!("Refreshing marketplace registry...");
-    if let Err(e) = registry::refresh_cache() {
-        log::warn!("registry refresh failed: {}", e);
-        eprintln!("Warning: could not refresh registry (using cache): {}", e);
-    }
-    let all_nodes = registry::load_cached_registry();
-
-    if all_nodes.is_empty() {
-        println!("No nodes found in marketplace registry.");
-        println!("The registry cache may not have been fetched yet.");
-        return Ok(());
-    }
-
-    let results = registry::search_registry(
-        &all_nodes,
-        &args.query,
-        args.category.as_deref(),
-        args.tag.as_deref(),
-    );
-
-    if results.is_empty() {
-        println!("No nodes matching your search.");
-        if !args.query.is_empty() || args.category.is_some() || args.tag.is_some() {
-            println!("Try: bubbaloop node search  (no arguments to list all)");
-        }
-        return Ok(());
-    }
-
-    println!(
-        "{:<20} {:<10} {:<8} {:<12} {:<30} REPO",
-        "NAME", "VERSION", "TYPE", "CATEGORY", "DESCRIPTION"
-    );
-    println!("{}", "-".repeat(110));
-    for node in &results {
-        println!(
-            "{:<20} {:<10} {:<8} {:<12} {:<30} {}",
-            node.name,
-            node.version,
-            node.node_type,
-            node.category,
-            truncate(&node.description, 28),
-            node.repo
-        );
-    }
-    println!();
-    println!("Install with: bubbaloop node install <name>");
-
-    Ok(())
-}
-
-async fn discover_nodes(args: DiscoverArgs) -> Result<()> {
-    // Refresh marketplace cache
-    if let Err(e) = registry::refresh_cache() {
-        log::warn!("registry refresh failed: {}", e);
-        eprintln!("Warning: could not refresh registry (using cache): {}", e);
-    }
-    let all_marketplace = registry::load_cached_registry();
-
-    // Query daemon for registered nodes via REST API
-    let client = crate::cli::daemon_client::DaemonClient::new();
-    let registered = match client.list_nodes().await {
-        Ok(data) => data.nodes,
-        Err(_) => vec![],
-    };
-
-    if all_marketplace.is_empty() {
-        println!(
-            "No nodes found in marketplace. The registry cache may not have been fetched yet."
-        );
-        return Ok(());
-    }
-
-    #[derive(serde::Serialize)]
-    struct DiscoverEntry {
-        name: String,
-        version: String,
-        node_type: String,
-        is_added: bool,
-        is_built: bool,
-        instance_count: usize,
-        repo: String,
-        description: String,
-    }
-
-    let entries: Vec<DiscoverEntry> = all_marketplace
-        .iter()
-        .map(|node| {
-            let reg = registered.iter().find(|r| r.name == node.name);
-            let is_added = reg.is_some();
-            let is_built = reg.map(|r| r.is_built).unwrap_or(false);
-            let instance_count = 0;
-            DiscoverEntry {
-                name: node.name.clone(),
-                version: node.version.clone(),
-                node_type: node.node_type.clone(),
-                is_added,
-                is_built,
-                instance_count,
-                repo: node.repo.clone(),
-                description: truncate(&node.description, 28),
-            }
-        })
-        .collect();
-
-    if args.format == "json" {
-        println!("{}", serde_json::to_string_pretty(&entries)?);
-    } else {
-        println!(
-            "{:<20} {:<10} {:<8} {:<6} {:<6} {:<5} {:<30} DESCRIPTION",
-            "NAME", "VERSION", "TYPE", "ADDED", "BUILT", "INST", "REPO"
-        );
-        println!("{}", "-".repeat(115));
-        for e in &entries {
-            let added = if e.is_added { "yes" } else { "-" };
-            let built = if e.is_added && e.is_built {
-                "yes"
-            } else if e.is_added {
-                "no"
-            } else {
-                "-"
-            };
-            let inst = if e.instance_count > 0 {
-                format!("{}", e.instance_count)
-            } else {
-                "-".to_string()
-            };
-            println!(
-                "{:<20} {:<10} {:<8} {:<6} {:<6} {:<5} {:<30} {}",
-                e.name, e.version, e.node_type, added, built, inst, e.repo, e.description
-            );
-        }
-        println!();
-        println!("Add with: bubbaloop node add <name>");
-        println!("Create instance: bubbaloop node add <path> --name <instance-name>");
-    }
-
     Ok(())
 }
 
@@ -1257,132 +771,6 @@ mod tests {
         assert!(!is_valid_node_name(".hidden"));
     }
 
-    // Multi-node repo support tests (Phase 3)
-
-    #[test]
-    fn test_resolve_node_path_single_node_at_root() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("node.yaml"),
-            "name: test-node\nversion: \"0.1.0\"\ntype: rust",
-        )
-        .unwrap();
-
-        let result = resolve_node_path(dir.path().to_str().unwrap(), None);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), dir.path().to_str().unwrap());
-    }
-
-    #[test]
-    fn test_resolve_node_path_with_subdir() {
-        let dir = tempfile::tempdir().unwrap();
-        let subdir = dir.path().join("my-node");
-        std::fs::create_dir(&subdir).unwrap();
-        std::fs::write(
-            subdir.join("node.yaml"),
-            "name: my-node\nversion: \"0.1.0\"\ntype: rust",
-        )
-        .unwrap();
-
-        let result = resolve_node_path(dir.path().to_str().unwrap(), Some("my-node"));
-        assert!(result.is_ok());
-        assert!(result.unwrap().ends_with("my-node"));
-    }
-
-    #[test]
-    fn test_resolve_node_path_subdir_missing_manifest() {
-        let dir = tempfile::tempdir().unwrap();
-        let subdir = dir.path().join("empty-dir");
-        std::fs::create_dir(&subdir).unwrap();
-
-        let result = resolve_node_path(dir.path().to_str().unwrap(), Some("empty-dir"));
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("No node.yaml found"));
-    }
-
-    #[test]
-    fn test_resolve_node_path_multi_node_discovery() {
-        let dir = tempfile::tempdir().unwrap();
-
-        // Create two node subdirectories
-        for name in &["camera", "weather"] {
-            let subdir = dir.path().join(name);
-            std::fs::create_dir(&subdir).unwrap();
-            std::fs::write(
-                subdir.join("node.yaml"),
-                format!("name: {}\nversion: \"0.1.0\"\ntype: rust", name),
-            )
-            .unwrap();
-        }
-
-        // No node.yaml at root, no --subdir -> should discover and error
-        let result = resolve_node_path(dir.path().to_str().unwrap(), None);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Found 2 node(s)"));
-        assert!(err.contains("camera"));
-        assert!(err.contains("weather"));
-        assert!(err.contains("--subdir"));
-    }
-
-    #[test]
-    fn test_resolve_node_path_no_nodes_found() {
-        let dir = tempfile::tempdir().unwrap();
-        // Empty directory, no node.yaml anywhere
-        let result = resolve_node_path(dir.path().to_str().unwrap(), None);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("No node.yaml found"));
-    }
-
-    #[test]
-    fn test_resolve_node_path_rejects_path_traversal() {
-        let dir = tempfile::tempdir().unwrap();
-        // ".." traversal
-        let result = resolve_node_path(dir.path().to_str().unwrap(), Some("../etc"));
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("simple directory name"));
-
-        // Slash in subdir
-        let result = resolve_node_path(dir.path().to_str().unwrap(), Some("foo/bar"));
-        assert!(result.is_err());
-
-        // Hidden directory
-        let result = resolve_node_path(dir.path().to_str().unwrap(), Some(".hidden"));
-        assert!(result.is_err());
-
-        // Empty string
-        let result = resolve_node_path(dir.path().to_str().unwrap(), Some(""));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_discover_nodes_in_subdirs() {
-        let dir = tempfile::tempdir().unwrap();
-
-        for (name, node_type) in &[("sensor", "rust"), ("bridge", "python")] {
-            let subdir = dir.path().join(name);
-            std::fs::create_dir(&subdir).unwrap();
-            std::fs::write(
-                subdir.join("node.yaml"),
-                format!("name: {}\nversion: \"0.1.0\"\ntype: {}", name, node_type),
-            )
-            .unwrap();
-        }
-
-        let nodes = discover_nodes_in_subdirs(dir.path());
-        assert_eq!(nodes.len(), 2);
-        // Sorted by name
-        assert_eq!(nodes[0].0, "bridge");
-        assert_eq!(nodes[0].2, "python");
-        assert_eq!(nodes[1].0, "sensor");
-        assert_eq!(nodes[1].2, "rust");
-    }
-
     #[test]
     fn test_node_state_base_node_deserialization() {
         let json = r#"{"name": "rtsp-camera-terrace", "path": "/path", "status": "running",
@@ -1470,125 +858,5 @@ mod tests {
         assert!(!is_valid_node_name("has;semicolon"));
         assert!(!is_valid_node_name("../traversal"));
         assert!(!is_valid_node_name(".hidden"));
-    }
-
-    #[test]
-    fn test_discover_nodes_ignores_files() {
-        let dir = tempfile::tempdir().unwrap();
-        // Create a file named "node.yaml" at root (not a subdir)
-        std::fs::write(dir.path().join("node.yaml"), "name: root").unwrap();
-        // Create a regular file (not a directory)
-        std::fs::write(dir.path().join("README.md"), "hello").unwrap();
-
-        let nodes = discover_nodes_in_subdirs(dir.path());
-        assert_eq!(nodes.len(), 0); // Only scans directories, not root
-    }
-
-    // ==================== Instance command tests ====================
-
-    /// Test that instance suffix validation rejects invalid characters
-    #[test]
-    fn test_instance_suffix_validation_valid() {
-        // Valid suffixes that should work
-        let valid_suffixes = ["terrace", "entrance", "cam01", "garden_1", "my-camera"];
-        for suffix in valid_suffixes {
-            assert!(
-                suffix
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_'),
-                "Expected '{}' to be valid",
-                suffix
-            );
-            assert!(
-                !suffix.starts_with('-') && !suffix.starts_with('_'),
-                "Expected '{}' to not start with - or _",
-                suffix
-            );
-        }
-    }
-
-    #[test]
-    fn test_instance_suffix_validation_invalid() {
-        // Invalid suffixes that should be rejected
-        let invalid_suffixes = [
-            "",              // empty
-            "-terrace",      // starts with dash
-            "_terrace",      // starts with underscore
-            "terrace space", // contains space
-            "terrace/path",  // contains slash
-            "../traversal",  // path traversal
-            "terrace;cmd",   // shell metacharacter
-        ];
-        for suffix in invalid_suffixes {
-            let is_valid = !suffix.is_empty()
-                && suffix.len() <= 64
-                && suffix
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-                && !suffix.starts_with('-')
-                && !suffix.starts_with('_');
-            assert!(!is_valid, "Expected '{}' to be invalid", suffix);
-        }
-    }
-
-    /// Test that instance name is constructed correctly: base-suffix
-    #[test]
-    fn test_instance_name_construction() {
-        let base = "rtsp-camera";
-        let suffix = "terrace";
-        let instance_name = format!("{}-{}", base, suffix);
-        assert_eq!(instance_name, "rtsp-camera-terrace");
-
-        let base2 = "weather-node";
-        let suffix2 = "station_1";
-        let instance_name2 = format!("{}-{}", base2, suffix2);
-        assert_eq!(instance_name2, "weather-node-station_1");
-    }
-
-    /// Test find_example_config function
-    #[test]
-    fn test_find_example_config_finds_yaml() {
-        let dir = tempfile::tempdir().unwrap();
-        let configs_dir = dir.path().join("configs");
-        std::fs::create_dir(&configs_dir).unwrap();
-        std::fs::write(configs_dir.join("example.yaml"), "name: test").unwrap();
-
-        let result = find_example_config(&configs_dir);
-        assert!(result.is_ok());
-        assert!(result.unwrap().to_string_lossy().contains("example.yaml"));
-    }
-
-    #[test]
-    fn test_find_example_config_finds_yml() {
-        let dir = tempfile::tempdir().unwrap();
-        let configs_dir = dir.path().join("configs");
-        std::fs::create_dir(&configs_dir).unwrap();
-        std::fs::write(configs_dir.join("example.yml"), "name: test").unwrap();
-
-        let result = find_example_config(&configs_dir);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_find_example_config_empty_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let configs_dir = dir.path().join("configs");
-        std::fs::create_dir(&configs_dir).unwrap();
-
-        let result = find_example_config(&configs_dir);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No .yaml config"));
-    }
-
-    #[test]
-    fn test_find_example_config_ignores_non_yaml() {
-        let dir = tempfile::tempdir().unwrap();
-        let configs_dir = dir.path().join("configs");
-        std::fs::create_dir(&configs_dir).unwrap();
-        std::fs::write(configs_dir.join("readme.txt"), "not a config").unwrap();
-        std::fs::write(configs_dir.join("config.json"), "{}").unwrap();
-
-        let result = find_example_config(&configs_dir);
-        assert!(result.is_err()); // Only .yaml/.yml files
     }
 }

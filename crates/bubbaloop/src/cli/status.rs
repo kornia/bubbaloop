@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::Command;
+
+use crate::cli::system_utils::{check_systemd_service as raw_systemd_service, is_process_running};
 
 #[derive(Debug, Serialize)]
 struct StatusOutput {
@@ -56,43 +56,26 @@ struct DaemonHealthResponse {
     nodes_running: usize,
 }
 
+/// Wraps the shared systemd check, mapping "active" to "running" for display.
 async fn check_systemd_service(service_name: &str) -> String {
-    let output = Command::new("systemctl")
-        .args(["--user", "is-active", service_name])
-        .output()
-        .await;
-
-    match output {
-        Ok(out) => {
-            let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if status == "active" {
-                "running".to_string()
-            } else {
-                status
-            }
-        }
-        Err(_) => "unknown".to_string(),
+    let status = raw_systemd_service(service_name).await;
+    if status == "active" {
+        "running".to_string()
+    } else {
+        status
     }
 }
 
-/// Query the daemon's MCP /health endpoint via raw HTTP.
+/// Query the daemon's MCP /health endpoint via HTTP.
 /// Returns None if the daemon is unreachable.
 async fn check_daemon_mcp(port: u16) -> Option<DaemonHealthResponse> {
-    let addr = format!("127.0.0.1:{}", port);
-    let mut stream = tokio::net::TcpStream::connect(&addr).await.ok()?;
-    let request = format!(
-        "GET /health HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
-        port
-    );
-    stream.write_all(request.as_bytes()).await.ok()?;
-    let mut buf = Vec::new();
-    tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf))
-        .await
-        .ok()?
+    let url = format!("http://127.0.0.1:{}/health", port);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
         .ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let body = text.split("\r\n\r\n").nth(1)?;
-    serde_json::from_str(body).ok()
+    let response = client.get(&url).send().await.ok()?;
+    response.json().await.ok()
 }
 
 fn print_table(status: &StatusOutput) {
@@ -216,12 +199,6 @@ async fn collect_status() -> Result<StatusOutput> {
         bridge,
         nodes: node_summary,
     })
-}
-
-async fn is_process_running(name: &str) -> bool {
-    let output = Command::new("pgrep").arg("-x").arg(name).output().await;
-
-    matches!(output, Ok(out) if out.status.success())
 }
 
 #[cfg(test)]

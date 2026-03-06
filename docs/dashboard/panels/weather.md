@@ -160,7 +160,7 @@ See [Weather API](../../api/weather.md) for complete field documentation.
 ### No weather data
 
 1. Verify OpenMeteo service is running: `pixi run weather`
-2. Check `/topics` in TUI for weather topics
+2. Check `bubbaloop debug topics` for weather topics
 3. Verify internet connectivity
 
 ### Wrong location

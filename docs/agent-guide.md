@@ -22,6 +22,226 @@ MCP server runs on `http://127.0.0.1:8088/mcp` when daemon is active.
 
 **Rate limits:** 100 request burst, ~1 req/sec sustained replenishment.
 
+## Creating and Managing Agents
+
+Bubbaloop runs a multi-agent runtime inside the daemon. Each agent is an independent LLM reasoning loop with its own identity (Soul), memory, and capabilities. The CLI is a thin Zenoh pub/sub client — all LLM processing happens daemon-side.
+
+### How It Works
+
+```
+┌──────────────┐     Zenoh pub/sub      ┌─────────────────────────────────────┐
+│  CLI client   │◄─────────────────────►│          Daemon (bubbaloop up)       │
+│               │   inbox → shared      │                                     │
+│ agent chat    │   outbox ← per-agent  │  ┌───────────┐  ┌───────────┐      │
+│ agent list    │                       │  │ jean-clawd │  │cam-expert │ ...  │
+└──────────────┘                        │  │ Soul+Mem   │  │ Soul+Mem  │      │
+                                        │  └───────────┘  └───────────┘      │
+                                        │       ▲ shared DaemonPlatform       │
+                                        │       │ (MCP tools, node mgr)       │
+                                        └───────────────────────────────────┘
+```
+
+1. **CLI** publishes a JSON message to the shared inbox Zenoh topic
+2. **Runtime** (inside daemon) routes the message to the right agent
+3. **Agent** processes the turn (LLM calls, tool use) and streams events to its outbox topic
+4. **CLI** subscribes to all outbox topics, filters by correlation ID, and renders the response
+
+### Step 1: Configure Agents
+
+Create `~/.bubbaloop/agents.toml`:
+
+```toml
+# The default agent — receives all unaddressed messages
+[agents.jean-clawd]
+enabled = true
+default = true
+
+# A specialist agent — target with `bubbaloop agent chat -a camera-expert`
+[agents.camera-expert]
+enabled = true
+capabilities = ["camera", "rtsp", "video"]
+```
+
+**Fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Whether the agent starts with the daemon |
+| `default` | bool | `false` | Routes unaddressed messages here (exactly one should be `true`) |
+| `capabilities` | string[] | `[]` | Keyword tags (future: capability-based routing) |
+
+If no `agents.toml` exists, the runtime creates a single default agent named `jean-clawd`.
+
+### Step 2: Customize the Agent's Soul
+
+Each agent has a per-agent directory at `~/.bubbaloop/agents/{agent_id}/`. Create the soul files:
+
+**`~/.bubbaloop/agents/camera-expert/soul/identity.md`** — system prompt:
+
+```markdown
+You are CamBot, an AI agent specialized in video surveillance and RTSP cameras
+through the Bubbaloop skill runtime.
+
+Your focus: managing RTSP camera feeds, diagnosing video issues, configuring streams.
+
+When given a task, DO it — use your tools, get results, report back.
+Be concise. Report what you did and the result.
+```
+
+**`~/.bubbaloop/agents/camera-expert/soul/capabilities.toml`** — model and tuning:
+
+```toml
+model_name = "claude-sonnet-4-20250514"
+max_turns = 15
+allow_internet = true
+
+# Heartbeat tuning (adaptive interval in seconds)
+heartbeat_base_interval = 60
+heartbeat_min_interval = 5
+heartbeat_decay_factor = 0.7
+
+# "auto" = execute immediately, "propose" = save for human approval
+default_approval_mode = "auto"
+
+# Retry / circuit breaker
+max_retries = 3
+
+# Memory retention: delete episodic logs older than N days (0 = keep forever)
+episodic_log_retention_days = 30
+
+# Context compaction: flush working state to episodic memory when input tokens
+# exceed this threshold, enabling recovery after LLM context truncation
+compaction_flush_threshold_tokens = 4000
+
+# Temporal decay: half-life (days) for BM25 search relevance scoring.
+# Older episodic entries are demoted. 0 = no decay.
+episodic_decay_half_life_days = 30
+```
+
+If soul files don't exist, the agent falls back to the global soul at `~/.bubbaloop/soul/`, then to compiled-in defaults.
+
+Soul files are **hot-reloaded** — edit them while the daemon is running and changes take effect on the next turn.
+
+### Step 3: Start the Daemon
+
+```bash
+bubbaloop up
+```
+
+The daemon starts the agent runtime, which:
+1. Reads `~/.bubbaloop/agents.toml` (or uses default config)
+2. For each enabled agent: creates `~/.bubbaloop/agents/{id}/` directory, loads Soul, initializes Claude provider, opens per-agent Memory (episodic NDJSON + semantic SQLite)
+3. Subscribes to the shared Zenoh inbox
+4. Registers per-agent manifest queryables
+5. Spawns per-agent tokio tasks (event loops)
+
+Look for these log lines to confirm:
+```
+[Runtime] Agent 'jean-clawd' ready (default=true)
+[Runtime] Agent 'camera-expert' ready (default=false)
+[Runtime] Agent runtime started: 2 agent(s), inbox=bubbaloop/local/{machine}/agent/inbox
+```
+
+### Step 4: Interact via CLI
+
+```bash
+# Single message (exits after response)
+bubbaloop agent chat "what is the system status?"
+
+# Interactive REPL
+bubbaloop agent chat
+
+# Target a specific agent
+bubbaloop agent chat -a camera-expert "describe the video feed"
+
+# List all running agents
+bubbaloop agent list
+```
+
+`agent list` queries all manifest Zenoh queryables and prints:
+```
+ID                   NAME                      DEFAULT    MODEL                          CAPABILITIES
+-----------------------------------------------------------------------------------------------
+jean-clawd           Bubbaloop                 yes        claude-sonnet-4-20250514
+camera-expert        CamBot                               claude-sonnet-4-20250514       camera, rtsp, video
+```
+
+### Per-Agent Directory Layout
+
+```
+~/.bubbaloop/agents/{agent_id}/
+├── soul/
+│   ├── identity.md          # System prompt (markdown)
+│   └── capabilities.toml    # Model config, heartbeat tuning
+├── memory/                  # Episodic logs (NDJSON, one file per day)
+└── memory.db                # Semantic memory (SQLite: jobs, search index)
+```
+
+Each agent owns its memory exclusively — no sharing between agents.
+
+### Robustness & Error Recovery
+
+The agent loop includes multiple layers of fault tolerance:
+
+**Timeouts:**
+- **Turn timeout:** 120 seconds per LLM turn (prevents stuck API calls)
+- **Tool-call timeout:** 30 seconds per individual tool execution (prevents runaway tools)
+
+**Tool result truncation:**
+- Tool outputs exceeding 4096 characters are truncated with a `[truncated]` marker
+- Prevents large outputs (e.g., verbose logs) from blowing up the LLM context window
+
+**Provider retry with exponential backoff:**
+- Retries on transient HTTP errors (429 rate limit, 5xx server errors)
+- Exponential backoff: 1s, 2s, 4s (base * 2^attempt)
+- Maximum 3 retries before propagating the error
+
+**Pre-compaction context recovery:**
+- When input tokens approach the context limit, the agent flushes working state to episodic memory
+- On subsequent turns, the most recent flush is recovered and injected into the system prompt as "Previously Persisted Context"
+- This ensures continuity across LLM context truncations
+
+**Job retry with circuit breaker:**
+- Failed jobs retry with exponential backoff: 10s * 2^retry_count
+- Maximum retries configurable via `max_retries` in capabilities.toml (default: 3)
+- After exhausting retries, jobs are dead-lettered (`failed_requires_approval` status)
+
+### Zenoh Gateway Topics
+
+```
+bubbaloop/{scope}/{machine}/agent/inbox                ← shared intake (all messages)
+bubbaloop/{scope}/{machine}/agent/{agent_id}/outbox    ← per-agent streamed response
+bubbaloop/{scope}/{machine}/agent/{agent_id}/manifest  ← agent capabilities (queryable)
+```
+
+**Wire format (JSON):**
+
+Inbox (CLI → Daemon):
+```json
+{"id": "uuid", "text": "user message", "agent": "camera-expert"}
+```
+
+Outbox (Daemon → CLI):
+```json
+{"id": "uuid", "type": "delta", "text": "token..."}
+{"id": "uuid", "type": "tool", "text": "get_system_status"}
+{"id": "uuid", "type": "tool_result", "text": "..."}
+{"id": "uuid", "type": "error", "text": "API error: 429"}
+{"id": "uuid", "type": "done"}
+```
+
+### Message Routing
+
+1. If the inbox message has an explicit `agent` field → route to that agent
+2. Otherwise → route to the default agent (`default = true` in config)
+3. If the target agent's inbox is full (capacity 32) → message is dropped with a warning
+
+### Building a Channel Adapter
+
+Because the gateway is a Zenoh convention (not hardcoded to the CLI), you can build adapters for any channel by publishing to the inbox topic and subscribing to outbox topics. The wire format is the same regardless of source.
+
+---
+
 ## Quick Start Workflow
 
 1. `list_nodes` → see all skillets with status
@@ -29,7 +249,7 @@ MCP server runs on `http://127.0.0.1:8088/mcp` when daemon is active.
 3. `get_node_schema` → understand its data format
 4. `get_stream_info` → get Zenoh topic for live data
 5. `send_command` → trigger actions on the skillet
-6. `add_rule` → automate responses to sensor events
+6. `schedule_task` → automate recurring agent jobs
 
 ## Architecture: Dual-Plane Model
 
@@ -363,209 +583,110 @@ Get the latest logs from a node's systemd service.
 
 ---
 
-### Automation Tools
+### Scheduling Tools
 
-#### `get_agent_status`
+#### `schedule_task`
+
+**Tier:** Operator
+
+Schedule a task for the agent to execute later. Supports one-off and recurring tasks via cron expressions. Uses `tokio::Notify` for immediate pickup.
+
+**Parameters:**
+- `prompt` (string, required): The instruction for the agent to execute
+- `cron_schedule` (string, optional): Cron expression for recurring tasks (5 or 6 field)
+- `recurrence` (boolean, optional): Whether this is a recurring task (default: false)
+
+**Returns:** Job ID on success.
+
+**Example (one-off):**
+```json
+{
+  "prompt": "Check all node health and report"
+}
+```
+
+**Example (recurring):**
+```json
+{
+  "prompt": "Run health patrol on all sensors",
+  "cron_schedule": "*/15 * * * *",
+  "recurrence": true
+}
+```
+
+---
+
+#### `list_jobs`
 
 **Tier:** Viewer
 
-Get the agent's current status including active rules, recent triggers, and human overrides.
+List scheduled jobs. Optionally filter by status.
 
-**Parameters:** None
-
-**Returns:** JSON status object:
-```json
-{
-  "rules_count": 3,
-  "active_rules": 2,
-  "recent_triggers": 47,
-  "human_overrides_active": false
-}
-```
+**Parameters:**
+- `status` (string, optional): Filter by status — pending, running, completed, failed, failed_requires_approval
 
 ---
 
-#### `list_agent_rules`
+#### `delete_job`
+
+**Tier:** Admin
+
+Delete a scheduled job by ID.
+
+**Parameters:**
+- `job_id` (string, required): The job ID to delete
+
+---
+
+### Memory Tools
+
+Memory tools operate on the agent's **per-agent** SQLite database at `~/.bubbaloop/agents/{agent_id}/memory.db`. Each agent has isolated memory — no shared global state.
+
+#### `memory_search`
 
 **Tier:** Viewer
 
-List all agent rules with their triggers, conditions, and actions.
-
-**Parameters:** None
-
-**Returns:** JSON array of rules:
-```json
-[
-  {
-    "name": "high-temp-alert",
-    "trigger": "bubbaloop/**/telemetry/status",
-    "condition": {
-      "field": "cpu_temp",
-      "operator": ">",
-      "value": 80
-    },
-    "action": {
-      "type": "log",
-      "message": "CPU temperature critical!",
-      "level": "error"
-    },
-    "enabled": true
-  }
-]
-```
-
----
-
-#### `add_rule`
-
-**Tier:** Operator
-
-Add a new rule to the agent rule engine. Rules trigger actions when sensor data matches conditions.
+Search episodic memory for past conversations, tool results, and agent observations. Uses BM25 full-text search with temporal decay.
 
 **Parameters:**
-- `name` (string, required): Rule name (unique identifier, 1-64 chars, alphanumeric + `-_`)
-- `trigger` (string, required): Zenoh key expression pattern to subscribe to (e.g., `"bubbaloop/**/telemetry/status"`)
-- `condition` (object, optional): Condition to evaluate (see Condition Format below)
-- `action` (object, required): Action to execute (see Action Types below)
-
-**Returns:** Success or error message.
-
-**Condition Format:**
-```json
-{
-  "field": "cpu_temp",         // JSON field path (supports dot notation: "nested.field")
-  "operator": ">",             // ==, !=, >, <, >=, <=, contains
-  "value": 80                  // Value to compare against (any JSON type)
-}
-```
-
-**Action Types:**
-
-1. **Log action:**
-```json
-{
-  "type": "log",
-  "message": "CPU too hot!",
-  "level": "warn"              // error, warn, info, debug (default: warn)
-}
-```
-
-2. **Command action:**
-```json
-{
-  "type": "command",
-  "node": "fan-controller",
-  "command": "set_speed",
-  "params": {"speed": "high"}
-}
-```
-
-3. **Publish action:**
-```json
-{
-  "type": "publish",
-  "topic": "bubbaloop/local/alerts/critical",
-  "payload": {"alert": "high_temp", "value": 85}
-}
-```
-
-**Example:**
-```json
-{
-  "name": "high-temp-alert",
-  "trigger": "bubbaloop/**/telemetry/status",
-  "condition": {
-    "field": "cpu_temp",
-    "operator": ">",
-    "value": 80
-  },
-  "action": {
-    "type": "command",
-    "node": "fan-controller",
-    "command": "set_speed",
-    "params": {"speed": "high"}
-  }
-}
-```
+- `query` (string, required): Search query (keywords or phrases)
+- `limit` (integer, optional): Maximum results to return (default: 10)
 
 ---
 
-#### `remove_rule`
+#### `memory_forget`
 
-**Tier:** Operator
+**Tier:** Admin
 
-Remove a rule from the agent rule engine by name.
+Remove matching entries from episodic memory search index. Use for PII removal, correcting false memories, or user-requested deletion. Creates an audit trail.
 
 **Parameters:**
-- `rule_name` (string, required): Name of the rule to remove
-
-**Returns:** Success or error message.
-
----
-
-#### `update_rule`
-
-**Tier:** Operator
-
-Update an existing rule in the agent rule engine. Provide the full rule definition — it replaces the rule with the same name.
-
-**Parameters:** Same as `add_rule`
-
-**Returns:** Success or error message.
+- `query` (string, required): Search query to match entries to forget
+- `reason` (string, required): Reason for forgetting (logged in audit trail)
 
 ---
 
-#### `test_rule`
+#### `create_proposal`
 
 **Tier:** Operator
 
-Test a rule's condition against sample data without executing the action. Returns whether the condition matches. Useful for debugging rules before deploying them.
+Create a proposal for human approval before executing a risky action. Use for destructive operations like removing nodes or changing configs.
 
 **Parameters:**
-- `rule_name` (string, required): Name of the rule to test
-- `sample_data` (object, required): Sample data to evaluate the rule condition against
-
-**Returns:** JSON result:
-```json
-{
-  "matched": true,
-  "field_value": 85,
-  "condition": "cpu_temp > 80"
-}
-```
-
-**Example:**
-```json
-{
-  "rule_name": "high-temp-alert",
-  "sample_data": {
-    "cpu_temp": 85,
-    "gpu_temp": 70
-  }
-}
-```
+- `skill` (string, required): The tool or action category (e.g., "restart_node", "remove_node")
+- `description` (string, required): Human-readable description of what will happen
+- `actions` (string, required): JSON array of tool calls to execute if approved
 
 ---
 
-#### `get_events`
+#### `list_proposals`
 
 **Tier:** Viewer
 
-Get recent agent events (rule triggers, actions taken). Returns the last N events from the trigger log.
+List proposals for human-in-the-loop approval.
 
-**Parameters:** None
-
-**Returns:** JSON array of event records:
-```json
-[
-  {
-    "timestamp": "2026-02-26T15:23:41Z",
-    "rule": "high-temp-alert",
-    "matched": true,
-    "action_taken": "command(fan-controller, set_speed)"
-  }
-]
-```
+**Parameters:**
+- `status` (string, optional): Filter by status — pending, approved, rejected, expired
 
 ---
 
@@ -637,14 +758,73 @@ Query a Zenoh key expression (admin only). Key must start with `bubbaloop/`. Ret
 
 ---
 
+#### `read_file`
+
+**Tier:** Operator
+
+Read the contents of a file. Returns up to 500 lines. Use for config files, logs, scripts, or any text file on the system.
+
+**Parameters:**
+- `path` (string, required): Absolute or relative file path (supports `~/` expansion)
+
+**Returns:** File contents as plain text. Long files are truncated at 500 lines.
+
+**Security:** Sensitive files are blocked: SSH keys (`id_rsa`, `id_ed25519`), `.pem`/`.key`/`.p12` files, `.env` (not `.env.example`), `/etc/shadow`, `/etc/sudoers`, `master.key`.
+
+**Example:** `read_file(path="/etc/hostname")`
+
+---
+
+#### `write_file`
+
+**Tier:** Operator
+
+Write content to a file inside `~/.bubbaloop/workspace/`. Creates parent directories if needed. Writes outside the workspace are blocked.
+
+**Parameters:**
+- `path` (string, required): File path (relative paths resolve inside workspace)
+- `content` (string, required): File content to write
+
+**Returns:** Confirmation with byte count and path.
+
+**Security:** All writes are scoped to `~/.bubbaloop/workspace/`. Symlink escape prevention via path canonicalization. Directory auto-created on first use.
+
+**Example:**
+```json
+{
+  "path": "scripts/monitor.py",
+  "content": "#!/usr/bin/env python3\nprint('Hello')"
+}
+```
+
+---
+
+#### `run_command`
+
+**Tier:** Operator
+
+Run a shell command and return its output. Captures both stdout and stderr. Use for diagnostics, system inspection, or any task requiring shell access.
+
+**Parameters:**
+- `command` (string, required): Shell command to execute (passed to `/bin/sh -c`)
+- `timeout_secs` (integer, optional): Timeout in seconds (default: 30, max: 300)
+
+**Returns:** Command output (stdout + stderr). Long output truncated at 50KB.
+
+**Security:** 10-category blocklist enforced (see Security Model section below). Safe operations like `ls`, `df`, `cat`, `pixi`, `cargo` are allowed.
+
+**Example:** `run_command(command="df -h")`
+
+---
+
 ## RBAC Tiers
 
 Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to execute.
 
 | Tier | Access Level | Example Tools |
 |------|--------------|---------------|
-| **Viewer** | Read-only monitoring | `list_nodes`, `get_node_health`, `get_system_status`, `list_agent_rules`, `discover_nodes` |
-| **Operator** | Day-to-day operations | `start_node`, `stop_node`, `send_command`, `add_rule`, `remove_rule`, `get_node_config` |
+| **Viewer** | Read-only monitoring | `list_nodes`, `get_node_health`, `get_system_status`, `discover_nodes`, `list_jobs` |
+| **Operator** | Day-to-day operations | `start_node`, `stop_node`, `send_command`, `schedule_task`, `get_node_config`, `read_file`, `write_file`, `run_command` |
 | **Admin** | System modification | `build_node`, `query_zenoh`, `install_node`, `remove_node` |
 
 **Default tier:** In single-user localhost mode, all requests are granted Admin tier.
@@ -652,6 +832,38 @@ Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to e
 **Token format:** `~/.bubbaloop/mcp-token` contains `<token>:<tier>` (e.g., `bb_abc123:operator`)
 
 **Permission model:** Higher tiers inherit lower tier permissions (Admin can do everything, Operator can do Viewer tasks).
+
+---
+
+## Security Model
+
+The agent's system tools (`read_file`, `write_file`, `run_command`) enforce
+defence-in-depth security to prevent damage to existing platforms.
+
+### Read Access
+- Can read any file on the filesystem
+- **Blocked:** SSH keys (`id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa`), `.pem`/`.key`/`.p12`/`.pfx`/`.jks` files,
+  `.env` (not `.env.example`/`.env.template`/`.env.sample`), `/etc/shadow`, `/etc/sudoers`, `master.key`
+
+### Write Access
+- **Scoped to `~/.bubbaloop/workspace/`** — all writes outside are rejected
+- Symlink escape prevention via path canonicalization
+- Directory auto-created on first use
+
+### Shell Commands
+
+10-category blocklist:
+
+1. **Privilege escalation** — `sudo`, `su` (requires manual execution)
+2. **Destructive filesystem** — `rm -rf /`, `mkfs`, `dd if=`, fork bombs
+3. **System control** — `shutdown`, `reboot`, `kill`, `killall`, `pkill`, `iptables`, `mount`
+4. **Non-bubbaloop service management** — `systemctl stop/disable/mask <non-bubbaloop>` blocked; bubbaloop services allowed
+5. **System package managers** — `apt`, `apt-get`, `dpkg`, `yum`, `dnf`, `pacman`, `snap`, `flatpak` (use `pixi`/`pip` for project deps)
+6. **Network mutation** — `ifconfig up/down`, `ip link set`, `ip route`, `ip addr`
+7. **Remote code execution** — `curl | sh`, `wget | bash` (plain curl/wget for data is fine)
+8. **Container destruction** — `docker rm/stop/kill`, `podman rm/stop/kill` (`docker ps/logs/inspect` allowed)
+9. **Git destructive ops** — `push --force`, `reset --hard`, `clean -f` (normal git operations allowed)
+10. **`rm` scoped** — only files in `~/.bubbaloop/workspace/` and `/tmp` can be removed
 
 ---
 
@@ -684,66 +896,32 @@ A "skillet" is a self-describing sensor/actuator capability. Each skillet:
 
 ---
 
-## Automation Rules
+## Task Scheduling
 
-The rule engine monitors Zenoh topics and triggers actions based on conditions. Rules are the primary way to create autonomous behavior.
+The scheduling system lets agents execute tasks autonomously. Use `schedule_task` for one-off or recurring jobs.
 
-### Rule Structure
+### Scheduling Pattern
 
-```json
-{
-  "name": "unique-rule-id",
-  "trigger": "bubbaloop/**/telemetry/status",
-  "condition": {
-    "field": "cpu_temp",
-    "operator": ">",
-    "value": 80
-  },
-  "action": {
-    "type": "command",
-    "node": "fan-controller",
-    "command": "set_speed",
-    "params": {"speed": "high"}
-  },
-  "enabled": true
-}
+```
+schedule_task(prompt="Check all node health", cron_schedule="*/15 * * * *", recurrence=true)
+→ Creates a recurring job that runs every 15 minutes
+→ Agent processes the prompt autonomously on each trigger
 ```
 
-### Trigger Patterns
+### Job Lifecycle
 
-Zenoh key expressions support wildcards:
-- `*` matches one segment (e.g., `bubbaloop/*/nvidia_orin00/*/status`)
-- `**` matches multiple segments (e.g., `bubbaloop/**/telemetry/status`)
+1. **pending** — waiting for next scheduled run
+2. **running** — agent is processing the job
+3. **completed** — job finished successfully
+4. **failed** — job failed, will retry with exponential backoff
+5. **failed_requires_approval** — exhausted retries, needs human intervention
 
-### Condition Operators
+### Best Practices
 
-- `==`, `!=`: Equality (works on strings, numbers, booleans)
-- `>`, `<`, `>=`, `<=`: Comparison (numbers only)
-- `contains`: Substring match (strings only)
-
-### Field Path Resolution
-
-Supports dot notation for nested fields:
-```json
-{
-  "field": "sensors.temperature.cpu",
-  "operator": ">",
-  "value": 80
-}
-```
-
-### Action Types Summary
-
-1. **Log:** Write to system logs (levels: error, warn, info, debug)
-2. **Command:** Send command to a node's command queryable
-3. **Publish:** Publish custom JSON to a Zenoh topic
-
-### Rule Best Practices
-
-- **Test first:** Use `test_rule` with sample data before deploying
-- **Specific triggers:** Use narrow key expressions to reduce noise
-- **Idempotent actions:** Commands should be safe to repeat (rules may trigger multiple times)
-- **Monitor events:** Check `get_events` to see rule activity
+- Use `list_jobs` to monitor job status
+- Use `delete_job` to cancel recurring jobs
+- Jobs survive daemon restarts (persisted in SQLite)
+- Failed jobs retry automatically — check `list_jobs(status="failed")` for stuck jobs
 
 ---
 
@@ -770,7 +948,6 @@ All tool errors return success responses with error text (MCP pattern):
 ### Validation Rules
 
 **Node names:** 1-64 characters, `[a-zA-Z0-9_-]` only
-**Rule names:** 1-64 characters, `[a-zA-Z0-9_-]` only
 **Key expressions:** Must start with `bubbaloop/`
 **Commands:** Must be listed in node's manifest
 
@@ -794,21 +971,21 @@ Always discover before acting:
 
 ### Automation
 
-- Use rules for continuous monitoring (runs in daemon, not via MCP calls)
-- Rules are more efficient than polling loops
-- Test rules with `test_rule` before deployment
+- Use `schedule_task` with cron for recurring monitoring (runs in daemon, not via MCP calls)
+- Scheduled jobs are more efficient than polling loops
+- Check `list_jobs` to monitor scheduled job status
 
 ### System Health
 
 - Check `get_system_status` before bulk operations
 - Use `get_node_logs` to diagnose failures
-- Monitor `get_events` for rule activity
+- Use `list_jobs(status="failed")` to find stuck jobs
 
 ### Performance
 
 - Batch independent operations where possible (MCP rate limit: 100 burst, 1/sec sustained)
 - Use Zenoh direct subscription for high-frequency data (1000s msg/sec supported)
-- Keep rule conditions simple (evaluated on every message)
+- Keep scheduled job prompts focused and specific
 
 ---
 
@@ -835,13 +1012,6 @@ bubbaloop/{scope}/{machine_id}/{node_name}/{topic}
 2. Subscribe to Zenoh topic (from `get_stream_info`)
 3. Decode bytes with protobuf library (Python: `protobuf`, Rust: `prost`)
 
-### Rule Engine Internals
-
-- Rules persist in `~/.bubbaloop/rules.json`
-- Evaluated in-process by the daemon (low latency)
-- Condition evaluation happens on every matching message
-- Actions execute asynchronously (don't block message processing)
-
 ---
 
 ## Troubleshooting
@@ -860,7 +1030,7 @@ Parameter format is invalid. Check the Tool Reference section for correct parame
 
 ### "Agent not available"
 
-The daemon was started without the agent flag (`--agent`). Rules and agent status tools require agent mode.
+The daemon was started without the agent runtime. Ensure `bubbaloop up` starts with agent support and `~/.bubbaloop/agents.toml` exists.
 
 ### Rate limit exceeded
 
@@ -879,8 +1049,8 @@ list_nodes → get_node_health → get_node_manifest → list_commands
 # Control
 start_node / stop_node / restart_node / send_command
 
-# Automation
-add_rule → test_rule → get_events
+# Scheduling
+schedule_task → list_jobs → delete_job
 
 # Data
 get_stream_info → (subscribe to Zenoh topic externally)
@@ -892,14 +1062,14 @@ get_system_status → get_node_logs
 ### Tool Count by Tier
 
 - **Viewer:** 13 tools (read-only)
-- **Operator:** 12 tools (operations)
+- **Operator:** 15 tools (operations)
 - **Admin:** 6 tools (system modification)
-- **Total:** 24 tools
+- **Total:** 34 tools
 
 ### Key Paths
 
 - Token: `~/.bubbaloop/mcp-token`
-- Rules: `~/.bubbaloop/rules.json`
+- Agents: `~/.bubbaloop/agents/{agent_id}/`
 - Nodes: `~/.bubbaloop/nodes/{node_name}/`
 - Logs: `~/.bubbaloop/mcp-stdio.log` (stdio mode)
 
@@ -920,28 +1090,28 @@ get_system_status → get_node_logs
 4. get_stream_info(node_name="temperature-sensor")
    → Get Zenoh topic: "bubbaloop/local/nvidia_orin00/temperature-sensor/reading"
 
-5. add_rule(
-     name="high-temp-alert",
-     trigger="bubbaloop/**/temperature-sensor/reading",
-     condition={"field": "celsius", "operator": ">", "value": 30},
-     action={"type": "log", "message": "Temperature exceeds 30°C!", "level": "warn"}
+5. schedule_task(
+     prompt="Check temperature-sensor health and report any anomalies",
+     cron_schedule="*/15 * * * *",
+     recurrence=true
    )
-   → Automate monitoring
+   → Automate monitoring every 15 minutes
 
-6. get_events()
-   → Check if rule has triggered
+6. list_jobs()
+   → Verify job is scheduled and check results
 ```
 
-Now the daemon continuously monitors temperature and logs alerts without further MCP calls.
+Now the agent autonomously monitors temperature every 15 minutes without further MCP calls.
 
 ---
 
 ## Summary
 
-- **24 tools** across 3 RBAC tiers (Viewer, Operator, Admin)
+- **34 tools** across 3 RBAC tiers (Viewer, Operator, Admin)
 - **Dual-plane architecture:** MCP for control, Zenoh for data
-- **Rules engine** for autonomous behavior (no polling loops)
+- **Task scheduling** for autonomous behavior (cron jobs, retry with circuit breaker)
+- **Robustness** — turn/tool timeouts, provider retry, context recovery, result truncation
 - **Self-describing nodes** with manifests, schemas, commands
 - **Multi-machine support** via Zenoh network discovery
 
-Read the tool reference, understand the dual-plane model, use rules for automation, and always prefer Zenoh direct subscription over MCP polling for data streams.
+Read the tool reference, understand the dual-plane model, use scheduled tasks for automation, and always prefer Zenoh direct subscription over MCP polling for data streams.

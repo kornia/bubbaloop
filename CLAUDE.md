@@ -19,12 +19,23 @@ dashboard/                 # React + Vite + TypeScript
 
 Key source files in `crates/bubbaloop/src/`:
 - `cli/login.rs` — login/logout/status: API key + Claude subscription (setup-token) auth
-- `agent/claude.rs` — Claude API client with dual auth (API key + OAuth bearer token)
+- `agent/mod.rs` — Agent core: EventSink trait, run_agent_turn(), model provider traits
+- `agent/gateway.rs` — Zenoh gateway wire format (AgentMessage, AgentEvent, topic builders)
+- `agent/runtime.rs` — Multi-agent runtime: AgentsConfig, AgentRuntime, ZenohSink, agent_loop
+- `agent/soul.rs` — Soul struct, first-run onboarding, notify hot-reload (`~/.bubbaloop/soul/`)
+- `agent/provider/mod.rs` — ModelProvider trait, Message, ContentBlock, ToolDefinition, StreamEvent
+- `agent/provider/claude.rs` — Claude API client with dual auth (API key + OAuth bearer token)
+- `agent/provider/ollama.rs` — Ollama local LLM client with tool calling (`/api/chat`)
+- `agent/memory/` — 3-tier: short-term (RAM) + episodic (NDJSON) + semantic (SQLite)
+- `agent/heartbeat.rs` — Adaptive heartbeat: arousal + decay + state collection
+- `agent/dispatch.rs` — Internal MCP tool dispatch (37 tools, includes telemetry)
+- `cli/agent_client.rs` — Thin Zenoh CLI client for agent chat/list (pub/sub, no LLM)
 - `cli/node/mod.rs` — node CRUD, validation, list/add/remove
 - `cli/node/install.rs` — install, precompiled binary download, GitHub clone
 - `cli/node/lifecycle.rs` — start, stop, restart, logs
 - `cli/node/build.rs` — build node
-- `daemon/mod.rs` — skill runtime: registry + lifecycle + health + MCP
+- `daemon/mod.rs` — skill runtime: registry + lifecycle + health + MCP + telemetry watchdog
+- `daemon/telemetry/` — Resource watchdog: sampler (sysinfo), circuit breaker, SQLite storage, hot-reload config
 - `daemon/node_manager.rs` (57KB) — node lifecycle, build queue, health
 - `daemon/systemd.rs` (38KB) — D-Bus/zbus integration
 - `daemon/registry.rs` — `~/.bubbaloop/nodes.json` management
@@ -53,7 +64,7 @@ Nodes repo: [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes
 
 MCP is core (not feature-gated). 3-tier RBAC, bearer token auth. Run: `bubbaloop mcp --stdio` or daemon HTTP on :8088.
 
-The daemon is a **passive skill runtime** — AI agents (Claude Code, etc.) interact exclusively through MCP. No autonomous decision-making.
+The daemon runs the **agent runtime** (multi-agent Zenoh gateway) alongside the MCP server. Agents are configured via `~/.bubbaloop/agents.toml`, each with per-agent Soul and Memory in `~/.bubbaloop/agents/{id}/`. The CLI (`bubbaloop agent chat`) is a thin Zenoh client — all LLM processing is daemon-side.
 
 Key files in `crates/bubbaloop/src/mcp/`: `mod.rs` (tools, BubbaLoopMcpServer), `platform.rs` (PlatformOperations trait), `rbac.rs`, `auth.rs`.
 
@@ -66,7 +77,7 @@ Testing: `cargo test --features test-harness --test integration_mcp` (47 tests)
 ```bash
 pixi run check     # cargo check (fast — run after every change)
 pixi run clippy    # zero warnings enforced (-D warnings)
-pixi run test      # cargo test (358 unit tests)
+pixi run test      # cargo test (445 unit tests)
 pixi run fmt       # cargo fmt --all
 pixi run build     # cargo build --release (slow on ARM64)
 cargo test --features test-harness --test integration_mcp  # 47 integration tests
@@ -99,7 +110,7 @@ cargo test --features test-harness --test integration_mcp  # 47 integration test
 - All tool handlers include audit logging: `log::info!("[MCP] tool=...")`
 - PlatformOperations trait for clean daemon/MCP separation
 - `test-harness` feature enables integration tests with MockPlatform
-- Daemon is a passive skill runtime (no agent rule engine, no autonomous decisions)
+- Daemon hosts agent runtime (multi-agent Zenoh gateway) + MCP server
 
 ## DO / DON'T
 
@@ -142,4 +153,6 @@ Exception: views with their own fallback decode chain (like JsonView) don't need
 - Logs must go to stderr (convention: never pollute stdout)
 - Zenoh session: MUST use `"client"` mode for router routing; check `BUBBALOOP_ZENOH_ENDPOINT` env var
 - Dashboard schema race: subscriptions start before schemas load — always use `useSchemaReady()` gating
-- OAuth tokens require Claude CLI identity headers (user-agent, x-app, anthropic-beta) — see `agent/claude.rs::OAUTH_BETA_HEADERS`
+- OAuth tokens require Claude CLI identity headers (user-agent, x-app, anthropic-beta) — see `agent/provider/claude.rs::OAUTH_BETA_HEADERS`
+- Agent robustness constants in `agent/mod.rs`: `TURN_TIMEOUT_SECS=120`, `TOOL_CALL_TIMEOUT_SECS=30`, `MAX_TOOL_RESULT_CHARS=4096` — change these to tune agent behavior
+- `run_turn_loop()` is the inner async fn wrapped by `tokio::time::timeout` — keep turn-level logic there, finalization (Done event, trim) in `run_agent_turn()`

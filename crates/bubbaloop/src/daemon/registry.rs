@@ -127,23 +127,8 @@ pub struct NodeManifest {
 impl NodeManifest {
     /// Validate the node manifest fields
     pub fn validate(&self) -> Result<()> {
-        // Validate name: 1-64 chars, alphanumeric + hyphen + underscore
-        if self.name.is_empty() || self.name.len() > 64 {
-            return Err(RegistryError::InvalidNode(format!(
-                "Node name must be 1-64 characters, got: {}",
-                self.name.len()
-            )));
-        }
-        if !self
-            .name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(RegistryError::InvalidNode(format!(
-                "Node name contains invalid characters: {}",
-                self.name
-            )));
-        }
+        // Validate name using the canonical shared validator
+        crate::validation::validate_node_name(&self.name).map_err(RegistryError::InvalidNode)?;
 
         // Validate version: basic semver check (contains digits and dots)
         if self.version.is_empty() {
@@ -323,21 +308,8 @@ pub fn register_node(
 
     // Validate override name if provided (same rules as manifest name)
     if let Some(override_name) = name_override {
-        if override_name.is_empty() || override_name.len() > 64 {
-            return Err(RegistryError::InvalidNode(format!(
-                "Instance name must be 1-64 characters, got: {}",
-                override_name.len()
-            )));
-        }
-        if !override_name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(RegistryError::InvalidNode(format!(
-                "Instance name contains invalid characters: {}",
-                override_name
-            )));
-        }
+        crate::validation::validate_node_name(override_name)
+            .map_err(|e| RegistryError::InvalidNode(format!("Instance name invalid: {}", e)))?;
     }
 
     // Load registry
@@ -472,17 +444,9 @@ pub fn check_is_built(node_path: &str, manifest: &NodeManifest) -> bool {
     }
 }
 
-/// Get current timestamp as ISO string (without chrono dependency)
+/// Get current timestamp as ISO 8601 string (RFC 3339 format)
 fn chrono_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = duration.as_secs();
-
-    // Simple ISO format without external dependencies
-    // This is good enough for our purposes
-    format!("{}000", secs)
+    chrono::Utc::now().to_rfc3339()
 }
 
 #[cfg(test)]
