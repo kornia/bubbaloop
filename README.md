@@ -3,7 +3,7 @@
 > *"Shrimp-fried cameras, shrimp-grilled sensors, shrimp-sauteed robots..."*
 > — Bubba, on all the ways to talk to your hardware 🦐
 
-**The open-source Hardware AI agent.** Talk to your cameras, sensors, and robots in natural language. Manage federated IoT/robotics fleets and automate physical systems — all from a single 12 MB Rust binary.
+**The open-source Hardware AI agent.** Talk to your cameras, sensors, and robots in natural language. Manage federated IoT/robotics fleets and automate physical systems — all from a single 13 MB Rust binary.
 
 ## Why Bubbaloop?
 
@@ -12,7 +12,7 @@ AI agents revolutionized software engineering. **Bubbaloop brings that same powe
 | | General AI Agents | **Bubbaloop** |
 |---|---|---|
 | **Focus** | Software tasks, coding, browsing | **Cameras, sensors, robots, IoT** |
-| **Runtime** | TypeScript / ~200 MB | **Rust / ~12 MB** |
+| **Runtime** | TypeScript / ~200 MB | **Rust / ~13 MB** |
 | **Data plane** | None | **Zenoh (zero-copy pub/sub)** |
 | **Hardware** | None | **Self-describing sensor nodes** |
 | **Runs on** | Desktop / cloud | **Jetson, RPi, any Linux ARM64/x86** |
@@ -36,7 +36,7 @@ bubbaloop status
 |-----------|-------------|
 | `zenohd` | Pub/sub router on port 7447 |
 | `zenoh-bridge-remote-api` | WebSocket bridge on port 10001 |
-| `bubbaloop` | Single ~12 MB binary: CLI + daemon + MCP server |
+| `bubbaloop` | Single ~13 MB binary: CLI + daemon + MCP server |
 | Dashboard | Web UI at http://localhost:8080 |
 
 All run as systemd user services with autostart enabled.

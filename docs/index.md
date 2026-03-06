@@ -1,19 +1,95 @@
-<div class="hero" markdown>
+---
+hide:
+  - navigation
+  - toc
+template: home.html
+---
 
 # Bubbaloop
 
-<p class="hero-tagline">"Shrimp-fried cameras, shrimp-grilled sensors, shrimp-sauteed robots..."</p>
+---
 
-**The open-source Hardware AI agent.** One binary. 37 tools. Talk to your cameras, sensors, and robots in plain English.
+## What you get
 
-```bash
-bubbaloop up
-bubbaloop agent chat "What sensors do I have?"
-```
+<div class="grid cards" markdown>
+
+-   :material-robot:{ .lg .middle } **Agent Runtime**
+
+    ---
+
+    Multi-agent Zenoh gateway. Each agent gets its own Soul, memory, and heartbeat.
+
+    [:octicons-arrow-right-24: Architecture](concepts/architecture.md)
+
+-   :material-wrench:{ .lg .middle } **37 Tools**
+
+    ---
+
+    Node lifecycle, fleet discovery, memory search, telemetry, scheduling, proposals.
+
+    [:octicons-arrow-right-24: Agent Guide](agent-guide.md)
+
+-   :material-database:{ .lg .middle } **3-Tier Memory**
+
+    ---
+
+    RAM for the current turn. NDJSON logs for yesterday. SQLite for the long game.
+
+    [:octicons-arrow-right-24: Memory](concepts/memory.md)
+
+-   :material-account-heart:{ .lg .middle } **Soul System**
+
+    ---
+
+    `identity.md` for personality. `capabilities.toml` for model tuning. Hot-reload.
+
+    [:octicons-arrow-right-24: Configuration](getting-started/configuration.md)
+
+-   :material-chip:{ .lg .middle } **Node SDK**
+
+    ---
+
+    Batteries-included Rust framework. ~50 lines to a working sensor node.
+
+    [:octicons-arrow-right-24: Create a Node](guides/create-your-first-node.md)
+
+-   :material-access-point:{ .lg .middle } **Self-Describing Nodes**
+
+    ---
+
+    Schema, manifest, health, config, command — every node is discoverable by agents.
+
+    [:octicons-arrow-right-24: Messaging](concepts/messaging.md)
+
+-   :material-gauge:{ .lg .middle } **Telemetry Watchdog** <span class="badge badge-new">New</span>
+
+    ---
+
+    CPU, RAM, disk, GPU monitoring. 5 severity levels. Circuit breakers. Runtime-tunable.
+
+    [:octicons-arrow-right-24: Telemetry Guide](guides/telemetry-watchdog.md)
+
+-   :material-monitor-dashboard:{ .lg .middle } **Dashboard**
+
+    ---
+
+    React + WebCodecs. Live camera feeds, telemetry charts, protobuf decode.
+
+    [:octicons-arrow-right-24: Dashboard](dashboard/index.md)
+
+-   :material-server-network:{ .lg .middle } **Fleet Management**
+
+    ---
+
+    Multi-machine orchestration via scoped Zenoh topics. One daemon per machine.
+
+    [:octicons-arrow-right-24: Architecture](concepts/architecture.md)
 
 </div>
 
-## What You Get
+---
+
+## Architecture
 
 ```mermaid
 flowchart TB
@@ -23,7 +99,7 @@ flowchart TB
         dash["Dashboard — React"]
     end
 
-    subgraph "Daemon (single binary)"
+    subgraph "Daemon (single ~13 MB binary)"
         runtime["Agent Runtime — multi-agent, per-agent memory"]
         mcp["MCP Server — 30 tools, RBAC"]
         nm["Node Manager — lifecycle, health, build"]
@@ -51,140 +127,36 @@ flowchart TB
     zenohd <--> custom
 ```
 
-A single ~12 MB Rust binary runs as a systemd service. The daemon hosts:
+---
 
-- **Agent Runtime**: Multi-agent Zenoh gateway with per-agent Soul, 3-tier memory, adaptive heartbeat
-- **MCP Server**: 37 tools across 7 categories — node lifecycle, fleet discovery, agent memory, telemetry, scheduling
-- **Node Manager**: Build, install, start/stop nodes as systemd services
-- **Telemetry Watchdog**: CPU, RAM, disk, GPU monitoring with circuit breakers
-
-## 5 Minutes to Magic
+## Quick start
 
 ```bash
-# 1. Install
+# Install (Linux x86_64 / ARM64)
 curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
 source ~/.bashrc
 
-# 2. Login
+# Login + start
 bubbaloop login
-
-# 3. Start everything
 bubbaloop up
 
-# 4. Talk to your hardware
+# Talk to your hardware
 bubbaloop agent chat
 ```
 
 First time? The agent introduces itself and asks what you care about. It remembers.
 
-## Features
+[:octicons-arrow-right-24: Full quickstart guide](getting-started/quickstart.md)
 
-<div class="feature-grid" markdown>
-<div class="card" markdown>
+---
 
-### Agent Runtime
-<span class="badge badge-agent">Agent</span>
+## Commands
 
-Multi-agent with Zenoh gateway. Each agent gets its own Soul and memory.
-
-</div>
-<div class="card" markdown>
-
-### 37 Tools
-<span class="badge badge-mcp">MCP</span>
-
-Node lifecycle, fleet discovery, memory search, telemetry, scheduling, proposals.
-
-</div>
-<div class="card" markdown>
-
-### 3-Tier Memory
-<span class="badge badge-agent">Agent</span>
-
-RAM (current turn) + NDJSON logs (episodic) + SQLite (jobs, proposals, search).
-
-</div>
-<div class="card" markdown>
-
-### Soul System
-<span class="badge badge-agent">Agent</span>
-
-`identity.md` for personality, `capabilities.toml` for model tuning. Hot-reload.
-
-</div>
-<div class="card" markdown>
-
-### Node SDK
-<span class="badge badge-node">Node</span>
-
-Batteries-included Rust framework. ~50 lines to a working sensor node.
-
-</div>
-<div class="card" markdown>
-
-### Self-Describing Nodes
-<span class="badge badge-node">Node</span>
-
-Schema, manifest, health, config, command — every node is discoverable.
-
-</div>
-<div class="card" markdown>
-
-### Telemetry Watchdog
-<span class="badge badge-new">New</span>
-
-CPU/RAM/disk/GPU with 5 severity levels. Circuit breakers. Runtime-tunable.
-
-</div>
-<div class="card" markdown>
-
-### Dashboard
-<span class="badge badge-node">Node</span>
-
-React + WebCodecs. Live camera feeds, telemetry charts, protobuf decode.
-
-</div>
-<div class="card" markdown>
-
-### Fleet Management
-<span class="badge badge-mcp">MCP</span>
-
-Multi-machine orchestration via scoped Zenoh topics.
-
-</div>
-<div class="card" markdown>
-
-### MCP Server
-<span class="badge badge-mcp">MCP</span>
-
-Stdio + HTTP. 3-tier RBAC (Viewer/Operator/Admin). Bearer token auth.
-
-</div>
-<div class="card" markdown>
-
-### Adaptive Heartbeat
-<span class="badge badge-agent">Agent</span>
-
-Arousal-based decay. Active = frequent check-ins. Idle = quiet.
-
-</div>
-<div class="card" markdown>
-
-### Dual Auth
-<span class="badge badge-mcp">MCP</span>
-
-API key or Claude subscription (OAuth). `bubbaloop login` handles both.
-
-</div>
-</div>
-
-## Available Commands
-
-| Command | Description |
+| Command | What it does |
 |---------|-------------|
 | `bubbaloop up` | Start daemon (agent runtime + MCP + node manager) |
 | `bubbaloop agent chat` | Chat with AI agents via Zenoh |
-| `bubbaloop agent list` | List running agents and capabilities |
+| `bubbaloop agent list` | List running agents and their models |
 | `bubbaloop login` | Authenticate (API key or Claude subscription) |
 | `bubbaloop status` | System and node status |
 | `bubbaloop doctor --fix` | Diagnostics with auto-repair |
@@ -192,28 +164,24 @@ API key or Claude subscription (OAuth). `bubbaloop login` handles both.
 | `bubbaloop node add` | Add node from path, GitHub, or marketplace |
 | `bubbaloop mcp --stdio` | Run MCP server over stdio |
 
-## Development Setup
+[:octicons-arrow-right-24: Full CLI reference](reference/cli.md)
+
+---
+
+## Development
 
 ```bash
-git clone https://github.com/kornia/bubbaloop.git
-cd bubbaloop
-pixi install
-pixi run up    # Start all services
+git clone https://github.com/kornia/bubbaloop.git && cd bubbaloop
+pixi install && pixi run up
 ```
 
-Dashboard dev server: http://localhost:5173
+Dashboard dev server: [localhost:5173](http://localhost:5173)
 
-## Documentation
+---
 
-- **[Quickstart](getting-started/quickstart.md)** — Install, login, first agent chat
-- **[Architecture](concepts/architecture.md)** — Layers, agent runtime, node contract
-- **[Messaging](concepts/messaging.md)** — Zenoh topics, agent gateway protocol
-- **[Memory](concepts/memory.md)** — 3-tier memory architecture
-- **[Configuration](getting-started/configuration.md)** — agents.toml, Soul files, telemetry.toml
-- **[Agent Guide](agent-guide.md)** — Multi-agent setup, MCP tools, security model
-- **[CLI Reference](reference/cli.md)** — Full command documentation
-- **[Troubleshooting](troubleshooting.md)** — Common issues and fixes
+<div class="grid" markdown>
 
-## Community
+[:fontawesome-brands-github: **GitHub**](https://github.com/kornia/bubbaloop){ .md-button }
+[:fontawesome-brands-discord: **Discord**](https://discord.com/invite/HfnywwpBnD){ .md-button }
 
-[Discord](https://discord.com/invite/HfnywwpBnD) · [GitHub](https://github.com/kornia/bubbaloop)
+</div>

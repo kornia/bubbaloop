@@ -4,7 +4,7 @@ Reference for the Bubbaloop command-line interface.
 
 ## bubbaloop Binary
 
-The `bubbaloop` binary is a single ~12 MB Rust executable that includes CLI, daemon, MCP server, and agent runtime.
+The `bubbaloop` binary is a single ~13 MB Rust executable that includes CLI, daemon, MCP server, and agent runtime.
 
 ### Core Commands
 

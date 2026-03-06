@@ -193,20 +193,22 @@ Messages are JSON.
 ```json
 {
     "id": "550e8400-e29b-41d4-a716-446655440000",
-    "event_type": "Delta",
+    "type": "delta",
     "text": "Currently running nodes:"
 }
 ```
 
-`event_type` values:
+Note: The field is serialized as `"type"` (not `event_type`) with snake_case values.
+
+`type` values:
 
 | Type | Meaning |
 |------|---------|
-| `Delta` | Streaming token — append to output |
-| `Tool` | Agent is calling a tool (tool name in `text`) |
-| `ToolResult` | Tool returned a result |
-| `Error` | Turn failed |
-| `Done` | Turn complete, stream closed |
+| `delta` | Streaming token — append to output |
+| `tool` | Agent is calling a tool (tool name in `text`) |
+| `tool_result` | Tool returned a result |
+| `error` | Turn failed |
+| `done` | Turn complete, stream closed |
 
 ### Correlation
 
@@ -371,5 +373,5 @@ Bind to `127.0.0.1`, not `0.0.0.0`. Never expose Zenoh ports directly to the int
 
 ## Next Steps
 
-- [Architecture](../architecture.md) — Layer model, daemon, agent runtime
+- [Architecture](architecture.md) — Layer model, daemon, agent runtime
 - [Memory](memory.md) — 3-tier agent memory (short-term, episodic, semantic)

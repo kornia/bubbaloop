@@ -67,8 +67,8 @@ CLI client                Daemon (agent runtime)
     |<-- publish to outbox ------|
 ```
 
-- Shared inbox topic: `bubbaloop/agents/inbox`
-- Per-agent outbox: `bubbaloop/agents/{id}/outbox`
+- Shared inbox topic: `bubbaloop/{scope}/{machine_id}/agent/inbox`
+- Per-agent outbox: `bubbaloop/{scope}/{machine_id}/agent/{agent_id}/outbox`
 - Wire format: JSON (`AgentMessage`, `AgentEvent`)
 
 **Per-agent state**
@@ -94,7 +94,7 @@ systemd. Uses D-Bus (`zbus`) — no subprocess spawning.
 
 **Agent Runtime** — multi-agent Zenoh gateway. Described above.
 
-**MCP Server** — 37 tools, 3-tier RBAC, stdio + HTTP transports. Described below.
+**MCP Server** — 30 MCP tools + 10 agent-internal tools (37 total), 3-tier RBAC, stdio + HTTP transports.
 
 **Telemetry Watchdog**
 

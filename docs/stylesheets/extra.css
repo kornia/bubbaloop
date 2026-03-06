@@ -1,126 +1,157 @@
-/* Bubbaloop custom theme — hardware AI agent */
+/* ============================================================
+   Bubbaloop docs theme — industrial dark + coral accent
+   Designed for developer experience: scannable, clean, modern
+   ============================================================ */
 
+/* --- Color tokens --- */
 :root {
-  /* Brand palette: industrial teal + warm coral accent */
-  --md-primary-fg-color: #0d1b2a;
+  --bb-coral: #e07a5f;
+  --bb-coral-dark: #c4573f;
+  --bb-coral-glow: rgba(224, 122, 95, 0.12);
+  --bb-teal: #3d8b8b;
+  --bb-blue: #5b9bd5;
+  --bb-green: #6bc77a;
+}
+
+/* --- Light mode --- */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #1a2332;
   --md-primary-bg-color: #ffffff;
   --md-accent-fg-color: #e07a5f;
+  --md-typeset-a-color: #c4573f;
 }
 
+/* --- Dark mode (primary) --- */
 [data-md-color-scheme="slate"] {
-  --md-primary-fg-color: #0d1b2a;
-  --md-primary-bg-color: #1b2838;
+  --md-primary-fg-color: #0e1520;
+  --md-primary-bg-color: #171d2b;
   --md-accent-fg-color: #e07a5f;
-  --md-default-bg-color: #0d1117;
+  --md-default-bg-color: #0e1520;
+  --md-typeset-a-color: #e07a5f;
+  --md-code-bg-color: #141a26;
 }
 
-/* Hero section on index page */
-.md-content .hero {
-  background: linear-gradient(135deg, #0d1b2a 0%, #1b3a4b 50%, #274c5b 100%);
-  border-radius: 12px;
-  padding: 2.5rem 2rem;
-  margin: 1rem 0 2rem;
-  color: #e0e0e0;
-  position: relative;
+/* --- Typography refinements --- */
+.md-typeset {
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+.md-typeset h1 {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.md-typeset h2 {
+  font-weight: 700;
+  margin-top: 2.4em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.md-typeset h3 {
+  font-weight: 600;
+}
+
+/* --- Code blocks --- */
+.md-typeset pre {
+  border-radius: 10px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.md-typeset code {
+  border-radius: 4px;
+  font-size: 0.82em;
+}
+
+/* --- Grid cards (Material built-in) --- */
+.md-typeset .grid.cards > ul > li {
+  border-radius: 10px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+}
+
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--bb-coral);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+}
+
+/* Icon sizing in cards */
+.md-typeset .grid.cards .twemoji,
+.md-typeset .grid.cards .emojione {
+  height: 1.4rem;
+}
+
+/* --- Tabs accent --- */
+.md-tabs__link--active,
+.md-nav__link--active {
+  color: var(--bb-coral) !important;
+}
+
+/* --- Admonitions --- */
+.md-typeset .admonition.tip,
+.md-typeset details.tip {
+  border-color: var(--bb-coral);
+}
+
+.md-typeset .admonition.note,
+.md-typeset details.note {
+  border-color: var(--bb-teal);
+}
+
+/* --- Tables --- */
+.md-typeset table:not([class]) {
+  font-size: 0.8rem;
+  border-radius: 8px;
   overflow: hidden;
 }
 
-.md-content .hero::before {
-  content: "";
-  position: absolute;
-  top: -50%;
-  right: -20%;
-  width: 300px;
-  height: 300px;
-  background: radial-gradient(circle, rgba(224, 122, 95, 0.15) 0%, transparent 70%);
-  border-radius: 50%;
-}
-
-.md-content .hero h1 {
-  color: #ffffff;
-  font-size: 2rem;
-  margin-bottom: 0.5rem;
-}
-
-.md-content .hero .hero-tagline {
-  color: #e07a5f;
-  font-size: 1.1rem;
-  font-weight: 500;
-}
-
-.md-content .hero code {
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-}
-
-/* Feature grid cards */
-.feature-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 1rem;
-  margin: 1.5rem 0;
-}
-
-.feature-grid .card {
-  background: var(--md-code-bg-color);
-  border: 1px solid var(--md-default-fg-color--lightest);
-  border-radius: 8px;
-  padding: 1.2rem;
-  transition: border-color 0.2s, transform 0.2s;
-}
-
-.feature-grid .card:hover {
-  border-color: var(--md-accent-fg-color);
-  transform: translateY(-2px);
-}
-
-.feature-grid .card h3 {
-  margin: 0 0 0.5rem;
-  font-size: 0.95rem;
-  color: var(--md-accent-fg-color);
-}
-
-.feature-grid .card p {
-  margin: 0;
-  font-size: 0.85rem;
-  color: var(--md-default-fg-color--light);
-}
-
-/* Terminal-style code blocks */
-.md-content pre {
-  border-radius: 8px;
-  border: 1px solid var(--md-default-fg-color--lightest);
-}
-
-/* Accent borders on admonitions */
-.md-typeset .admonition.tip,
-.md-typeset details.tip {
-  border-color: #e07a5f;
-}
-
-/* Navigation tab accent */
-.md-tabs__link--active {
-  border-bottom-color: #e07a5f;
-}
-
-/* Subtle separator for sections */
-.md-content hr {
-  border-color: var(--md-default-fg-color--lightest);
-  margin: 2rem 0;
-}
-
-/* Badge-style labels */
-.badge {
-  display: inline-block;
-  padding: 0.15rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.75rem;
+.md-typeset table:not([class]) th {
+  background: var(--md-default-fg-color--lightest);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
 }
 
-.badge-agent { background: rgba(224, 122, 95, 0.15); color: #e07a5f; }
-.badge-node { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
-.badge-mcp { background: rgba(16, 185, 129, 0.15); color: #10b981; }
-.badge-new { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+/* --- Badges --- */
+.badge {
+  display: inline-block;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  vertical-align: middle;
+}
+
+.badge-agent { background: var(--bb-coral-glow); color: var(--bb-coral); }
+.badge-node  { background: rgba(91, 155, 213, 0.12); color: var(--bb-blue); }
+.badge-mcp   { background: rgba(61, 139, 139, 0.12); color: var(--bb-teal); }
+.badge-new   { background: rgba(107, 199, 122, 0.12); color: var(--bb-green); }
+
+/* --- Navigation polish --- */
+.md-header {
+  backdrop-filter: blur(8px);
+}
+
+.md-tabs {
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+/* --- Footer --- */
+.md-footer {
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+
+/* --- Smooth scrolling --- */
+html {
+  scroll-behavior: smooth;
+}
+
+/* --- Home page specific (applied via home.html override) --- */
+.mdx-hero + .md-content .md-typeset h1:first-child {
+  display: none;
+}

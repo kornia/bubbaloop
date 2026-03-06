@@ -1,0 +1,156 @@
+{% extends "main.html" %}
+
+{% block tabs %}
+  {{ super() }}
+  <style>
+    .md-main__inner { margin-top: 0; }
+    .mdx-hero {
+      max-width: 61rem;
+      margin: 0 auto;
+      padding: 3rem 1rem 1rem;
+      text-align: center;
+    }
+    .mdx-hero h1 {
+      font-weight: 800;
+      font-size: 2.6rem;
+      line-height: 1.15;
+      margin-bottom: 0.8rem;
+    }
+    .mdx-hero h1 strong {
+      background: linear-gradient(135deg, #e07a5f, #f4a261);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .mdx-hero__tagline {
+      font-size: 1.15rem;
+      color: var(--md-default-fg-color--light);
+      margin-bottom: 1.5rem;
+      max-width: 36rem;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .mdx-hero__buttons {
+      display: flex;
+      gap: 0.8rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 2.5rem;
+    }
+    .mdx-hero__buttons .md-button {
+      border-radius: 8px;
+      padding: 0.65rem 1.8rem;
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+    .mdx-hero__buttons .md-button--primary {
+      background: #e07a5f;
+      border-color: #e07a5f;
+      color: #fff;
+    }
+    .mdx-hero__buttons .md-button--primary:hover {
+      background: #c4573f;
+      border-color: #c4573f;
+    }
+    .mdx-cta-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin: 0 auto 2rem;
+      max-width: 52rem;
+    }
+    @media (max-width: 600px) {
+      .mdx-cta-grid { grid-template-columns: 1fr; }
+      .mdx-hero h1 { font-size: 1.8rem; }
+    }
+    .mdx-cta-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 1.4rem 1rem;
+      border: 1px solid var(--md-default-fg-color--lightest);
+      border-radius: 10px;
+      text-decoration: none !important;
+      color: var(--md-default-fg-color) !important;
+      transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+      background: var(--md-code-bg-color);
+    }
+    .mdx-cta-card:hover {
+      border-color: #e07a5f;
+      transform: translateY(-3px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+    }
+    .mdx-cta-card__icon { font-size: 1.6rem; }
+    .mdx-cta-card__title { font-weight: 700; font-size: 0.95rem; }
+    .mdx-cta-card__desc {
+      font-size: 0.8rem;
+      color: var(--md-default-fg-color--light);
+    }
+    .mdx-terminal {
+      max-width: 36rem;
+      margin: 0 auto 2rem;
+      text-align: left;
+    }
+  </style>
+
+  <section class="mdx-hero">
+    <h1>The open-source<br/><strong>Hardware AI</strong> agent</h1>
+    <p class="mdx-hero__tagline">
+      Talk to your cameras, sensors, and robots in plain English.
+      Single binary. 37 tools. Runs on Jetson, RPi, any Linux.
+    </p>
+
+    <div class="mdx-hero__buttons">
+      <a href="{{ 'getting-started/quickstart/' | url }}" class="md-button md-button--primary">
+        Get Started
+      </a>
+      <a href="{{ 'agent-guide/' | url }}" class="md-button">
+        Agent Guide
+      </a>
+      <a href="https://github.com/kornia/bubbaloop" class="md-button">
+        GitHub
+      </a>
+    </div>
+
+    <div class="mdx-terminal">
+      <div class="highlight">
+        <pre><code><span style="color: var(--md-default-fg-color--light)">$</span> bubbaloop up
+<span style="color: var(--md-default-fg-color--light)">$</span> bubbaloop agent chat <span style="color: #e07a5f">"What sensors do I have?"</span></code></pre>
+      </div>
+    </div>
+
+    <div class="mdx-cta-grid">
+      <a href="{{ 'getting-started/quickstart/' | url }}" class="mdx-cta-card">
+        <span class="mdx-cta-card__icon">&#x1F680;</span>
+        <span class="mdx-cta-card__title">Quick Start</span>
+        <span class="mdx-cta-card__desc">Install and chat in 5 minutes</span>
+      </a>
+      <a href="{{ 'concepts/architecture/' | url }}" class="mdx-cta-card">
+        <span class="mdx-cta-card__icon">&#x1F3D7;&#xFE0F;</span>
+        <span class="mdx-cta-card__title">Architecture</span>
+        <span class="mdx-cta-card__desc">Layers, agent runtime, nodes</span>
+      </a>
+      <a href="{{ 'concepts/memory/' | url }}" class="mdx-cta-card">
+        <span class="mdx-cta-card__icon">&#x1F9E0;</span>
+        <span class="mdx-cta-card__title">3-Tier Memory</span>
+        <span class="mdx-cta-card__desc">RAM, logs, SQLite per agent</span>
+      </a>
+      <a href="{{ 'concepts/messaging/' | url }}" class="mdx-cta-card">
+        <span class="mdx-cta-card__icon">&#x1F4E1;</span>
+        <span class="mdx-cta-card__title">Messaging</span>
+        <span class="mdx-cta-card__desc">Zenoh pub/sub + agent gateway</span>
+      </a>
+      <a href="{{ 'getting-started/configuration/' | url }}" class="mdx-cta-card">
+        <span class="mdx-cta-card__icon">&#x2699;&#xFE0F;</span>
+        <span class="mdx-cta-card__title">Configuration</span>
+        <span class="mdx-cta-card__desc">agents.toml, Soul, telemetry</span>
+      </a>
+      <a href="{{ 'reference/cli/' | url }}" class="mdx-cta-card">
+        <span class="mdx-cta-card__icon">&#x1F4BB;</span>
+        <span class="mdx-cta-card__title">CLI Reference</span>
+        <span class="mdx-cta-card__desc">All commands documented</span>
+      </a>
+    </div>
+  </section>
+{% endblock %}
