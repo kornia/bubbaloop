@@ -188,7 +188,7 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447  # Optional override
 
 ## MCP Server
 
-MCP is the **sole control interface**. 34 tools across 6 categories:
+MCP is the **sole control interface**. 37 tools across 7 categories:
 
 | Category | Tools |
 |----------|-------|
@@ -197,6 +197,7 @@ MCP is the **sole control interface**. 34 tools across 6 categories:
 | **Data** | send_command, query_zenoh |
 | **System** | get_system_status, get_machine_info, read_file, write_file, run_command |
 | **Memory** | memory_search, memory_forget, schedule_task, list_jobs, delete_job, create_proposal, list_proposals |
+| **Telemetry** | get_system_telemetry, get_telemetry_history, update_telemetry_config |
 
 ### Transport Options
 
@@ -236,6 +237,7 @@ MCP is the **sole control interface**. 34 tools across 6 categories:
 | **Rate limiting** | tower-governor middleware, per-client limits |
 | **Transport security** | HTTP on localhost only (127.0.0.1:8088) or stdio |
 | **Audit logging** | All MCP requests logged with client identity and timestamp |
+| **Dispatch security** | `dispatch_security.rs` validates RBAC before every tool call |
 
 ### Authentication Methods
 
@@ -283,13 +285,14 @@ MCP is the **sole control interface**. 34 tools across 6 categories:
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 34 tools |
+| Control | MCP (rmcp) | Standard AI agent interface, 37 tools |
 | Memory | SQLite (rusqlite) + NDJSON | 3-tier: RAM + episodic (NDJSON/FTS5) + semantic (SQLite). Episodic FTS5 index and semantic store share `memory.db` per agent. |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
 | systemd | zbus (D-Bus) | No subprocess spawning, safe |
 | LLM | ModelProvider trait (reqwest) | Claude (OAuth + API key) and Ollama (local, tool calling) |
 | HTTP | axum | Dashboard + MCP HTTP transport |
+| Telemetry | sysinfo | CPU/RAM/disk/GPU monitoring, cross-platform |
 
 **Removed technologies:**
 - **TUI (ratatui/crossterm)** — Removed in v0.0.6. Codebase simplified to ~14K lines.

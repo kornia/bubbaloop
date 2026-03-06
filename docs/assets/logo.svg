@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Shrimp body - curved -->
+  <path d="M 18 20 C 14 20, 10 24, 10 30 C 10 36, 14 42, 22 44 C 28 45, 34 44, 38 40 C 42 36, 44 30, 42 24 C 40 20, 36 18, 32 18 C 28 18, 24 19, 18 20 Z" fill="#e07a5f" opacity="0.9"/>
+  <!-- Shrimp tail segments -->
+  <path d="M 38 40 C 40 42, 44 44, 48 42 C 50 41, 52 38, 54 36" stroke="#e07a5f" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M 54 36 C 56 34, 56 32, 54 30" stroke="#e07a5f" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <path d="M 54 36 C 56 37, 58 36, 58 34" stroke="#e07a5f" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M 54 36 C 55 38, 57 39, 58 38" stroke="#e07a5f" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- Shrimp body segments -->
+  <path d="M 22 22 C 26 21, 30 22, 34 24" stroke="#c4573f" stroke-width="1" fill="none" opacity="0.5"/>
+  <path d="M 20 26 C 24 25, 30 26, 36 28" stroke="#c4573f" stroke-width="1" fill="none" opacity="0.5"/>
+  <path d="M 18 30 C 22 29, 30 30, 38 32" stroke="#c4573f" stroke-width="1" fill="none" opacity="0.5"/>
+  <path d="M 18 34 C 22 33, 30 34, 38 36" stroke="#c4573f" stroke-width="1" fill="none" opacity="0.5"/>
+  <!-- Eye -->
+  <circle cx="16" cy="24" r="2.5" fill="white"/>
+  <circle cx="16.5" cy="23.5" r="1.2" fill="#0d1b2a"/>
+  <!-- Antennae -->
+  <path d="M 14 22 C 10 16, 6 14, 4 12" stroke="#e07a5f" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  <path d="M 14 21 C 12 14, 10 10, 10 8" stroke="#e07a5f" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  <!-- Legs -->
+  <path d="M 20 38 L 18 44" stroke="#e07a5f" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M 24 40 L 22 46" stroke="#e07a5f" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M 28 41 L 27 47" stroke="#e07a5f" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M 32 41 L 32 47" stroke="#e07a5f" stroke-width="1.2" stroke-linecap="round"/>
+</svg>

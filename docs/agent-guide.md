@@ -22,6 +22,8 @@ MCP server runs on `http://127.0.0.1:8088/mcp` when daemon is active.
 
 **Rate limits:** 100 request burst, ~1 req/sec sustained replenishment.
 
+**Agent model authentication** resolves in order: API key (`ANTHROPIC_API_KEY` env var) → OAuth bearer token (from `bubbaloop login`). API key takes precedence when both are configured.
+
 ## Creating and Managing Agents
 
 Bubbaloop runs a multi-agent runtime inside the daemon. Each agent is an independent LLM reasoning loop with its own identity (Soul), memory, and capabilities. The CLI is a thin Zenoh pub/sub client — all LLM processing happens daemon-side.
@@ -833,6 +835,8 @@ Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to e
 
 **Permission model:** Higher tiers inherit lower tier permissions (Admin can do everything, Operator can do Viewer tasks).
 
+Security enforcement is implemented in `dispatch_security.rs` — all tool calls pass through RBAC validation before execution.
+
 ---
 
 ## Security Model
@@ -1063,8 +1067,8 @@ get_system_status → get_node_logs
 
 - **Viewer:** 13 tools (read-only)
 - **Operator:** 15 tools (operations)
-- **Admin:** 6 tools (system modification)
-- **Total:** 34 tools
+- **Admin:** 9 tools (system modification)
+- **Total:** 37 tools
 
 ### Key Paths
 
@@ -1107,7 +1111,7 @@ Now the agent autonomously monitors temperature every 15 minutes without further
 
 ## Summary
 
-- **34 tools** across 3 RBAC tiers (Viewer, Operator, Admin)
+- **37 tools** across 3 RBAC tiers (Viewer, Operator, Admin)
 - **Dual-plane architecture:** MCP for control, Zenoh for data
 - **Task scheduling** for autonomous behavior (cron jobs, retry with circuit breaker)
 - **Robustness** — turn/tool timeouts, provider retry, context recovery, result truncation

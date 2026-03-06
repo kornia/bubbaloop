@@ -78,6 +78,14 @@ bubbaloop agent chat
 bubbaloop agent list
 ```
 
+### First-Run Onboarding
+
+The first time you run `bubbaloop agent chat`, the agent introduces itself and asks:
+- What name you'd like to call it (default: jean-clawd)
+- What hardware you're working with
+
+This creates the agent's identity and memory. To reset: `rm ~/.bubbaloop/.onboarded`
+
 ### Custom Agents (Optional)
 
 Create `~/.bubbaloop/agents.toml` to configure multiple agents:
@@ -96,37 +104,31 @@ Customize per-agent identity in `~/.bubbaloop/agents/{agent-id}/soul/identity.md
 
 See [Agent Guide](../agent-guide.md#creating-and-managing-agents) for the full multi-agent setup.
 
+## Step 6: Customize Your Agent
+
+Each agent has a Soul — two files that define personality and behavior:
+
+**Identity** (`~/.bubbaloop/agents/{id}/soul/identity.md`):
+```markdown
+# Jean-Clawd
+I'm a hardware-obsessed shrimp who lives in your Jetson.
+I specialize in camera feeds and sensor monitoring.
+```
+
+**Capabilities** (`~/.bubbaloop/agents/{id}/soul/capabilities.toml`):
+```toml
+model = "claude-sonnet-4-20250514"
+heartbeat_interval_secs = 300
+compaction_flush_threshold_tokens = 150000
+```
+
+Changes take effect on the next turn — no restart needed.
+
+See [Memory](../concepts/memory.md) for how agents remember conversations.
+
 ---
 
 See [Installation](installation.md) for detailed requirements.
-
-## Configuration
-
-### Camera Configuration
-
-Create `~/.bubbaloop/configs/cameras.yaml`:
-
-```yaml
-cameras:
-  - name: "entrance"
-    url: "rtsp://user:password@192.168.1.100:554/stream1"
-    latency: 200
-
-  - name: "backyard"
-    url: "rtsp://user:password@192.168.1.101:554/stream1"
-    latency: 200
-```
-
-### Weather Service
-
-Create `~/.bubbaloop/configs/config.yaml`:
-
-```yaml
-weather:
-  latitude: 37.7749
-  longitude: -122.4194
-  interval_secs: 300
-```
 
 ## Service Management
 
@@ -201,3 +203,4 @@ pixi run dashboard   # Web dashboard
 - [Installation](installation.md) — Detailed installation options
 - [Configuration](configuration.md) — Component configuration options
 - [Architecture](../concepts/architecture.md) — Understand the system design
+- [Memory](../concepts/memory.md) — How agents remember

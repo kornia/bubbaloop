@@ -1,194 +1,238 @@
 # Architecture
 
-Bubbaloop is designed as a modular orchestration system where specialized components (Bubbles) communicate through a unified messaging layer (Loop).
+How the pieces fit together.
 
-## System Overview
+---
 
-```mermaid
-flowchart TB
-    subgraph sensors [Sensors]
-        cam1[RTSP Camera 1]
-        cam2[RTSP Camera 2]
-        camN[Camera N]
-    end
+## Layer Diagram
 
-    subgraph services [Services]
-        weather[OpenMeteo Weather]
-        ml[ML Inference]
-    end
-
-    subgraph core [Zenoh Message Bus]
-        zenoh((Zenoh Router))
-        ws[WebSocket Bridge]
-    end
-
-    subgraph dashboard [Dashboard]
-        react[React App]
-        webcodecs[WebCodecs Decoder]
-        canvas[Canvas Rendering]
-    end
-
-    cam1 -->|CompressedImage| zenoh
-    cam2 -->|CompressedImage| zenoh
-    camN -->|CompressedImage| zenoh
-    weather -->|Weather Data| zenoh
-    ml -.->|Inference Results| zenoh
-
-    zenoh <--> ws
-    ws -->|WebSocket| react
-    react --> webcodecs
-    webcodecs --> canvas
 ```
+  CLI / Dashboard / MCP Client
+           |
+           | Zenoh pub/sub
+           |
+  +---------+------------------------------------------------+
+  |  Daemon (~12-13 MB single binary)                        |
+  |                                                          |
+  |  Agent Runtime  |  MCP Server  |  Node Manager           |
+  |                 |              |                          |
+  |  Telemetry Watchdog                                      |
+  +---------+------------------------------------------------+
+           |
+           | Zenoh pub/sub
+           |
+  +--------+--------+--------+
+  |        |        |        |
+  Camera   IMU    Motor   Weather     (self-describing nodes)
+```
+
+One binary. Four subsystems. One data plane.
+
+---
+
+## Three Entry Points
+
+All three share the same daemon-side agent runtime and MCP tools.
+
+**CLI** (`bubbaloop agent chat`)
+- Thin Zenoh client. No LLM on the CLI side.
+- Publishes to the agent's inbox topic, subscribes to its outbox.
+- All LLM processing happens inside the daemon.
+
+**MCP stdio** (`bubbaloop mcp --stdio`)
+- For Claude Code and local AI agents.
+- No auth required — inherits user permissions (Admin tier).
+- Launch: add `bubbaloop mcp --stdio` to your Claude Code config.
+
+**MCP HTTP** (daemon auto-starts on `:8088`)
+- For remote agents, dashboards, and external integrations.
+- Bearer token auth (`~/.bubbaloop/mcp-token`).
+- Localhost only — never binds `0.0.0.0`.
+
+---
+
+## Agent Runtime
+
+The daemon hosts a multi-agent Zenoh gateway. Agents run entirely daemon-side.
+
+**Gateway protocol**
+
+```
+CLI client                Daemon (agent runtime)
+    |                            |
+    |-- publish to inbox ------->|
+    |                     [agent loop]
+    |                     [LLM turn]
+    |                     [tool dispatch]
+    |<-- publish to outbox ------|
+```
+
+- Shared inbox topic: `bubbaloop/agents/inbox`
+- Per-agent outbox: `bubbaloop/agents/{id}/outbox`
+- Wire format: JSON (`AgentMessage`, `AgentEvent`)
+
+**Per-agent state**
+
+Each agent has:
+- `Soul` — identity.md + capabilities.toml in `~/.bubbaloop/agents/{id}/soul/`
+- 3-tier Memory — short-term (RAM), episodic (NDJSON + FTS5), semantic (SQLite)
+- Adaptive heartbeat — arousal rises on activity, decays at rest
+
+**Configuration**
+
+Agents defined in `~/.bubbaloop/agents.toml`. Per-agent files at
+`~/.bubbaloop/agents/{id}/`. Soul hot-reloads — changes take effect on the next turn.
+
+---
+
+## Daemon
+
+Four subsystems run concurrently inside a single async runtime.
+
+**Node Manager** — builds, installs, starts/stops, and health-monitors nodes via
+systemd. Uses D-Bus (`zbus`) — no subprocess spawning.
+
+**Agent Runtime** — multi-agent Zenoh gateway. Described above.
+
+**MCP Server** — 37 tools, 3-tier RBAC, stdio + HTTP transports. Described below.
+
+**Telemetry Watchdog**
+
+Monitors CPU, RAM, disk, and GPU on ARM64/x86. Five severity levels drive adaptive
+sampling and automatic circuit breakers.
+
+```
+Green  < 60% RAM  — normal (30s sampling)
+Yellow  60-80%    — warn agent (10s sampling)
+Orange  80-90%    — urgent alert (5s sampling)
+Red     90-95%    — kill largest non-essential node
+Critical > 95%    — kill ALL non-essential nodes
+```
+
+Config at `~/.bubbaloop/telemetry.toml`. File-watched. Agent can tune thresholds at
+runtime via `update_telemetry_config`.
+
+---
+
+## MCP Server
+
+The sole control interface. Zenoh is the data plane only.
+
+**37 tools across 7 categories**
+
+| Category | What it covers |
+|---|---|
+| Node lifecycle | install, uninstall, start, stop, restart, build, clean, autostart |
+| Fleet discovery | list nodes, health, config, manifest, schema, stream info |
+| Agent memory | search, forget, semantic store |
+| Telemetry | system metrics, history, config |
+| Scheduling | schedule task, list jobs, delete job |
+| Proposals | create, list proposals |
+| System | machine info, read/write file, run command |
+
+**3-tier RBAC**
+
+| Role | Permissions |
+|---|---|
+| Viewer | Discovery and read-only data |
+| Operator | Viewer + lifecycle, send_command, config writes |
+| Admin | Operator + install/uninstall, system tools |
+
+Default for stdio: Admin. Default for HTTP: Viewer.
+
+**Dual-plane design**
+
+MCP handles control and metadata. Zenoh handles data streams. Agents use
+`get_stream_info` to learn the Zenoh topic for a node, then subscribe directly
+for high-frequency data (video, IMU, etc.).
+
+---
+
+## Node Contract
+
+Every node serves five standard queryables. Short paths for readability — full
+paths follow the topic hierarchy below.
+
+```
+{node}/schema      -> Protobuf FileDescriptorSet (binary)
+{node}/manifest    -> Capabilities, topics, commands (JSON)
+{node}/health      -> Status and uptime (JSON)
+{node}/config      -> Current configuration (JSON)
+{node}/command     -> Imperative actions (JSON request/response)
+```
+
+AI agents discover nodes via the `bubbaloop/**/manifest` wildcard. They read
+the manifest to find available commands, then call `send_command` to act.
+
+**Schema rules**
+
+- Reply with raw FileDescriptorSet bytes, not JSON.
+- Never use `.complete(true)` (Rust) or `complete=True` (Python) — blocks wildcard queries.
+- Python: `query.key_expr` is a property, not a method.
+
+---
+
+## Security Layers
+
+Four layers. Brief summary — see [ARCHITECTURE.md](../../ARCHITECTURE.md) for full details.
+
+**Input validation**
+Node names: `[a-zA-Z0-9_-]`, 1-64 chars, no null bytes. Build command allowlist:
+`cargo`, `pixi`, `npm`, `make`, `python`, `pip` only. `find_curl()` searches
+`/usr/bin`, `/usr/local/bin`, `/bin` only — never PATH.
+
+**RBAC**
+Viewer/Operator/Admin tiers enforced at the MCP tool level. Unknown tools default
+to Admin. All requests audit-logged.
+
+**Build sandboxing**
+Node builds run under the allowlist. Git clone always uses `--` separator.
+`bubbaloop-schemas` is a separate crate, not in the workspace — no supply chain
+cross-contamination.
+
+**Network isolation**
+HTTP and MCP bind localhost only. Zenoh supports mTLS with per-key ACLs. Bearer
+token at `~/.bubbaloop/mcp-token` (0600 permissions, never logged).
+
+---
 
 ## Data Flow
 
 ```
-Component → Protobuf Message → Zenoh → WebSocket Bridge → Browser
+Node --> Protobuf --> Zenoh --> WebSocket Bridge --> Browser / Dashboard
+                          \--> Agent (via Zenoh subscription)
 ```
 
-1. **Component**: Captures or processes data (camera, weather service, etc.)
-2. **Protobuf**: Serializes data into efficient binary format
-3. **Zenoh**: Routes messages via pub/sub topics
-4. **Bridge**: Translates Zenoh protocol to WebSocket
-5. **Browser**: Decodes and visualizes data
+1. Node serializes data to Protobuf and publishes to its Zenoh topic.
+2. Dashboard subscribes via WebSocket bridge, decodes with schema registry.
+3. Agents subscribe directly to Zenoh or query via MCP tools.
 
-## Core Components
+---
 
-### Sensors
+## Topic Hierarchy
 
-Sensors capture data from the physical world and publish it to the message bus.
-
-| Sensor | Output | Description |
-|--------|--------|-------------|
-| RTSP Camera | CompressedImage | H264 video frames from RTSP cameras |
-| IMU (future) | IMUData | Accelerometer, gyroscope data |
-| LiDAR (future) | PointCloud | 3D point cloud data |
-
-See [Sensors](../components/sensors/index.md) for available sensors.
-
-### Services
-
-Services provide data processing, external integrations, or computed outputs.
-
-| Service | Output | Description |
-|---------|--------|-------------|
-| OpenMeteo | Weather data | Current conditions and forecasts |
-| ML Inference (future) | Detections | Object detection, classification |
-
-See [Services](../components/services/index.md) for available services.
-
-### Actuators
-
-Actuators interact with the physical world based on commands.
-
-| Actuator | Input | Description |
-|----------|-------|-------------|
-| Motor (future) | Velocity | Speed and direction control |
-| Servo (future) | Position | Angular position control |
-
-See [Actuators](../components/actuators/index.md) for planned actuators.
-
-## Camera Pipeline
-
-The camera pipeline is optimized for zero-copy H264 passthrough:
-
-```mermaid
-flowchart LR
-    A[rtspsrc] -->|RTP| B[rtph264depay]
-    B -->|H264 AVC| C[h264parse]
-    C -->|"Annex B + SPS/PPS"| D[appsink]
-
-    style A fill:#e1f5fe
-    style D fill:#c8e6c9
+```
+bubbaloop/{scope}/{machine_id}/{node_name}/{resource}
+          |        |            |           |
+          |        |            |           +-- schema, manifest, health, config, command
+          |        |            +-------------- node identifier  [a-zA-Z0-9_-], 1-64 chars
+          |        +--------------------------- machine ID (e.g., nvidia_orin00)
+          +------------------------------------ scope (local / edge / cloud)
 ```
 
-**Key optimizations:**
+Nodes receive scope, machine ID, and Zenoh endpoint via environment variables
+injected by the daemon into systemd unit files:
 
-- No decoding on the server (zero CPU overhead)
-- SPS/PPS headers injected before keyframes
-- Zero-copy buffer mapping from GStreamer
-
-### Camera Node
-
-Each camera runs as an independent node:
-
-- Wraps GStreamer pipeline in Zenoh node
-- Publishes `CompressedImage` messages
-- Includes timestamps and sequence numbers
-- Handles graceful shutdown
-
-## Messaging Layer
-
-### Zenoh
-
-[Zenoh](https://zenoh.io/) provides the messaging backbone:
-
-- **Pub/Sub**: Efficient topic-based routing
-- **Low latency**: Designed for robotics and IoT
-- **Flexible topology**: Peer-to-peer or routed
-- **Multiple protocols**: TCP, UDP, WebSocket
-
-### WebSocket Bridge
-
-The `zenoh-bridge-remote-api` enables browser access:
-
-- Translates Zenoh protocol to WebSocket
-- Listens on TCP:7448 for Rust clients
-- Serves WebSocket on port 10000 for browsers
-
-See [Messaging](messaging.md) for protocol details.
-
-## Dashboard Architecture
-
-The React dashboard provides real-time visualization:
-
-```mermaid
-flowchart LR
-    subgraph Browser
-        zenohts[zenoh-ts Client]
-        decoder[Protobuf Decoder]
-        webcodecs[WebCodecs H264]
-        panels[Panel Components]
-    end
-
-    ws[WebSocket :10000] --> zenohts
-    zenohts --> decoder
-    decoder --> webcodecs
-    decoder --> panels
-    webcodecs --> panels
+```
+BUBBALOOP_SCOPE=local
+BUBBALOOP_MACHINE_ID=nvidia_orin00
+BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447
 ```
 
-**Components:**
-
-| Component | Purpose |
-|-----------|---------|
-| zenoh-ts | TypeScript Zenoh client for WebSocket |
-| Protobuf decoder | Parses binary messages |
-| WebCodecs | Hardware-accelerated H264 decoding |
-| Panels | Render camera, weather, stats, etc. |
-
-## Performance
-
-| Metric | Value |
-|--------|-------|
-| CPU overhead | Near zero (no decode on server) |
-| Latency | ~200ms (configurable) |
-| Memory per camera | ~10-50MB |
-| Max cameras | Limited by network bandwidth |
-
-## Browser Requirements
-
-WebCodecs API is required for H264 decoding:
-
-| Browser | Support |
-|---------|---------|
-| Chrome 94+ | Supported |
-| Edge 94+ | Supported |
-| Safari 16.4+ | Supported |
-| Firefox | Not supported |
+---
 
 ## Next Steps
 
-- [Messaging](messaging.md) — Zenoh messaging patterns
-- [Topics](topics.md) — Topic naming conventions
-- [Components](../components/index.md) — Available components
+- [Messaging](messaging.md) — Zenoh pub/sub patterns and topic conventions
+- [Memory](memory.md) — 3-tier agent memory: short-term, episodic, semantic
+- [ARCHITECTURE.md](../../ARCHITECTURE.md) — Full security model, technology choices, design rationale

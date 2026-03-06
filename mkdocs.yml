@@ -1,5 +1,5 @@
 site_name: Bubbaloop
-site_description: Orchestration system for Physical AI - sensors, actuators, and services
+site_description: The open-source Hardware AI agent. Cameras, sensors, robots, and IoT fleets — orchestrated by AI.
 site_author: Edgar Riba
 
 repo_name: kornia/bubbaloop
@@ -7,31 +7,48 @@ repo_url: https://github.com/kornia/bubbaloop
 
 theme:
   name: material
+  custom_dir: docs/overrides
   palette:
     - scheme: slate
-      primary: deep purple
-      accent: amber
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
     - scheme: default
-      primary: deep purple
-      accent: amber
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
+  font:
+    text: Inter
+    code: JetBrains Mono
   features:
+    - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
     - navigation.expand
     - navigation.indexes
+    - navigation.top
+    - navigation.instant
+    - navigation.instant.progress
     - content.code.copy
     - content.code.annotate
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
   icon:
     repo: fontawesome/brands/github
 
 markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
@@ -39,11 +56,19 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
+  - pymdownx.snippets
+  - pymdownx.mark
+  - pymdownx.keys
   - admonition
   - pymdownx.details
   - attr_list
   - md_in_html
   - tables
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/extra.css
 
 extra_javascript:
   - https://unpkg.com/mermaid@10/dist/mermaid.min.js
@@ -57,8 +82,13 @@ nav:
   - Concepts:
     - Architecture: concepts/architecture.md
     - Messaging: concepts/messaging.md
+    - 3-Tier Memory: concepts/memory.md
     - Topics: concepts/topics.md
-  - Components:
+  - Agent:
+    - Agent Guide: agent-guide.md
+    - Guides:
+      - Telemetry Watchdog: guides/telemetry-watchdog.md
+  - Nodes:
     - Overview: components/index.md
     - Sensors:
       - Overview: components/sensors/index.md
@@ -68,6 +98,7 @@ nav:
       - OpenMeteo Weather: components/services/openmeteo.md
     - Actuators:
       - Overview: components/actuators/index.md
+    - Create Your First Node: guides/create-your-first-node.md
   - Dashboard:
     - Overview: dashboard/index.md
     - Panels:
@@ -76,16 +107,14 @@ nav:
       - Weather: dashboard/panels/weather.md
       - Stats & Metrics: dashboard/panels/stats.md
     - Remote Access: dashboard/remote-access.md
-  - API Reference:
-    - Overview: api/index.md
-    - Header: api/header.md
-    - Camera Messages: api/camera.md
-    - Weather Messages: api/weather.md
-  - Guides:
-    - Telemetry Watchdog: guides/telemetry-watchdog.md
   - Reference:
     - CLI Commands: reference/cli.md
-    - Troubleshooting: reference/troubleshooting.md
+    - API:
+      - Overview: api/index.md
+      - Header: api/header.md
+      - Camera Messages: api/camera.md
+      - Weather Messages: api/weather.md
+    - Troubleshooting: troubleshooting.md
 
 extra:
   social:
@@ -93,4 +122,3 @@ extra:
       link: https://github.com/kornia/bubbaloop
     - icon: fontawesome/brands/discord
       link: https://discord.com/invite/HfnywwpBnD
-

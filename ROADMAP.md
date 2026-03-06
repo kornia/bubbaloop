@@ -63,7 +63,7 @@ bubbaloop agent chat   # interactive REPL
 │  │  Short-term (RAM) | Episodic (NDJSON) | Semantic DB │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (25 tools) — sole control interface     │  │
+│  │  MCP Server (37 tools) — sole control interface     │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  Daemon (skill runtime + agent host)                │  │

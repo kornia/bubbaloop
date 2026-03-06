@@ -1035,6 +1035,77 @@ bubbaloop status
 
 ---
 
+## Agent Issues
+
+### Agent not responding
+
+**Check:**
+```bash
+bubbaloop agent list          # Empty = no agents running
+journalctl --user -u bubbaloop-daemon | grep Agent
+```
+
+**Fix:** Ensure `~/.bubbaloop/agents.toml` exists (or let daemon create defaults). Restart daemon:
+```bash
+systemctl --user restart bubbaloop-daemon
+```
+
+### "No API key configured"
+
+**Check:**
+```bash
+bubbaloop login --status
+```
+
+**Fix:** Authenticate with `bubbaloop login`. Choose API key or Claude subscription.
+
+### Agent stuck / not finishing turn
+
+Turn timeout is 120s, tool call timeout is 30s. Check daemon logs:
+```bash
+journalctl --user -u bubbaloop-daemon | grep -i timeout
+```
+
+May indicate API rate limiting (HTTP 429). Wait and retry, or check your Anthropic usage dashboard.
+
+### Agent lost context
+
+Context compaction fires when approaching the token limit (~200K tokens). Previous context is recovered from episodic memory on the next turn.
+
+**Check:** Ask the agent `memory_search` for recent entries:
+```
+bubbaloop agent chat "Search your memory for what we discussed today"
+```
+
+### Soul changes not taking effect
+
+Soul files hot-reload on the **next turn**, not mid-turn. Check file permissions:
+```bash
+ls -la ~/.bubbaloop/agents/jean-clawd/soul/
+```
+
+### First-run onboarding keeps repeating
+
+**Check:** Look for the `.onboarded` marker:
+```bash
+ls ~/.bubbaloop/.onboarded
+```
+
+**Fix:**
+```bash
+touch ~/.bubbaloop/.onboarded
+```
+
+### "Daemon is not running" but it is
+
+The CLI checks for the daemon manifest via Zenoh. If Zenoh router is down, the check fails.
+```bash
+pgrep zenohd              # Should return a PID
+bubbaloop doctor --fix     # Auto-repairs Zenoh issues
+```
+
+---
+
 ## LLM Troubleshooting Guide
 
 This section is specifically for AI assistants (LLMs) using Bubbaloop commands for diagnostics.

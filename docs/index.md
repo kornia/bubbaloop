@@ -1,115 +1,198 @@
+<div class="hero" markdown>
+
 # Bubbaloop
 
-**AI-native orchestration for Physical AI** — Build intelligent robotic systems by composing sensors, actuators, and services through a unified messaging layer.
+<p class="hero-tagline">"Shrimp-fried cameras, shrimp-grilled sensors, shrimp-sauteed robots..."</p>
 
-## What is Bubbaloop?
-
-Bubbaloop is an orchestration framework for building physical AI systems. The name combines **Bubbles** (nodes/components) interconnected through a messaging **Loop**, creating a flexible architecture where specialized components can be composed into complete robotic solutions.
-
-### Core Concepts
-
-- **Sensors** capture data from the physical world (cameras, IMUs, LiDAR)
-- **Services** provide data processing and external integrations (weather, ML inference)
-- **Actuators** interact with the physical world (motors, servos, speakers)
-- **Dashboard** provides real-time monitoring, visualization, and analytics
-
-All components communicate via [Zenoh](https://zenoh.io/) messaging for low-latency, distributed operation.
-
-## Quick Install
+**The open-source Hardware AI agent.** One binary. 37 tools. Talk to your cameras, sensors, and robots in plain English.
 
 ```bash
-# One-line install (Linux x86_64/ARM64)
-curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
-source ~/.bashrc
-
-# Verify installation
-bubbaloop doctor --fix
-bubbaloop status
+bubbaloop up
+bubbaloop agent chat "What sensors do I have?"
 ```
 
-This installs:
-- **zenohd** — Pub/sub router on port 7447
-- **zenoh-bridge-remote-api** — WebSocket bridge on port 10001
-- **bubbaloop** — Single ~12 MB binary (CLI + daemon + MCP server + agent runtime)
-- **Dashboard** — Web UI at http://localhost:8080
+</div>
 
-All run as systemd user services with autostart enabled.
-
-## Architecture
+## What You Get
 
 ```mermaid
 flowchart TB
     subgraph Clients
-        agent_cli[Agent CLI - Zenoh pub/sub]
-        dash[Dashboard - React]
-        mcp_client[MCP Client - Claude Code]
+        cli["CLI — bubbaloop agent chat"]
+        mcp_client["MCP Client — Claude Code"]
+        dash["Dashboard — React"]
+    end
+
+    subgraph "Daemon (single binary)"
+        runtime["Agent Runtime — multi-agent, per-agent memory"]
+        mcp["MCP Server — 30 tools, RBAC"]
+        nm["Node Manager — lifecycle, health, build"]
+        watchdog["Telemetry Watchdog — CPU/RAM/disk/GPU"]
     end
 
     subgraph Messaging
-        bridge[zenoh-bridge-remote-api]
-        zenohd((zenohd))
+        zenohd(("zenohd — pub/sub router"))
+        bridge["WebSocket Bridge"]
     end
 
-    subgraph Daemon
-        nm[Node Manager]
-        mcp[MCP Server - 25+ tools]
-        runtime[Agent Runtime - multi-agent]
-        sysd[systemd D-Bus]
+    subgraph "Nodes (self-describing)"
+        cam["rtsp-camera"]
+        weather["openmeteo"]
+        custom["your-node..."]
     end
 
-    subgraph Nodes
-        cam[rtsp-camera]
-        weather[openmeteo]
-        custom[custom nodes...]
-    end
-
-    agent_cli --> zenohd
+    cli --> zenohd
     mcp_client --> mcp
     dash --> bridge --> zenohd
-    zenohd <--> nm
     zenohd <--> runtime
-    nm --> sysd
+    zenohd <--> nm
     zenohd <--> cam
     zenohd <--> weather
     zenohd <--> custom
 ```
 
-## Features
+A single ~12 MB Rust binary runs as a systemd service. The daemon hosts:
 
-| Feature | Description |
-|---------|-------------|
-| Zero-copy H264 passthrough | Direct stream forwarding, no decoding overhead |
-| Multi-camera support | Stream from multiple RTSP cameras simultaneously |
-| Zenoh integration | Publish/subscribe with scoped topics |
-| React Dashboard | Real-time browser visualization with WebCodecs |
-| Multi-instance nodes | Run same node with different configs |
-| System diagnostics | `bubbaloop doctor --fix` for auto-repair |
-| Fleet management | Multi-machine orchestration |
+- **Agent Runtime**: Multi-agent Zenoh gateway with per-agent Soul, 3-tier memory, adaptive heartbeat
+- **MCP Server**: 37 tools across 7 categories — node lifecycle, fleet discovery, agent memory, telemetry, scheduling
+- **Node Manager**: Build, install, start/stop nodes as systemd services
+- **Telemetry Watchdog**: CPU, RAM, disk, GPU monitoring with circuit breakers
 
-## Basic Usage
+## 5 Minutes to Magic
 
 ```bash
-# Start daemon (agent runtime + MCP server + node manager)
+# 1. Install
+curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
+source ~/.bashrc
+
+# 2. Login
+bubbaloop login
+
+# 3. Start everything
 bubbaloop up
 
-# Talk to your hardware via AI agents
-bubbaloop agent chat "What sensors do I have?"
-bubbaloop agent chat                  # Interactive REPL
-bubbaloop agent list                  # Show running agents
-
-# System status and diagnostics
-bubbaloop status
-bubbaloop doctor --fix
-
-# Node lifecycle
-bubbaloop node add user/my-node --build --install
-bubbaloop node start my-node
-bubbaloop node logs my-node -f
+# 4. Talk to your hardware
+bubbaloop agent chat
 ```
 
-## Development Setup
+First time? The agent introduces itself and asks what you care about. It remembers.
 
-For building from source:
+## Features
+
+<div class="feature-grid" markdown>
+<div class="card" markdown>
+
+### Agent Runtime
+<span class="badge badge-agent">Agent</span>
+
+Multi-agent with Zenoh gateway. Each agent gets its own Soul and memory.
+
+</div>
+<div class="card" markdown>
+
+### 37 Tools
+<span class="badge badge-mcp">MCP</span>
+
+Node lifecycle, fleet discovery, memory search, telemetry, scheduling, proposals.
+
+</div>
+<div class="card" markdown>
+
+### 3-Tier Memory
+<span class="badge badge-agent">Agent</span>
+
+RAM (current turn) + NDJSON logs (episodic) + SQLite (jobs, proposals, search).
+
+</div>
+<div class="card" markdown>
+
+### Soul System
+<span class="badge badge-agent">Agent</span>
+
+`identity.md` for personality, `capabilities.toml` for model tuning. Hot-reload.
+
+</div>
+<div class="card" markdown>
+
+### Node SDK
+<span class="badge badge-node">Node</span>
+
+Batteries-included Rust framework. ~50 lines to a working sensor node.
+
+</div>
+<div class="card" markdown>
+
+### Self-Describing Nodes
+<span class="badge badge-node">Node</span>
+
+Schema, manifest, health, config, command — every node is discoverable.
+
+</div>
+<div class="card" markdown>
+
+### Telemetry Watchdog
+<span class="badge badge-new">New</span>
+
+CPU/RAM/disk/GPU with 5 severity levels. Circuit breakers. Runtime-tunable.
+
+</div>
+<div class="card" markdown>
+
+### Dashboard
+<span class="badge badge-node">Node</span>
+
+React + WebCodecs. Live camera feeds, telemetry charts, protobuf decode.
+
+</div>
+<div class="card" markdown>
+
+### Fleet Management
+<span class="badge badge-mcp">MCP</span>
+
+Multi-machine orchestration via scoped Zenoh topics.
+
+</div>
+<div class="card" markdown>
+
+### MCP Server
+<span class="badge badge-mcp">MCP</span>
+
+Stdio + HTTP. 3-tier RBAC (Viewer/Operator/Admin). Bearer token auth.
+
+</div>
+<div class="card" markdown>
+
+### Adaptive Heartbeat
+<span class="badge badge-agent">Agent</span>
+
+Arousal-based decay. Active = frequent check-ins. Idle = quiet.
+
+</div>
+<div class="card" markdown>
+
+### Dual Auth
+<span class="badge badge-mcp">MCP</span>
+
+API key or Claude subscription (OAuth). `bubbaloop login` handles both.
+
+</div>
+</div>
+
+## Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `bubbaloop up` | Start daemon (agent runtime + MCP + node manager) |
+| `bubbaloop agent chat` | Chat with AI agents via Zenoh |
+| `bubbaloop agent list` | List running agents and capabilities |
+| `bubbaloop login` | Authenticate (API key or Claude subscription) |
+| `bubbaloop status` | System and node status |
+| `bubbaloop doctor --fix` | Diagnostics with auto-repair |
+| `bubbaloop node list` | List registered nodes |
+| `bubbaloop node add` | Add node from path, GitHub, or marketplace |
+| `bubbaloop mcp --stdio` | Run MCP server over stdio |
+
+## Development Setup
 
 ```bash
 git clone https://github.com/kornia/bubbaloop.git
@@ -118,33 +201,19 @@ pixi install
 pixi run up    # Start all services
 ```
 
-Dashboard: http://localhost:5173
-
-## Available Commands
-
-| Command | Description |
-|---------|-------------|
-| `bubbaloop up` | Start daemon (agent runtime + MCP + nodes) |
-| `bubbaloop agent chat` | Chat with AI agents (daemon-side LLM) |
-| `bubbaloop agent list` | List running agents and capabilities |
-| `bubbaloop status` | Show system and node status |
-| `bubbaloop doctor` | Run diagnostics (--fix for auto-repair) |
-| `bubbaloop node list` | List all nodes |
-| `bubbaloop node add` | Add node from path or GitHub |
-| `bubbaloop marketplace list` | List node sources |
-
-See [CLI Reference](reference/cli.md) for complete command documentation.
+Dashboard dev server: http://localhost:5173
 
 ## Documentation
 
-- [Quickstart](getting-started/quickstart.md) — Detailed setup instructions
-- [Configuration](getting-started/configuration.md) — Config file reference
-- [CLI Reference](reference/cli.md) — Command documentation
-- [Troubleshooting](reference/troubleshooting.md) — Common issues and solutions
-- [Architecture](concepts/architecture.md) — System design
-- [Create Your First Node](guides/create-your-first-node.md) — Node development guide
+- **[Quickstart](getting-started/quickstart.md)** — Install, login, first agent chat
+- **[Architecture](concepts/architecture.md)** — Layers, agent runtime, node contract
+- **[Messaging](concepts/messaging.md)** — Zenoh topics, agent gateway protocol
+- **[Memory](concepts/memory.md)** — 3-tier memory architecture
+- **[Configuration](getting-started/configuration.md)** — agents.toml, Soul files, telemetry.toml
+- **[Agent Guide](agent-guide.md)** — Multi-agent setup, MCP tools, security model
+- **[CLI Reference](reference/cli.md)** — Full command documentation
+- **[Troubleshooting](troubleshooting.md)** — Common issues and fixes
 
 ## Community
 
-- [Discord Server](https://discord.com/invite/HfnywwpBnD)
-- [GitHub Repository](https://github.com/kornia/bubbaloop)
+[Discord](https://discord.com/invite/HfnywwpBnD) · [GitHub](https://github.com/kornia/bubbaloop)

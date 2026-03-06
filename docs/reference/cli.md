@@ -15,6 +15,9 @@ The `bubbaloop` binary is a single ~12 MB Rust executable that includes CLI, dae
 | `bubbaloop status` | Show service and node status |
 | `bubbaloop doctor` | Run system diagnostics |
 | `bubbaloop daemon` | Run the daemon (node manager) |
+| `bubbaloop login` | Authenticate with Anthropic (API key or OAuth) |
+| `bubbaloop logout` | Remove stored credentials |
+| `bubbaloop login --status` | Check authentication status |
 
 ### Agent Commands
 
@@ -40,6 +43,30 @@ bubbaloop agent chat "What sensors do I have?"       # Single message
 bubbaloop agent chat                                  # Interactive REPL
 bubbaloop agent chat -a camera-expert "check feeds"   # Target specific agent
 bubbaloop agent list                                  # Show running agents
+```
+
+### Login Commands
+
+```bash
+bubbaloop login [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--status` | Check current authentication method and validity |
+
+**Authentication methods:**
+
+1. **API Key** (pay-as-you-go): Paste key from console.anthropic.com
+2. **Claude Subscription** (Pro/Max/Team): Run `claude setup-token` first, then paste the `sk-ant-oat01-*` token
+
+Credentials stored in `~/.bubbaloop/credentials.json`.
+
+**Examples:**
+```bash
+bubbaloop login           # Interactive login (API key or OAuth token)
+bubbaloop login --status  # Check current authentication method and validity
+bubbaloop logout          # Remove stored credentials
 ```
 
 ### Node Commands
@@ -327,6 +354,8 @@ pixi run up                  # Start all services via process-compose
 |----------|-------------|---------|
 | `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
 | `BUBBALOOP_MACHINE_ID` | Machine identifier | hostname |
+| `BUBBALOOP_MCP_PORT` | MCP HTTP server port | `8088` |
+| `ANTHROPIC_API_KEY` | Anthropic API key for Claude agents | — |
 | `RUST_LOG` | Log level | `info` |
 
 **Examples:**

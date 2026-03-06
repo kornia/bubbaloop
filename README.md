@@ -16,7 +16,7 @@ AI agents revolutionized software engineering. **Bubbaloop brings that same powe
 | **Data plane** | None | **Zenoh (zero-copy pub/sub)** |
 | **Hardware** | None | **Self-describing sensor nodes** |
 | **Runs on** | Desktop / cloud | **Jetson, RPi, any Linux ARM64/x86** |
-| **MCP role** | Client (consumes tools) | **Server (provides 23+ tools)** |
+| **MCP role** | Client (consumes tools) | **Server (37 tools, 3-tier RBAC)** |
 | **Scheduling** | Always-on LLM (~$5-10/day) | **Offline Tier 1 + LLM Tier 2 (~$0.05/day)** |
 
 ## Quick Install
@@ -73,7 +73,7 @@ bubbaloop up
 bubbaloop agent chat "What sensors do I have?"
 bubbaloop agent chat                   # Interactive REPL
 bubbaloop agent chat -a camera-expert "describe the video feed"
-bubbaloop agent list                   # Show running agents
+bubbaloop agent list                   # Show running agents + models
 
 # System diagnostics with auto-fix
 bubbaloop doctor --fix
@@ -150,8 +150,12 @@ bubbaloop daemon
 | `get_node_logs` | Read node service logs |
 | `discover_nodes` | Fleet-wide manifest discovery |
 | `query_zenoh` | Query any Zenoh key expression |
+| `memory_search` / `memory_forget` | Search or clear agent episodic memory |
+| `get_system_telemetry` | CPU, RAM, disk, GPU metrics |
+| `schedule_task` | Schedule recurring agent tasks |
+| `create_proposal` | Human-in-the-loop approval queue |
 
-Configure Claude Code to use it via `.mcp.json` (already in project root).
+37 tools total (30 MCP + 10 agent-internal). Configure Claude Code via `.mcp.json` (already in project root).
 
 ## Architecture
 
@@ -166,7 +170,7 @@ CLI ───────────────┘               │
                                    │
 Daemon ────────────────────────────┤
   ├─ Node Manager (lifecycle)      │
-  ├─ MCP Server (34 tools)       │
+  ├─ MCP Server (37 tools)        │
   ├─ Agent Runtime (multi-agent)   │
   └─ Systemd D-Bus (zbus)         │
                                    │
@@ -177,6 +181,12 @@ Nodes (self-describing) ───────────┘
 ```
 
 The daemon hosts the **agent runtime** (multi-agent Zenoh gateway) alongside the MCP server. Agents are configured via `~/.bubbaloop/agents.toml` with per-agent identity and memory in `~/.bubbaloop/agents/{id}/`. The CLI is a thin Zenoh client — all LLM processing runs daemon-side.
+
+**Per-agent features:**
+- **Soul**: `identity.md` (personality) + `capabilities.toml` (model, heartbeat). Hot-reload on file change.
+- **3-Tier Memory**: RAM (current turn) → NDJSON logs (episodic, BM25 search) → SQLite (jobs, proposals).
+- **Adaptive Heartbeat**: Arousal-based decay — active agents check in frequently, idle agents stay quiet.
+- **Telemetry Watchdog**: CPU/RAM/disk/GPU monitoring with circuit breakers and 5 severity levels.
 
 ## Node Contract
 
