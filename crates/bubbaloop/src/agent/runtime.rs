@@ -235,15 +235,8 @@ impl AgentRuntime {
             }
 
             // Per-agent directory: ~/.bubbaloop/agents/{agent_id}/
-            // Only start agents whose directory was created by onboarding.
             let agent_dir = agent_directory(agent_id);
-            if !agent_dir.exists() {
-                log::info!(
-                    "[Runtime] Agent '{}' has no directory, skipping (run onboarding first)",
-                    agent_id
-                );
-                continue;
-            }
+            std::fs::create_dir_all(&agent_dir).ok();
 
             // Load per-agent Soul (falls back to global Soul)
             let soul_dir = agent_dir.join("soul");
