@@ -13,14 +13,16 @@ use zenoh::Session;
 /// Timeout waiting for first response from daemon.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Check if the daemon's agent runtime is reachable by querying for agent manifests.
+/// Check if the daemon is reachable by querying the daemon manifest.
 pub async fn is_daemon_running(session: &Arc<Session>, scope: &str, machine_id: &str) -> bool {
-    let pattern = gateway::manifest_wildcard(scope, machine_id);
-    match session.get(&pattern).timeout(Duration::from_secs(2)).await {
-        Ok(replies) => {
-            // If we get at least one manifest reply, daemon is running
-            replies.recv_async().await.is_ok()
-        }
+    let pattern = crate::daemon::gateway::manifest_topic(scope, machine_id);
+    match session
+        .get(&pattern)
+        .target(zenoh::query::QueryTarget::BestMatching)
+        .timeout(Duration::from_secs(2))
+        .await
+    {
+        Ok(replies) => replies.recv_async().await.is_ok(),
         Err(_) => false,
     }
 }
