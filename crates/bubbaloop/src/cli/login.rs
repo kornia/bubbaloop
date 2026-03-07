@@ -482,6 +482,22 @@ fn parse_model_name(body: &serde_json::Value) -> String {
         .to_string()
 }
 
+/// Check if any Claude API credentials are configured (env var, OAuth, or key file).
+pub fn has_claude_credentials() -> bool {
+    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        return true;
+    }
+    if let Ok(Some(_)) = load_oauth_credentials() {
+        return true;
+    }
+    if let Ok(path) = key_file_path() {
+        if path.exists() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Get the path to the API key file: `~/.bubbaloop/anthropic-key`.
 fn key_file_path() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or(LoginError::NoHomeDir)?;

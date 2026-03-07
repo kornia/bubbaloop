@@ -17,6 +17,16 @@ pub struct AgentCommand {
 pub enum AgentSubcommand {
     Chat(ChatCommand),
     List(ListCommand),
+    Setup(SetupCommand),
+}
+
+/// Configure agent provider and model (writes to ~/.bubbaloop/agents.toml)
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "setup")]
+pub struct SetupCommand {
+    /// target agent ID to configure (interactive selection if omitted)
+    #[argh(option, short = 'a')]
+    pub agent: Option<String>,
 }
 
 /// Send messages to an agent via the daemon (auto-starts daemon if needed)

@@ -67,12 +67,20 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
      └────────┘  └────────┘  └────────┘
 ```
 
-**Three entry points, same core:**
+**Entry points:**
+- `bubbaloop agent setup` — interactive wizard: configure provider, model, and identity. No daemon needed.
 - `bubbaloop agent chat` — thin Zenoh CLI client (LLM runs daemon-side)
 - `bubbaloop agent list` — discover running agents via manifest queryables
 - `bubbaloop mcp --stdio` — MCP server for Claude Code / external agents
 
 **Key principle**: Nodes are autonomous and self-describing. The MCP server is the sole control interface — Zenoh is the data plane only. The agent runtime runs inside the daemon, with agents configured via `~/.bubbaloop/agents.toml` and per-agent state in `~/.bubbaloop/agents/{id}/`.
+
+**Agent identity model:**
+- **Agent ID** (`agents.toml` key, e.g. `jean-clawd`) — immutable routing key; determines filesystem path and Zenoh topics
+- **Display name / personality** (`~/.bubbaloop/agents/{id}/soul/identity.md`) — freely editable plain text; soul watcher hot-reloads without daemon restart
+- **First-run onboarding** — if no `identity.md` exists and a `.needs-onboarding` marker is present (written by `agent setup`), the daemon injects an onboarding system prompt on the first chat turn. The LLM interviews the user, writes `identity.md`, and clears the marker automatically.
+
+**Per-agent model override:** `agents.toml` supports an optional `model` field that overrides `Soul.capabilities.model_name` at the provider level. This lets different agents run different models without touching soul files.
 
 ---
 

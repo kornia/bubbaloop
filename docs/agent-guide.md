@@ -71,8 +71,19 @@ capabilities = ["camera", "rtsp", "video"]
 | `enabled` | bool | `true` | Whether the agent starts with the daemon |
 | `default` | bool | `false` | Routes unaddressed messages here (exactly one should be `true`) |
 | `capabilities` | string[] | `[]` | Keyword tags (future: capability-based routing) |
+| `provider` | string | `"claude"` | LLM provider: `"claude"` or `"ollama"` |
+| `model` | string | — | Model override (e.g., `"claude-haiku-4-5-20251001"`). Overrides `soul/capabilities.toml` model_name when set. |
 
 If no `agents.toml` exists, the runtime creates a single default agent named `jean-clawd`.
+
+**Interactive setup wizard:**
+
+```bash
+bubbaloop agent setup              # Configure existing agent (interactive selection)
+bubbaloop agent setup -a my-agent  # Create or configure a specific agent
+```
+
+The wizard lets you choose provider (Claude or Ollama), pick a model, and — for new agents — write an initial `identity.md`. No daemon required.
 
 ### Step 2: Customize the Agent's Soul
 

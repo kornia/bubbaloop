@@ -237,6 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              --status: Show current auth status");
             eprintln!("  logout    Remove saved Anthropic API key");
             eprintln!("  agent     Interact with AI agents via the daemon:");
+            eprintln!("              setup [-a <id>]: Configure provider, model, and identity (no daemon needed)");
             eprintln!("              chat [-a agent[@machine]] [message]: Send messages to agents");
             eprintln!("              list [--all]: Show running agents and capabilities");
             eprintln!("  up        Load skills and ensure sensor nodes are running:");
@@ -339,6 +340,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         }
         Some(Command::Agent(cmd)) => {
+            // Setup runs without Zenoh/daemon — pure local config
+            if let bubbaloop::cli::agent::AgentSubcommand::Setup(setup_cmd) = &cmd.subcommand {
+                if let Err(e) =
+                    bubbaloop::cli::agent_setup::run_setup(setup_cmd.agent.as_deref()).await
+                {
+                    eprintln!("Error: {}", e);
+                }
+                return Ok(());
+            }
+
             // First-run onboarding: interactive interview BEFORE anything else.
             // Pure stdin/stdout — no Zenoh, no daemon needed.
             if matches!(
@@ -420,6 +431,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("Error: {}", e);
                     }
                 }
+                bubbaloop::cli::agent::AgentSubcommand::Setup(_) => unreachable!(),
             }
         }
         Some(Command::Up(cmd)) => {

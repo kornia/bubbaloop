@@ -113,6 +113,8 @@ pub struct AgentTurnInput<'a> {
     pub user_input: Option<&'a str>,
     pub job_id: Option<&'a str>,
     pub correlation_id: &'a str,
+    /// When set, triggers first-run onboarding prompt (path to identity.md).
+    pub soul_path: Option<&'a str>,
 }
 
 /// Internal context passed to `run_turn_loop`, grouping agent-config parameters.
@@ -228,7 +230,7 @@ pub async fn run_agent_turn<
         )
     };
     let resource_summary = dispatcher.telemetry_prompt_summary().await;
-    let system_prompt = prompt::build_system_prompt(
+    let system_prompt = prompt::build_system_prompt_with_soul_path(
         soul,
         &inventory,
         &active_jobs,
@@ -236,6 +238,7 @@ pub async fn run_agent_turn<
         recent_plan.as_deref(),
         recovered_context.as_deref(),
         resource_summary.as_deref(),
+        input.soul_path,
     );
 
     // Add user input to short-term memory

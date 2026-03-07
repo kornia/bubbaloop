@@ -18,10 +18,13 @@ dashboard/                 # React + Vite + TypeScript
 ```
 
 Key source files in `crates/bubbaloop/src/`:
-- `cli/login.rs` — login/logout/status: API key + Claude subscription (setup-token) auth
-- `agent/mod.rs` — Agent core: EventSink trait, run_agent_turn(), model provider traits
+- `cli/login.rs` — login/logout/status + `has_claude_credentials()` (env var → OAuth → key file)
+- `cli/agent_setup.rs` — `bubbaloop agent setup`: interactive provider/model/identity wizard (no daemon needed)
+- `cli/agent_client.rs` — Thin Zenoh CLI client for agent chat/list (pub/sub, no LLM)
+- `agent/mod.rs` — Agent core: EventSink trait, run_agent_turn(), AgentTurnInput (soul_path triggers onboarding)
 - `agent/gateway.rs` — Zenoh gateway wire format (AgentMessage, AgentEvent, topic builders)
-- `agent/runtime.rs` — Multi-agent runtime: AgentsConfig, AgentRuntime, ZenohSink, agent_loop
+- `agent/runtime.rs` — Multi-agent runtime: AgentsConfig, AgentRuntime, ZenohSink, agent_loop; `agent_directory()` (pub)
+- `agent/prompt.rs` — System prompt builder; `build_system_prompt_with_soul_path()` injects onboarding prompt for new agents
 - `agent/soul.rs` — Soul struct, first-run onboarding, notify hot-reload (`~/.bubbaloop/soul/`)
 - `agent/provider/mod.rs` — ModelProvider trait, Message, ContentBlock, ToolDefinition, StreamEvent
 - `agent/provider/claude.rs` — Claude API client with dual auth (API key + OAuth bearer token)
@@ -29,7 +32,6 @@ Key source files in `crates/bubbaloop/src/`:
 - `agent/memory/` — 3-tier: short-term (RAM) + episodic (NDJSON) + semantic (SQLite)
 - `agent/heartbeat.rs` — Adaptive heartbeat: arousal + decay + state collection
 - `agent/dispatch.rs` — Internal MCP tool dispatch (37 tools, includes telemetry)
-- `cli/agent_client.rs` — Thin Zenoh CLI client for agent chat/list (pub/sub, no LLM)
 - `cli/node/mod.rs` — node CRUD, validation, list/add/remove
 - `cli/node/install.rs` — install, precompiled binary download, GitHub clone
 - `cli/node/lifecycle.rs` — start, stop, restart, logs
@@ -156,3 +158,6 @@ Exception: views with their own fallback decode chain (like JsonView) don't need
 - OAuth tokens require Claude CLI identity headers (user-agent, x-app, anthropic-beta) — see `agent/provider/claude.rs::OAUTH_BETA_HEADERS`
 - Agent robustness constants in `agent/mod.rs`: `TURN_TIMEOUT_SECS=120`, `TOOL_CALL_TIMEOUT_SECS=30`, `MAX_TOOL_RESULT_CHARS=4096` — change these to tune agent behavior
 - `run_turn_loop()` is the inner async fn wrapped by `tokio::time::timeout` — keep turn-level logic there, finalization (Done event, trim) in `run_agent_turn()`
+- Agent ID vs display name: agent ID (`agents.toml` key) is the routing/filesystem key — immutable. The display name lives in `identity.md` (hot-reloaded). Edit `identity.md` to rename an agent without touching the ID.
+- `agent setup` onboarding flow: writes `.needs-onboarding` marker in `~/.bubbaloop/agents/{id}/`. On first chat turn, daemon injects `NEW_AGENT_IDENTITY` prompt; LLM writes `identity.md`; daemon clears marker. `needs_onboarding` bool is cached in `agent_loop` to avoid hot-path `Path::exists()` calls.
+- `agents.toml` `model` field overrides `Soul.capabilities.model_name` per-agent. Omit to use soul default.
