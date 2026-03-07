@@ -80,11 +80,14 @@ bubbaloop agent list
 
 ### First-Run Onboarding
 
-The first time you run `bubbaloop agent chat`, the agent introduces itself and asks:
-- What name you'd like to call it (default: jean-clawd)
-- What your agent's focus is
+Run the setup wizard before starting the daemon:
 
-This creates the agent's identity and memory. To reset: `rm ~/.bubbaloop/.onboarded`
+```bash
+bubbaloop agent setup              # Configure the default agent
+bubbaloop agent setup -a my-agent  # Create a named agent
+```
+
+The wizard asks you to choose a provider (Claude or Ollama) and model, then prompts for a one-sentence role description and writes `identity.md`. On the first `agent chat` turn, the daemon injects an onboarding interview so the LLM can refine its own identity and write it back — no restart needed.
 
 ### Custom Agents (Optional)
 
@@ -94,10 +97,14 @@ Create `~/.bubbaloop/agents.toml` to configure multiple agents:
 [agents.jean-clawd]
 enabled = true
 default = true
+provider = "claude"
+model = "claude-sonnet-4-20250514"  # optional: overrides soul/capabilities.toml
 
 [agents.camera-expert]
 enabled = true
 capabilities = ["camera", "rtsp", "video"]
+provider = "ollama"
+model = "qwen3.5:9b"
 ```
 
 Customize per-agent identity in `~/.bubbaloop/agents/{agent-id}/soul/identity.md`.

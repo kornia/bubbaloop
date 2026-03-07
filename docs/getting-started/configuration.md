@@ -186,8 +186,11 @@ provider = "claude"
 | `default` | bool | `false` | Receives messages when no agent specified |
 | `capabilities` | list | `[]` | Tags for agent routing |
 | `provider` | string | `"claude"` | LLM provider: `"claude"` or `"ollama"` |
+| `model` | string | — | Model name override (e.g., `"claude-haiku-4-5-20251001"`, `"qwen3.5:9b"`). Overrides `soul/capabilities.toml` `model_name` when set. |
 
 When no `agents.toml` exists, a single default agent named `jean-clawd` is created automatically.
+
+Use `bubbaloop agent setup [-a <id>]` to configure agents interactively without editing TOML by hand.
 
 ## Soul Files
 

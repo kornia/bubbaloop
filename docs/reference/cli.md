@@ -29,6 +29,7 @@ bubbaloop agent <subcommand>
 |------------|-------------|
 | `chat [message]` | Send messages to agents (REPL if no message) |
 | `list` | List running agents and capabilities |
+| `setup [-a <id>]` | Configure provider, model, and identity (no daemon needed) |
 
 **Options:**
 
@@ -43,6 +44,8 @@ bubbaloop agent chat "What sensors do I have?"       # Single message
 bubbaloop agent chat                                  # Interactive REPL
 bubbaloop agent chat -a camera-expert "check feeds"   # Target specific agent
 bubbaloop agent list                                  # Show running agents
+bubbaloop agent setup                                 # Interactive setup wizard
+bubbaloop agent setup -a camera-expert               # Configure specific agent
 ```
 
 ### Login Commands
