@@ -271,10 +271,8 @@ impl DaemonClient {
             "logs" | "get_logs" | "get-logs" => DaemonCommandType::GetLogs {
                 name: name.to_string(),
             },
-            "install" => DaemonCommandType::InstallNode {
-                source: name.to_string(),
-                name: None,
-                config: None,
+            "install" => DaemonCommandType::InstallService {
+                name: name.to_string(),
             },
             "build" => DaemonCommandType::BuildNode {
                 name: name.to_string(),

@@ -402,7 +402,6 @@ impl NodeCommand {
                 list::list_nodes(&args.format, args.base, args.instances).await
             }
             Some(NodeAction::Add(args)) => {
-                log::warn!("Note: 'bubbaloop node add' is deprecated. Use MCP tool 'install_node' instead.");
                 manage::add_node(
                     &args.source,
                     args.output.as_deref(),
@@ -416,7 +415,6 @@ impl NodeCommand {
                 .await
             }
             Some(NodeAction::Remove(args)) => {
-                log::warn!("Note: 'bubbaloop node remove' is deprecated. Use MCP tool 'remove_node' instead.");
                 manage::remove_node(&args.name, args.delete_files).await
             }
             Some(NodeAction::Instance(args)) => {
@@ -432,20 +430,9 @@ impl NodeCommand {
             }
             Some(NodeAction::Install(args)) => install::handle_install(args).await,
             Some(NodeAction::Uninstall(args)) => send_command(&args.name, "uninstall").await,
-            Some(NodeAction::Start(args)) => {
-                log::warn!("Note: 'bubbaloop node start' is deprecated. Use MCP tool 'start_node' instead.");
-                lifecycle::start_node(&args.name).await
-            }
-            Some(NodeAction::Stop(args)) => {
-                log::warn!(
-                    "Note: 'bubbaloop node stop' is deprecated. Use MCP tool 'stop_node' instead."
-                );
-                lifecycle::stop_node(&args.name).await
-            }
-            Some(NodeAction::Restart(args)) => {
-                log::warn!("Note: 'bubbaloop node restart' is deprecated. Use MCP tool 'restart_node' instead.");
-                lifecycle::restart_node(&args.name).await
-            }
+            Some(NodeAction::Start(args)) => lifecycle::start_node(&args.name).await,
+            Some(NodeAction::Stop(args)) => lifecycle::stop_node(&args.name).await,
+            Some(NodeAction::Restart(args)) => lifecycle::restart_node(&args.name).await,
             Some(NodeAction::Logs(args)) => lifecycle::view_logs(args).await,
             Some(NodeAction::Build(args)) => build::build_node(&args.name).await,
             Some(NodeAction::Clean(args)) => send_command(&args.name, "clean").await,
