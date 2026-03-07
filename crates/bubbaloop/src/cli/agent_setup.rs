@@ -75,7 +75,8 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
         println!("  Run 'bubbaloop login' first to authenticate.\n");
         println!("  Continue anyway? Model config will be saved. [y/N]");
         let mut line = String::new();
-        print!("  "); io::stdout().flush()?;
+        print!("  ");
+        io::stdout().flush()?;
         io::stdin().read_line(&mut line)?;
         if !line.trim().eq_ignore_ascii_case("y") {
             println!("  Setup cancelled. Run 'bubbaloop login' then try again.");
@@ -125,7 +126,8 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
     // Offer to restart the daemon so changes take effect immediately
     println!("\n  Restart daemon for changes to take effect? [Y/n]");
     let mut line = String::new();
-    print!("  "); io::stdout().flush()?;
+    print!("  ");
+    io::stdout().flush()?;
     io::stdin().read_line(&mut line)?;
     let should_restart = line.trim().is_empty() || line.trim().eq_ignore_ascii_case("y");
 
@@ -162,10 +164,7 @@ fn select_agent(config: &AgentsConfig) -> Result<String, Box<dyn std::error::Err
     println!("  Available agents:\n");
     for (i, (id, entry)) in agents.iter().enumerate() {
         let default_tag = if entry.default { " (default)" } else { "" };
-        let model_display = entry
-            .model
-            .as_deref()
-            .unwrap_or("soul default");
+        let model_display = entry.model.as_deref().unwrap_or("soul default");
         println!(
             "  [{}] {}{} — {} / {}",
             i + 1,
@@ -192,7 +191,9 @@ fn select_claude_model() -> Result<String, Box<dyn std::error::Error>> {
     }
     println!("  [{}] Custom (enter model ID)\n", CLAUDE_MODELS.len() + 1);
 
-    let valid: Vec<String> = (1..=CLAUDE_MODELS.len() + 1).map(|i| i.to_string()).collect();
+    let valid: Vec<String> = (1..=CLAUDE_MODELS.len() + 1)
+        .map(|i| i.to_string())
+        .collect();
     let valid_refs: Vec<&str> = valid.iter().map(|s| s.as_str()).collect();
     let choice = prompt_choice("  Select model", &valid_refs)?;
     let idx: usize = choice.parse::<usize>()? - 1;
@@ -296,9 +297,7 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
         .iter()
         .filter(|(name, _)| {
             let base = name.split(':').next().unwrap_or("");
-            !local_names
-                .iter()
-                .any(|local| local.starts_with(base))
+            !local_names.iter().any(|local| local.starts_with(base))
         })
         .copied()
         .collect();
@@ -342,10 +341,7 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
 }
 
 /// Pull an Ollama model, showing progress via the CLI `ollama pull` command.
-async fn pull_ollama_model(
-    model: &str,
-    _endpoint: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn pull_ollama_model(model: &str, _endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n  Pulling {}...\n", model);
 
     let status = tokio::process::Command::new("ollama")
@@ -431,7 +427,11 @@ mod tests {
     #[test]
     fn claude_models_have_valid_ids() {
         for (id, desc) in CLAUDE_MODELS {
-            assert!(id.starts_with("claude-"), "model ID should start with claude-: {}", id);
+            assert!(
+                id.starts_with("claude-"),
+                "model ID should start with claude-: {}",
+                id
+            );
             assert!(!desc.is_empty(), "model description should not be empty");
         }
     }
