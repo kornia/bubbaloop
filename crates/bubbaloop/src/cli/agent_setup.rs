@@ -3,9 +3,8 @@
 //! `bubbaloop agent setup` — configure which provider and model each agent uses.
 //! Writes to `~/.bubbaloop/agents.toml`. No Zenoh or daemon needed.
 
-use crate::agent::runtime::{AgentEntry, AgentsConfig};
+use crate::agent::runtime::{agent_directory, AgentEntry, AgentsConfig};
 use crate::cli::login;
-use crate::daemon::registry::get_bubbaloop_home;
 use std::io::{self, Write};
 
 /// Known Claude models for interactive selection.
@@ -104,8 +103,7 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
     println!("    model: {}", model);
     // For new agents, ask for a quick identity description and write identity.md
     if is_new_agent {
-        let agent_dir = get_bubbaloop_home().join("agents").join(&agent_id);
-        let soul_dir = agent_dir.join("soul");
+        let soul_dir = agent_directory(&agent_id).join("soul");
         std::fs::create_dir_all(&soul_dir).ok();
 
         println!("\n  Describe this agent's role in one sentence");

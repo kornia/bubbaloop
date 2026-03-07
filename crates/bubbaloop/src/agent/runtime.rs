@@ -457,7 +457,10 @@ impl AgentRuntime {
                     let payload = sample.payload().to_bytes().to_vec();
                     match serde_json::from_slice::<AgentMessage>(&payload) {
                         Ok(msg) => {
-                            log::info!("[Runtime] Inbox message: id={}, agent={:?}, text_len={}", msg.id, msg.agent, msg.text.len());
+                            log::info!(
+                                "[Runtime] Inbox message: id={}, agent={:?}, text_len={}",
+                                msg.id, msg.agent, msg.text.len()
+                            );
                             runtime.route(msg).await;
                         }
                         Err(e) => {
@@ -527,6 +530,11 @@ async fn agent_loop(
     let initial_caps = soul.read().await.capabilities.clone();
     let mut arousal = ArousalState::new(&initial_caps);
 
+    // Cache onboarding state in memory — avoids a syscall on every inbox message.
+    // True only while the marker exists and identity.md hasn't been written yet.
+    let mut needs_onboarding = onboarding_marker.exists() && !identity_path.exists();
+    let identity_path_str = identity_path.to_string_lossy().to_string();
+
     log::info!("[Agent:{}] Event loop started", agent_id);
 
     loop {
@@ -542,14 +550,17 @@ async fn agent_loop(
                 arousal.spike(ArousalSource::UserInput);
                 let soul_snapshot = soul.read().await.clone();
 
-                // First-run onboarding: if marker exists and no identity.md yet
-                let onboarding_path = if onboarding_marker.exists() && !identity_path.exists() {
-                    Some(identity_path.to_string_lossy().to_string())
-                } else {
-                    // Clear stale marker if identity was written
-                    if onboarding_marker.exists() && identity_path.exists() {
+                // First-run onboarding: pass soul path until agent writes identity.md.
+                let onboarding_path = if needs_onboarding {
+                    if identity_path.exists() {
+                        // Agent just wrote identity.md — clear marker and stop onboarding.
                         let _ = std::fs::remove_file(&onboarding_marker);
+                        needs_onboarding = false;
+                        None
+                    } else {
+                        Some(identity_path_str.as_str())
                     }
+                } else {
                     None
                 };
 
@@ -563,7 +574,7 @@ async fn agent_loop(
                         user_input: Some(&msg.text),
                         job_id: None,
                         correlation_id: &msg.id,
-                        soul_path: onboarding_path.as_deref(),
+                        soul_path: onboarding_path,
                     },
                 ).await {
                     log::error!("[Agent:{}] Turn failed: {}", agent_id, e);
@@ -686,7 +697,7 @@ async fn agent_loop(
 }
 
 /// Return the per-agent directory path.
-fn agent_directory(agent_id: &str) -> PathBuf {
+pub fn agent_directory(agent_id: &str) -> PathBuf {
     get_bubbaloop_home().join("agents").join(agent_id)
 }
 
