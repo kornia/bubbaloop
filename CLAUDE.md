@@ -118,7 +118,7 @@ cargo test --features test-harness --test integration_mcp  # 47 integration test
 
 **DO:** `pixi run check` after changes | `pixi run fmt && pixi run clippy` before commits | tests with every PR | validate user input | `--` in git clone | verify both `bubbaloop-schemas` and `bubbaloop` compile after proto changes
 
-**DON'T:** edit `target/`/`OUT_DIR` | commit `.env`/credentials/`target/` | add `bubbaloop-schemas` to workspace | combine `git`+`path` in Cargo deps | `git push --force` to main
+**DON'T:** edit `target/`/`OUT_DIR` | commit `.env`/credentials/`target/` | add `bubbaloop-schemas` to workspace | combine `git`+`path` in Cargo deps | `git push --force` to main | **commit directly to main** (always use a branch + PR)
 
 ## Zenoh API Rules (templates & nodes)
 
