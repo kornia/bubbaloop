@@ -11,7 +11,7 @@ use std::time::Duration;
 use zenoh::Session;
 
 /// Timeout waiting for first response from daemon.
-const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Check if the daemon is reachable by querying the daemon manifest.
 pub async fn is_daemon_running(session: &Arc<Session>, scope: &str, machine_id: &str) -> bool {

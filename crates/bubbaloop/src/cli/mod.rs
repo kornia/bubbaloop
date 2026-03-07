@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod agent_client;
+pub mod agent_setup;
 pub mod daemon;
 pub mod daemon_client;
 pub mod debug;

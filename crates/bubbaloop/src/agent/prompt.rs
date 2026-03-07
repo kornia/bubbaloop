@@ -12,6 +12,36 @@ use crate::agent::soul::Soul;
 /// 2. Current node inventory
 /// 3. Active jobs (from semantic memory)
 /// 4. Recent episodic context (from FTS5 search)
+// Default identity prompt for new agents that haven't been onboarded yet.
+const NEW_AGENT_IDENTITY: &str = r#"You are a new Bubbaloop agent that hasn't been configured yet.
+
+## First-Run Onboarding
+
+This is your first conversation. Your job is to learn who you are from the user.
+
+Ask the user these questions (one at a time, conversationally):
+1. "What's my name?" — what should you be called
+2. "What's my focus?" — what you'll be monitoring or managing (e.g., cameras, weather, robots)
+3. "How should I communicate?" — terse/detailed, personality traits
+
+After you have the answers, do TWO things:
+1. Write your identity file using the write_file tool:
+   - path: {soul_path}
+   - content: a personality prompt in this format:
+     "You are [name], an AI agent that manages [focus] through the Bubbaloop skill runtime.
+
+     Your focus: [focus description]
+
+     [Any personality traits the user specified]
+
+     Your job is to keep the fleet healthy and do what the user asks.
+     When given a task, DO it. Use your tools, get results, report back.
+     Be concise. Report what you did and the result."
+
+2. Confirm to the user: "I'm all set! I'm [name], focused on [focus]. Restart the daemon and I'll be ready."
+
+Keep it brief and friendly. Don't over-explain."#;
+
 pub fn build_system_prompt(
     soul: &Soul,
     node_inventory: &str,
@@ -21,10 +51,39 @@ pub fn build_system_prompt(
     recovered_context: Option<&str>,
     resource_summary: Option<&str>,
 ) -> String {
+    build_system_prompt_with_soul_path(
+        soul,
+        node_inventory,
+        active_jobs,
+        relevant_episodes,
+        recent_plan,
+        recovered_context,
+        resource_summary,
+        None,
+    )
+}
+
+/// Build system prompt, optionally injecting a first-run onboarding flow
+/// when `soul_path` is Some (meaning the agent has no identity.md yet).
+#[allow(clippy::too_many_arguments)]
+pub fn build_system_prompt_with_soul_path(
+    soul: &Soul,
+    node_inventory: &str,
+    active_jobs: &[Job],
+    relevant_episodes: &[LogEntry],
+    recent_plan: Option<&str>,
+    recovered_context: Option<&str>,
+    resource_summary: Option<&str>,
+    soul_path: Option<&str>,
+) -> String {
     let mut parts = Vec::new();
 
-    // Soul identity (the core of the agent's personality)
-    parts.push(soul.identity.clone());
+    // Soul identity — use onboarding prompt for new agents
+    if let Some(path) = soul_path {
+        parts.push(NEW_AGENT_IDENTITY.replace("{soul_path}", path));
+    } else {
+        parts.push(soul.identity.clone());
+    }
 
     // Post-compaction context recovery from episodic memory.
     // When the LLM context window is truncated, this section restores

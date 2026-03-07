@@ -14,7 +14,7 @@ use crate::agent::soul::Soul;
 use crate::agent::{run_agent_turn, AgentTurnInput, EventSink};
 use crate::daemon::registry::get_bubbaloop_home;
 use crate::mcp::platform::DaemonPlatform;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -48,7 +48,7 @@ impl ModelProvider for AnyProvider {
 // ── Config ───────────────────────────────────────────────────────
 
 /// Multi-agent configuration from `~/.bubbaloop/agents.toml`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentsConfig {
     /// Map of agent_id → agent config.
     #[serde(default)]
@@ -56,7 +56,7 @@ pub struct AgentsConfig {
 }
 
 /// Per-agent configuration entry.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentEntry {
     /// Whether this agent is active.
     #[serde(default = "default_true")]
@@ -70,6 +70,10 @@ pub struct AgentEntry {
     /// Provider backend: "claude" (default) or "ollama".
     #[serde(default = "default_provider")]
     pub provider: String,
+    /// Model name (e.g., "claude-sonnet-4-20250514", "llama3.2").
+    /// Overrides Soul capabilities.toml model_name when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 fn default_provider() -> String {
@@ -134,9 +138,18 @@ impl AgentsConfig {
                 default: true,
                 capabilities: vec![],
                 provider: default_provider(),
+                model: None,
             },
         );
         Self { agents }
+    }
+
+    /// Save config to `~/.bubbaloop/agents.toml`.
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = get_bubbaloop_home().join("agents.toml");
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(&path, content)
     }
 
     /// Find the default agent ID.
@@ -248,7 +261,11 @@ impl AgentRuntime {
             let soul = Arc::new(RwLock::new(soul));
 
             // Initialize provider based on config (claude or ollama)
-            let model_name = soul.read().await.capabilities.model_name.clone();
+            // Prefer agents.toml model over Soul capabilities.toml model_name
+            let model_name = match &entry.model {
+                Some(m) => m.clone(),
+                None => soul.read().await.capabilities.model_name.clone(),
+            };
             let provider: AnyProvider = match entry.provider.as_str() {
                 "ollama" => match OllamaProvider::from_env(Some(&model_name)) {
                     Ok(p) => AnyProvider::Ollama(p),
@@ -387,6 +404,11 @@ impl AgentRuntime {
                 .await;
             });
 
+            // First-run onboarding: triggered by a marker file placed by `agent setup`.
+            // The marker is removed once the agent writes its own identity.md.
+            let onboarding_marker = agent_dir.join(".needs-onboarding");
+            let identity_path = soul_dir.join("identity.md");
+
             tokio::spawn(agent_loop(
                 agent_id_clone,
                 provider,
@@ -397,6 +419,8 @@ impl AgentRuntime {
                 sink,
                 agent_shutdown,
                 job_notify,
+                identity_path,
+                onboarding_marker,
             ));
 
             log::info!(
@@ -433,6 +457,7 @@ impl AgentRuntime {
                     let payload = sample.payload().to_bytes().to_vec();
                     match serde_json::from_slice::<AgentMessage>(&payload) {
                         Ok(msg) => {
+                            log::info!("[Runtime] Inbox message: id={}, agent={:?}, text_len={}", msg.id, msg.agent, msg.text.len());
                             runtime.route(msg).await;
                         }
                         Err(e) => {
@@ -496,6 +521,8 @@ async fn agent_loop(
     sink: ZenohSink,
     mut shutdown_rx: tokio::sync::watch::Receiver<()>,
     job_notify: Arc<Notify>,
+    identity_path: std::path::PathBuf,
+    onboarding_marker: std::path::PathBuf,
 ) {
     let initial_caps = soul.read().await.capabilities.clone();
     let mut arousal = ArousalState::new(&initial_caps);
@@ -515,6 +542,17 @@ async fn agent_loop(
                 arousal.spike(ArousalSource::UserInput);
                 let soul_snapshot = soul.read().await.clone();
 
+                // First-run onboarding: if marker exists and no identity.md yet
+                let onboarding_path = if onboarding_marker.exists() && !identity_path.exists() {
+                    Some(identity_path.to_string_lossy().to_string())
+                } else {
+                    // Clear stale marker if identity was written
+                    if onboarding_marker.exists() && identity_path.exists() {
+                        let _ = std::fs::remove_file(&onboarding_marker);
+                    }
+                    None
+                };
+
                 if let Err(e) = run_agent_turn(
                     &provider,
                     &dispatcher,
@@ -525,6 +563,7 @@ async fn agent_loop(
                         user_input: Some(&msg.text),
                         job_id: None,
                         correlation_id: &msg.id,
+                        soul_path: onboarding_path.as_deref(),
                     },
                 ).await {
                     log::error!("[Agent:{}] Turn failed: {}", agent_id, e);
@@ -596,6 +635,7 @@ async fn agent_loop(
                         user_input: Some(&job.prompt_payload),
                         job_id: Some(&job.id),
                         correlation_id: &cid,
+                        soul_path: None, // Jobs don't trigger onboarding
                     },
                 )
                 .await
