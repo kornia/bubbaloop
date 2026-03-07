@@ -237,6 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              --status: Show current auth status");
             eprintln!("  logout    Remove saved Anthropic API key");
             eprintln!("  agent     Interact with AI agents via the daemon:");
+            eprintln!("              setup [-a <id>]: Configure provider, model, and identity (no daemon needed)");
             eprintln!("              chat [-a agent[@machine]] [message]: Send messages to agents");
             eprintln!("              list [--all]: Show running agents and capabilities");
             eprintln!("  up        Load skills and ensure sensor nodes are running:");

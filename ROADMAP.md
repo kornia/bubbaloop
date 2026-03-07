@@ -163,14 +163,17 @@ config:
 **Deliverables:**
 - [x] `bubbaloop agent chat` CLI command (thin Zenoh client, LLM runs daemon-side)
 - [x] `bubbaloop agent list` — discover running agents via manifest queryables
+- [x] `bubbaloop agent setup` — interactive wizard: provider (Claude/Ollama), model, identity
 - [x] Multi-agent runtime: agents run as tokio tasks inside daemon
 - [x] Agent gateway: Zenoh pub/sub wire format (inbox/outbox/manifest topics)
-- [x] Per-agent config via `~/.bubbaloop/agents.toml`
+- [x] Per-agent config via `~/.bubbaloop/agents.toml` (provider, model override, capabilities)
 - [x] Per-agent Soul + Memory isolation (`~/.bubbaloop/agents/{id}/`)
 - [x] EventSink abstraction (StdoutSink, ZenohSink — extensible to Telegram, web, etc.)
 - [x] Claude API integration via `reqwest` (tool_use for MCP tools)
+- [x] Ollama local LLM integration with tool calling (`/api/chat`)
 - [x] Internal MCP tool dispatch (call tools without HTTP round-trip)
 - [x] System prompt injection: sensor inventory, node status, active schedules
+- [x] First-run LLM onboarding: marker file triggers interview prompt; agent writes its own `identity.md`
 - [ ] Capability-based message routing (currently falls back to default agent)
 - [ ] HTTP chat endpoint for future dashboard integration
 
@@ -288,7 +291,8 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 **Deliverables:**
 - [ ] `curl -sSL https://get.bubbaloop.com | bash` install script
 - [x] `bubbaloop login` — API key + Claude subscription (setup-token) authentication
-- [x] First-run onboarding: name, focus, approval mode → personalized `identity.md`
+- [x] `bubbaloop agent setup` — configure provider/model, create agents, write identity
+- [x] First-run LLM onboarding: daemon injects interview prompt → agent writes its own `identity.md`
 - [ ] `bubbaloop agent chat` auto-loads skills, auto-installs drivers, starts chat
 - [ ] AI-assisted skill creation: "Add my garage camera at rtsp://..."
 - [ ] Conversational scheduling: "Check cameras every hour"
