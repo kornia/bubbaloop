@@ -41,6 +41,8 @@ pub enum DaemonCommandType {
     RemoveNode { name: String },
     /// Build a node by name.
     BuildNode { name: String },
+    /// Install a registered node as a systemd service (by name).
+    InstallService { name: String },
     /// Uninstall a node by name.
     UninstallNode { name: String },
     /// Clean build artifacts for a node.
@@ -239,6 +241,9 @@ mod tests {
                 name: "cam".to_string(),
             },
             DaemonCommandType::BuildNode {
+                name: "cam".to_string(),
+            },
+            DaemonCommandType::InstallService {
                 name: "cam".to_string(),
             },
             DaemonCommandType::UninstallNode {

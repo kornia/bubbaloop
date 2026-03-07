@@ -321,6 +321,16 @@ async fn dispatch_daemon_command(
                 Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
             }
         }
+        gateway::DaemonCommandType::InstallService { name } => {
+            validate_name!(name);
+            match platform
+                .execute_command(name, crate::mcp::platform::NodeCommand::Install)
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
         gateway::DaemonCommandType::UninstallNode { name } => {
             validate_name!(name);
             match platform
