@@ -129,12 +129,7 @@ async fn send_and_render(
                                 AgentEventType::ToolResult => {
                                     if verbose {
                                         if let Some(result) = &event.text {
-                                            let preview = if result.len() > 300 {
-                                                format!("{}…", &result[..300])
-                                            } else {
-                                                result.clone()
-                                            };
-                                            println!("  → {}", preview);
+                                            println!("  → {}", truncate_with_ellipsis(result, 300));
                                         }
                                     }
                                 }
@@ -172,16 +167,16 @@ async fn send_and_render(
 use crossterm::{
     event::{Event, EventStream, KeyCode, KeyModifiers},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures::StreamExt;
 use ratatui::{
-    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    Terminal,
 };
 
 /// Output line kinds — drive colour rendering.
@@ -239,7 +234,6 @@ async fn run_tui_repl(
     let mut scroll_offset: usize = 0;
     let mut waiting_for_agent = false;
     let mut current_correlation_id = String::new();
-    let mut current_agent_id = String::new();
     let mut agent_header_shown = false;
 
     // Welcome banner
@@ -273,22 +267,18 @@ async fn run_tui_repl(
                 .flat_map(|line| render_output_line(line))
                 .collect();
 
-            // Auto-scroll: keep bottom visible when new content arrives
-            let visible_rows = output_area.height.saturating_sub(2) as usize; // -2 for border
-            let total_items = items.len();
-            let max_scroll = total_items.saturating_sub(visible_rows);
-            let scroll = if scroll_offset == 0 || scroll_offset > max_scroll {
+            // Auto-scroll: 0 means "follow bottom"; otherwise clamp to max
+            let visible_rows = output_area.height.saturating_sub(2) as usize;
+            let max_scroll = items.len().saturating_sub(visible_rows);
+            let scroll = if scroll_offset == 0 {
                 max_scroll
             } else {
-                scroll_offset
+                scroll_offset.min(max_scroll)
             };
 
             // Slice visible items
-            let visible: Vec<ListItem> = items
-                .into_iter()
-                .skip(scroll)
-                .take(visible_rows)
-                .collect();
+            let visible: Vec<ListItem> =
+                items.into_iter().skip(scroll).take(visible_rows).collect();
 
             let output_widget = List::new(visible).block(
                 Block::default()
@@ -308,7 +298,9 @@ async fn run_tui_repl(
             let prompt_style = if waiting_for_agent {
                 Style::default().fg(Color::DarkGray)
             } else {
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
             };
             let input_paragraph = Paragraph::new(Line::from(vec![
                 Span::styled(prompt_prefix, prompt_style),
@@ -355,7 +347,6 @@ async fn run_tui_repl(
                                     // Send to daemon
                                     let cid = uuid::Uuid::new_v4().to_string();
                                     current_correlation_id = cid.clone();
-                                    current_agent_id.clear();
                                     agent_header_shown = false;
                                     waiting_for_agent = true;
 
@@ -409,81 +400,70 @@ async fn run_tui_repl(
                         .to_string();
 
                     let bytes = sample.payload().to_bytes();
-                    if let Ok(event) = serde_json::from_slice::<AgentEvent>(&bytes) {
-                        if event.id != current_correlation_id {
-                            // not our turn — ignore
-                        } else {
-                            match event.event_type {
-                                AgentEventType::Delta => {
-                                    if !agent_header_shown {
-                                        current_agent_id = agent_id_from_topic.clone();
-                                        output.push(OutputLine::AgentHeader(agent_id_from_topic));
-                                        agent_header_shown = true;
-                                    }
-                                    if let Some(text) = event.text {
-                                        // Append delta to last AgentDelta line if it exists,
-                                        // otherwise push a new one
-                                        if let Some(OutputLine::AgentDelta(last)) = output.last_mut() {
-                                            last.push_str(&text);
-                                        } else {
-                                            output.push(OutputLine::AgentDelta(text));
-                                        }
-                                        scroll_offset = 0;
-                                    }
+                    let event = match serde_json::from_slice::<AgentEvent>(&bytes) {
+                        Ok(e) if e.id == current_correlation_id => e,
+                        _ => continue, // not ours or unparseable
+                    };
+
+                    match event.event_type {
+                        AgentEventType::Delta => {
+                            if !agent_header_shown {
+                                output.push(OutputLine::AgentHeader(agent_id_from_topic));
+                                agent_header_shown = true;
+                            }
+                            if let Some(text) = event.text {
+                                if let Some(OutputLine::AgentDelta(last)) = output.last_mut() {
+                                    last.push_str(&text);
+                                } else {
+                                    output.push(OutputLine::AgentDelta(text));
                                 }
-                                AgentEventType::Tool => {
-                                    if let Some(name) = event.text {
-                                        let label = if verbose {
-                                            let inp = event.input.as_deref().unwrap_or("{}");
-                                            format!("⚙ {} {}", name, inp)
-                                        } else {
-                                            // Show name + short human-readable hint from input
-                                            let hint = event
-                                                .input
-                                                .as_deref()
-                                                .and_then(tool_input_hint)
-                                                .unwrap_or_default();
-                                            if hint.is_empty() {
-                                                format!("⚙ {}", name)
-                                            } else {
-                                                format!("⚙ {}  {}", name, hint)
-                                            }
-                                        };
-                                        output.push(OutputLine::ToolCall(label));
-                                        scroll_offset = 0;
+                                scroll_offset = 0;
+                            }
+                        }
+                        AgentEventType::Tool => {
+                            if let Some(name) = event.text {
+                                let label = if verbose {
+                                    let inp = event.input.as_deref().unwrap_or("{}");
+                                    format!("⚙ {} {}", name, inp)
+                                } else {
+                                    let hint = event
+                                        .input
+                                        .as_deref()
+                                        .and_then(tool_input_hint)
+                                        .unwrap_or_default();
+                                    if hint.is_empty() {
+                                        format!("⚙ {}", name)
+                                    } else {
+                                        format!("⚙ {}  {}", name, hint)
                                     }
-                                }
-                                AgentEventType::ToolResult => {
-                                    if verbose {
-                                        if let Some(result) = event.text {
-                                            let preview = if result.len() > 200 {
-                                                format!("{}…", &result[..200])
-                                            } else {
-                                                result
-                                            };
-                                            output.push(OutputLine::ToolResult(
-                                                format!("  → {}", preview),
-                                            ));
-                                            scroll_offset = 0;
-                                        }
-                                    }
-                                }
-                                AgentEventType::Error => {
-                                    if let Some(msg) = event.text {
-                                        output.push(OutputLine::ErrorLine(
-                                            format!("✗ {}", msg),
-                                        ));
-                                    }
-                                    waiting_for_agent = false;
-                                    output.push(OutputLine::Separator);
-                                    scroll_offset = 0;
-                                }
-                                AgentEventType::Done => {
-                                    waiting_for_agent = false;
-                                    output.push(OutputLine::Separator);
+                                };
+                                output.push(OutputLine::ToolCall(label));
+                                scroll_offset = 0;
+                            }
+                        }
+                        AgentEventType::ToolResult => {
+                            if verbose {
+                                if let Some(result) = event.text {
+                                    let preview = truncate_with_ellipsis(&result, 200);
+                                    output.push(OutputLine::ToolResult(
+                                        format!("  → {}", preview),
+                                    ));
                                     scroll_offset = 0;
                                 }
                             }
+                        }
+                        AgentEventType::Error => {
+                            if let Some(msg) = event.text {
+                                output.push(OutputLine::ErrorLine(format!("✗ {}", msg)));
+                            }
+                            waiting_for_agent = false;
+                            output.push(OutputLine::Separator);
+                            scroll_offset = 0;
+                        }
+                        AgentEventType::Done => {
+                            waiting_for_agent = false;
+                            output.push(OutputLine::Separator);
+                            scroll_offset = 0;
                         }
                     }
                 }
@@ -504,6 +484,15 @@ async fn run_tui_repl(
     Ok(())
 }
 
+/// Truncate a string to `max_len` characters, appending an ellipsis if needed.
+fn truncate_with_ellipsis(s: &str, max_len: usize) -> String {
+    if s.len() > max_len {
+        format!("{}…", &s[..max_len])
+    } else {
+        s.to_string()
+    }
+}
+
 /// Extract a short human-readable hint from a tool's JSON input.
 ///
 /// Priority order: `path`, `command`, `topic`, `key`, `subject`, `name`, `query` —
@@ -514,91 +503,81 @@ fn tool_input_hint(input_json: &str) -> Option<String> {
 
     // Keys that most meaningfully describe "what the tool is acting on"
     const PRIORITY: &[&str] = &[
-        "path", "command", "topic", "key", "subject", "name", "query",
-        "mission_id", "node_name", "agent_id",
+        "path",
+        "command",
+        "topic",
+        "key",
+        "subject",
+        "name",
+        "query",
+        "mission_id",
+        "node_name",
+        "agent_id",
     ];
     for key in PRIORITY {
         if let Some(val) = obj.get(*key).and_then(|v| v.as_str()) {
-            // Truncate long values
-            let s = if val.len() > 60 {
-                format!("{}…", &val[..60])
-            } else {
-                val.to_string()
-            };
-            return Some(s);
+            return Some(truncate_with_ellipsis(val, 60));
         }
     }
     // Fallback: first string value in the object
     obj.values()
         .find_map(|v| v.as_str())
-        .map(|s| if s.len() > 60 { format!("{}…", &s[..60]) } else { s.to_string() })
+        .map(|s| truncate_with_ellipsis(s, 60))
+}
+
+/// Create a single styled `ListItem`.
+fn styled_item(text: String, style: Style) -> ListItem<'static> {
+    ListItem::new(Line::from(Span::styled(text, style)))
 }
 
 /// Convert an `OutputLine` into one or more ratatui `ListItem`s with colour styling.
 fn render_output_line(line: &OutputLine) -> Vec<ListItem<'static>> {
     match line {
         OutputLine::UserMessage(text) => {
-            let label = format!("You  {}", text);
-            vec![ListItem::new(Line::from(Span::styled(
-                label,
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )))]
+            let style = Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD);
+            vec![styled_item(format!("You  {}", text), style)]
         }
         OutputLine::AgentHeader(id) => {
-            let label = format!("╾── {} ──╼", id);
-            vec![ListItem::new(Line::from(Span::styled(
-                label,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )))]
+            let style = Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD);
+            vec![styled_item(format!("╾── {} ──╼", id), style)]
         }
         OutputLine::AgentDelta(text) => {
-            // Split on newlines so long responses stay readable
+            let style = Style::default().fg(Color::Green);
             text.split('\n')
-                .map(|chunk| {
-                    ListItem::new(Line::from(Span::styled(
-                        chunk.to_string(),
-                        Style::default().fg(Color::Green),
-                    )))
-                })
+                .map(|chunk| styled_item(chunk.to_string(), style))
                 .collect()
         }
         OutputLine::ToolCall(label) => {
-            vec![ListItem::new(Line::from(Span::styled(
-                label.clone(),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::ITALIC),
-            )))]
+            let style = Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::ITALIC);
+            vec![styled_item(label.clone(), style)]
         }
         OutputLine::ToolResult(text) => {
-            vec![ListItem::new(Line::from(Span::styled(
+            vec![styled_item(
                 text.clone(),
                 Style::default().fg(Color::DarkGray),
-            )))]
+            )]
         }
         OutputLine::ErrorLine(text) => {
-            vec![ListItem::new(Line::from(Span::styled(
-                text.clone(),
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            )))]
+            let style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+            vec![styled_item(text.clone(), style)]
         }
         OutputLine::Separator => {
-            vec![ListItem::new(Line::from(Span::styled(
+            vec![styled_item(
                 "─".repeat(60),
                 Style::default().fg(Color::DarkGray),
-            )))]
+            )]
         }
         OutputLine::Info(text) => {
-            vec![ListItem::new(Line::from(Span::styled(
-                text.clone(),
-                Style::default()
-                    .fg(Color::Blue)
-                    .add_modifier(Modifier::ITALIC),
-            )))]
+            let style = Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::ITALIC);
+            vec![styled_item(text.clone(), style)]
         }
     }
 }
