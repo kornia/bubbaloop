@@ -147,13 +147,53 @@ pub(crate) fn validate_write_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate `kill` arguments: allow numeric PIDs only, block broadcast targets.
+///
+/// Allowed:  `kill 1234`, `kill -15 1234`, `kill -9 1234 5678`
+/// Blocked:  `kill -1` (all processes), `kill 0` (process group), `kill 1` (init)
+fn validate_kill_args(args: &[&str]) -> Result<(), String> {
+    let mut saw_pid = false;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg.starts_with('-') {
+            // Signal flag — only allow -<number>, -TERM, -KILL, -HUP, -INT, -QUIT
+            let sig = arg.trim_start_matches('-');
+            let ok = sig.parse::<u32>().is_ok()
+                || matches!(
+                    sig.to_uppercase().as_str(),
+                    "TERM" | "KILL" | "HUP" | "INT" | "QUIT" | "USR1" | "USR2"
+                );
+            if !ok {
+                return Err(format!("Blocked: signal '{}' is not allowed", arg));
+            }
+        } else {
+            // Must be a numeric PID
+            match arg.parse::<i64>() {
+                Ok(pid) if pid > 1 => saw_pid = true,
+                Ok(0) => return Err("Blocked: kill 0 sends signal to entire process group".to_string()),
+                Ok(1) => return Err("Blocked: kill 1 would signal the init process".to_string()),
+                Ok(pid) if pid < 0 => return Err(format!("Blocked: kill {} broadcasts to a process group", pid)),
+                _ => return Err(format!("Blocked: '{}' is not a valid numeric PID", arg)),
+            }
+        }
+        i += 1;
+    }
+    if !saw_pid {
+        return Err("Blocked: kill requires at least one numeric PID > 1".to_string());
+    }
+    Ok(())
+}
+
 /// Check a single command word against the blocked commands list.
+/// Used for pipe segment validation — `kill` is blocked in pipes (use as first command only).
 fn validate_single_command_word(cmd_base: &str) -> Result<(), String> {
     const BLOCKED_COMMANDS: &[&str] = &[
         "shutdown",
         "reboot",
         "halt",
         "poweroff",
+        // kill blocked in pipe segments — only safe as first command with numeric PIDs
         "kill",
         "killall",
         "pkill",
@@ -299,14 +339,19 @@ pub(crate) fn validate_command(command: &str) -> Result<(), String> {
     // first_cmd_base already extracted above (handles /usr/bin/cmd)
     let first_cmd = first_cmd_base;
 
+    // ── 2b. kill with numeric PIDs — allowed, but validated ─────────
+    if first_cmd == "kill" {
+        let args: Vec<&str> = cmd.split_whitespace().skip(1).collect();
+        return validate_kill_args(&args);
+    }
+
     const BLOCKED_COMMANDS: &[&str] = &[
         // Power management
         "shutdown",
         "reboot",
         "halt",
         "poweroff",
-        // Process killing
-        "kill",
+        // Name-based process killing (too broad — matches unrelated processes)
         "killall",
         "pkill",
         // System config
@@ -477,9 +522,25 @@ mod tests {
     fn command_blocks_system_control() {
         assert!(validate_command("shutdown -h now").is_err());
         assert!(validate_command("reboot").is_err());
-        assert!(validate_command("kill -9 1234").is_err());
         assert!(validate_command("killall nginx").is_err());
         assert!(validate_command("pkill python").is_err());
+    }
+
+    #[test]
+    fn kill_allows_numeric_pids_blocks_broadcast() {
+        // Allowed: numeric PIDs > 1
+        assert!(validate_command("kill 1234").is_ok());
+        assert!(validate_command("kill 229455 229456").is_ok());
+        assert!(validate_command("kill -15 1234").is_ok());
+        assert!(validate_command("kill -9 1234").is_ok());
+        assert!(validate_command("kill -TERM 1234").is_ok());
+        // Blocked: broadcast / special targets
+        assert!(validate_command("kill 1").is_err());   // init
+        assert!(validate_command("kill 0").is_err());   // process group
+        assert!(validate_command("kill -1").is_err());  // all processes
+        assert!(validate_command("kill -9 -1").is_err()); // SIGKILL all
+        // Blocked: non-numeric PIDs
+        assert!(validate_command("kill nginx").is_err());
     }
 
     #[test]
