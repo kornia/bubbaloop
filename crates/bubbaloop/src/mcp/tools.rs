@@ -1016,7 +1016,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Context provider tools ────────────────────────────────────
 
     #[tool(
-        description = "Configure a context provider: a daemon background task that watches a Zenoh topic pattern and writes extracted values to world state. The agent can then see live sensor data in its world state without LLM involvement. Admin only."
+        description = "Configure a context provider: a daemon background task that subscribes to a Zenoh topic pattern and writes extracted field values into world state. Required: mission_id, topic_pattern (e.g. 'bubbaloop/**/vision/detections'), world_state_key_template (e.g. '{label}.location'), value_field (JSON path to extract). Optional: filter (e.g. 'confidence>0.8'), min_interval_secs, max_age_secs, confidence_field. Use list_world_state to see results. Admin only."
     )]
     async fn configure_context(
         &self,

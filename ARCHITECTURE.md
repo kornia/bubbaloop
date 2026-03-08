@@ -237,7 +237,7 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447  # Optional override
 
 ## MCP Server
 
-MCP is the **sole control interface**. 30 MCP tools + 7 agent-internal (37 total) across categories:
+MCP is the **sole control interface**. 39 MCP tools + 10 agent-internal (49 total) across categories:
 
 | Category | Tools |
 |----------|-------|
@@ -245,7 +245,13 @@ MCP is the **sole control interface**. 30 MCP tools + 7 agent-internal (37 total
 | **Lifecycle** | install_node, uninstall_node, start_node, stop_node, restart_node, build_node, remove_node, clean_node, enable_autostart, disable_autostart |
 | **Data** | send_command, query_zenoh |
 | **System** | get_system_status, get_machine_info |
-| **Memory** | list_jobs, delete_job, list_proposals |
+| **Memory** | list_jobs, delete_job, list_proposals, clear_episodic_memory |
+| **Beliefs** | update_belief, get_belief — durable subject+predicate assertions with confidence tracking |
+| **World State** | list_world_state — live sensor-derived snapshot injected into every agent turn |
+| **Context Providers** | configure_context — wire Zenoh topic → world state (no LLM); topic_pattern + value_field + optional filter |
+| **Missions** | list_missions, pause_mission, resume_mission, cancel_mission — YAML-file-driven (`~/.bubbaloop/agents/{id}/missions/`) |
+| **Constraints** | register_constraint, list_constraints — per-mission safety limits; params_json formats: `workspace={"x":[-1,1],"y":[-1,1],"z":[0,2]}`, `max_velocity=1.5`, `forbidden_zone={"center":[0,0,0],"radius":0.3}`, `max_force=50.0` |
+| **Alerts** | register_alert, unregister_alert — reactive arousal triggers when world state predicate matches |
 | **Agent-internal** | read_file, write_file, run_command, memory_search, memory_forget, schedule_task, create_proposal, get_system_telemetry, get_telemetry_history, update_telemetry_config |
 
 ### Transport Options
@@ -334,7 +340,7 @@ MCP is the **sole control interface**. 30 MCP tools + 7 agent-internal (37 total
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 30 MCP tools + 7 agent-internal |
+| Control | MCP (rmcp) | Standard AI agent interface, 39 MCP tools + 10 agent-internal |
 | Memory | SQLite (rusqlite) + NDJSON | 4-tier: world state (live SQLite) + RAM + episodic (NDJSON/FTS5) + semantic (SQLite). World state updated by context providers, not LLM. |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |

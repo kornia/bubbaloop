@@ -63,7 +63,7 @@ bubbaloop agent chat   # interactive REPL
 │  │  Short-term (RAM) | Episodic (NDJSON) | Semantic DB │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (37 tools) — sole control interface     │  │
+│  │  MCP Server (49 tools) — sole control interface     │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  Daemon (skill runtime + agent host)                │  │
@@ -375,7 +375,7 @@ Memory confirmed or contradicted by sensor readings — not just conversation hi
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 37 tools |
+| Control | MCP (rmcp) | Standard AI agent interface, 49 tools (39 MCP + 10 agent-internal) |
 | Memory | SQLite (rusqlite) | Embedded, +1-2 MB, battle-tested everywhere |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
