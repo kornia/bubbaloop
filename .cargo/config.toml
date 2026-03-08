@@ -1,0 +1,8 @@
+[target.aarch64-unknown-linux-gnu]
+# Uncomment after: sudo apt install mold clang
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# To activate mold (3-5x faster link step):
+#   sudo apt install mold clang
+# Then uncomment the two lines above and remove the default gcc linker config.

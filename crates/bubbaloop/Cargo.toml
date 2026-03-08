@@ -93,7 +93,7 @@ schemars.workspace = true
 tower_governor = "0.8"
 
 [features]
-default = ["dashboard"]
+default = []
 dashboard = ["dep:rust-embed", "dep:mime_guess", "dep:tokio-tungstenite"]
 test-harness = ["rmcp/client"]
 

@@ -437,7 +437,17 @@ async fn run_tui_repl(
                                             let inp = event.input.as_deref().unwrap_or("{}");
                                             format!("⚙ {} {}", name, inp)
                                         } else {
-                                            format!("⚙ {}…", name)
+                                            // Show name + short human-readable hint from input
+                                            let hint = event
+                                                .input
+                                                .as_deref()
+                                                .and_then(tool_input_hint)
+                                                .unwrap_or_default();
+                                            if hint.is_empty() {
+                                                format!("⚙ {}", name)
+                                            } else {
+                                                format!("⚙ {}  {}", name, hint)
+                                            }
                                         };
                                         output.push(OutputLine::ToolCall(label));
                                         scroll_offset = 0;
@@ -492,6 +502,36 @@ async fn run_tui_repl(
     }
 
     Ok(())
+}
+
+/// Extract a short human-readable hint from a tool's JSON input.
+///
+/// Priority order: `path`, `command`, `topic`, `key`, `subject`, `name`, `query` —
+/// whichever appears first in the JSON object. Falls back to the first string value.
+fn tool_input_hint(input_json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(input_json).ok()?;
+    let obj = v.as_object()?;
+
+    // Keys that most meaningfully describe "what the tool is acting on"
+    const PRIORITY: &[&str] = &[
+        "path", "command", "topic", "key", "subject", "name", "query",
+        "mission_id", "node_name", "agent_id",
+    ];
+    for key in PRIORITY {
+        if let Some(val) = obj.get(*key).and_then(|v| v.as_str()) {
+            // Truncate long values
+            let s = if val.len() > 60 {
+                format!("{}…", &val[..60])
+            } else {
+                val.to_string()
+            };
+            return Some(s);
+        }
+    }
+    // Fallback: first string value in the object
+    obj.values()
+        .find_map(|v| v.as_str())
+        .map(|s| if s.len() > 60 { format!("{}…", &s[..60]) } else { s.to_string() })
 }
 
 /// Convert an `OutputLine` into one or more ratatui `ListItem`s with colour styling.
