@@ -397,8 +397,11 @@ async fn run_tui_repl(
                 }
             }
 
-            // Zenoh outbox events
-            result = subscriber.recv_async(), if waiting_for_agent => {
+            // Zenoh outbox events — always drain the subscriber, never gate on
+            // waiting_for_agent. If gated, Done arriving before ToolResult in
+            // the buffer causes the guard to flip to false and drops ToolResult.
+            // The correlation_id filter below handles routing correctly.
+            result = subscriber.recv_async() => {
                 if let Ok(sample) = result {
                     let agent_id_from_topic = sample
                         .key_expr()
