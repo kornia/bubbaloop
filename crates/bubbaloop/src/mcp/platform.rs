@@ -179,6 +179,51 @@ pub trait PlatformOperations: Send + Sync + 'static {
         &self,
         params: ConfigureContextParams,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    // ── Mission lifecycle ─────────────────────────────────────────────
+
+    /// List all missions.
+    fn list_missions(
+        &self,
+    ) -> impl std::future::Future<Output = PlatformResult<Vec<crate::daemon::mission::Mission>>> + Send;
+
+    /// Update a mission's status. Returns a confirmation message or error.
+    fn update_mission_status(
+        &self,
+        mission_id: String,
+        status: String,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    // ── Reactive alerts ───────────────────────────────────────────────
+
+    /// Register a reactive alert rule that spikes arousal when world state matches.
+    fn register_alert(
+        &self,
+        params: RegisterAlertParams,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Unregister a reactive alert rule by ID.
+    fn unregister_alert(
+        &self,
+        alert_id: String,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+}
+
+/// Parameters for registering a reactive alert.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RegisterAlertParams {
+    /// Mission this alert is attached to.
+    pub mission_id: String,
+    /// World state predicate expression (e.g. "toddler.near_stairs = 'true'").
+    pub predicate: String,
+    /// Minimum seconds between consecutive firings (default: 60).
+    #[serde(default)]
+    pub debounce_secs: Option<u32>,
+    /// Arousal boost when rule fires (default: 2.0).
+    #[serde(default)]
+    pub arousal_boost: Option<f64>,
+    /// Human-readable description of this alert.
+    pub description: String,
 }
 
 /// Parameters for configuring a context provider.

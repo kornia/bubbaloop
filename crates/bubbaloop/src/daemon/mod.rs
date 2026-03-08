@@ -14,7 +14,9 @@
 
 pub mod context_provider;
 pub mod gateway;
+pub mod mission;
 pub mod node_manager;
+pub mod reactive;
 pub mod registry;
 pub mod systemd;
 pub mod telemetry;

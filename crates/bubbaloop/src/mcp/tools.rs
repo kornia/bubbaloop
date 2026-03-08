@@ -90,6 +90,34 @@ pub(crate) struct ClearEpisodicMemoryRequest {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct MissionIdRequest {
+    /// ID of the mission.
+    mission_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct RegisterAlertRequest {
+    /// Mission this alert is attached to.
+    mission_id: String,
+    /// World state predicate expression (e.g. "toddler.near_stairs = 'true'").
+    predicate: String,
+    /// Minimum seconds between consecutive firings (default: 60).
+    #[serde(default)]
+    debounce_secs: Option<u32>,
+    /// Arousal boost when rule fires (default: 2.0).
+    #[serde(default)]
+    arousal_boost: Option<f64>,
+    /// Human-readable description of this alert.
+    description: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct AlertIdRequest {
+    /// ID of the alert to unregister.
+    alert_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct ConfigureContextRequest {
     /// Mission this provider is attached to.
     mission_id: String,
@@ -978,6 +1006,126 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         };
 
         match self.platform.configure_context(params).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Mission lifecycle tools ─────────────────────────────────────
+
+    #[tool(description = "List all missions with their status, expiry, and resources.")]
+    async fn list_missions(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_missions");
+        match self.platform.list_missions().await {
+            Ok(missions) => Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&missions).unwrap_or_else(|_| "[]".to_string()),
+            )])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Pause an active mission. The agent will stop working on it until resumed."
+    )]
+    async fn pause_mission(
+        &self,
+        Parameters(req): Parameters<MissionIdRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=pause_mission id={}", req.mission_id);
+        match self
+            .platform
+            .update_mission_status(req.mission_id, "paused".to_string())
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "Resume a paused mission. The agent will continue working on it.")]
+    async fn resume_mission(
+        &self,
+        Parameters(req): Parameters<MissionIdRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=resume_mission id={}", req.mission_id);
+        match self
+            .platform
+            .update_mission_status(req.mission_id, "active".to_string())
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Cancel an active or paused mission. The agent will stop working on it permanently."
+    )]
+    async fn cancel_mission(
+        &self,
+        Parameters(req): Parameters<MissionIdRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=cancel_mission id={}", req.mission_id);
+        match self
+            .platform
+            .update_mission_status(req.mission_id, "cancelled".to_string())
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Reactive alert tools ────────────────────────────────────────
+
+    #[tool(
+        description = "Register a reactive alert rule. When the world state matches the predicate, the agent's arousal spikes without an LLM call. Admin only."
+    )]
+    async fn register_alert(
+        &self,
+        Parameters(req): Parameters<RegisterAlertRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=register_alert mission_id={}", req.mission_id);
+
+        let params = platform::RegisterAlertParams {
+            mission_id: req.mission_id,
+            predicate: req.predicate,
+            debounce_secs: req.debounce_secs,
+            arousal_boost: req.arousal_boost,
+            description: req.description,
+        };
+
+        match self.platform.register_alert(params).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "Unregister a reactive alert rule by ID. Admin only.")]
+    async fn unregister_alert(
+        &self,
+        Parameters(req): Parameters<AlertIdRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=unregister_alert id={}", req.alert_id);
+        match self.platform.unregister_alert(req.alert_id).await {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: {}",

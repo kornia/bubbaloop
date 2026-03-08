@@ -9,6 +9,8 @@ pub struct MockPlatform {
     pub nodes: Mutex<Vec<NodeInfo>>,
     pub configs: Mutex<HashMap<String, Value>>,
     pub manifests: Mutex<Vec<(String, Value)>>,
+    pub missions: Mutex<Vec<crate::daemon::mission::Mission>>,
+    pub alerts: Mutex<Vec<(String, String, String)>>, // (id, mission_id, predicate)
 }
 
 impl Default for MockPlatform {
@@ -29,6 +31,8 @@ impl MockPlatform {
                 is_built: true,
             }]),
             configs: Mutex::new(HashMap::new()),
+            missions: Mutex::new(Vec::new()),
+            alerts: Mutex::new(Vec::new()),
             manifests: Mutex::new(vec![(
                 "test-node".to_string(),
                 serde_json::json!({
@@ -212,6 +216,56 @@ impl PlatformOperations for MockPlatform {
             provider_id, params.mission_id
         ))
     }
+
+    async fn list_missions(&self) -> PlatformResult<Vec<crate::daemon::mission::Mission>> {
+        Ok(self.missions.lock().unwrap().clone())
+    }
+
+    async fn update_mission_status(
+        &self,
+        mission_id: String,
+        status: String,
+    ) -> PlatformResult<String> {
+        let mut missions = self.missions.lock().unwrap();
+        if let Some(m) = missions.iter_mut().find(|m| m.id == mission_id) {
+            let parsed: crate::daemon::mission::MissionStatus = status
+                .parse()
+                .map_err(|e: String| PlatformError::InvalidInput(e))?;
+            m.status = parsed;
+            Ok(format!("Mission '{}' updated to {}", mission_id, status))
+        } else {
+            Err(PlatformError::NodeNotFound(format!(
+                "Mission '{}' not found",
+                mission_id
+            )))
+        }
+    }
+
+    async fn register_alert(
+        &self,
+        params: super::platform::RegisterAlertParams,
+    ) -> PlatformResult<String> {
+        let alert_id = format!("alert-mock-{}", uuid::Uuid::new_v4());
+        self.alerts
+            .lock()
+            .unwrap()
+            .push((alert_id.clone(), params.mission_id, params.predicate));
+        Ok(format!("Alert '{}' registered", alert_id))
+    }
+
+    async fn unregister_alert(&self, alert_id: String) -> PlatformResult<String> {
+        let mut alerts = self.alerts.lock().unwrap();
+        let before = alerts.len();
+        alerts.retain(|(id, _, _)| *id != alert_id);
+        if alerts.len() < before {
+            Ok(format!("Alert '{}' unregistered", alert_id))
+        } else {
+            Err(PlatformError::NodeNotFound(format!(
+                "Alert '{}' not found",
+                alert_id
+            )))
+        }
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -227,6 +281,8 @@ mod tests {
             nodes: Mutex::new(nodes),
             manifests: Mutex::new(Vec::new()),
             configs: Mutex::new(HashMap::new()),
+            missions: Mutex::new(Vec::new()),
+            alerts: Mutex::new(Vec::new()),
         }
     }
 
@@ -722,6 +778,7 @@ mod tests {
             "get_node_schema",
             "discover_capabilities",
             "list_jobs",
+            "list_missions",
         ];
         for tool in &viewer_tools {
             assert_eq!(
@@ -745,6 +802,9 @@ mod tests {
             "enable_autostart",
             "disable_autostart",
             "delete_job",
+            "pause_mission",
+            "resume_mission",
+            "cancel_mission",
         ];
         for tool in &operator_tools {
             assert_eq!(
@@ -766,6 +826,8 @@ mod tests {
             "uninstall_node",
             "clean_node",
             "clear_episodic_memory",
+            "register_alert",
+            "unregister_alert",
         ];
         for tool in &admin_tools {
             assert_eq!(
@@ -949,5 +1011,118 @@ mod tests {
         let nodes_default = from_default.nodes.lock().unwrap();
         assert_eq!(nodes_new.len(), nodes_default.len());
         assert_eq!(nodes_new[0].name, nodes_default[0].name);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // 5. Mission lifecycle tests
+    // ════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn list_missions_empty() {
+        let mock = MockPlatform::new();
+        let missions = mock.list_missions().await.unwrap();
+        assert!(missions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pause_resume_mission() {
+        use crate::daemon::mission::{Mission, MissionStatus};
+        let mock = MockPlatform::new();
+        mock.missions.lock().unwrap().push(Mission {
+            id: "dog-watch".to_string(),
+            markdown: "Watch the dog.".to_string(),
+            status: MissionStatus::Active,
+            expires_at: None,
+            resources: vec![],
+            sub_mission_ids: vec![],
+            depends_on: vec![],
+            compiled_at: 1700000000,
+        });
+
+        // Pause
+        let msg = mock
+            .update_mission_status("dog-watch".to_string(), "paused".to_string())
+            .await
+            .unwrap();
+        assert!(msg.contains("paused"));
+        assert_eq!(
+            mock.missions.lock().unwrap()[0].status,
+            MissionStatus::Paused
+        );
+
+        // Resume
+        let msg = mock
+            .update_mission_status("dog-watch".to_string(), "active".to_string())
+            .await
+            .unwrap();
+        assert!(msg.contains("active"));
+        assert_eq!(
+            mock.missions.lock().unwrap()[0].status,
+            MissionStatus::Active
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_mission_not_found() {
+        let mock = MockPlatform::new();
+        let err = mock
+            .update_mission_status("nonexistent".to_string(), "cancelled".to_string())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, PlatformError::NodeNotFound(_)));
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // 6. Reactive alert tests
+    // ════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn register_alert_saves_rule() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::RegisterAlertParams {
+            mission_id: "m1".to_string(),
+            predicate: "toddler.near_stairs = true".to_string(),
+            debounce_secs: Some(30),
+            arousal_boost: Some(3.0),
+            description: "Toddler near stairs".to_string(),
+        };
+        let msg = mock.register_alert(params).await.unwrap();
+        assert!(msg.contains("alert-mock-"));
+        assert_eq!(mock.alerts.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unregister_alert_removes_it() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::RegisterAlertParams {
+            mission_id: "m1".to_string(),
+            predicate: "temp > 100".to_string(),
+            debounce_secs: None,
+            arousal_boost: None,
+            description: "High temp".to_string(),
+        };
+        let msg = mock.register_alert(params).await.unwrap();
+        // Extract the alert ID from the response
+        let alert_id = msg
+            .strip_prefix("Alert '")
+            .and_then(|s| s.strip_suffix("' registered"))
+            .unwrap()
+            .to_string();
+
+        assert_eq!(mock.alerts.lock().unwrap().len(), 1);
+
+        let msg = mock.unregister_alert(alert_id.clone()).await.unwrap();
+        assert!(msg.contains("unregistered"));
+        assert!(mock.alerts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unregister_alert_not_found() {
+        let mock = MockPlatform::new();
+        let err = mock
+            .unregister_alert("nonexistent".to_string())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, PlatformError::NodeNotFound(_)));
     }
 }

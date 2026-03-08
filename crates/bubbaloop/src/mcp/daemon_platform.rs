@@ -481,6 +481,80 @@ impl PlatformOperations for DaemonPlatform {
         ))
     }
 
+    async fn list_missions(&self) -> PlatformResult<Vec<crate::daemon::mission::Mission>> {
+        let missions_db_path = self
+            .agent_db_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("missions.db");
+        let store = crate::daemon::mission::MissionStore::open(&missions_db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        store
+            .list_missions()
+            .map_err(|e| PlatformError::Internal(e.to_string()))
+    }
+
+    async fn update_mission_status(
+        &self,
+        mission_id: String,
+        status: String,
+    ) -> PlatformResult<String> {
+        let parsed: crate::daemon::mission::MissionStatus = status
+            .parse()
+            .map_err(|e: String| PlatformError::InvalidInput(e))?;
+        let missions_db_path = self
+            .agent_db_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("missions.db");
+        let store = crate::daemon::mission::MissionStore::open(&missions_db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        store
+            .update_status(&mission_id, parsed)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        Ok(format!("Mission '{}' updated to {}", mission_id, status))
+    }
+
+    async fn register_alert(
+        &self,
+        params: super::platform::RegisterAlertParams,
+    ) -> PlatformResult<String> {
+        let alerts_db_path = self
+            .agent_db_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("alerts.db");
+        let store = crate::daemon::reactive::ReactiveRuleStore::open(&alerts_db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        let rule_id = format!("alert-{}", uuid::Uuid::new_v4());
+        let rule = crate::daemon::reactive::ReactiveRuleConfig {
+            id: rule_id.clone(),
+            mission_id: params.mission_id,
+            predicate: params.predicate,
+            debounce_secs: params.debounce_secs.unwrap_or(60),
+            arousal_boost: params.arousal_boost.unwrap_or(2.0),
+            description: params.description,
+        };
+        store
+            .save_rule(&rule)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        Ok(format!("Alert '{}' registered", rule_id))
+    }
+
+    async fn unregister_alert(&self, alert_id: String) -> PlatformResult<String> {
+        let alerts_db_path = self
+            .agent_db_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("alerts.db");
+        let store = crate::daemon::reactive::ReactiveRuleStore::open(&alerts_db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        store
+            .delete_rule(&alert_id)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        Ok(format!("Alert '{}' unregistered", alert_id))
+    }
+
     async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {
         let base = self
             .agent_db_path
