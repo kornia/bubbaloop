@@ -133,6 +133,13 @@ async fn send_and_render(
                                         println!("  → {}", truncate_with_ellipsis(result, limit));
                                     }
                                 }
+                                AgentEventType::System => {
+                                    if verbose {
+                                        if let Some(msg) = &event.text {
+                                            eprintln!("  ⟳ {}", msg);
+                                        }
+                                    }
+                                }
                                 AgentEventType::Error => {
                                     if let Some(msg) = &event.text {
                                         eprintln!("Error: {}", msg);
@@ -190,6 +197,8 @@ enum OutputLine {
     ErrorLine(String),
     Separator,
     Info(String),
+    /// Dim blue system lifecycle event (world state, memory, turn counter).
+    SystemInfo(String),
 }
 
 /// RAII guard: restore terminal on drop (handles panics too).
@@ -461,6 +470,12 @@ async fn run_tui_repl(
                             output.push(OutputLine::Separator);
                             scroll_offset = 0;
                         }
+                        AgentEventType::System => {
+                            if let Some(msg) = event.text {
+                                output.push(OutputLine::SystemInfo(format!("  ⟳ {}", msg)));
+                                scroll_offset = 0;
+                            }
+                        }
                         AgentEventType::Done => {
                             waiting_for_agent = false;
                             output.push(OutputLine::Separator);
@@ -578,6 +593,13 @@ fn render_output_line(line: &OutputLine) -> Vec<ListItem<'static>> {
             let style = Style::default()
                 .fg(Color::Blue)
                 .add_modifier(Modifier::ITALIC);
+            vec![styled_item(text.clone(), style)]
+        }
+        OutputLine::SystemInfo(text) => {
+            // Dim blue-gray — visible but not distracting
+            let style = Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::DIM);
             vec![styled_item(text.clone(), style)]
         }
     }

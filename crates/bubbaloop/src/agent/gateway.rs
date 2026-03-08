@@ -35,6 +35,11 @@ pub enum AgentEventType {
     Error,
     /// Turn complete — no more events for this correlation ID.
     Done,
+    /// System lifecycle event (context loaded, world state, turn counter).
+    ///
+    /// Emitted before LLM calls so the TUI can show what the agent sees
+    /// without waiting for the first text token.
+    System,
 }
 
 /// An event emitted by an agent on its outbox topic.
@@ -102,6 +107,19 @@ impl AgentEvent {
             id: id.to_string(),
             event_type: AgentEventType::Done,
             text: None,
+            input: None,
+        }
+    }
+
+    /// Create a System lifecycle event.
+    ///
+    /// Used to show TUI users what context the agent loaded (world state entries,
+    /// memory episodes recalled, turn counter) before the first LLM token arrives.
+    pub fn system(id: &str, message: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            event_type: AgentEventType::System,
+            text: Some(message.to_string()),
             input: None,
         }
     }
@@ -231,6 +249,16 @@ mod tests {
     }
 
     #[test]
+    fn agent_event_system_serde() {
+        let event = AgentEvent::system("id-1", "world state: 3 entries, memory: 2 episodes");
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"system\""));
+        assert!(json.contains("world state"));
+        let parsed: AgentEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, parsed);
+    }
+
+    #[test]
     fn agent_event_all_types_roundtrip() {
         let events = vec![
             AgentEvent::delta("id", "token"),
@@ -238,6 +266,7 @@ mod tests {
             AgentEvent::tool_result("id", "ok"),
             AgentEvent::error("id", "429 rate limit"),
             AgentEvent::done("id"),
+            AgentEvent::system("id", "context — world state: 2 entries"),
         ];
         for event in events {
             let json = serde_json::to_string(&event).unwrap();

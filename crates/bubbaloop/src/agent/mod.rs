@@ -72,6 +72,9 @@ impl EventSink for StdoutSink {
             AgentEventType::Done => {
                 // Done is implicit in stdout mode
             }
+            AgentEventType::System => {
+                // System events are TUI-only; stdout mode silently ignores them
+            }
         }
     }
 }
@@ -231,6 +234,29 @@ pub async fn run_agent_turn<
             world_state,
         )
     };
+    // Emit system context summary so the TUI shows what the agent loaded
+    // before the first LLM token arrives.
+    {
+        let ws_count = world_state.len();
+        let ep_count = relevant_episodes.len();
+        let mut parts = Vec::new();
+        if ws_count > 0 {
+            parts.push(format!("world state: {} entr{}", ws_count, if ws_count == 1 { "y" } else { "ies" }));
+        }
+        if ep_count > 0 {
+            parts.push(format!("memory: {} episode{}", ep_count, if ep_count == 1 { "" } else { "s" }));
+        }
+        if !active_jobs.is_empty() {
+            parts.push(format!("{} pending job{}", active_jobs.len(), if active_jobs.len() == 1 { "" } else { "s" }));
+        }
+        let summary = if parts.is_empty() {
+            "context loaded".to_string()
+        } else {
+            format!("context — {}", parts.join(", "))
+        };
+        sink.emit(AgentEvent::system(correlation_id, &summary)).await;
+    }
+
     let resource_summary = dispatcher.telemetry_prompt_summary().await;
     let system_prompt = prompt::build_system_prompt_with_soul_path(
         soul,
@@ -326,9 +352,17 @@ async fn run_turn_loop<
     let mut last_input_tokens = 0u32;
     let mut tool_call_counts: HashMap<u64, u32> = HashMap::new();
     let mut loop_detected = false;
-    for _turn in 0..soul.capabilities.max_turns {
+    let max_turns = soul.capabilities.max_turns;
+    for _turn in 0..max_turns {
         if loop_detected {
             break;
+        }
+        if _turn > 0 {
+            sink.emit(AgentEvent::system(
+                correlation_id,
+                &format!("turn {} / {}", _turn + 1, max_turns),
+            ))
+            .await;
         }
         // Stream response from provider (retry handled inside ClaudeProvider)
         let mut rx = match provider
