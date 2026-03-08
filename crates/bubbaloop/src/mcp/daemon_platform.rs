@@ -555,6 +555,103 @@ impl PlatformOperations for DaemonPlatform {
         Ok(format!("Alert '{}' unregistered", alert_id))
     }
 
+    async fn register_constraint(
+        &self,
+        params: super::platform::RegisterConstraintParams,
+    ) -> PlatformResult<String> {
+        use crate::daemon::constraints::Constraint;
+
+        let constraint: Constraint = match params.constraint_type.as_str() {
+            "workspace" => {
+                #[derive(serde::Deserialize)]
+                struct W {
+                    x: (f64, f64),
+                    y: (f64, f64),
+                    z: (f64, f64),
+                }
+                let w: W = serde_json::from_str(&params.params_json).map_err(|e| {
+                    PlatformError::InvalidInput(format!("invalid workspace params: {}", e))
+                })?;
+                Constraint::Workspace {
+                    x: w.x,
+                    y: w.y,
+                    z: w.z,
+                }
+            }
+            "max_velocity" => {
+                let v: f64 = serde_json::from_str(&params.params_json).map_err(|e| {
+                    PlatformError::InvalidInput(format!("invalid max_velocity param: {}", e))
+                })?;
+                Constraint::MaxVelocity(v)
+            }
+            "forbidden_zone" => {
+                #[derive(serde::Deserialize)]
+                struct Fz {
+                    center: [f64; 3],
+                    radius: f64,
+                }
+                let fz: Fz = serde_json::from_str(&params.params_json).map_err(|e| {
+                    PlatformError::InvalidInput(format!("invalid forbidden_zone params: {}", e))
+                })?;
+                Constraint::ForbiddenZone {
+                    center: fz.center,
+                    radius: fz.radius,
+                }
+            }
+            "max_force" => {
+                let v: f64 = serde_json::from_str(&params.params_json).map_err(|e| {
+                    PlatformError::InvalidInput(format!("invalid max_force param: {}", e))
+                })?;
+                Constraint::MaxForce(v)
+            }
+            other => {
+                return Err(PlatformError::InvalidInput(format!(
+                    "unknown constraint type '{}' — must be workspace, max_velocity, forbidden_zone, or max_force",
+                    other
+                )));
+            }
+        };
+
+        let constraint_id = format!("cst-{}", uuid::Uuid::new_v4());
+        let constraints_db_path = self
+            .agent_db_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("missions.db");
+        let store = crate::daemon::constraints::ConstraintStore::open(&constraints_db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        store
+            .save_constraint(&constraint_id, &params.mission_id, &constraint)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+
+        log::info!(
+            "[MCP] tool=register_constraint mission_id={} constraint_id={}",
+            params.mission_id,
+            constraint_id
+        );
+
+        Ok(format!(
+            "Constraint '{}' registered (mission={})",
+            constraint_id, params.mission_id
+        ))
+    }
+
+    async fn list_constraints(
+        &self,
+        mission_id: String,
+    ) -> PlatformResult<Vec<(String, crate::daemon::constraints::Constraint)>> {
+        let constraints_db_path = self
+            .agent_db_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("missions.db");
+        let store = crate::daemon::constraints::ConstraintStore::open(&constraints_db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        store
+            .list_constraints(&mission_id)
+            .map_err(|e| PlatformError::Internal(e.to_string()))
+    }
+
     async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {
         let base = self
             .agent_db_path

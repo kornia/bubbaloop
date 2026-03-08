@@ -11,6 +11,7 @@ pub struct MockPlatform {
     pub manifests: Mutex<Vec<(String, Value)>>,
     pub missions: Mutex<Vec<crate::daemon::mission::Mission>>,
     pub alerts: Mutex<Vec<(String, String, String)>>, // (id, mission_id, predicate)
+    pub constraints: Mutex<Vec<(String, String, crate::daemon::constraints::Constraint)>>, // (id, mission_id, constraint)
 }
 
 impl Default for MockPlatform {
@@ -33,6 +34,7 @@ impl MockPlatform {
             configs: Mutex::new(HashMap::new()),
             missions: Mutex::new(Vec::new()),
             alerts: Mutex::new(Vec::new()),
+            constraints: Mutex::new(Vec::new()),
             manifests: Mutex::new(vec![(
                 "test-node".to_string(),
                 serde_json::json!({
@@ -266,6 +268,83 @@ impl PlatformOperations for MockPlatform {
             )))
         }
     }
+
+    async fn register_constraint(
+        &self,
+        params: super::platform::RegisterConstraintParams,
+    ) -> PlatformResult<String> {
+        use crate::daemon::constraints::Constraint;
+
+        let constraint: Constraint = match params.constraint_type.as_str() {
+            "max_velocity" => {
+                let v: f64 = serde_json::from_str(&params.params_json)
+                    .map_err(|e| PlatformError::InvalidInput(format!("invalid param: {}", e)))?;
+                Constraint::MaxVelocity(v)
+            }
+            "workspace" => {
+                #[derive(serde::Deserialize)]
+                struct W {
+                    x: (f64, f64),
+                    y: (f64, f64),
+                    z: (f64, f64),
+                }
+                let w: W = serde_json::from_str(&params.params_json)
+                    .map_err(|e| PlatformError::InvalidInput(format!("invalid param: {}", e)))?;
+                Constraint::Workspace {
+                    x: w.x,
+                    y: w.y,
+                    z: w.z,
+                }
+            }
+            "forbidden_zone" => {
+                #[derive(serde::Deserialize)]
+                struct Fz {
+                    center: [f64; 3],
+                    radius: f64,
+                }
+                let fz: Fz = serde_json::from_str(&params.params_json)
+                    .map_err(|e| PlatformError::InvalidInput(format!("invalid param: {}", e)))?;
+                Constraint::ForbiddenZone {
+                    center: fz.center,
+                    radius: fz.radius,
+                }
+            }
+            "max_force" => {
+                let v: f64 = serde_json::from_str(&params.params_json)
+                    .map_err(|e| PlatformError::InvalidInput(format!("invalid param: {}", e)))?;
+                Constraint::MaxForce(v)
+            }
+            other => {
+                return Err(PlatformError::InvalidInput(format!(
+                    "unknown constraint type '{}'",
+                    other
+                )));
+            }
+        };
+
+        let constraint_id = format!("cst-mock-{}", uuid::Uuid::new_v4());
+        self.constraints.lock().unwrap().push((
+            constraint_id.clone(),
+            params.mission_id.clone(),
+            constraint,
+        ));
+        Ok(format!(
+            "Constraint '{}' registered (mission={})",
+            constraint_id, params.mission_id
+        ))
+    }
+
+    async fn list_constraints(
+        &self,
+        mission_id: String,
+    ) -> PlatformResult<Vec<(String, crate::daemon::constraints::Constraint)>> {
+        let all = self.constraints.lock().unwrap();
+        Ok(all
+            .iter()
+            .filter(|(_, mid, _)| *mid == mission_id)
+            .map(|(id, _, c)| (id.clone(), c.clone()))
+            .collect())
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -283,6 +362,7 @@ mod tests {
             configs: Mutex::new(HashMap::new()),
             missions: Mutex::new(Vec::new()),
             alerts: Mutex::new(Vec::new()),
+            constraints: Mutex::new(Vec::new()),
         }
     }
 
@@ -779,6 +859,7 @@ mod tests {
             "discover_capabilities",
             "list_jobs",
             "list_missions",
+            "list_constraints",
         ];
         for tool in &viewer_tools {
             assert_eq!(
@@ -828,6 +909,7 @@ mod tests {
             "clear_episodic_memory",
             "register_alert",
             "unregister_alert",
+            "register_constraint",
         ];
         for tool in &admin_tools {
             assert_eq!(
@@ -1124,5 +1206,47 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, PlatformError::NodeNotFound(_)));
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // 7. Constraint tests
+    // ════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn register_constraint_workspace() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::RegisterConstraintParams {
+            mission_id: "m1".to_string(),
+            constraint_type: "workspace".to_string(),
+            params_json: r#"{"x":[-1.0,1.0],"y":[-1.0,1.0],"z":[0.0,2.0]}"#.to_string(),
+        };
+        let msg = mock.register_constraint(params).await.unwrap();
+        assert!(msg.contains("cst-mock-"));
+        assert!(msg.contains("m1"));
+
+        let constraints = mock.list_constraints("m1".to_string()).await.unwrap();
+        assert_eq!(constraints.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_constraints_empty() {
+        let mock = MockPlatform::new();
+        let constraints = mock
+            .list_constraints("nonexistent".to_string())
+            .await
+            .unwrap();
+        assert!(constraints.is_empty());
+    }
+
+    #[tokio::test]
+    async fn register_constraint_invalid_type() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::RegisterConstraintParams {
+            mission_id: "m1".to_string(),
+            constraint_type: "nonexistent_type".to_string(),
+            params_json: "{}".to_string(),
+        };
+        let err = mock.register_constraint(params).await.unwrap_err();
+        assert!(matches!(err, PlatformError::InvalidInput(_)));
     }
 }

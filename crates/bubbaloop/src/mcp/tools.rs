@@ -144,6 +144,22 @@ pub(crate) struct ConfigureContextRequest {
     token_budget: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct RegisterConstraintRequest {
+    /// Mission this constraint is attached to.
+    mission_id: String,
+    /// Constraint type: "workspace", "max_velocity", "forbidden_zone", "max_force"
+    constraint_type: String,
+    /// JSON object with constraint-specific fields.
+    params_json: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct ListConstraintsRequest {
+    /// Mission ID to list constraints for.
+    mission_id: String,
+}
+
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
@@ -1127,6 +1143,66 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         log::info!("[MCP] tool=unregister_alert id={}", req.alert_id);
         match self.platform.unregister_alert(req.alert_id).await {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Constraint tools ────────────────────────────────────────────
+
+    #[tool(
+        description = "Register a safety constraint for a mission. Constraints are checked before any actuator command (fail-closed). Admin only."
+    )]
+    async fn register_constraint(
+        &self,
+        Parameters(req): Parameters<RegisterConstraintRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=register_constraint mission_id={} type={}",
+            req.mission_id,
+            req.constraint_type
+        );
+
+        let params = platform::RegisterConstraintParams {
+            mission_id: req.mission_id,
+            constraint_type: req.constraint_type,
+            params_json: req.params_json,
+        };
+
+        match self.platform.register_constraint(params).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "List all safety constraints for a mission. Viewer only.")]
+    async fn list_constraints(
+        &self,
+        Parameters(req): Parameters<ListConstraintsRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_constraints mission_id={}", req.mission_id);
+
+        match self.platform.list_constraints(req.mission_id).await {
+            Ok(constraints) => {
+                let text = serde_json::to_string_pretty(
+                    &constraints
+                        .iter()
+                        .map(|(id, c)| {
+                            serde_json::json!({
+                                "id": id,
+                                "constraint": c,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_else(|_| "[]".to_string());
+                Ok(CallToolResult::success(vec![Content::text(text)]))
+            }
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: {}",
                 e

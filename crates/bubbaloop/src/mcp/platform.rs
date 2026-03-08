@@ -207,6 +207,33 @@ pub trait PlatformOperations: Send + Sync + 'static {
         &self,
         alert_id: String,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    // ── Constraints ───────────────────────────────────────────────────
+
+    /// Register a safety constraint for a mission.
+    fn register_constraint(
+        &self,
+        params: RegisterConstraintParams,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// List all constraints for a mission.
+    fn list_constraints(
+        &self,
+        mission_id: String,
+    ) -> impl std::future::Future<
+        Output = PlatformResult<Vec<(String, crate::daemon::constraints::Constraint)>>,
+    > + Send;
+}
+
+/// Parameters for registering a safety constraint.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RegisterConstraintParams {
+    /// Mission this constraint is attached to.
+    pub mission_id: String,
+    /// Constraint type: "workspace", "max_velocity", "forbidden_zone", "max_force"
+    pub constraint_type: String,
+    /// JSON object with constraint-specific fields.
+    pub params_json: String,
 }
 
 /// Parameters for registering a reactive alert.

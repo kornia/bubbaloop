@@ -64,7 +64,8 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "list_jobs"
         | "get_system_telemetry"
         | "get_telemetry_history"
-        | "list_missions" => Tier::Viewer,
+        | "list_missions"
+        | "list_constraints" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
         "start_node" | "stop_node" | "restart_node" | "get_node_config" | "send_command"
@@ -83,7 +84,8 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "update_telemetry_config"
         | "configure_context"
         | "register_alert"
-        | "unregister_alert" => Tier::Admin,
+        | "unregister_alert"
+        | "register_constraint" => Tier::Admin,
 
         // Unknown tools default to admin (principle of least privilege)
         _ => Tier::Admin,
