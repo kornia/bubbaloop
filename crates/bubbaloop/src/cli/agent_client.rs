@@ -129,7 +129,7 @@ async fn send_and_render(
                                 }
                                 AgentEventType::ToolResult => {
                                     if let Some(result) = &event.text {
-                                        let limit = if verbose { 300 } else { 80 };
+                                        let limit = if verbose { 300 } else { 120 };
                                         println!("  → {}", truncate_with_ellipsis(result, limit));
                                     }
                                 }
@@ -455,8 +455,8 @@ async fn run_tui_repl(
                         }
                         AgentEventType::ToolResult => {
                             if let Some(result) = event.text {
-                                // Always show a short result; verbose shows up to 300 chars
-                                let limit = if verbose { 300 } else { 80 };
+                                // Always show a result preview; verbose shows up to 300 chars
+                                let limit = if verbose { 300 } else { 120 };
                                 let preview = truncate_with_ellipsis(&result, limit);
                                 output.push(OutputLine::ToolResult(format!("  → {}", preview)));
                                 scroll_offset = 0;
@@ -576,7 +576,7 @@ fn render_output_line(line: &OutputLine) -> Vec<ListItem<'static>> {
         OutputLine::ToolResult(text) => {
             vec![styled_item(
                 text.clone(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             )]
         }
         OutputLine::ErrorLine(text) => {
