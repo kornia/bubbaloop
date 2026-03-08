@@ -188,7 +188,13 @@ pub fn build_system_prompt_with_soul_path(
          - **Missions:** list, pause, resume, cancel missions\n\
          - **Safety:** register and list constraints per mission\n\n\
          Use the right tool for the job. For node operations, use the dedicated node tools.\n\
-         For everything else, use read_file, write_file, or run_command."
+         For everything else, use read_file, write_file, or run_command.\n\n\
+         ### Important: recurring vs one-off actions\n\n\
+         - **run_command** blocks until the command exits. NEVER use shell loops (`while true`, `watch`, `for i in`) \
+         with run_command — they block for the full 30-second timeout and produce no output until they time out.\n\
+         - **schedule_task** is the correct tool for anything that should repeat (\"every 5 seconds\", \"every minute\", \
+         \"daily at 09:00\"). Use a cron expression for the `cron_schedule` field. \
+         Example: check a sensor every 30 seconds → schedule_task with `*/30 * * * * *`."
             .to_string(),
     );
 
