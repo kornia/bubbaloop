@@ -835,6 +835,10 @@ impl<P: PlatformOperations> Dispatcher<P> {
     }
 
     async fn handle_send_command(&self, input: &Value) -> ToolResult {
+        // Phase 4: ConstraintEngine.validate_position_goal() must be called here
+        // before actuator publish. The actual wiring happens in Phase 5 when the
+        // daemon loop is restructured to pass mission context (with constraint set)
+        // into the agent dispatch path.
         let node_name = match Self::extract_node_name(input) {
             Ok(n) => n,
             Err(e) => return e,
