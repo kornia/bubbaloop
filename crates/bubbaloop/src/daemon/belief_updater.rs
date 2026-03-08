@@ -107,6 +107,13 @@ pub async fn spawn_belief_decay_task(
     mut shutdown: tokio::sync::watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let store = match tokio::task::block_in_place(|| SemanticStore::open(&db_path)) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("[BeliefDecay] failed to open store: {}", e);
+                return;
+            }
+        };
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         loop {
             tokio::select! {
@@ -116,7 +123,6 @@ pub async fn spawn_belief_decay_task(
                 }
                 _ = interval.tick() => {
                     let result = tokio::task::block_in_place(|| {
-                        let store = SemanticStore::open(&db_path)?;
                         store.decay_beliefs(decay_factor).map_err(|e| anyhow::anyhow!("{}", e))
                     });
                     match result {

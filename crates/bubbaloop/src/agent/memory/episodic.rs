@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// A single episodic log entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LogEntry {
     /// ISO 8601 timestamp.
     pub timestamp: String,
@@ -674,12 +674,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "hello world".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         };
         log.append(&entry).unwrap();
 
@@ -698,11 +693,7 @@ mod tests {
                 role: "user".to_string(),
                 content: format!("message {}", i),
                 job_id: Some("job-1".to_string()),
-                flush: None,
-                id: None,
-                cause_id: None,
-                salience: None,
-                mission_id: None,
+                ..Default::default()
             };
             log.append(&entry).unwrap();
         }
@@ -720,23 +711,13 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "day one".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         };
         let entry2 = LogEntry {
             timestamp: "2026-03-04T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "day two".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         };
         log.append(&entry1).unwrap();
         log.append(&entry2).unwrap();
@@ -753,23 +734,14 @@ mod tests {
             role: "assistant".to_string(),
             content: "Restarted front-door camera".to_string(),
             job_id: Some("job-1".to_string()),
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
         log.append(&LogEntry {
             timestamp: "2026-03-03T10:01:00Z".to_string(),
             role: "user".to_string(),
             content: "What is the weather?".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -786,12 +758,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "hello".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -841,12 +808,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "test message".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -872,24 +834,14 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "assistant".to_string(),
             content: "The password is hunter2".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
         log.append(&LogEntry {
             timestamp: "2026-03-03T10:01:00Z".to_string(),
             role: "user".to_string(),
             content: "weather looks good".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -919,12 +871,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "sensitive data here".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -953,12 +900,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "camera restarted".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -976,12 +918,7 @@ mod tests {
             timestamp: "2025-01-01T10:00:00Z".to_string(),
             role: "assistant".to_string(),
             content: "camera was offline for maintenance".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
         // Recent entry
@@ -989,12 +926,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "assistant".to_string(),
             content: "camera is now online and healthy".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -1012,24 +944,14 @@ mod tests {
             timestamp: "2025-01-01T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "ancient forgotten artifact".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
         log.append(&LogEntry {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "recent important update".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -1057,12 +979,7 @@ mod tests {
             timestamp: "2020-01-01T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "ancient".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -1092,12 +1009,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "assistant".to_string(),
             content: "I checked the sensors.".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
         // First plan
@@ -1105,12 +1017,7 @@ mod tests {
             timestamp: "2026-03-03T10:01:00Z".to_string(),
             role: "plan".to_string(),
             content: "Step 1: install node. Step 2: build.".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
         // Second (newer) plan
@@ -1119,11 +1026,7 @@ mod tests {
             role: "plan".to_string(),
             content: "Revised plan: restart camera first.".to_string(),
             job_id: Some("job-42".to_string()),
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -1140,24 +1043,14 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "plan something".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
         log.append(&LogEntry {
             timestamp: "2026-03-03T10:01:00Z".to_string(),
             role: "assistant".to_string(),
             content: "here is a plan".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -1179,12 +1072,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "hello world".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
         // Flush entry
@@ -1226,12 +1114,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "system".to_string(),
             content: "System initialized".to_string(),
-            job_id: None,
-            flush: None,
-            id: None,
-            cause_id: None,
-            salience: None,
-            mission_id: None,
+            ..Default::default()
         })
         .unwrap();
 

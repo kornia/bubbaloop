@@ -107,14 +107,7 @@ pub struct ReactiveRuleStore {
 impl ReactiveRuleStore {
     /// Open (or create) the reactive rule store at the given path.
     pub fn open(path: &Path) -> anyhow::Result<Self> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let conn = Connection::open(path)?;
-
-        conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
-        conn.query_row("PRAGMA busy_timeout=5000", [], |_| Ok(()))?;
+        let conn = crate::daemon::util::open_sqlite(path)?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS reactive_rules (
