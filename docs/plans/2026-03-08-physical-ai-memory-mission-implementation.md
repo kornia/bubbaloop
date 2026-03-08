@@ -463,7 +463,11 @@ fn causal_chain_roundtrips() {
 cargo test --lib -p bubbaloop causal_chain 2>&1 | grep -E "FAILED|error"
 ```
 
-**Step 3: Extend LogEntry struct and FTS5 table**
+**Step 3: Extend LogEntry struct and add episodic_meta table**
+
+⚠️ **CRITICAL FIX (architect review):** FTS5 virtual tables do NOT support `ALTER TABLE ADD COLUMN`.
+Do NOT add columns to `fts_episodic`. Instead, create a separate regular table `episodic_meta`
+that stores structured metadata and is JOINed with the FTS5 table for queries.
 
 In `episodic.rs`, extend `LogEntry`:
 
@@ -474,7 +478,7 @@ pub struct LogEntry {
     pub content: String,
     pub job_id: Option<String>,
     pub flush: Option<bool>,
-    // New fields
+    // New fields (stored in episodic_meta, not fts_episodic)
     pub id: Option<String>,        // UUID for causal chain linking
     pub cause_id: Option<String>,  // ID of the event that caused this entry
     pub salience: Option<f32>,     // 0.0-1.0 importance (None = not scored)
@@ -482,40 +486,57 @@ pub struct LogEntry {
 }
 ```
 
-Add migration in `EpisodicLog::new()` after the table creation:
+Add `episodic_meta` table creation in `EpisodicLog::new()` (regular table, not FTS5):
 
 ```rust
-// Add new columns if they don't exist (migration-safe ADD COLUMN)
-for col in &["id TEXT", "cause_id TEXT", "salience REAL", "mission_id TEXT"] {
-    let _ = conn.execute(&format!(
-        "ALTER TABLE fts_episodic ADD COLUMN {}", col), []);
-    // Ignore errors — column already exists
-}
+// episodic_meta: structured metadata parallel to fts_episodic FTS rows
+// The `rowid` column links to fts_episodic rowid for JOIN queries.
+conn.execute_batch("
+    CREATE TABLE IF NOT EXISTS episodic_meta (
+        id          TEXT PRIMARY KEY,        -- UUID assigned at append time
+        rowid_ref   INTEGER NOT NULL,        -- fts_episodic rowid this matches
+        cause_id    TEXT,                    -- UUID of triggering event
+        salience    REAL,                    -- 0.0-1.0 importance score
+        mission_id  TEXT,                    -- Active mission at time of entry
+        timestamp   TEXT NOT NULL            -- Copied from log entry for ordering
+    );
+    CREATE INDEX IF NOT EXISTS idx_em_cause ON episodic_meta(cause_id);
+    CREATE INDEX IF NOT EXISTS idx_em_mission ON episodic_meta(mission_id);
+")?;
 ```
 
 **Step 4: Add append_with_cause and causal_chain**
 
+Use `uuid::Uuid::new_v4().to_string()` — the `uuid` crate with `v4` feature is already in Cargo.toml.
+
 ```rust
 pub fn append_with_cause(&self, role: &str, content: &str,
     cause_id: Option<&str>, salience: f32) -> super::Result<String> {
-    let id = uuid_v4(); // implement as: format!("{:x}", rand::random::<u64>())
+    let id = uuid::Uuid::new_v4().to_string();
+    let ts = crate::agent::memory::now_rfc3339();
     let entry = LogEntry {
         id: Some(id.clone()),
-        timestamp: crate::agent::memory::now_rfc3339(),
+        timestamp: ts.clone(),
         role: role.to_string(),
         content: content.to_string(),
         cause_id: cause_id.map(String::from),
         salience: Some(salience),
         job_id: None, flush: None, mission_id: None,
     };
+    // append() must write to episodic_meta if entry.id is Some
     self.append(&entry)?;
     Ok(id)
 }
 
+// causal_chain: query episodic_meta (regular table) for cause_id matches,
+// then join with fts_episodic via rowid_ref to get content/role/timestamp
 pub fn causal_chain(&self, cause_id: &str) -> super::Result<Vec<LogEntry>> {
     let mut stmt = self.conn.prepare(
-        "SELECT content, id, role, timestamp, job_id, cause_id, salience
-         FROM fts_episodic WHERE cause_id = ?1 ORDER BY timestamp"
+        "SELECT f.content, m.id, f.role, m.timestamp, NULL, m.cause_id, m.salience
+         FROM episodic_meta m
+         JOIN fts_episodic f ON f.rowid = m.rowid_ref
+         WHERE m.cause_id = ?1
+         ORDER BY m.timestamp"
     )?;
     let entries = stmt.query_map(rusqlite::params![cause_id], |row| {
         Ok(LogEntry {

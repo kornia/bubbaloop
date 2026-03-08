@@ -310,28 +310,38 @@ These are out of scope but represent natural evolution:
 - **Voice** — Speech-to-text for hands-free robot control
 - **Visual** — Camera frame analysis in Claude conversations (multimodal)
 
-### Research Track: Physical Memory + Federated Agents
+### Research Track: Physical Memory + Federated Agents ✅ SHIPPED v0.0.11
 
-Exploratory directions targeting home IoT, robot brain (VLM→VLA), and software bots.
+Implemented in v0.0.11. Full implementation: `docs/plans/2026-03-08-physical-ai-memory-mission-implementation.md`
 
-#### Sensor-Grounded Belief Memory
+#### Sensor-Grounded Belief Memory ✅
 
 Memory confirmed or contradicted by sensor readings — not just conversation history:
 
-- **Tier 0 — Live world state:** Structured key-value snapshot of physical reality, updated continuously by a cheap local rule engine (NOT the LLM). Injected at the top of every agent turn. "Dog: sleeping in kitchen, 45min. Last fed: 8am."
-- **Belief update loop:** Camera sees dog at bowl → belief "dog eats at 6pm" is reinforced. 10 days without → belief retracted. LLM sees current belief set, not raw history.
-- **Causal chain episodic memory:** Store `cause → effect → agent_response` triples instead of flat NDJSON. "Motor hot → agent reduced speed → motor cooled." Retrieval returns chains, not isolated events. Prevents event amnesia.
-- **Salience-weighted forgetting:** Physical events (overcurrent, fall detected) have high salience and long retention. Conversational exchanges decay fast. Memory writes filtered by heuristic, not logged blindly.
-- **Context Providers:** Pluggable components assemble the LLM context per turn — each with a token budget. `SensorDigestProvider`, `EventProvider`, `ConversationProvider`. Same agent loop, domain-specific context assembly.
+- [x] **Tier 0 — Live world state:** SQLite `world_state` table, updated by Context Providers (rule engine, no LLM). Injected at top of every agent turn with stale-entry warnings.
+- [x] **Belief update loop:** `daemon/belief_updater.rs` — `evaluate_observation_vs_belief()` (confirm/neutral/contradict via token overlap). `spawn_belief_decay_task` periodic confidence decay.
+- [x] **Causal chain episodic memory:** `episodic_meta` regular table (NOT FTS5 — FTS5 forbids ALTER TABLE) links entries via `cause_id`. `causal_chain()` uses JOIN for retrieval.
+- [x] **Salience-weighted forgetting:** `salience: f32` field on `LogEntry`; `mission_id` tagging for cross-cutting retrieval.
+- [x] **Context Providers:** `daemon/context_provider.rs` — Zenoh subscribers writing world state. Filter: `field=value AND field2>number`. Key templates with `{field}` substitution.
 
-#### Federated Agents (Zenoh as federation bus)
+#### Mission Engine ✅
 
-Multi-agent coordination across physical nodes without a central server:
+- [x] **Mission Model:** `daemon/mission.rs` — markdown → SQLite state machine (Active/Paused/Cancelled/Completed/Failed). 5s file watcher hot-reload.
+- [x] **Mission DAG:** `DagEvaluator::ready_missions()` for dependency resolution. `run_micro_turn()` LLM pre-validation (single call, no tools, no episodic write).
+- [x] **Safety Layer:** `daemon/constraints.rs` — `ConstraintEngine` fail-closed (Allow|Deny), `ResourceRegistry` exclusive locking, `CompiledFallback` enum without arbitrary Zenoh publish.
+- [x] **Reactive pre-filter:** `daemon/reactive.rs` — rule engine with per-rule debounce, arousal boost injection, `register_alert` MCP tool (Admin).
 
-- **World state gossip:** Agents publish compact belief snapshots on Zenoh. Subscribers merge into local world model. No central broker.
-- **Quorum memory:** Critical observations enter shared semantic memory only when N agents independently confirm. "Dog near stairs" triggers alert if 2 cameras agree.
-- **Reactive pre-filter:** Cheap local rule engine watches Zenoh streams, escalates to LLM only on threshold crossings or anomalies. Heartbeat stays slow (60s); reactive layer fires in milliseconds.
-- **Role-based topic namespaces:** Agent roles in `agents.toml` determine Zenoh topic subscriptions. Federation is implicit in the topic tree.
+#### Federated Agents (Zenoh as federation bus) ✅
+
+- [x] **World state gossip:** `daemon/federated.rs` — topic helpers for `bubbaloop/{scope}/{machine_id}/agent/{id}/world_state`, `extract_machine_id()`, `prefix_remote_key()` for `remote:{machine_id}.` namespace.
+- [ ] **Quorum memory:** Critical observations confirmed by N agents — not yet wired to reactive layer.
+- [ ] **Full gossip subscriber:** Background task subscribing to remote world state topics — protocol helpers done, subscriber task pending.
+
+**New MCP tools (Viewer):** `list_missions`, `list_constraints`, `get_belief`, `list_world_state`
+**New MCP tools (Operator):** `update_mission_status`, `update_belief`
+**New MCP tools (Admin):** `configure_context`, `register_alert`, `unregister_alert`, `register_constraint`
+
+**Tests:** 675 unit tests (up from 601). Zero clippy warnings.
 
 - **Security hardening:**
   - [ ] Zenoh message authentication (HMAC or shared secret on inbox/outbox/daemon topics)
@@ -376,6 +386,7 @@ Multi-agent coordination across physical nodes without a central server:
 
 ## Design Documents
 
+- `docs/plans/2026-03-08-physical-ai-memory-mission-implementation.md` — Physical AI Memory & Mission system (4-tier memory, missions, safety layer, federated agents)
 - `docs/plans/2026-03-05-telemetry-watchdog-design.md` — Telemetry watchdog design (circuit breaker, agent bridge, hot-reload config)
 - `docs/plans/2026-03-05-telemetry-watchdog-implementation.md` — Telemetry watchdog implementation plan (11 tasks)
 - `docs/plans/2026-03-03-openclaw-agent-rewrite-design.md` — OpenClaw agent rewrite (Soul, 3-tier memory, adaptive heartbeat, proposals)

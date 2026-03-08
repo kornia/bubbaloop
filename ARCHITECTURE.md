@@ -44,8 +44,9 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 │  │  Soul | EventSink | Heartbeat | per-agent Memory   │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  3-Tier Memory                                      │  │
-│  │  Short-term (RAM) | Episodic (NDJSON) | Semantic DB │  │
+│  │  4-Tier Memory + Mission Engine                     │  │
+│  │  World State (SQLite) | Short-term (RAM)            │  │
+│  │  Episodic (NDJSON/FTS5) | Semantic (SQLite)         │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  MCP Server (30 tools) — sole control interface      │  │
@@ -138,6 +139,46 @@ Nodes that support imperative actions MUST declare `{topic_prefix}/command` quer
 {"command": "capture_frame", "params": {"resolution": "1080p"}}
 → {"result": "frame captured", "error": null}
 ```
+
+---
+
+## Physical AI Memory & Mission Engine
+
+Implemented in v0.0.11. Full design: `docs/plans/2026-03-08-physical-ai-memory-mission-implementation.md`
+
+### 4-Tier Memory Model
+
+| Tier | Storage | Who Writes | Token Budget |
+|------|---------|------------|--------------|
+| **0 — Live World State** | SQLite `world_state` table | Context Providers (rule engine, no LLM) | Injected at top of every turn |
+| **1 — Short-term** | RAM `Vec<Message>` | LLM turns | Active turn only |
+| **2 — Episodic** | NDJSON + FTS5 | LLM turns | BM25 search recall |
+| **3 — Semantic** | SQLite | LLM + belief engine | Beliefs + jobs + proposals |
+
+**Causal chains**: `episodic_meta` table (regular table, NOT FTS5) links entries via `cause_id` for `"motor hot → reduced speed → cooled"` recall chains. FTS5 virtual tables do not support `ALTER TABLE` — use join instead.
+
+**Belief system** (`daemon/belief_updater.rs`): Observation confirms/contradicts beliefs via token overlap. `spawn_belief_decay_task` periodically reduces belief confidence (configurable rate). MCP tools: `get_belief`, `update_belief` (Operator), `list_world_state` (Viewer).
+
+### Context Providers (`daemon/context_provider.rs`)
+
+Daemon background tasks that subscribe to Zenoh topics and write to world state — no LLM involved. Filter expression: `field=value AND field2>number`. World state key templates support `{field}` substitution from payload. Each provider opens its own rusqlite connection (WAL mode allows concurrent reads).
+
+### Mission Engine
+
+- **Mission Model** (`daemon/mission.rs`): Markdown files → SQLite state machine. States: `Active | Paused | Cancelled | Completed | Failed`. 5-second file watcher for hot-reload. Resources stored as JSON array. Sub-missions linked via `parent_id`.
+- **Mission DAG** (`daemon/mission.rs`): `DagEvaluator::ready_missions()` resolves `depends_on` dependencies. `run_micro_turn()` validates sub-mission preconditions with a single LLM call (no tools, no episodic write) before activation.
+- **Reactive Pre-filter** (`daemon/reactive.rs`): Rule engine (predicate → arousal boost) with per-rule debounce (`AtomicI64` last_fired_at). `register_alert` MCP tool (Admin). Fires in milliseconds; no LLM.
+- **Safety Layer** (`daemon/constraints.rs`): `ConstraintEngine` fail-closed validation (Allow|Deny|ValidatorError). `ResourceRegistry` for exclusive actuator locking with `Drop`-guard release. `CompiledFallback` enum: `StopActuators | PauseAllMissions | AlertAgent | HaltAndWait` — NO arbitrary Zenoh publish variant.
+- **Federated Agents** (`daemon/federated.rs`): World state gossip topic helpers. Remote entries namespaced `remote:{machine_id}.{key}`. Pattern: `bubbaloop/**/agent/*/world_state`.
+
+### Safety Invariants
+
+| ID | Invariant | Enforcer |
+|----|-----------|----------|
+| I2 | Constraint violations synchronously rejected before any actuator command | `ConstraintEngine::validate_position_goal()` |
+| I3 | Fallback actions cannot publish arbitrary Zenoh payloads | `CompiledFallback` enum — no `PublishZenoh` variant |
+| I5 | rusqlite `Connection` never shared across async boundaries | `block_in_place()` for all DB calls |
+| I6 | Resource locks released on drop | `ResourceGuard` Drop impl |
 
 ---
 
@@ -294,7 +335,7 @@ MCP is the **sole control interface**. 30 MCP tools + 7 agent-internal (37 total
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
 | Control | MCP (rmcp) | Standard AI agent interface, 30 MCP tools + 7 agent-internal |
-| Memory | SQLite (rusqlite) + NDJSON | 3-tier: RAM + episodic (NDJSON/FTS5) + semantic (SQLite). Episodic FTS5 index and semantic store share `memory.db` per agent. |
+| Memory | SQLite (rusqlite) + NDJSON | 4-tier: world state (live SQLite) + RAM + episodic (NDJSON/FTS5) + semantic (SQLite). World state updated by context providers, not LLM. |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
 | systemd | zbus (D-Bus) | No subprocess spawning, safe |
