@@ -160,6 +160,32 @@ pub(crate) struct ListConstraintsRequest {
     mission_id: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct GetBeliefRequest {
+    /// Subject of the belief (e.g. "front_door_camera").
+    subject: String,
+    /// Predicate / relation (e.g. "is_reliable").
+    predicate: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct UpdateBeliefRequest {
+    /// Subject of the belief (e.g. "front_door_camera").
+    subject: String,
+    /// Predicate / relation (e.g. "is_reliable").
+    predicate: String,
+    /// Value (e.g. "true", "mostly", JSON).
+    value: String,
+    /// Confidence (0.0-1.0).
+    confidence: f64,
+    /// How this belief was formed (e.g. "observation", "user_told_me").
+    #[serde(default)]
+    source: Option<String>,
+    /// Free-form notes.
+    #[serde(default)]
+    notes: Option<String>,
+}
+
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
@@ -1203,6 +1229,79 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
                 .unwrap_or_else(|_| "[]".to_string());
                 Ok(CallToolResult::success(vec![Content::text(text)]))
             }
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Belief tools ──────────────────────────────────────────────────
+
+    #[tool(
+        description = "Get a single belief by subject and predicate. Returns the belief as JSON or 'not found'."
+    )]
+    async fn get_belief(
+        &self,
+        Parameters(req): Parameters<GetBeliefRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=get_belief subject={} predicate={}",
+            req.subject,
+            req.predicate
+        );
+        match self.platform.get_belief(req.subject, req.predicate).await {
+            Ok(Some(belief)) => Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&belief).unwrap_or_else(|_| "{}".to_string()),
+            )])),
+            Ok(None) => Ok(CallToolResult::success(vec![Content::text("not found")])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Create or update a belief about the world. Beliefs are durable assertions the agent holds (e.g. 'the dog eats at 08:00'). Operator only."
+    )]
+    async fn update_belief(
+        &self,
+        Parameters(req): Parameters<UpdateBeliefRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=update_belief subject={} predicate={}",
+            req.subject,
+            req.predicate
+        );
+
+        let params = platform::UpdateBeliefParams {
+            subject: req.subject,
+            predicate: req.predicate,
+            value: req.value,
+            confidence: req.confidence,
+            source: req.source,
+            notes: req.notes,
+        };
+
+        match self.platform.update_belief(params).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "List all world state entries. Returns the current world state snapshot as JSON."
+    )]
+    async fn list_world_state(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_world_state");
+        match self.platform.list_world_state().await {
+            Ok(entries) => Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "[]".to_string()),
+            )])),
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: {}",
                 e

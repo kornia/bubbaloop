@@ -223,6 +223,48 @@ pub trait PlatformOperations: Send + Sync + 'static {
     ) -> impl std::future::Future<
         Output = PlatformResult<Vec<(String, crate::daemon::constraints::Constraint)>>,
     > + Send;
+
+    // ── Belief management ────────────────────────────────────────────
+
+    /// Get a single belief by subject and predicate.
+    fn get_belief(
+        &self,
+        subject: String,
+        predicate: String,
+    ) -> impl std::future::Future<
+        Output = PlatformResult<Option<crate::agent::memory::semantic::Belief>>,
+    > + Send;
+
+    /// Create or update a belief with the given parameters.
+    fn update_belief(
+        &self,
+        params: UpdateBeliefParams,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// List all world state entries.
+    fn list_world_state(
+        &self,
+    ) -> impl std::future::Future<Output = PlatformResult<Vec<crate::agent::memory::WorldStateEntry>>>
+           + Send;
+}
+
+/// Parameters for creating or updating a belief.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UpdateBeliefParams {
+    /// Subject of the belief (e.g. "front_door_camera").
+    pub subject: String,
+    /// Predicate / relation (e.g. "is_reliable").
+    pub predicate: String,
+    /// Value (e.g. "true", "mostly", JSON).
+    pub value: String,
+    /// Confidence (0.0-1.0).
+    pub confidence: f64,
+    /// How this belief was formed (e.g. "observation", "user_told_me").
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Free-form notes.
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// Parameters for registering a safety constraint.

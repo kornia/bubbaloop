@@ -12,8 +12,10 @@
 //! External AI agents (Claude Code, etc.) interact exclusively through MCP.
 //! The daemon never makes autonomous decisions — it's a passive skill runtime.
 
+pub mod belief_updater;
 pub mod constraints;
 pub mod context_provider;
+pub mod federated;
 pub mod gateway;
 pub mod mission;
 pub mod node_manager;

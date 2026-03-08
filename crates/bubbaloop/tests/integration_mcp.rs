@@ -142,6 +142,8 @@ fn mock_with_nodes(nodes: Vec<NodeInfo>) -> MockPlatform {
         missions: Mutex::new(Vec::new()),
         alerts: Mutex::new(Vec::new()),
         constraints: Mutex::new(Vec::new()),
+        beliefs: Mutex::new(Vec::new()),
+        world_state: Mutex::new(Vec::new()),
     }
 }
 

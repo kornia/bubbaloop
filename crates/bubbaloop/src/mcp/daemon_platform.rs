@@ -652,6 +652,56 @@ impl PlatformOperations for DaemonPlatform {
             .map_err(|e| PlatformError::Internal(e.to_string()))
     }
 
+    async fn get_belief(
+        &self,
+        subject: String,
+        predicate: String,
+    ) -> PlatformResult<Option<crate::agent::memory::semantic::Belief>> {
+        let store = crate::agent::memory::semantic::SemanticStore::open(&self.agent_db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        store
+            .get_belief(&subject, &predicate)
+            .map_err(|e| PlatformError::Internal(e.to_string()))
+    }
+
+    async fn update_belief(
+        &self,
+        params: super::platform::UpdateBeliefParams,
+    ) -> PlatformResult<String> {
+        let store = crate::agent::memory::semantic::SemanticStore::open(&self.agent_db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        let id = format!("belief-{}", uuid::Uuid::new_v4());
+        let source = params.source.as_deref().unwrap_or("mcp");
+        store
+            .upsert_belief(
+                &id,
+                &params.subject,
+                &params.predicate,
+                &params.value,
+                params.confidence,
+                source,
+                params.notes.as_deref(),
+            )
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        log::info!(
+            "[MCP] tool=update_belief subject={} predicate={}",
+            params.subject,
+            params.predicate
+        );
+        Ok(format!(
+            "Belief ({}, {}) updated with confidence {}",
+            params.subject, params.predicate, params.confidence
+        ))
+    }
+
+    async fn list_world_state(&self) -> PlatformResult<Vec<crate::agent::memory::WorldStateEntry>> {
+        let store = crate::agent::memory::semantic::SemanticStore::open(&self.agent_db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        store
+            .world_state_snapshot()
+            .map_err(|e| PlatformError::Internal(e.to_string()))
+    }
+
     async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {
         let base = self
             .agent_db_path
