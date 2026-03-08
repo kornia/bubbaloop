@@ -12,6 +12,8 @@ use chrono::SecondsFormat;
 use std::path::Path;
 use std::sync::Arc;
 
+pub use semantic::{Belief, WorldStateEntry};
+
 /// Errors from memory operations.
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryError {
@@ -33,6 +35,18 @@ pub struct MemoryBackend {
     pub episodic: episodic::EpisodicLog,
     /// Tier 3: Semantic store (SQLite jobs + proposals).
     pub semantic: semantic::SemanticStore,
+}
+
+impl MemoryBackend {
+    /// Read the full world-state snapshot (delegates to semantic store).
+    pub fn world_state_snapshot(&self) -> Result<Vec<WorldStateEntry>> {
+        self.semantic.world_state_snapshot()
+    }
+
+    /// List all beliefs (delegates to semantic store).
+    pub fn list_beliefs(&self) -> Result<Vec<Belief>> {
+        self.semantic.list_beliefs()
+    }
 }
 
 /// Unified memory facade combining all three tiers.
@@ -151,5 +165,46 @@ mod tests {
         let now = now_epoch_secs();
         assert!(now > 1_577_836_800); // after 2020
         assert!(now < 4_102_444_800); // before 2100
+    }
+
+    #[test]
+    fn snapshot_includes_world_state_and_beliefs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = semantic::SemanticStore::open(&db_path).unwrap();
+
+        // Insert world state
+        store
+            .upsert_world_state(
+                "cam.status",
+                "online",
+                0.95,
+                Some("topic/cam"),
+                Some("rtsp"),
+                300,
+            )
+            .unwrap();
+
+        // Insert belief
+        store
+            .upsert_belief(
+                "b1",
+                "camera",
+                "is_reliable",
+                "true",
+                0.8,
+                "observation",
+                None,
+            )
+            .unwrap();
+
+        // Verify both appear in snapshots
+        let ws = store.world_state_snapshot().unwrap();
+        assert_eq!(ws.len(), 1);
+        assert_eq!(ws[0].key, "cam.status");
+
+        let beliefs = store.list_beliefs().unwrap();
+        assert_eq!(beliefs.len(), 1);
+        assert_eq!(beliefs[0].subject, "camera");
     }
 }

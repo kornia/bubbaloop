@@ -100,7 +100,34 @@ impl SemanticStore {
                 decided_by  TEXT,
                 decided_at  TEXT
             );
-            CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);",
+            CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
+
+            CREATE TABLE IF NOT EXISTS world_state (
+                key           TEXT PRIMARY KEY,
+                value         TEXT NOT NULL,
+                confidence    REAL NOT NULL DEFAULT 1.0,
+                source_topic  TEXT,
+                source_node   TEXT,
+                last_seen_at  INTEGER NOT NULL,
+                max_age_secs  INTEGER NOT NULL DEFAULT 300,
+                created_at    INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ws_last_seen ON world_state(last_seen_at);
+
+            CREATE TABLE IF NOT EXISTS beliefs (
+                id                 TEXT PRIMARY KEY,
+                subject            TEXT NOT NULL,
+                predicate          TEXT NOT NULL,
+                value              TEXT NOT NULL,
+                confidence         REAL NOT NULL DEFAULT 1.0,
+                source             TEXT NOT NULL,
+                first_observed     INTEGER NOT NULL,
+                last_confirmed     INTEGER NOT NULL,
+                confirmation_count INTEGER NOT NULL DEFAULT 1,
+                contradiction_count INTEGER NOT NULL DEFAULT 0,
+                notes              TEXT,
+                UNIQUE(subject, predicate)
+            );",
         )?;
 
         #[cfg(unix)]
@@ -377,6 +404,202 @@ impl SemanticStore {
         Ok(count > 0)
     }
 
+    // ── World State CRUD ──────────────────────────────────────────
+
+    /// Upsert a world-state entry using the current time.
+    pub fn upsert_world_state(
+        &self,
+        key: &str,
+        value: &str,
+        confidence: f64,
+        source_topic: Option<&str>,
+        source_node: Option<&str>,
+        max_age_secs: i64,
+    ) -> super::Result<()> {
+        let now = super::now_epoch_secs() as i64;
+        self.upsert_world_state_at(
+            key,
+            value,
+            confidence,
+            source_topic,
+            source_node,
+            max_age_secs,
+            now,
+        )
+    }
+
+    /// Upsert a world-state entry with an explicit timestamp (for testing staleness).
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_world_state_at(
+        &self,
+        key: &str,
+        value: &str,
+        confidence: f64,
+        source_topic: Option<&str>,
+        source_node: Option<&str>,
+        max_age_secs: i64,
+        last_seen_at: i64,
+    ) -> super::Result<()> {
+        self.conn.execute(
+            "INSERT INTO world_state (key, value, confidence, source_topic, source_node, last_seen_at, max_age_secs, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6)
+             ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                confidence = excluded.confidence,
+                source_topic = excluded.source_topic,
+                source_node = excluded.source_node,
+                last_seen_at = excluded.last_seen_at,
+                max_age_secs = excluded.max_age_secs",
+            params![key, value, confidence, source_topic, source_node, last_seen_at, max_age_secs],
+        )?;
+        Ok(())
+    }
+
+    /// Read the full world-state snapshot. Marks entries stale where `now - last_seen_at > max_age_secs`.
+    pub fn world_state_snapshot(&self) -> super::Result<Vec<WorldStateEntry>> {
+        let now = super::now_epoch_secs() as i64;
+        let mut stmt = self.conn.prepare(
+            "SELECT key, value, confidence, source_topic, source_node, last_seen_at, max_age_secs \
+             FROM world_state ORDER BY key ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let last_seen_at: i64 = row.get(5)?;
+            let max_age_secs: i64 = row.get(6)?;
+            let stale = (now - last_seen_at) > max_age_secs;
+            Ok(WorldStateEntry {
+                key: row.get(0)?,
+                value: row.get(1)?,
+                confidence: row.get(2)?,
+                source_topic: row.get(3)?,
+                source_node: row.get(4)?,
+                last_seen_at,
+                max_age_secs,
+                stale,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(super::MemoryError::from)
+    }
+
+    // ── Beliefs CRUD ─────────────────────────────────────────────
+
+    /// Upsert a belief. On conflict (subject, predicate), updates value/confidence/source
+    /// and increments confirmation_count.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_belief(
+        &self,
+        id: &str,
+        subject: &str,
+        predicate: &str,
+        value: &str,
+        confidence: f64,
+        source: &str,
+        notes: Option<&str>,
+    ) -> super::Result<()> {
+        let now = super::now_epoch_secs() as i64;
+        self.conn.execute(
+            "INSERT INTO beliefs (id, subject, predicate, value, confidence, source, first_observed, last_confirmed, confirmation_count, contradiction_count, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 1, 0, ?8)
+             ON CONFLICT(subject, predicate) DO UPDATE SET
+                value = excluded.value,
+                confidence = excluded.confidence,
+                source = excluded.source,
+                last_confirmed = excluded.last_confirmed,
+                confirmation_count = confirmation_count + 1,
+                notes = COALESCE(excluded.notes, notes)",
+            params![id, subject, predicate, value, confidence, source, now, notes],
+        )?;
+        Ok(())
+    }
+
+    /// Confirm a belief: bump confidence by +0.05 (capped at 1.0), increment confirmation_count.
+    pub fn confirm_belief(&self, subject: &str, predicate: &str) -> super::Result<bool> {
+        let now = super::now_epoch_secs() as i64;
+        let count = self.conn.execute(
+            "UPDATE beliefs SET confidence = MIN(1.0, confidence + 0.05), \
+             confirmation_count = confirmation_count + 1, last_confirmed = ?1 \
+             WHERE subject = ?2 AND predicate = ?3",
+            params![now, subject, predicate],
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Contradict a belief: reduce confidence by -0.15 (floored at 0.0), increment contradiction_count.
+    pub fn contradict_belief(&self, subject: &str, predicate: &str) -> super::Result<bool> {
+        let count = self.conn.execute(
+            "UPDATE beliefs SET confidence = MAX(0.0, confidence - 0.15), \
+             contradiction_count = contradiction_count + 1 \
+             WHERE subject = ?1 AND predicate = ?2",
+            params![subject, predicate],
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Get a single belief by subject + predicate.
+    pub fn get_belief(&self, subject: &str, predicate: &str) -> super::Result<Option<Belief>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, subject, predicate, value, confidence, source, first_observed, last_confirmed, \
+             confirmation_count, contradiction_count, notes \
+             FROM beliefs WHERE subject = ?1 AND predicate = ?2",
+        )?;
+        let mut rows = stmt.query_map(params![subject, predicate], |row| {
+            Ok(Belief {
+                id: row.get(0)?,
+                subject: row.get(1)?,
+                predicate: row.get(2)?,
+                value: row.get(3)?,
+                confidence: row.get(4)?,
+                source: row.get(5)?,
+                first_observed: row.get(6)?,
+                last_confirmed: row.get(7)?,
+                confirmation_count: row.get(8)?,
+                contradiction_count: row.get(9)?,
+                notes: row.get(10)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(b)) => Ok(Some(b)),
+            Some(Err(e)) => Err(super::MemoryError::from(e)),
+            None => Ok(None),
+        }
+    }
+
+    /// List all beliefs.
+    pub fn list_beliefs(&self) -> super::Result<Vec<Belief>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, subject, predicate, value, confidence, source, first_observed, last_confirmed, \
+             confirmation_count, contradiction_count, notes \
+             FROM beliefs ORDER BY subject ASC, predicate ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Belief {
+                id: row.get(0)?,
+                subject: row.get(1)?,
+                predicate: row.get(2)?,
+                value: row.get(3)?,
+                confidence: row.get(4)?,
+                source: row.get(5)?,
+                first_observed: row.get(6)?,
+                last_confirmed: row.get(7)?,
+                confirmation_count: row.get(8)?,
+                contradiction_count: row.get(9)?,
+                notes: row.get(10)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(super::MemoryError::from)
+    }
+
+    /// Decay all belief confidences by a factor (e.g. 0.95 reduces by 5%).
+    /// Returns number of rows updated.
+    pub fn decay_beliefs(&self, decay_factor: f64) -> super::Result<u32> {
+        let count = self.conn.execute(
+            "UPDATE beliefs SET confidence = MAX(0.0, confidence * ?1) WHERE confidence > 0.0",
+            params![decay_factor],
+        )?;
+        Ok(count as u32)
+    }
+
     /// Get a single proposal by ID.
     pub fn get_proposal(&self, id: &str) -> super::Result<Option<Proposal>> {
         let mut stmt = self.conn.prepare(
@@ -401,6 +624,54 @@ impl SemanticStore {
             None => Ok(None),
         }
     }
+}
+
+/// A world-state entry (Tier 0: sensor-grounded state).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WorldStateEntry {
+    /// Unique key (e.g. "camera.front_door.status").
+    pub key: String,
+    /// Current value (JSON or plain text).
+    pub value: String,
+    /// Confidence in the value (0.0–1.0).
+    pub confidence: f64,
+    /// Zenoh topic that produced this value.
+    pub source_topic: Option<String>,
+    /// Node that produced this value.
+    pub source_node: Option<String>,
+    /// Epoch seconds when this value was last observed.
+    pub last_seen_at: i64,
+    /// Maximum age in seconds before the entry is considered stale.
+    pub max_age_secs: i64,
+    /// Whether this entry is stale (computed at read time, not stored).
+    pub stale: bool,
+}
+
+/// A belief — durable assertion the agent holds about the world.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Belief {
+    /// Unique ID.
+    pub id: String,
+    /// Subject of the belief (e.g. "front_door_camera").
+    pub subject: String,
+    /// Predicate / relation (e.g. "is_reliable").
+    pub predicate: String,
+    /// Value (e.g. "true", "mostly", JSON).
+    pub value: String,
+    /// Confidence (0.0–1.0).
+    pub confidence: f64,
+    /// How this belief was formed (e.g. "observation", "user_told_me").
+    pub source: String,
+    /// Epoch seconds when first observed.
+    pub first_observed: i64,
+    /// Epoch seconds when last confirmed.
+    pub last_confirmed: i64,
+    /// How many times this belief has been confirmed.
+    pub confirmation_count: i32,
+    /// How many times this belief has been contradicted.
+    pub contradiction_count: i32,
+    /// Free-form notes.
+    pub notes: Option<String>,
 }
 
 /// Outcome of a job failure.
@@ -863,6 +1134,173 @@ mod tests {
         let all = store.list_jobs(None).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].id, "still-pending");
+    }
+
+    #[test]
+    fn world_state_table_exists_and_roundtrips() {
+        let (store, _dir) = test_store();
+        store
+            .upsert_world_state(
+                "cam.front.status",
+                "online",
+                0.95,
+                Some("bubbaloop/cam"),
+                Some("rtsp-camera"),
+                300,
+            )
+            .unwrap();
+        store
+            .upsert_world_state("weather.temp", "22.5", 1.0, None, Some("openmeteo"), 600)
+            .unwrap();
+
+        let snapshot = store.world_state_snapshot().unwrap();
+        assert_eq!(snapshot.len(), 2);
+
+        let cam = snapshot
+            .iter()
+            .find(|e| e.key == "cam.front.status")
+            .unwrap();
+        assert_eq!(cam.value, "online");
+        assert!((cam.confidence - 0.95).abs() < f64::EPSILON);
+        assert_eq!(cam.source_topic.as_deref(), Some("bubbaloop/cam"));
+        assert!(!cam.stale);
+
+        // Upsert should update existing key
+        store
+            .upsert_world_state(
+                "cam.front.status",
+                "offline",
+                0.8,
+                Some("bubbaloop/cam"),
+                Some("rtsp-camera"),
+                300,
+            )
+            .unwrap();
+        let snapshot = store.world_state_snapshot().unwrap();
+        let cam = snapshot
+            .iter()
+            .find(|e| e.key == "cam.front.status")
+            .unwrap();
+        assert_eq!(cam.value, "offline");
+    }
+
+    #[test]
+    fn world_state_staleness_flagged() {
+        let (store, _dir) = test_store();
+        let old_time = super::super::now_epoch_secs() as i64 - 600; // 10 minutes ago
+        store
+            .upsert_world_state_at("sensor.temp", "25.0", 1.0, None, None, 300, old_time)
+            .unwrap();
+
+        let snapshot = store.world_state_snapshot().unwrap();
+        assert_eq!(snapshot.len(), 1);
+        assert!(
+            snapshot[0].stale,
+            "entry 600s old with max_age 300s should be stale"
+        );
+    }
+
+    #[test]
+    fn belief_upsert_and_confirm() {
+        let (store, _dir) = test_store();
+        store
+            .upsert_belief(
+                "b1",
+                "front_camera",
+                "is_reliable",
+                "true",
+                0.8,
+                "observation",
+                None,
+            )
+            .unwrap();
+
+        let belief = store
+            .get_belief("front_camera", "is_reliable")
+            .unwrap()
+            .unwrap();
+        assert_eq!(belief.value, "true");
+        assert!((belief.confidence - 0.8).abs() < f64::EPSILON);
+        assert_eq!(belief.confirmation_count, 1);
+        assert_eq!(belief.contradiction_count, 0);
+
+        // Confirm bumps confidence by 0.05
+        store.confirm_belief("front_camera", "is_reliable").unwrap();
+        let belief = store
+            .get_belief("front_camera", "is_reliable")
+            .unwrap()
+            .unwrap();
+        assert!((belief.confidence - 0.85).abs() < f64::EPSILON);
+        assert_eq!(belief.confirmation_count, 2);
+
+        // Upsert same (subject, predicate) increments confirmation_count
+        store
+            .upsert_belief(
+                "b1-dup",
+                "front_camera",
+                "is_reliable",
+                "still true",
+                0.9,
+                "re-observation",
+                None,
+            )
+            .unwrap();
+        let belief = store
+            .get_belief("front_camera", "is_reliable")
+            .unwrap()
+            .unwrap();
+        assert_eq!(belief.confirmation_count, 3);
+        assert_eq!(belief.value, "still true");
+
+        // List returns it
+        let all = store.list_beliefs().unwrap();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn belief_contradiction_reduces_confidence() {
+        let (store, _dir) = test_store();
+        store
+            .upsert_belief("b2", "sensor", "is_accurate", "yes", 0.5, "test", None)
+            .unwrap();
+
+        store.contradict_belief("sensor", "is_accurate").unwrap();
+        let belief = store.get_belief("sensor", "is_accurate").unwrap().unwrap();
+        assert!((belief.confidence - 0.35).abs() < f64::EPSILON);
+        assert_eq!(belief.contradiction_count, 1);
+
+        // Contradict again
+        store.contradict_belief("sensor", "is_accurate").unwrap();
+        let belief = store.get_belief("sensor", "is_accurate").unwrap().unwrap();
+        assert!((belief.confidence - 0.20).abs() < f64::EPSILON);
+        assert_eq!(belief.contradiction_count, 2);
+
+        // Floor at 0.0
+        store.contradict_belief("sensor", "is_accurate").unwrap(); // 0.05
+        store.contradict_belief("sensor", "is_accurate").unwrap(); // would be -0.10 => 0.0
+        let belief = store.get_belief("sensor", "is_accurate").unwrap().unwrap();
+        assert!(belief.confidence >= 0.0);
+        assert!(belief.confidence < f64::EPSILON);
+    }
+
+    #[test]
+    fn belief_decay_reduces_confidence() {
+        let (store, _dir) = test_store();
+        store
+            .upsert_belief("d1", "cam", "works", "yes", 1.0, "test", None)
+            .unwrap();
+        store
+            .upsert_belief("d2", "sensor", "accurate", "yes", 0.5, "test", None)
+            .unwrap();
+
+        let updated = store.decay_beliefs(0.9).unwrap();
+        assert_eq!(updated, 2);
+
+        let b1 = store.get_belief("cam", "works").unwrap().unwrap();
+        assert!((b1.confidence - 0.9).abs() < f64::EPSILON);
+
+        let b2 = store.get_belief("sensor", "accurate").unwrap().unwrap();
+        assert!((b2.confidence - 0.45).abs() < f64::EPSILON);
     }
 
     #[cfg(unix)]

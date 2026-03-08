@@ -271,6 +271,10 @@ mod tests {
             content: "Restarted front-door camera after 5 minutes offline.".to_string(),
             job_id: Some("job-1".to_string()),
             flush: None,
+            id: None,
+            cause_id: None,
+            salience: None,
+            mission_id: None,
         }];
         let prompt = build_system_prompt(&soul, "", &[], &episodes, None, None, None);
         assert!(prompt.contains("Relevant Context"));
@@ -304,6 +308,10 @@ mod tests {
                 content: format!("message {}", i),
                 job_id: None,
                 flush: None,
+                id: None,
+                cause_id: None,
+                salience: None,
+                mission_id: None,
             })
             .collect();
         let prompt = build_system_prompt(&soul, "", &[], &episodes, None, None, None);
