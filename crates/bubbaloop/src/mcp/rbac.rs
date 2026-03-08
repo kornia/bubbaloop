@@ -78,7 +78,8 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "uninstall_node"
         | "clean_node"
         | "clear_episodic_memory"
-        | "update_telemetry_config" => Tier::Admin,
+        | "update_telemetry_config"
+        | "configure_context" => Tier::Admin,
 
         // Unknown tools default to admin (principle of least privilege)
         _ => Tier::Admin,

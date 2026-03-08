@@ -66,6 +66,7 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
                  **Config:** get_node_config, get_node_manifest, list_commands\n\
                  **Proposals:** list_proposals, approve_proposal, reject_proposal\n\
                  **Memory:** list_jobs, delete_job, clear_episodic_memory\n\
+                 **Context:** configure_context\n\
                  **System:** get_system_status, get_machine_info, query_zenoh, discover_nodes\n\n\
                  install_node accepts marketplace names (e.g., 'rtsp-camera'), local paths, or GitHub 'user/repo' format.\n\
                  Use discover_capabilities to find nodes by capability (sensor, actuator, processor, gateway).\n\

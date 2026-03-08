@@ -191,6 +191,27 @@ impl PlatformOperations for MockPlatform {
             older_than_days
         ))
     }
+
+    async fn configure_context(
+        &self,
+        params: super::platform::ConfigureContextParams,
+    ) -> PlatformResult<String> {
+        if params.topic_pattern.is_empty() {
+            return Err(PlatformError::InvalidInput(
+                "topic_pattern must not be empty".to_string(),
+            ));
+        }
+        if params.world_state_key_template.is_empty() {
+            return Err(PlatformError::InvalidInput(
+                "world_state_key_template must not be empty".to_string(),
+            ));
+        }
+        let provider_id = format!("cp-mock-{}", params.mission_id);
+        Ok(format!(
+            "mock: context provider '{}' configured (mission={})",
+            provider_id, params.mission_id
+        ))
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -881,6 +902,43 @@ mod tests {
         let mock = MockPlatform::new();
         let msg = mock.clear_episodic_memory(30).await.unwrap();
         assert!(msg.contains("30"));
+    }
+
+    #[tokio::test]
+    async fn configure_context_tool_validates_empty_topic_pattern() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::ConfigureContextParams {
+            mission_id: "m1".to_string(),
+            topic_pattern: String::new(),
+            world_state_key_template: "{label}.location".to_string(),
+            value_field: "location".to_string(),
+            filter: None,
+            min_interval_secs: None,
+            max_age_secs: None,
+            confidence_field: None,
+            token_budget: None,
+        };
+        let err = mock.configure_context(params).await.unwrap_err();
+        assert!(matches!(err, PlatformError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn configure_context_tool_saves_valid_config() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::ConfigureContextParams {
+            mission_id: "m1".to_string(),
+            topic_pattern: "bubbaloop/**/detections".to_string(),
+            world_state_key_template: "{label}.location".to_string(),
+            value_field: "location".to_string(),
+            filter: Some("confidence>0.8".to_string()),
+            min_interval_secs: Some(10),
+            max_age_secs: Some(120),
+            confidence_field: Some("confidence".to_string()),
+            token_budget: Some(100),
+        };
+        let msg = mock.configure_context(params).await.unwrap();
+        assert!(msg.contains("cp-mock-"));
+        assert!(msg.contains("m1"));
     }
 
     #[test]

@@ -89,6 +89,33 @@ pub(crate) struct ClearEpisodicMemoryRequest {
     older_than_days: u32,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct ConfigureContextRequest {
+    /// Mission this provider is attached to.
+    mission_id: String,
+    /// Zenoh key expression pattern (e.g. "bubbaloop/**/vision/detections").
+    topic_pattern: String,
+    /// Template for world state key (e.g. "{label}.location").
+    world_state_key_template: String,
+    /// JSON field path to extract as the value.
+    value_field: String,
+    /// Optional filter expression (e.g. "label=dog AND confidence>0.85").
+    #[serde(default)]
+    filter: Option<String>,
+    /// Minimum interval between writes for the same key (seconds).
+    #[serde(default)]
+    min_interval_secs: Option<u32>,
+    /// Maximum age before a world state entry is considered stale (seconds).
+    #[serde(default)]
+    max_age_secs: Option<u32>,
+    /// Optional JSON field path to extract confidence from.
+    #[serde(default)]
+    confidence_field: Option<String>,
+    /// Approximate token budget for this provider's world state entries.
+    #[serde(default)]
+    token_budget: Option<u32>,
+}
+
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
@@ -908,6 +935,49 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             .clear_episodic_memory(req.older_than_days)
             .await
         {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Context provider tools ────────────────────────────────────
+
+    #[tool(
+        description = "Configure a context provider: a daemon background task that watches a Zenoh topic pattern and writes extracted values to world state. The agent can then see live sensor data in its world state without LLM involvement. Admin only."
+    )]
+    async fn configure_context(
+        &self,
+        Parameters(req): Parameters<ConfigureContextRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=configure_context mission_id={}", req.mission_id);
+
+        if req.topic_pattern.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "Error: topic_pattern must not be empty",
+            )]));
+        }
+        if req.world_state_key_template.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "Error: world_state_key_template must not be empty",
+            )]));
+        }
+
+        let params = platform::ConfigureContextParams {
+            mission_id: req.mission_id,
+            topic_pattern: req.topic_pattern,
+            world_state_key_template: req.world_state_key_template,
+            value_field: req.value_field,
+            filter: req.filter,
+            min_interval_secs: req.min_interval_secs,
+            max_age_secs: req.max_age_secs,
+            confidence_field: req.confidence_field,
+            token_budget: req.token_budget,
+        };
+
+        match self.platform.configure_context(params).await {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: {}",

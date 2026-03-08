@@ -427,6 +427,60 @@ impl PlatformOperations for DaemonPlatform {
         Ok(format!("Job '{}' deleted", id))
     }
 
+    async fn configure_context(
+        &self,
+        params: super::platform::ConfigureContextParams,
+    ) -> PlatformResult<String> {
+        if params.topic_pattern.is_empty() {
+            return Err(PlatformError::InvalidInput(
+                "topic_pattern must not be empty".to_string(),
+            ));
+        }
+        if params.world_state_key_template.is_empty() {
+            return Err(PlatformError::InvalidInput(
+                "world_state_key_template must not be empty".to_string(),
+            ));
+        }
+
+        let provider_id = format!("cp-{}", uuid::Uuid::new_v4());
+
+        let cfg = crate::daemon::context_provider::ProviderConfig {
+            id: provider_id.clone(),
+            mission_id: params.mission_id.clone(),
+            topic_pattern: params.topic_pattern,
+            world_state_key_template: params.world_state_key_template,
+            value_field: params.value_field,
+            filter: params.filter,
+            min_interval_secs: params.min_interval_secs.unwrap_or(30),
+            max_age_secs: params.max_age_secs.unwrap_or(300),
+            confidence_field: params.confidence_field,
+            token_budget: params.token_budget.unwrap_or(50),
+        };
+
+        // Store the provider config in the providers database next to the agent memory.db
+        let providers_db_path = self
+            .agent_db_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("providers.db");
+        let store = crate::daemon::context_provider::ProviderStore::open(&providers_db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+        store
+            .save_provider(&cfg)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
+
+        log::info!(
+            "[MCP] tool=configure_context mission_id={} provider_id={}",
+            params.mission_id,
+            provider_id
+        );
+
+        Ok(format!(
+            "Context provider '{}' configured (mission={})",
+            provider_id, params.mission_id
+        ))
+    }
+
     async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {
         let base = self
             .agent_db_path

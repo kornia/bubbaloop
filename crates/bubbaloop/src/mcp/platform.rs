@@ -170,6 +170,43 @@ pub trait PlatformOperations: Send + Sync + 'static {
         &self,
         older_than_days: u32,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    // ── Context providers ──────────────────────────────────────────
+
+    /// Configure a context provider: a daemon background task that watches
+    /// a Zenoh topic and writes extracted values to world state.
+    fn configure_context(
+        &self,
+        params: ConfigureContextParams,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+}
+
+/// Parameters for configuring a context provider.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ConfigureContextParams {
+    /// Mission this provider is attached to.
+    pub mission_id: String,
+    /// Zenoh key expression pattern (e.g. "bubbaloop/**/vision/detections").
+    pub topic_pattern: String,
+    /// Template for world state key (e.g. "{label}.location").
+    pub world_state_key_template: String,
+    /// JSON field path to extract as the value.
+    pub value_field: String,
+    /// Optional filter expression (e.g. "label=dog AND confidence>0.85").
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// Minimum interval between writes for the same key (seconds).
+    #[serde(default)]
+    pub min_interval_secs: Option<u32>,
+    /// Maximum age before a world state entry is considered stale (seconds).
+    #[serde(default)]
+    pub max_age_secs: Option<u32>,
+    /// Optional JSON field path to extract confidence from.
+    #[serde(default)]
+    pub confidence_field: Option<String>,
+    /// Approximate token budget for this provider's world state entries.
+    #[serde(default)]
+    pub token_budget: Option<u32>,
 }
 
 // ── Re-exports for backward compatibility ─────────────────────────────
