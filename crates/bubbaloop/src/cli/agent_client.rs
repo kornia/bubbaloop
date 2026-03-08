@@ -128,10 +128,9 @@ async fn send_and_render(
                                     }
                                 }
                                 AgentEventType::ToolResult => {
-                                    if verbose {
-                                        if let Some(result) = &event.text {
-                                            println!("  → {}", truncate_with_ellipsis(result, 300));
-                                        }
+                                    if let Some(result) = &event.text {
+                                        let limit = if verbose { 300 } else { 80 };
+                                        println!("  → {}", truncate_with_ellipsis(result, limit));
                                     }
                                 }
                                 AgentEventType::Error => {
@@ -446,14 +445,12 @@ async fn run_tui_repl(
                             }
                         }
                         AgentEventType::ToolResult => {
-                            if verbose {
-                                if let Some(result) = event.text {
-                                    let preview = truncate_with_ellipsis(&result, 200);
-                                    output.push(OutputLine::ToolResult(
-                                        format!("  → {}", preview),
-                                    ));
-                                    scroll_offset = 0;
-                                }
+                            if let Some(result) = event.text {
+                                // Always show a short result; verbose shows up to 300 chars
+                                let limit = if verbose { 300 } else { 80 };
+                                let preview = truncate_with_ellipsis(&result, limit);
+                                output.push(OutputLine::ToolResult(format!("  → {}", preview)));
+                                scroll_offset = 0;
                             }
                         }
                         AgentEventType::Error => {
