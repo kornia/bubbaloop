@@ -199,7 +199,7 @@ pub async fn run_agent_turn<
     let correlation_id = input.correlation_id;
     // 1. Build system prompt
     let inventory = dispatcher.get_node_inventory().await;
-    let (active_jobs, relevant_episodes, recent_plan, recovered_context) = {
+    let (active_jobs, relevant_episodes, recent_plan, recovered_context, world_state) = {
         let backend = memory.backend.lock().await;
         let active_jobs = backend.semantic.pending_jobs().unwrap_or_default();
         let decay_half_life = soul.capabilities.episodic_decay_half_life_days;
@@ -222,11 +222,13 @@ pub async fn run_agent_turn<
             .ok()
             .flatten()
             .map(|e| EpisodicLog::strip_flush_prefix(&e.content).to_string());
+        let world_state = backend.semantic.world_state_snapshot().unwrap_or_default();
         (
             active_jobs,
             relevant_episodes,
             recent_plan,
             recovered_context,
+            world_state,
         )
     };
     let resource_summary = dispatcher.telemetry_prompt_summary().await;
@@ -239,6 +241,7 @@ pub async fn run_agent_turn<
         recovered_context.as_deref(),
         resource_summary.as_deref(),
         input.soul_path,
+        &world_state,
     );
 
     // Add user input to short-term memory

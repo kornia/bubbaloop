@@ -97,6 +97,7 @@ pub fn build_system_prompt(
         recovered_context,
         resource_summary,
         None,
+        &[], // no world state — callers that need it use build_system_prompt_with_soul_path directly
     )
 }
 
@@ -112,6 +113,7 @@ pub fn build_system_prompt_with_soul_path(
     recovered_context: Option<&str>,
     resource_summary: Option<&str>,
     soul_path: Option<&str>,
+    world_state: &[crate::agent::memory::semantic::WorldStateEntry],
 ) -> String {
     let mut parts = Vec::new();
 
@@ -188,8 +190,11 @@ pub fn build_system_prompt_with_soul_path(
             .to_string(),
     );
 
-    // TODO(phase-2): wire world_state into build_system_prompt — pass entries from
-    // MemoryBackend::world_state_snapshot() and call format_world_state_section() here.
+    // Inject live world state — written by context providers, not the LLM.
+    let ws_section = format_world_state_section(world_state, 500);
+    if !ws_section.is_empty() {
+        parts.push(ws_section);
+    }
 
     if let Some(summary) = resource_summary {
         parts.push(summary.to_string());
