@@ -36,17 +36,37 @@ bubbaloop agent <subcommand>
 | Option | Description |
 |--------|-------------|
 | `-a, --agent <id>` | Target a specific agent (default: routes to default agent) |
+| `-v, --verbose` | Show tool inputs and results (useful for debugging agent behaviour) |
 | `-z, --zenoh <endpoint>` | Zenoh endpoint (default: auto-discover) |
 
 **Examples:**
 ```bash
-bubbaloop agent chat "What sensors do I have?"       # Single message
-bubbaloop agent chat                                  # Interactive REPL
+bubbaloop agent chat "What sensors do I have?"       # Single message (plain stdout)
+bubbaloop agent chat                                  # Interactive TUI REPL
+bubbaloop agent chat -v                               # TUI REPL with tool debug info
 bubbaloop agent chat -a camera-expert "check feeds"   # Target specific agent
 bubbaloop agent list                                  # Show running agents
 bubbaloop agent setup                                 # Interactive setup wizard
 bubbaloop agent setup -a camera-expert               # Configure specific agent
 ```
+
+**TUI keyboard shortcuts (interactive REPL):**
+
+| Key | Action |
+|-----|--------|
+| Enter | Send message |
+| Backspace | Delete character |
+| ↑ / ↓ | Scroll output history |
+| PageUp / PageDown | Scroll output faster |
+| Ctrl-C or `q` (empty input) | Exit |
+
+**TUI colour guide:**
+- **Bold white** — your messages
+- **Cyan** — agent name header
+- **Green** — agent response text
+- **Yellow italic** — tool calls in progress
+- **Gray** — tool results (verbose mode)
+- **Red** — errors
 
 ### Login Commands
 
