@@ -455,7 +455,23 @@ async fn run_turn_loop<
                 break;
             }
 
-            sink.emit(AgentEvent::tool(correlation_id, &tc.name)).await;
+            let input_preview: Option<String> =
+                if tc.input.is_null() || tc.input == serde_json::Value::Object(Default::default()) {
+                    None
+                } else {
+                    let s = tc.input.to_string();
+                    Some(if s.len() > 200 {
+                        format!("{}…", &s[..200])
+                    } else {
+                        s
+                    })
+                };
+            sink.emit(AgentEvent::tool(
+                correlation_id,
+                &tc.name,
+                input_preview.as_deref(),
+            ))
+            .await;
             log::info!("[Agent] calling tool: {}", tc.name);
 
             // All tools dispatched through the Dispatcher (memory tools included)
@@ -498,6 +514,9 @@ async fn run_turn_loop<
                 if let Err(e) = backend.episodic.append(&entry) {
                     log::warn!("Failed to log tool result to episodic: {}", e);
                 }
+                // Emit result so CLI --verbose can display it
+                sink.emit(AgentEvent::tool_result(correlation_id, &content))
+                    .await;
             }
         }
 

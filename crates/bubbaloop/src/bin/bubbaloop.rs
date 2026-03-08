@@ -410,6 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         target_machine,
                         agent,
                         chat_cmd.message.as_deref(),
+                        chat_cmd.verbose,
                     )
                     .await
                     {

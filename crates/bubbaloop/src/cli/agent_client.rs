@@ -34,13 +34,14 @@ pub async fn run_agent_client(
     machine_id: &str,
     agent: Option<&str>,
     message: Option<&str>,
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(msg) = message {
         // Single-message mode: send and wait for Done
-        send_and_render(&session, scope, machine_id, agent, msg).await?;
+        send_and_render(&session, scope, machine_id, agent, msg, verbose).await?;
     } else {
         // Interactive REPL mode
-        run_repl(&session, scope, machine_id, agent).await?;
+        run_repl(&session, scope, machine_id, agent, verbose).await?;
     }
     Ok(())
 }
@@ -52,6 +53,7 @@ async fn send_and_render(
     machine_id: &str,
     agent: Option<&str>,
     text: &str,
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let correlation_id = uuid::Uuid::new_v4().to_string();
 
@@ -115,11 +117,26 @@ async fn send_and_render(
                                 }
                                 AgentEventType::Tool => {
                                     if let Some(name) = &event.text {
-                                        println!("  [calling {}...]", name);
+                                        if verbose {
+                                            let input_str =
+                                                event.input.as_deref().unwrap_or("{}");
+                                            println!("  [calling {} {}]", name, input_str);
+                                        } else {
+                                            println!("  [calling {}...]", name);
+                                        }
                                     }
                                 }
                                 AgentEventType::ToolResult => {
-                                    // Silently consumed
+                                    if verbose {
+                                        if let Some(result) = &event.text {
+                                            let preview = if result.len() > 300 {
+                                                format!("{}…", &result[..300])
+                                            } else {
+                                                result.clone()
+                                            };
+                                            println!("  → {}", preview);
+                                        }
+                                    }
                                 }
                                 AgentEventType::Error => {
                                     if let Some(msg) = &event.text {
@@ -156,6 +173,7 @@ async fn run_repl(
     scope: &str,
     machine_id: &str,
     agent: Option<&str>,
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("  bubbaloop agent ({})", env!("CARGO_PKG_VERSION"));
@@ -194,7 +212,7 @@ async fn run_repl(
         if input == "quit" || input == "exit" {
             break;
         }
-        if let Err(e) = send_and_render(session, scope, machine_id, agent, &input).await {
+        if let Err(e) = send_and_render(session, scope, machine_id, agent, &input, verbose).await {
             let err_str = e.to_string();
             if err_str != "timeout" {
                 eprintln!("Error: {}", e);

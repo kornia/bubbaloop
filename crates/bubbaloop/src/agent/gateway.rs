@@ -48,6 +48,9 @@ pub struct AgentEvent {
     /// Event payload (text delta, tool name, error message, etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Truncated tool input JSON (only present on Tool events).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
 }
 
 impl AgentEvent {
@@ -57,15 +60,19 @@ impl AgentEvent {
             id: id.to_string(),
             event_type: AgentEventType::Delta,
             text: Some(text.to_string()),
+            input: None,
         }
     }
 
     /// Create a Tool event (tool call started).
-    pub fn tool(id: &str, tool_name: &str) -> Self {
+    ///
+    /// `input` is an optional truncated JSON preview of the tool's arguments.
+    pub fn tool(id: &str, tool_name: &str, input: Option<&str>) -> Self {
         Self {
             id: id.to_string(),
             event_type: AgentEventType::Tool,
             text: Some(tool_name.to_string()),
+            input: input.map(|s| s.to_string()),
         }
     }
 
@@ -75,6 +82,7 @@ impl AgentEvent {
             id: id.to_string(),
             event_type: AgentEventType::ToolResult,
             text: Some(result.to_string()),
+            input: None,
         }
     }
 
@@ -84,6 +92,7 @@ impl AgentEvent {
             id: id.to_string(),
             event_type: AgentEventType::Error,
             text: Some(message.to_string()),
+            input: None,
         }
     }
 
@@ -93,6 +102,7 @@ impl AgentEvent {
             id: id.to_string(),
             event_type: AgentEventType::Done,
             text: None,
+            input: None,
         }
     }
 }
@@ -207,7 +217,7 @@ mod tests {
 
     #[test]
     fn agent_event_tool_serde() {
-        let event = AgentEvent::tool("id-1", "list_nodes");
+        let event = AgentEvent::tool("id-1", "list_nodes", None);
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"type\":\"tool\""));
         assert!(json.contains("list_nodes"));
@@ -224,7 +234,7 @@ mod tests {
     fn agent_event_all_types_roundtrip() {
         let events = vec![
             AgentEvent::delta("id", "token"),
-            AgentEvent::tool("id", "get_health"),
+            AgentEvent::tool("id", "get_health", None),
             AgentEvent::tool_result("id", "ok"),
             AgentEvent::error("id", "429 rate limit"),
             AgentEvent::done("id"),

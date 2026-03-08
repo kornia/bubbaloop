@@ -37,6 +37,10 @@ pub struct ChatCommand {
     #[argh(option, short = 'a')]
     pub agent: Option<String>,
 
+    /// show tool inputs and results (debug output)
+    #[argh(switch, short = 'v')]
+    pub verbose: bool,
+
     /// single message to send (exits after response, no REPL)
     #[argh(positional)]
     pub message: Option<String>,
