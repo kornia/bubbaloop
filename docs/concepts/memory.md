@@ -157,6 +157,24 @@ A daemon background task (`spawn_belief_decay_task`) periodically reduces `confi
 
 ---
 
+## Missions vs Tasks
+
+These two concepts are distinct and complementary:
+
+| | Task (`schedule_task`) | Mission |
+|---|---|---|
+| Duration | Momentary | Days / weeks / ongoing |
+| Granularity | One action at a scheduled time | Many actions over time |
+| State | `pending → running → completed/failed` | `active → paused → completed/failed/cancelled` |
+| Trigger | Time-based (cron or one-shot) | Always present until completed |
+| Safety constraints | None | Per-mission limits attached |
+| Storage | `memory.db` `jobs` table | `missions.db` |
+| Example | "send status report at 09:00" | "monitor the front entrance 24/7" |
+
+**Relationship:** a mission *can spawn tasks*. For example, the `security-patrol` mission might call `schedule_task` to send an hourly summary report — the mission is the persistent intent, the task is the concrete timed action it produces. The agent wires this relationship itself via tool calls; there is currently no hard foreign key in the DB linking a job to its parent mission.
+
+---
+
 ## Missions
 
 Missions are the unit of persistent agent intent — goals that span multiple conversations and survive restarts.
@@ -368,7 +386,7 @@ Each agent has its own memory directory and database. No shared state:
 | `unregister_alert` | — | Admin | Remove a reactive alert rule |
 | `memory_search` | 2 | Operator | BM25 search over episodic logs |
 | `memory_forget` | 2 | Admin | Remove entries from episodic memory |
-| `schedule_task` | 3 | Operator | Create a scheduled job |
+| `schedule_task` | 3 | Operator | Create a one-shot or recurring job (cron). Distinct from missions — tasks are timed actions, missions are persistent goals. |
 | `create_proposal` | 3 | Operator | Submit a proposal for human approval |
 
 ---
