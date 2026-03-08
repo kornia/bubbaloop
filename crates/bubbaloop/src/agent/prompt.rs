@@ -181,10 +181,12 @@ pub fn build_system_prompt_with_soul_path(
     // Scope — tells the LLM what tools it has
     parts.push(
         "\n## Tools\n\n\
-         You have 30 tools across three categories:\n\
+         You have 49 tools across categories:\n\
          - **Node management:** install, build, start, stop, restart, configure, monitor, query nodes\n\
          - **System:** read and write files, run shell commands\n\
-         - **Memory:** search and manage episodic memory\n\n\
+         - **Memory:** search episodic memory, update beliefs, read world state\n\
+         - **Missions:** list, pause, resume, cancel missions\n\
+         - **Safety:** register and list constraints per mission\n\n\
          Use the right tool for the job. For node operations, use the dedicated node tools.\n\
          For everything else, use read_file, write_file, or run_command."
             .to_string(),
