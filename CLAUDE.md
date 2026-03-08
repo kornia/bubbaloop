@@ -29,7 +29,7 @@ Key source files in `crates/bubbaloop/src/`:
 - `agent/provider/mod.rs` — ModelProvider trait, Message, ContentBlock, ToolDefinition, StreamEvent
 - `agent/provider/claude.rs` — Claude API client with dual auth (API key + OAuth bearer token)
 - `agent/provider/ollama.rs` — Ollama local LLM client with tool calling (`/api/chat`)
-- `agent/memory/` — 3-tier: short-term (RAM) + episodic (NDJSON) + semantic (SQLite)
+- `agent/memory/` — 4-tier: world state (live SQLite) + short-term (RAM) + episodic (NDJSON) + semantic (SQLite)
 - `agent/heartbeat.rs` — Adaptive heartbeat: arousal + decay + state collection
 - `agent/dispatch.rs` — Internal MCP tool dispatch (49 tools: 39 MCP + 10 agent-internal, includes telemetry + beliefs + constraints + missions)
 - `cli/node/mod.rs` — node CRUD, validation, list/add/remove
@@ -79,9 +79,9 @@ Testing: `cargo test --features test-harness --test integration_mcp` (47 tests)
 ```bash
 pixi run check     # cargo check (fast — run after every change)
 pixi run clippy    # zero warnings enforced (-D warnings)
-pixi run test      # cargo test (445 unit tests)
+pixi run test      # cargo test (676 unit tests)
 pixi run fmt       # cargo fmt --all
-pixi run build     # cargo build --release (slow on ARM64)
+pixi run build     # cargo build --release (slow on ARM64; install mold+clang to speed up)
 cargo test --features test-harness --test integration_mcp  # 47 integration tests
 ```
 
@@ -106,6 +106,7 @@ cargo test --features test-harness --test integration_mcp  # 47 integration test
 - Node names: 1-64 chars, `[a-zA-Z0-9_-]`, no null bytes
 - Git clone: always use `--` separator
 - Bind localhost only, never `0.0.0.0`
+- `kill <numeric_pids>` allowed (agent lifecycle cleanup); `kill 0/1/-1`, `killall`, `pkill` blocked
 
 **MCP:**
 - RBAC: Viewer/Operator/Admin tiers, unknown tools default to Admin
@@ -151,7 +152,10 @@ Exception: views with their own fallback decode chain (like JsonView) don't need
 - ARM64 release builds are slow — use `pixi run check` first
 - Proto changes require rebuilding both `bubbaloop-schemas/` and `bubbaloop` (descriptor.bin is compiled in)
 - MCP is core — rmcp, schemars, tower_governor are unconditional deps
-- TUI was removed in v0.0.6 — codebase simplified to ~14K lines
+- TUI was removed in v0.0.6, re-added in v0.0.11 as ratatui chat REPL (`agent chat`). Single-message mode stays plain stdout.
+- `dashboard` feature is opt-in (not default) — use `--features dashboard` to build the web UI
+- Binary size profile: `panic=abort` + `lto=true` + `opt-level=z` + `strip=symbols` + `rusqlite bundled` (not bundled-full)
+- mold linker config ready in `.cargo/config.toml` — activate with `sudo apt install mold clang`
 - Logs must go to stderr (convention: never pollute stdout)
 - Zenoh session: MUST use `"client"` mode for router routing; check `BUBBALOOP_ZENOH_ENDPOINT` env var
 - Dashboard schema race: subscriptions start before schemas load — always use `useSchemaReady()` gating

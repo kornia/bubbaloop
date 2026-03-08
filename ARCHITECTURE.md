@@ -49,7 +49,7 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 │  │  Episodic (NDJSON/FTS5) | Semantic (SQLite)         │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (30 tools) — sole control interface      │  │
+│  │  MCP Server (49 tools) — sole control interface     │  │
 │  │  RBAC (Viewer/Operator/Admin) | Bearer token auth   │  │
 │  │  PlatformOperations trait | Rate limiting            │  │
 │  └──────────────────────┬─────────────────────────────┘  │

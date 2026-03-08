@@ -171,9 +171,16 @@ fn validate_kill_args(args: &[&str]) -> Result<(), String> {
             // Must be a numeric PID
             match arg.parse::<i64>() {
                 Ok(pid) if pid > 1 => saw_pid = true,
-                Ok(0) => return Err("Blocked: kill 0 sends signal to entire process group".to_string()),
+                Ok(0) => {
+                    return Err("Blocked: kill 0 sends signal to entire process group".to_string())
+                }
                 Ok(1) => return Err("Blocked: kill 1 would signal the init process".to_string()),
-                Ok(pid) if pid < 0 => return Err(format!("Blocked: kill {} broadcasts to a process group", pid)),
+                Ok(pid) if pid < 0 => {
+                    return Err(format!(
+                        "Blocked: kill {} broadcasts to a process group",
+                        pid
+                    ))
+                }
                 _ => return Err(format!("Blocked: '{}' is not a valid numeric PID", arg)),
             }
         }
@@ -535,11 +542,11 @@ mod tests {
         assert!(validate_command("kill -9 1234").is_ok());
         assert!(validate_command("kill -TERM 1234").is_ok());
         // Blocked: broadcast / special targets
-        assert!(validate_command("kill 1").is_err());   // init
-        assert!(validate_command("kill 0").is_err());   // process group
-        assert!(validate_command("kill -1").is_err());  // all processes
+        assert!(validate_command("kill 1").is_err()); // init
+        assert!(validate_command("kill 0").is_err()); // process group
+        assert!(validate_command("kill -1").is_err()); // all processes
         assert!(validate_command("kill -9 -1").is_err()); // SIGKILL all
-        // Blocked: non-numeric PIDs
+                                                          // Blocked: non-numeric PIDs
         assert!(validate_command("kill nginx").is_err());
     }
 
