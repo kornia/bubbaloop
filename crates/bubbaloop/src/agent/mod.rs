@@ -241,20 +241,33 @@ pub async fn run_agent_turn<
         let ep_count = relevant_episodes.len();
         let mut parts = Vec::new();
         if ws_count > 0 {
-            parts.push(format!("world state: {} entr{}", ws_count, if ws_count == 1 { "y" } else { "ies" }));
+            parts.push(format!(
+                "world state: {} entr{}",
+                ws_count,
+                if ws_count == 1 { "y" } else { "ies" }
+            ));
         }
         if ep_count > 0 {
-            parts.push(format!("memory: {} episode{}", ep_count, if ep_count == 1 { "" } else { "s" }));
+            parts.push(format!(
+                "memory: {} episode{}",
+                ep_count,
+                if ep_count == 1 { "" } else { "s" }
+            ));
         }
         if !active_jobs.is_empty() {
-            parts.push(format!("{} pending job{}", active_jobs.len(), if active_jobs.len() == 1 { "" } else { "s" }));
+            parts.push(format!(
+                "{} pending job{}",
+                active_jobs.len(),
+                if active_jobs.len() == 1 { "" } else { "s" }
+            ));
         }
         let summary = if parts.is_empty() {
             "context loaded".to_string()
         } else {
             format!("context — {}", parts.join(", "))
         };
-        sink.emit(AgentEvent::system(correlation_id, &summary)).await;
+        sink.emit(AgentEvent::system(correlation_id, &summary))
+            .await;
     }
 
     let resource_summary = dispatcher.telemetry_prompt_summary().await;
@@ -663,7 +676,13 @@ fn sanitize_dangling_tool_use(memory: &mut Memory) {
 
     let results: Vec<(String, String, Option<bool>)> = dangling_ids
         .into_iter()
-        .map(|id| (id, "Error: turn timed out before tool completed".to_string(), Some(true)))
+        .map(|id| {
+            (
+                id,
+                "Error: turn timed out before tool completed".to_string(),
+                Some(true),
+            )
+        })
         .collect();
 
     memory.short_term.push(Message::tool_results(results));
@@ -949,7 +968,12 @@ mod tests {
             .content
             .iter()
             .filter_map(|b| {
-                if let ContentBlock::ToolResult { tool_use_id, is_error, .. } = b {
+                if let ContentBlock::ToolResult {
+                    tool_use_id,
+                    is_error,
+                    ..
+                } = b
+                {
                     Some((tool_use_id.clone(), *is_error))
                 } else {
                     None
@@ -969,7 +993,11 @@ mod tests {
         let mut memory = Memory::open(dir.path()).unwrap();
         let initial_len = memory.short_term.len();
         sanitize_dangling_tool_use(&mut memory);
-        assert_eq!(memory.short_term.len(), initial_len, "should not add messages");
+        assert_eq!(
+            memory.short_term.len(),
+            initial_len,
+            "should not add messages"
+        );
     }
 
     #[tokio::test]

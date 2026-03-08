@@ -577,10 +577,7 @@ fn render_output_line(line: &OutputLine) -> Vec<ListItem<'static>> {
             vec![styled_item(label.clone(), style)]
         }
         OutputLine::ToolResult(text) => {
-            vec![styled_item(
-                text.clone(),
-                Style::default().fg(Color::Gray),
-            )]
+            vec![styled_item(text.clone(), Style::default().fg(Color::Gray))]
         }
         OutputLine::ErrorLine(text) => {
             let style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
@@ -600,9 +597,7 @@ fn render_output_line(line: &OutputLine) -> Vec<ListItem<'static>> {
         }
         OutputLine::SystemInfo(text) => {
             // Dim blue-gray — visible but not distracting
-            let style = Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::DIM);
+            let style = Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM);
             vec![styled_item(text.clone(), style)]
         }
     }
