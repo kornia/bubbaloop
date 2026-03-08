@@ -37,16 +37,16 @@ pub async fn run_agent_client(
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(msg) = message {
-        // Single-message mode: send and wait for Done
+        // Single-message mode: send and wait for Done (plain stdout, no TUI)
         send_and_render(&session, scope, machine_id, agent, msg, verbose).await?;
     } else {
-        // Interactive REPL mode
-        run_repl(&session, scope, machine_id, agent, verbose).await?;
+        // Interactive REPL mode: ratatui two-panel TUI
+        run_tui_repl(&session, scope, machine_id, agent, verbose).await?;
     }
     Ok(())
 }
 
-/// Send a single message and render the streamed response.
+/// Send a single message and render the streamed response (plain stdout, used for single-message mode).
 async fn send_and_render(
     session: &Arc<Session>,
     scope: &str,
@@ -167,61 +167,400 @@ async fn send_and_render(
     }
 }
 
-/// Interactive REPL: read stdin, send via Zenoh, render responses.
-async fn run_repl(
+// ── TUI REPL ──────────────────────────────────────────────────────────────────
+
+use crossterm::{
+    event::{Event, EventStream, KeyCode, KeyModifiers},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+};
+use futures::StreamExt;
+use ratatui::{
+    Terminal,
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+};
+
+/// Output line kinds — drive colour rendering.
+#[derive(Clone)]
+enum OutputLine {
+    UserMessage(String),
+    AgentHeader(String),
+    AgentDelta(String),
+    ToolCall(String),
+    ToolResult(String),
+    ErrorLine(String),
+    Separator,
+    Info(String),
+}
+
+/// RAII guard: restore terminal on drop (handles panics too).
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+    }
+}
+
+/// Two-panel ratatui REPL.
+///
+/// Top panel: scrolling output.
+/// Bottom panel (3 rows): input prompt, always visible.
+async fn run_tui_repl(
     session: &Arc<Session>,
     scope: &str,
     machine_id: &str,
     agent: Option<&str>,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!();
-    println!("  bubbaloop agent ({})", env!("CARGO_PKG_VERSION"));
+    // ── Terminal setup ────────────────────────────────────────────────────────
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    let _guard = TerminalGuard; // restored on drop
+
+    // ── Subscribe to outbox once, shared for all turns ────────────────────────
+    let outbox_pattern = gateway::outbox_wildcard(scope, machine_id);
+    let subscriber = session
+        .declare_subscriber(&outbox_pattern)
+        .await
+        .map_err(|e| format!("Failed to subscribe to outbox: {}", e))?;
+
+    // ── App state ─────────────────────────────────────────────────────────────
+    let mut output: Vec<OutputLine> = Vec::new();
+    let mut input = String::new();
+    let mut scroll_offset: usize = 0;
+    let mut waiting_for_agent = false;
+    let mut current_correlation_id = String::new();
+    let mut current_agent_id = String::new();
+    let mut agent_header_shown = false;
+
+    // Welcome banner
+    output.push(OutputLine::Info(format!(
+        "bubbaloop agent v{} — Ctrl-C or 'quit' to exit",
+        env!("CARGO_PKG_VERSION")
+    )));
     if let Some(a) = agent {
-        println!("  Target agent: {}", a);
+        output.push(OutputLine::Info(format!("Target agent: {}", a)));
     }
-    println!("  Type a message to chat, 'quit' to exit.");
-    println!();
+    output.push(OutputLine::Separator);
 
-    let stdin = std::io::stdin();
-    let (repl_tx, mut repl_rx) = tokio::sync::mpsc::channel::<String>(1);
+    let mut event_stream = EventStream::new();
 
-    std::thread::spawn(move || loop {
-        print!("> ");
-        use std::io::Write;
-        std::io::stdout().flush().ok();
+    loop {
+        // ── Render ────────────────────────────────────────────────────────────
+        terminal.draw(|frame| {
+            let total = frame.area();
+            // Layout: output takes all but 3 bottom rows for input
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(3), Constraint::Length(3)])
+                .split(total);
 
-        let mut line = String::new();
-        match stdin.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => {
-                let trimmed = line.trim().to_string();
-                if trimmed == "quit" || trimmed == "exit" {
-                    let _ = repl_tx.blocking_send(trimmed);
-                    break;
-                }
-                if !trimmed.is_empty() {
-                    let _ = repl_tx.blocking_send(trimmed);
+            let output_area = chunks[0];
+            let input_area = chunks[1];
+
+            // Build coloured output lines
+            let items: Vec<ListItem> = output
+                .iter()
+                .flat_map(|line| render_output_line(line))
+                .collect();
+
+            // Auto-scroll: keep bottom visible when new content arrives
+            let visible_rows = output_area.height.saturating_sub(2) as usize; // -2 for border
+            let total_items = items.len();
+            let max_scroll = total_items.saturating_sub(visible_rows);
+            let scroll = if scroll_offset == 0 || scroll_offset > max_scroll {
+                max_scroll
+            } else {
+                scroll_offset
+            };
+
+            // Slice visible items
+            let visible: Vec<ListItem> = items
+                .into_iter()
+                .skip(scroll)
+                .take(visible_rows)
+                .collect();
+
+            let output_widget = List::new(visible).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(Span::styled(
+                        " output ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+            );
+            frame.render_widget(output_widget, output_area);
+
+            // Input prompt
+            let prompt_prefix = if waiting_for_agent { "⏳ " } else { "▸ " };
+            let prompt_style = if waiting_for_agent {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            };
+            let input_paragraph = Paragraph::new(Line::from(vec![
+                Span::styled(prompt_prefix, prompt_style),
+                Span::styled(input.as_str(), Style::default().fg(Color::White)),
+            ]))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(if waiting_for_agent {
+                        Style::default().fg(Color::DarkGray)
+                    } else {
+                        Style::default().fg(Color::Green)
+                    })
+                    .title(Span::styled(
+                        " type a message ",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+            );
+            frame.render_widget(input_paragraph, input_area);
+        })?;
+
+        // ── Event loop ────────────────────────────────────────────────────────
+        tokio::select! {
+            // Keyboard input
+            maybe_event = event_stream.next() => {
+                match maybe_event {
+                    Some(Ok(Event::Key(key))) => {
+                        match (key.code, key.modifiers) {
+                            (KeyCode::Char('c'), KeyModifiers::CONTROL) |
+                            (KeyCode::Char('q'), KeyModifiers::NONE) if input.is_empty() => {
+                                break; // quit
+                            }
+                            (KeyCode::Enter, _) => {
+                                let trimmed = input.trim().to_string();
+                                if trimmed == "quit" || trimmed == "exit" {
+                                    break;
+                                }
+                                if !trimmed.is_empty() && !waiting_for_agent {
+                                    // Echo user message to output
+                                    output.push(OutputLine::UserMessage(trimmed.clone()));
+                                    scroll_offset = 0; // snap to bottom
+
+                                    // Send to daemon
+                                    let cid = uuid::Uuid::new_v4().to_string();
+                                    current_correlation_id = cid.clone();
+                                    current_agent_id.clear();
+                                    agent_header_shown = false;
+                                    waiting_for_agent = true;
+
+                                    let inbox = gateway::inbox_topic(scope, machine_id);
+                                    let msg = AgentMessage {
+                                        id: cid,
+                                        text: trimmed,
+                                        agent: agent.map(|s| s.to_string()),
+                                    };
+                                    if let Ok(payload) = serde_json::to_vec(&msg) {
+                                        let _ = session.put(&inbox, payload).await;
+                                    }
+                                    input.clear();
+                                }
+                            }
+                            (KeyCode::Backspace, _) => {
+                                input.pop();
+                            }
+                            (KeyCode::Char(c), _) => {
+                                input.push(c);
+                            }
+                            (KeyCode::Up, _) => {
+                                scroll_offset = scroll_offset.saturating_add(1);
+                            }
+                            (KeyCode::Down, _) => {
+                                scroll_offset = scroll_offset.saturating_sub(1);
+                            }
+                            (KeyCode::PageUp, _) => {
+                                scroll_offset = scroll_offset.saturating_add(10);
+                            }
+                            (KeyCode::PageDown, _) => {
+                                scroll_offset = scroll_offset.saturating_sub(10);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(Err(_)) | None => break,
+                    _ => {}
                 }
             }
-            Err(_) => break,
-        }
-    });
 
-    while let Some(input) = repl_rx.recv().await {
-        if input == "quit" || input == "exit" {
-            break;
-        }
-        if let Err(e) = send_and_render(session, scope, machine_id, agent, &input, verbose).await {
-            let err_str = e.to_string();
-            if err_str != "timeout" {
-                eprintln!("Error: {}", e);
+            // Zenoh outbox events
+            result = subscriber.recv_async(), if waiting_for_agent => {
+                if let Ok(sample) = result {
+                    let agent_id_from_topic = sample
+                        .key_expr()
+                        .as_str()
+                        .split('/')
+                        .nth(4)
+                        .unwrap_or("agent")
+                        .to_string();
+
+                    let bytes = sample.payload().to_bytes();
+                    if let Ok(event) = serde_json::from_slice::<AgentEvent>(&bytes) {
+                        if event.id != current_correlation_id {
+                            // not our turn — ignore
+                        } else {
+                            match event.event_type {
+                                AgentEventType::Delta => {
+                                    if !agent_header_shown {
+                                        current_agent_id = agent_id_from_topic.clone();
+                                        output.push(OutputLine::AgentHeader(agent_id_from_topic));
+                                        agent_header_shown = true;
+                                    }
+                                    if let Some(text) = event.text {
+                                        // Append delta to last AgentDelta line if it exists,
+                                        // otherwise push a new one
+                                        if let Some(OutputLine::AgentDelta(last)) = output.last_mut() {
+                                            last.push_str(&text);
+                                        } else {
+                                            output.push(OutputLine::AgentDelta(text));
+                                        }
+                                        scroll_offset = 0;
+                                    }
+                                }
+                                AgentEventType::Tool => {
+                                    if let Some(name) = event.text {
+                                        let label = if verbose {
+                                            let inp = event.input.as_deref().unwrap_or("{}");
+                                            format!("⚙ {} {}", name, inp)
+                                        } else {
+                                            format!("⚙ {}…", name)
+                                        };
+                                        output.push(OutputLine::ToolCall(label));
+                                        scroll_offset = 0;
+                                    }
+                                }
+                                AgentEventType::ToolResult => {
+                                    if verbose {
+                                        if let Some(result) = event.text {
+                                            let preview = if result.len() > 200 {
+                                                format!("{}…", &result[..200])
+                                            } else {
+                                                result
+                                            };
+                                            output.push(OutputLine::ToolResult(
+                                                format!("  → {}", preview),
+                                            ));
+                                            scroll_offset = 0;
+                                        }
+                                    }
+                                }
+                                AgentEventType::Error => {
+                                    if let Some(msg) = event.text {
+                                        output.push(OutputLine::ErrorLine(
+                                            format!("✗ {}", msg),
+                                        ));
+                                    }
+                                    waiting_for_agent = false;
+                                    output.push(OutputLine::Separator);
+                                    scroll_offset = 0;
+                                }
+                                AgentEventType::Done => {
+                                    waiting_for_agent = false;
+                                    output.push(OutputLine::Separator);
+                                    scroll_offset = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Timeout while waiting for first response
+            _ = tokio::time::sleep(RESPONSE_TIMEOUT), if waiting_for_agent => {
+                output.push(OutputLine::ErrorLine(
+                    "No response from daemon. Is `bubbaloop up` running?".to_string(),
+                ));
+                waiting_for_agent = false;
+                output.push(OutputLine::Separator);
+                scroll_offset = 0;
             }
         }
     }
 
-    println!("Goodbye.");
     Ok(())
+}
+
+/// Convert an `OutputLine` into one or more ratatui `ListItem`s with colour styling.
+fn render_output_line(line: &OutputLine) -> Vec<ListItem<'static>> {
+    match line {
+        OutputLine::UserMessage(text) => {
+            let label = format!("You  {}", text);
+            vec![ListItem::new(Line::from(Span::styled(
+                label,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )))]
+        }
+        OutputLine::AgentHeader(id) => {
+            let label = format!("╾── {} ──╼", id);
+            vec![ListItem::new(Line::from(Span::styled(
+                label,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )))]
+        }
+        OutputLine::AgentDelta(text) => {
+            // Split on newlines so long responses stay readable
+            text.split('\n')
+                .map(|chunk| {
+                    ListItem::new(Line::from(Span::styled(
+                        chunk.to_string(),
+                        Style::default().fg(Color::Green),
+                    )))
+                })
+                .collect()
+        }
+        OutputLine::ToolCall(label) => {
+            vec![ListItem::new(Line::from(Span::styled(
+                label.clone(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::ITALIC),
+            )))]
+        }
+        OutputLine::ToolResult(text) => {
+            vec![ListItem::new(Line::from(Span::styled(
+                text.clone(),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        }
+        OutputLine::ErrorLine(text) => {
+            vec![ListItem::new(Line::from(Span::styled(
+                text.clone(),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )))]
+        }
+        OutputLine::Separator => {
+            vec![ListItem::new(Line::from(Span::styled(
+                "─".repeat(60),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        }
+        OutputLine::Info(text) => {
+            vec![ListItem::new(Line::from(Span::styled(
+                text.clone(),
+                Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::ITALIC),
+            )))]
+        }
+    }
 }
 
 /// Query all agent manifests and print a table.
