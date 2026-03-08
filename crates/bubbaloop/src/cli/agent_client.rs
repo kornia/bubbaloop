@@ -118,9 +118,10 @@ async fn send_and_render(
                                 AgentEventType::Tool => {
                                     if let Some(name) = &event.text {
                                         if verbose {
-                                            let input_str =
-                                                event.input.as_deref().unwrap_or("{}");
-                                            println!("  [calling {} {}]", name, input_str);
+                                            match event.input.as_deref().filter(|s| !s.is_empty() && *s != "{}") {
+                                                Some(inp) => println!("  [calling {} {}]", name, inp),
+                                                None => println!("  [calling {}]", name),
+                                            }
                                         } else {
                                             println!("  [calling {}...]", name);
                                         }
@@ -423,8 +424,11 @@ async fn run_tui_repl(
                         AgentEventType::Tool => {
                             if let Some(name) = event.text {
                                 let label = if verbose {
-                                    let inp = event.input.as_deref().unwrap_or("{}");
-                                    format!("⚙ {} {}", name, inp)
+                                    // Don't show "{}" when input is absent or empty object
+                                    match event.input.as_deref().filter(|s| !s.is_empty() && *s != "{}") {
+                                        Some(inp) => format!("⚙ {} {}", name, inp),
+                                        None => format!("⚙ {}", name),
+                                    }
                                 } else {
                                     let hint = event
                                         .input

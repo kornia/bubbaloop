@@ -279,6 +279,11 @@ pub async fn run_agent_turn<
         Ok(inner) => inner?,
         Err(_elapsed) => {
             log::error!("[Agent] Turn timed out after {}s", TURN_TIMEOUT_SECS);
+            // Sanitize: the turn loop may have pushed an assistant message with
+            // tool_use blocks but was cancelled before pushing matching tool_results.
+            // The Claude API returns 400 "unexpected tool_use" on the next turn if
+            // those blocks are left dangling. Add synthetic error tool_results.
+            sanitize_dangling_tool_use(memory);
             sink.emit(AgentEvent::error(
                 correlation_id,
                 &format!("Turn timed out after {}s", TURN_TIMEOUT_SECS),
@@ -455,17 +460,18 @@ async fn run_turn_loop<
                 break;
             }
 
-            let input_preview: Option<String> =
-                if tc.input.is_null() || tc.input == serde_json::Value::Object(Default::default()) {
-                    None
+            let input_preview: Option<String> = if tc.input.is_null()
+                || tc.input == serde_json::Value::Object(Default::default())
+            {
+                None
+            } else {
+                let s = tc.input.to_string();
+                Some(if s.len() > 200 {
+                    format!("{}…", &s[..200])
                 } else {
-                    let s = tc.input.to_string();
-                    Some(if s.len() > 200 {
-                        format!("{}…", &s[..200])
-                    } else {
-                        s
-                    })
-                };
+                    s
+                })
+            };
             sink.emit(AgentEvent::tool(
                 correlation_id,
                 &tc.name,
@@ -566,6 +572,67 @@ async fn run_turn_loop<
     }
 
     Ok(())
+}
+
+/// Fix dangling tool_use blocks left in short-term memory after a turn timeout.
+///
+/// When `tokio::time::timeout` cancels `run_turn_loop`, the assistant message
+/// with `tool_use` blocks may already be in memory but the matching
+/// `tool_results` user message was never pushed. Claude's API returns
+/// 400 "unexpected tool_use" on the next call if these are left dangling.
+///
+/// This function adds a synthetic error `tool_result` for every unmatched
+/// `tool_use` ID in the last assistant message.
+fn sanitize_dangling_tool_use(memory: &mut Memory) {
+    use crate::agent::provider::{ContentBlock, Message};
+
+    // Collect tool_use IDs from the trailing assistant message (if any)
+    let dangling_ids: Vec<String> = memory
+        .short_term
+        .iter()
+        .rev()
+        .take_while(|m| m.role == "assistant")
+        .flat_map(|m| {
+            m.content.iter().filter_map(|b| {
+                if let ContentBlock::ToolUse { id, .. } = b {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+
+    if dangling_ids.is_empty() {
+        return;
+    }
+
+    // Check whether a tool_results message already follows
+    let already_resolved = memory.short_term.iter().rev().any(|m| {
+        m.content.iter().any(|b| {
+            if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                dangling_ids.contains(tool_use_id)
+            } else {
+                false
+            }
+        })
+    });
+
+    if already_resolved {
+        return;
+    }
+
+    log::warn!(
+        "[Agent] Sanitizing {} dangling tool_use block(s) after turn timeout",
+        dangling_ids.len()
+    );
+
+    let results: Vec<(String, String, Option<bool>)> = dangling_ids
+        .into_iter()
+        .map(|id| (id, "Error: turn timed out before tool completed".to_string(), Some(true)))
+        .collect();
+
+    memory.short_term.push(Message::tool_results(results));
 }
 
 /// Truncate a tool result string if it exceeds `MAX_TOOL_RESULT_CHARS`.
@@ -812,6 +879,63 @@ mod tests {
             .await
             .unwrap();
         assert!(!result);
+    }
+
+    #[test]
+    fn sanitize_adds_tool_results_for_dangling_tool_use() {
+        use crate::agent::provider::{ContentBlock, Message};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let mut memory = Memory::open(dir.path()).unwrap();
+
+        // Push an assistant message with two tool_use blocks (no tool_results after)
+        memory.short_term.push(Message {
+            role: "assistant".to_string(),
+            content: vec![
+                ContentBlock::ToolUse {
+                    id: "tu-1".to_string(),
+                    name: "run_command".to_string(),
+                    input: serde_json::json!({"command": "sleep 300"}),
+                },
+                ContentBlock::ToolUse {
+                    id: "tu-2".to_string(),
+                    name: "write_file".to_string(),
+                    input: serde_json::json!({"path": "/tmp/x", "content": "y"}),
+                },
+            ],
+        });
+
+        sanitize_dangling_tool_use(&mut memory);
+
+        // A tool_results message should have been appended
+        let last = memory.short_term.last().unwrap();
+        assert_eq!(last.role, "user");
+        let ids: Vec<_> = last
+            .content
+            .iter()
+            .filter_map(|b| {
+                if let ContentBlock::ToolResult { tool_use_id, is_error, .. } = b {
+                    Some((tool_use_id.clone(), *is_error))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.iter().any(|(id, _)| id == "tu-1"));
+        assert!(ids.iter().any(|(id, _)| id == "tu-2"));
+        assert!(ids.iter().all(|(_, is_err)| *is_err == Some(true)));
+    }
+
+    #[test]
+    fn sanitize_noop_when_no_dangling_tool_use() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let mut memory = Memory::open(dir.path()).unwrap();
+        let initial_len = memory.short_term.len();
+        sanitize_dangling_tool_use(&mut memory);
+        assert_eq!(memory.short_term.len(), initial_len, "should not add messages");
     }
 
     #[tokio::test]
