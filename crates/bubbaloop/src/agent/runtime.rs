@@ -14,7 +14,7 @@ use crate::agent::soul::Soul;
 use crate::agent::{run_agent_turn, AgentTurnInput, EventSink};
 use crate::daemon::belief_updater::spawn_belief_decay_task;
 use crate::daemon::context_provider::{spawn_provider, ProviderStore};
-use crate::daemon::mission::{Mission, MissionStatus, MissionStore, watch_missions_dir};
+use crate::daemon::mission::{watch_missions_dir, Mission, MissionStatus, MissionStore};
 use crate::daemon::registry::get_bubbaloop_home;
 use crate::mcp::platform::DaemonPlatform;
 use serde::{Deserialize, Serialize};
@@ -339,7 +339,12 @@ impl AgentRuntime {
                                 let semantic_db = agent_dir.join("memory.db");
                                 let provider_session = session.clone();
                                 let provider_shutdown = shutdown_rx.clone();
-                                spawn_provider(cfg, provider_session, semantic_db, provider_shutdown);
+                                spawn_provider(
+                                    cfg,
+                                    provider_session,
+                                    semantic_db,
+                                    provider_shutdown,
+                                );
                             }
                         }
                         Err(e) => log::warn!(
@@ -499,7 +504,11 @@ impl AgentRuntime {
                         compiled_at,
                     };
                     if let Err(e) = store.save_mission(&mission) {
-                        log::error!("[MissionWatcher] Failed to save mission '{}': {}", mission_id, e);
+                        log::error!(
+                            "[MissionWatcher] Failed to save mission '{}': {}",
+                            mission_id,
+                            e
+                        );
                     } else {
                         log::info!("[MissionWatcher] Loaded mission '{}'", mission_id);
                     }
