@@ -14,6 +14,7 @@ use crate::agent::soul::Soul;
 use crate::agent::{run_agent_turn, AgentTurnInput, EventSink};
 use crate::daemon::belief_updater::spawn_belief_decay_task;
 use crate::daemon::context_provider::{spawn_provider, ProviderStore};
+use crate::daemon::mission::{Mission, MissionStatus, MissionStore, watch_missions_dir};
 use crate::daemon::registry::get_bubbaloop_home;
 use crate::mcp::platform::DaemonPlatform;
 use serde::{Deserialize, Serialize};
@@ -449,6 +450,60 @@ impl AgentRuntime {
                     watch_dir,
                 )
                 .await;
+            });
+
+            // Spawn mission file watcher — polls agent_dir/missions/ every 5s.
+            // New/changed .md files are upserted into MissionStore as Active.
+            // The filename stem becomes the mission ID: "patrol.md" → ID "patrol".
+            let missions_dir = agent_dir.join("missions");
+            std::fs::create_dir_all(&missions_dir).ok();
+            let missions_db_path = agent_dir.join("missions.db");
+            let (mission_tx, mut mission_rx) = tokio::sync::mpsc::channel::<String>(16);
+            let mission_watcher_shutdown = shutdown_rx.clone();
+            tokio::spawn(watch_missions_dir(
+                missions_dir.clone(),
+                mission_watcher_shutdown,
+                mission_tx,
+            ));
+
+            // Consume mission IDs and upsert into MissionStore
+            tokio::spawn(async move {
+                while let Some(mission_id) = mission_rx.recv().await {
+                    let md_path = missions_dir.join(format!("{}.md", mission_id));
+                    let markdown = match std::fs::read_to_string(&md_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            log::warn!("[MissionWatcher] Failed to read {}.md: {}", mission_id, e);
+                            continue;
+                        }
+                    };
+                    let store = match MissionStore::open(&missions_db_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            log::error!("[MissionWatcher] Failed to open MissionStore: {}", e);
+                            continue;
+                        }
+                    };
+                    let compiled_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    let mission = Mission {
+                        id: mission_id.clone(),
+                        markdown,
+                        status: MissionStatus::Active,
+                        expires_at: None,
+                        resources: vec![],
+                        sub_mission_ids: vec![],
+                        depends_on: vec![],
+                        compiled_at,
+                    };
+                    if let Err(e) = store.save_mission(&mission) {
+                        log::error!("[MissionWatcher] Failed to save mission '{}': {}", mission_id, e);
+                    } else {
+                        log::info!("[MissionWatcher] Loaded mission '{}'", mission_id);
+                    }
+                }
             });
 
             // First-run onboarding: triggered by a marker file placed by `agent setup`.
