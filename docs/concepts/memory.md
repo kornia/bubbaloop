@@ -1,248 +1,380 @@
-# 3-Tier Memory
+# Memory & Mission Engine
 
-RAM for now. Logs for yesterday. SQLite for the long game.
+The LLM is expensive and slow — everything that doesn't need reasoning runs without it.
 
----
-
-## Architecture
-
-```
-+------------------------------------------+
-| Tier 1: Short-term (RAM)                 |
-|   Vec<Message> — current turn context    |
-|   system prompt + user + tool + assistant|
-+------------------+-----------------------+
-                   | flush on compaction
-                   v
-+------------------------------------------+
-| Tier 2: Episodic (NDJSON + FTS5)         |
-|   daily_logs_YYYY-MM-DD.jsonl            |
-|   BM25 search with temporal decay        |
-+------------------+-----------------------+
-                   | indexed by
-                   v
-+------------------------------------------+
-| Tier 3: Semantic (SQLite)                |
-|   jobs table    — scheduled tasks        |
-|   proposals table — approval queue       |
-|   fts_episodic  — FTS5 search index      |
-+------------------------------------------+
-```
-
-All three tiers are managed by the `Memory` struct in
-`crates/bubbaloop/src/agent/memory/mod.rs`.
+Bubbaloop's memory stack gives agents **persistent awareness** of the physical world across conversations, sessions, and reboots.
 
 ---
 
-## Tier 1: Short-term (RAM)
+## Overview
 
-```rust
-pub struct Memory {
-    pub short_term: Vec<Message>,
-    pub backend: Arc<tokio::sync::Mutex<MemoryBackend>>,
-}
+```
+┌─────────────────────────────────────────────────────┐
+│  Tier 0 — World State (live, sensor-driven)          │
+│  SQLite world_state table                            │
+│  Written by: Context Providers (no LLM, <1ms)       │
+│  Read by: injected at top of every agent turn        │
+├─────────────────────────────────────────────────────┤
+│  Tier 1 — Short-term (RAM)                          │
+│  Vec<Message> — current conversation only           │
+├─────────────────────────────────────────────────────┤
+│  Tier 2 — Episodic (NDJSON + FTS5)                  │
+│  daily_logs_YYYY-MM-DD.jsonl — past events          │
+│  BM25 search with temporal decay                    │
+├─────────────────────────────────────────────────────┤
+│  Tier 3 — Semantic (SQLite)                         │
+│  Beliefs + jobs + proposals + episodic_meta         │
+└─────────────────────────────────────────────────────┘
 ```
 
-`short_term` holds the active conversation for the current turn. It contains:
-
-- The system prompt (injected at generation time, not stored here)
-- User messages
-- Assistant responses (text + tool use blocks)
-- Tool results
-
-Between turns the agent trims `short_term` to the last 40 messages
-(`MAX_CONVERSATION_MESSAGES = 40`). After a job completes,
-`clear_short_term()` wipes it entirely.
-
-When context usage approaches the 200k-token window limit
-(`compaction_flush_threshold_tokens` from the agent's Soul), a silent
-pre-compaction flush turn fires. The model is asked to summarize active
-proposals, node health, and unresolved decisions. That summary is written
-to episodic and recovered on the next turn. See the Context Compaction
-section below.
+**Key principle:** The agent always knows what's happening right now (Tier 0), can recall past events (Tier 2), and holds durable knowledge about the world (Tier 3 beliefs). The LLM only writes Tiers 1–3. Tier 0 is written by the daemon without LLM involvement.
 
 ---
 
-## Tier 2: Episodic (NDJSON + FTS5)
+## Tier 0: World State
 
-Daily append-only log files. Every user message, assistant response, tool
-result, and planning step is written here as a JSON line.
+The agent's real-time awareness of the physical environment.
 
-**File location:**
-```
-~/.bubbaloop/agents/{agent-id}/memory/daily_logs_YYYY-MM-DD.jsonl
-```
+### What it is
 
-**Entry format:**
-```json
-{"timestamp":"2026-03-06T14:22:01Z","role":"assistant","content":"Restarted rtsp-camera node.","job_id":"job-abc123"}
-```
-
-Roles: `user`, `assistant`, `tool`, `system`, `plan`.
-
-The `plan` role is special — it fires when the model outputs both text
-(reasoning) and tool calls in the same response. That text is the plan.
-
-**Search:**
-
-Each append dual-writes to an FTS5 virtual table (`fts_episodic`) inside
-`memory.db`. Queries use BM25 ranking via SQLite's `rank` column.
-
-```sql
-SELECT content, role, timestamp, job_id FROM fts_episodic
-WHERE fts_episodic MATCH 'camera restart'
-ORDER BY rank LIMIT 5;
-```
-
-**Temporal decay:**
-
-`search_with_decay(query, limit, half_life_days)` applies exponential
-decay to demote old matches:
+A SQLite table of key/value pairs that gets **prepended to the system prompt** before every LLM turn. The agent sees current sensor readings without any tool calls.
 
 ```
-effective_rank = rank * e^(-age_days * ln2 / half_life_days)
+[World State]
+person.location = "hallway"     (confidence: 0.92, age: 3s)
+robot_arm.location = "home"     (confidence: 0.8,  age: 12s)
+front_door.status = "closed"    (confidence: 0.99, age: 1s)
 ```
 
-Set `half_life_days = 0` to disable decay (falls back to plain BM25).
+### Who writes it: Context Providers
 
-**Retention:**
+Context Providers are daemon background tasks that subscribe to Zenoh topics and write to world state — no LLM involved. Each provider is configured with `configure_context` (Admin):
 
-At startup, `prune_old_logs(retention_days)` deletes NDJSON files older
-than `retention_days` and removes their FTS5 entries. Set `retention_days
-= 0` to keep everything.
+```
+configure_context
+  mission_id="security-patrol"
+  topic_pattern="bubbaloop/**/vision/detections"
+  world_state_key_template="{label}.location"
+  value_field="label"
+  filter="confidence>0.8"
+  min_interval_secs=1
+  max_age_secs=30
+```
 
-**Forget:**
+**How it works:**
 
-`forget(query, reason)` hard-deletes matching FTS5 entries and writes an
-audit trail to `memory/.deleted/forgotten_YYYY-MM-DD_HH-MM-SS.jsonl`.
-The NDJSON source files are not touched (append-only principle).
+```
+Vision node publishes to Zenoh:
+  {"label": "person", "confidence": 0.92, "zone": "hallway"}
+          ↓
+Context Provider (filter: confidence>0.8) matches
+          ↓
+Writes: world_state["person.location"] = "hallway"
+          ↓ (within milliseconds, no LLM)
+Next agent turn sees: "person.location = hallway" in its prompt
+```
+
+**Filter syntax:** `field=value AND field2>number`
+- Equality: `label=person`
+- Numeric: `confidence>0.8`, `temperature<50`
+- Combined: `label=dog AND confidence>0.85`
+
+**Key template:** `{field}` substitutes from the payload.
+- `{label}.location` → `"person.location"` when `label="person"`
+- `arm.{joint_id}.angle` → `"arm.shoulder.angle"` when `joint_id="shoulder"`
+
+### Reading world state
+
+```
+list_world_state
+→ [
+    {"key": "person.location", "value": "hallway", "confidence": 0.92, "updated_at": 1772990123},
+    {"key": "robot_arm.location", "value": "home", "confidence": 0.8, "updated_at": 1772990111}
+  ]
+```
 
 ---
 
-## Tier 3: Semantic (SQLite)
+## Tier 3: Beliefs
+
+Durable knowledge the agent holds about the world that doesn't come from live sensors — things that are true for hours, days, or permanently.
+
+### Data model
+
+Every belief is a **subject + predicate → value** triple with a confidence score:
+
+| Field | Example | Notes |
+|-------|---------|-------|
+| `subject` | `"front_door_camera"` | The entity |
+| `predicate` | `"is_reliable"` | The property |
+| `value` | `"true"` | The current value |
+| `confidence` | `0.95` | 0.0–1.0 |
+| `source` | `"heartbeat_monitor"` | Optional: how this was formed |
+| `confirmation_count` | `3` | Incremented on each re-confirmation |
+| `contradiction_count` | `0` | Incremented on each contradiction |
+| `first_observed` | `1772990085` | Unix epoch |
+| `last_confirmed` | `1772990200` | Updated on re-confirmation |
+
+### Creating and updating beliefs
 
 ```
-~/.bubbaloop/agents/{agent-id}/memory.db
+update_belief
+  subject="front_door_camera"
+  predicate="is_reliable"
+  value="true"
+  confidence=0.95
+  source="heartbeat_monitor"
+→ Belief (front_door_camera, is_reliable) updated with confidence 0.95
 ```
 
-Permissions: `0600` (owner-read/write only).
+Calling `update_belief` again with the same subject+predicate increments `confirmation_count` and updates `confidence`. Calling it with a different value increments `contradiction_count`.
 
-WAL mode enabled. Busy timeout: 5000ms.
+### Reading beliefs
 
-### Tables
+```
+get_belief subject="front_door_camera" predicate="is_reliable"
+→ {
+    "id": "belief-a3135f9d-...",
+    "subject": "front_door_camera",
+    "predicate": "is_reliable",
+    "value": "true",
+    "confidence": 0.95,
+    "source": "heartbeat_monitor",
+    "first_observed": 1772990085,
+    "last_confirmed": 1772990200,
+    "confirmation_count": 3,
+    "contradiction_count": 0,
+    "notes": null
+  }
 
-**`jobs`** — scheduled and one-off agent tasks:
+get_belief subject="nonexistent" predicate="nothing"
+→ "not found"
+```
 
-| Column           | Type    | Description                                    |
-|------------------|---------|------------------------------------------------|
-| `id`             | TEXT PK | UUID                                           |
-| `cron_schedule`  | TEXT    | Optional cron expression for recurring jobs   |
-| `next_run_at`    | INTEGER | Epoch seconds (when to next fire)             |
-| `prompt_payload` | TEXT    | Instruction to execute                        |
-| `status`         | TEXT    | `pending`, `running`, `completed`, `failed`, `dead_letter` |
-| `recurrence`     | BOOLEAN | Recurring if true                             |
-| `retry_count`    | INTEGER | Consecutive failure count                     |
-| `last_error`     | TEXT    | Most recent error message                     |
+### Belief decay
 
-Retry logic: exponential backoff (`30s * 2^(retry_count+1)`). The first
-retry waits 60s, the second waits 120s. After `max_retries` consecutive
-failures the job is parked as `dead_letter`.
+A daemon background task (`spawn_belief_decay_task`) periodically reduces `confidence` by the configured rate. A belief confirmed daily by a sensor stays high; a belief not revisited for weeks decays toward 0.
 
-**`proposals`** — human-in-the-loop approval queue:
+---
 
-| Column        | Type    | Description                                    |
-|---------------|---------|------------------------------------------------|
-| `id`          | TEXT PK | UUID                                           |
-| `skill`       | TEXT    | Action category                               |
-| `description` | TEXT    | Human-readable summary                        |
-| `actions`     | TEXT    | JSON array of tool calls to execute           |
-| `status`      | TEXT    | `pending`, `approved`, `rejected`, `expired` (not yet implemented)  |
-| `decided_by`  | TEXT    | `user`, `mcp`, or `timeout`                   |
-| `decided_at`  | TEXT    | ISO 8601 timestamp of decision                |
+## Missions
 
-**`fts_episodic`** — FTS5 virtual table (search index for Tier 2).
+Missions are the unit of persistent agent intent — goals that span multiple conversations and survive restarts.
+
+### How missions are created
+
+Drop a markdown file into `~/.bubbaloop/agents/{agent-id}/missions/`. The filename stem becomes the mission ID:
+
+```
+~/.bubbaloop/agents/jean-clawd/missions/
+├── security-patrol.md      →  mission ID: "security-patrol"
+├── dog-monitor.md          →  mission ID: "dog-monitor"
+└── maintenance-check.md    →  mission ID: "maintenance-check"
+```
+
+The daemon watches this directory (5-second poll) and picks up new and changed files automatically. The file content is stored as-is in SQLite as the mission's markdown.
+
+> **Note:** The file-watcher is implemented and tested. Missions are currently inserted via the MCP platform layer; direct file-drop support is being wired into the agent runtime in the next release.
+
+### Mission lifecycle
+
+```
+         ┌─────────┐
+    ───►  │ Active  │ ◄──── resume_mission
+         └────┬────┘
+              │ pause_mission
+         ┌────▼────┐
+         │ Paused  │
+         └────┬────┘
+              │ cancel_mission (or auto-expiry)
+    ┌─────────┼──────────────────┐
+    ▼         ▼                  ▼
+Cancelled  Completed           Failed
+```
+
+States: `active | paused | cancelled | completed | failed`
+
+### MCP control tools
+
+```
+list_missions
+→ [
+    {"id": "security-patrol", "status": "active",  "compiled_at": 1772990000, "expires_at": null},
+    {"id": "dog-monitor",     "status": "paused",  "compiled_at": 1772989000, "expires_at": null}
+  ]
+
+pause_mission   mission_id="security-patrol"   →  "Mission security-patrol paused"
+resume_mission  mission_id="security-patrol"   →  "Mission security-patrol resumed"
+cancel_mission  mission_id="security-patrol"   →  "Mission security-patrol cancelled"
+
+# Unknown mission ID returns a graceful error (not a crash):
+pause_mission   mission_id="nonexistent"       →  "Error: mission not found"
+```
+
+### Mission DAG (dependencies)
+
+Missions can depend on other missions. The `DagEvaluator` only activates a mission when all its `depends_on` missions are `Completed`:
+
+```
+calibrate-arm  ──depends_on──►  run-welding-task
+```
+
+Before activating a sub-mission, the daemon makes a **micro-turn** — a single cheap LLM call with no tools and no episodic write — to validate preconditions. This catches obvious mistakes without burning a full agent turn.
+
+---
+
+## Safety: Constraints
+
+Per-mission safety limits that are checked **synchronously and fail-closed** before any actuator command. If the validator errors, the command is denied.
+
+### Registering constraints
+
+```
+register_constraint
+  mission_id="robot-arm-task"
+  constraint_type="workspace"
+  params_json='{"x": [-1.0, 1.0], "y": [-1.0, 1.0], "z": [0.0, 2.0]}'
+→ "Constraint registered for mission robot-arm-task"
+```
+
+### Constraint types
+
+| Type | `params_json` format | Description |
+|------|---------------------|-------------|
+| `workspace` | `{"x": [min, max], "y": [min, max], "z": [min, max]}` | Axis-aligned bounding box |
+| `max_velocity` | `1.5` | Maximum speed in m/s |
+| `forbidden_zone` | `{"center": [x, y, z], "radius": r}` | Spherical exclusion zone |
+| `max_force` | `50.0` | Maximum force in Newtons |
+
+### Listing constraints
+
+```
+list_constraints mission_id="robot-arm-task"
+→ [
+    {"constraint": {"Workspace": {"x": [-1.0, 1.0], "y": [-1.0, 1.0], "z": [0.0, 2.0]}}},
+    {"constraint": {"MaxVelocity": 1.5}}
+  ]
+```
+
+### What happens on violation
+
+`ConstraintEngine::validate_position_goal()` returns `Allow | Deny | ValidatorError`. On denial, a `CompiledFallback` fires:
+
+| Fallback | What it does |
+|----------|-------------|
+| `StopActuators` | Sends stop command to all actuators |
+| `PauseAllMissions` | Pauses every active mission |
+| `AlertAgent` | Spikes agent arousal to trigger a turn |
+| `HaltAndWait` | Stops all action until human intervention |
+
+There is deliberately **no "publish arbitrary Zenoh message" fallback** — all actions are pre-enumerated at compile time.
+
+### Resource locking
+
+`ResourceRegistry` ensures two missions cannot simultaneously command the same actuator. Locks are held by a `ResourceGuard` that releases automatically on drop (Rust RAII — no explicit unlock needed).
+
+---
+
+## Reactive Alerts
+
+Fast pre-filter that fires without an LLM call when world state matches a predicate.
+
+```
+register_alert
+  mission_id="childproof-home"
+  predicate="toddler.near_stairs = 'true'"
+→ "Alert registered"
+```
+
+When the world state entry `toddler.near_stairs` becomes `"true"` (written by a vision context provider), agent arousal spikes immediately — in milliseconds, no LLM token spent. The LLM only wakes up if arousal crosses the agent's threshold.
+
+Per-rule debounce prevents alert storms. Each rule stores its last-fired timestamp as an `AtomicI64`.
+
+---
+
+## The Full Data Flow
+
+```
+[Camera node]
+      │ publishes frame detections to Zenoh
+      ▼
+[Context Provider]  (daemon, no LLM, <1ms)
+      │ filter: confidence>0.8
+      │ key template: {label}.location
+      │ writes: world_state["person.location"] = "hallway"
+      ▼
+[Reactive alert check]  (no LLM, <1ms)
+      │ predicate: "person.location = 'front_door'" → arousal spike?
+      ▼
+[Agent turn triggers]
+      │ world state injected into system prompt:
+      │   "person.location = front_door  (confidence: 0.94)"
+      ▼
+[LLM reasons]
+      │ decides to act → "move arm to greet position"
+      ▼
+[Constraint engine]  (no LLM, <1ms)
+      │ validate_position_goal([0.5, 0.2, 1.0])
+      │ workspace constraint: ALLOW
+      ▼
+[Actuator executes]
+      ▼
+[Belief engine]
+      │ observation confirms: arm.in_greeting_position = true
+      │ update_belief → confirmation_count++
+```
+
+The LLM is called once. Everything else — sensor ingestion, alert matching, constraint validation — runs in the daemon without it.
 
 ---
 
 ## Per-Agent Isolation
 
-Each agent gets its own memory directory and SQLite database. No shared
-state between agents.
+Each agent has its own memory directory and database. No shared state:
 
 ```
 ~/.bubbaloop/agents/
 ├── jean-clawd/
-│   ├── soul/
-│   │   ├── identity.md
-│   │   └── capabilities.toml
-│   ├── memory/
-│   │   ├── daily_logs_2026-03-05.jsonl
-│   │   ├── daily_logs_2026-03-06.jsonl
-│   │   └── .deleted/
-│   │       └── forgotten_2026-03-06_09-15-00.jsonl
-│   └── memory.db
+│   ├── soul/identity.md
+│   ├── memory/daily_logs_YYYY-MM-DD.jsonl
+│   ├── memory.db          ← beliefs, jobs, proposals, world_state
+│   └── missions/
+│       ├── security-patrol.md
+│       └── dog-monitor.md
 └── camera-expert/
     ├── soul/
     ├── memory/
-    └── memory.db
+    ├── memory.db
+    └── missions/
 ```
-
-`Memory::open(base)` creates `{base}/memory/` for NDJSON files and
-`{base}/memory.db` for the SQLite database. Both are created on first
-open if they do not exist.
-
-Note: `Soul::load_or_default()` checks the per-agent path
-(`~/.bubbaloop/agents/{id}/soul/`) first, then falls back to the global
-`~/.bubbaloop/soul/` directory if no per-agent soul files are found.
 
 ---
 
-## Context Compaction
+## MCP Tool Reference
 
-When `last_input_tokens > DEFAULT_CONTEXT_WINDOW - flush_threshold`:
-
-1. Agent appends a flush instruction to `short_term` asking the model to
-   summarize key state (proposals, node health, unresolved decisions).
-2. Model response is checked for substance (`len >= 50`, no "nothing to
-   persist" phrases).
-3. Substantive response is written to episodic as a `CONTEXT_FLUSH:`
-   entry (`role = "system"`, `flush = true`).
-4. On the next turn, `latest_flush()` retrieves this entry and injects
-   it into the system prompt as recovered context.
-
-This prevents total context loss during long-running conversations.
-The flush does not count toward `max_turns`.
-
----
-
-## Memory Tools
-
-| Tool              | Tier    | Description                                    |
-|-------------------|---------|------------------------------------------------|
-| `memory_search`   | 2       | BM25 search over episodic logs                |
-| `memory_forget`   | 2       | Remove entries from FTS5 (with audit trail)   |
-| `schedule_task`   | 3       | Create a scheduled job in SQLite              |
-| `create_proposal` | 3       | Submit a proposal for human approval          |
-
----
-
-## Example
-
-```
-> What did we discuss about the camera yesterday?
-
-[jean-clawd]
-  [calling memory_search...]
-Yesterday we set up the front-door RTSP camera at 192.168.1.100 with
-the rtsp-camera node. The stream was healthy after restart at 14:22 UTC.
-```
-
-The agent calls `memory_search` with your query, gets BM25 results from
-the FTS5 index (with temporal decay applied), and synthesizes the answer.
+| Tool | Tier | Role | Description |
+|------|------|------|-------------|
+| `list_world_state` | 0 | Viewer | Current world state snapshot |
+| `configure_context` | 0 | Admin | Wire Zenoh topic → world state |
+| `update_belief` | 3 | Operator | Create or update a belief |
+| `get_belief` | 3 | Viewer | Retrieve a single belief |
+| `list_missions` | — | Viewer | List missions with status |
+| `pause_mission` | — | Operator | Pause an active mission |
+| `resume_mission` | — | Operator | Resume a paused mission |
+| `cancel_mission` | — | Admin | Cancel a mission permanently |
+| `register_constraint` | — | Admin | Add a safety constraint to a mission |
+| `list_constraints` | — | Viewer | List constraints for a mission |
+| `register_alert` | — | Admin | Register a reactive alert rule |
+| `unregister_alert` | — | Admin | Remove a reactive alert rule |
+| `memory_search` | 2 | Operator | BM25 search over episodic logs |
+| `memory_forget` | 2 | Admin | Remove entries from episodic memory |
+| `schedule_task` | 3 | Operator | Create a scheduled job |
+| `create_proposal` | 3 | Operator | Submit a proposal for human approval |
 
 ---
 
 ## See Also
 
-- [Architecture](architecture.md) — layer model and node contract
-- [Agent Guide](../agent-guide.md) — configuring agents and Soul
+- [Architecture](architecture.md) — full layer model and invariants
+- [Agent Guide](../agent-guide.md) — configuring agents, Soul, and providers
+- [Telemetry Watchdog](../guides/telemetry-watchdog.md) — edge device resource limits
