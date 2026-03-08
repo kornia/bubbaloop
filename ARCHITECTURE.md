@@ -157,19 +157,102 @@ Implemented in v0.0.11. Full design: `docs/plans/2026-03-08-physical-ai-memory-m
 
 **Causal chains**: `episodic_meta` table (regular table, NOT FTS5) links entries via `cause_id` for `"motor hot → reduced speed → cooled"` recall chains. FTS5 virtual tables do not support `ALTER TABLE` — use join instead.
 
-**Belief system** (`daemon/belief_updater.rs`): Observation confirms/contradicts beliefs via token overlap. `spawn_belief_decay_task` periodically reduces belief confidence (configurable rate). MCP tools: `get_belief`, `update_belief` (Operator), `list_world_state` (Viewer).
+### Beliefs (`daemon/belief_updater.rs`)
+
+Durable assertions the agent holds about the world, modeled as **subject + predicate → value** triples with confidence scores.
+
+- `update_belief` (Operator): creates or updates a belief, increments `confirmation_count` on repeated update
+- `get_belief` (Viewer): retrieves a belief as JSON or `"not found"`
+- `spawn_belief_decay_task`: daemon background task that periodically reduces `confidence` by the configured rate
+- Token overlap scoring confirms/contradicts existing beliefs from observations
+
+```
+# Example MCP session — tracking camera reliability
+update_belief subject="front_door_camera" predicate="is_reliable" value="true" confidence=0.95 source="heartbeat_monitor"
+→ Belief (front_door_camera, is_reliable) updated with confidence 0.95
+
+get_belief subject="front_door_camera" predicate="is_reliable"
+→ {"id": "...", "subject": "front_door_camera", "predicate": "is_reliable",
+   "value": "true", "confidence": 0.95, "confirmation_count": 1, ...}
+
+# After more heartbeat confirmations:
+update_belief subject="front_door_camera" predicate="is_reliable" value="true" confidence=0.97
+→ confirmation_count becomes 2, confidence updated to 0.97
+```
 
 ### Context Providers (`daemon/context_provider.rs`)
 
 Daemon background tasks that subscribe to Zenoh topics and write to world state — no LLM involved. Filter expression: `field=value AND field2>number`. World state key templates support `{field}` substitution from payload. Each provider opens its own rusqlite connection (WAL mode allows concurrent reads).
 
+```
+# Wire a vision node's detections into world state
+configure_context
+  mission_id="security-patrol"
+  topic_pattern="bubbaloop/**/vision/detections"
+  world_state_key_template="{label}.location"
+  value_field="label"
+  filter="confidence>0.8"
+
+# Now list_world_state shows live entries like:
+# [{"key": "person.location", "value": "hallway", "confidence": 0.92, ...}]
+```
+
 ### Mission Engine
 
-- **Mission Model** (`daemon/mission.rs`): Markdown files → SQLite state machine. States: `Active | Paused | Cancelled | Completed | Failed`. 5-second file watcher for hot-reload. Resources stored as JSON array. Sub-missions linked via `parent_id`.
-- **Mission DAG** (`daemon/mission.rs`): `DagEvaluator::ready_missions()` resolves `depends_on` dependencies. `run_micro_turn()` validates sub-mission preconditions with a single LLM call (no tools, no episodic write) before activation.
-- **Reactive Pre-filter** (`daemon/reactive.rs`): Rule engine (predicate → arousal boost) with per-rule debounce (`AtomicI64` last_fired_at). `register_alert` MCP tool (Admin). Fires in milliseconds; no LLM.
-- **Safety Layer** (`daemon/constraints.rs`): `ConstraintEngine` fail-closed validation (Allow|Deny|ValidatorError). `ResourceRegistry` for exclusive actuator locking with `Drop`-guard release. `CompiledFallback` enum: `StopActuators | PauseAllMissions | AlertAgent | HaltAndWait` — NO arbitrary Zenoh publish variant.
-- **Federated Agents** (`daemon/federated.rs`): World state gossip topic helpers. Remote entries namespaced `remote:{machine_id}.{key}`. Pattern: `bubbaloop/**/agent/*/world_state`.
+Missions are the unit of persistent agent intent. The model, DAG evaluator, and MCP control tools are fully implemented in v0.0.11. The file-watcher is implemented and tested but **not yet wired into the main agent runtime loop** — missions are currently inserted programmatically or via the MCP platform layer.
+
+**Mission lifecycle** (`daemon/mission.rs`):
+- States: `Active → Paused → Resumed → Cancelled | Completed | Failed`
+- Each mission is a markdown string stored in SQLite with optional `resources` (JSON array of locked actuator IDs), `depends_on` (other mission IDs), and `expires_at` (Unix timestamp)
+- Filename stem becomes the mission ID: `dog-monitor.md` → ID `"dog-monitor"`
+
+**MCP control tools** (all require a `mission_id`):
+```
+list_missions
+→ [{"id": "security-patrol", "status": "active", "compiled_at": 1772990000, ...}]
+
+pause_mission   mission_id="security-patrol"   → "Mission security-patrol paused"
+resume_mission  mission_id="security-patrol"   → "Mission security-patrol resumed"
+cancel_mission  mission_id="security-patrol"   → "Mission security-patrol cancelled"
+
+# Unknown mission ID → graceful error:
+pause_mission   mission_id="nonexistent"       → "Error: mission not found"
+```
+
+**Mission DAG** (`DagEvaluator::ready_missions()`): resolves `depends_on` dependencies — a mission only becomes `Active` when all its dependencies are `Completed`. `run_micro_turn()` validates sub-mission preconditions with a single LLM call (no tools, no episodic write) before activation.
+
+**Safety Layer** (`daemon/constraints.rs`):
+
+```
+# Register a workspace constraint for a mission (fail-closed)
+register_constraint
+  mission_id="robot-arm-task"
+  constraint_type="workspace"
+  params_json='{"x": [-1.0, 1.0], "y": [-1.0, 1.0], "z": [0.0, 2.0]}'
+
+# Other constraint types:
+#   max_velocity    params_json='1.5'                          (m/s)
+#   forbidden_zone  params_json='{"center":[0,0,0],"radius":0.3}'
+#   max_force       params_json='50.0'                         (N)
+
+list_constraints mission_id="robot-arm-task"
+→ [{"constraint": {"Workspace": {"x": [-1.0, 1.0], "y": [-1.0, 1.0], "z": [0.0, 2.0]}}}]
+```
+
+`ConstraintEngine` validates position goals before any actuator command (Allow | Deny | ValidatorError). `ResourceRegistry` holds exclusive actuator locks with `Drop`-guard release. `CompiledFallback`: `StopActuators | PauseAllMissions | AlertAgent | HaltAndWait` — NO arbitrary Zenoh publish variant.
+
+**Reactive Pre-filter** (`daemon/reactive.rs`):
+
+```
+# Spike arousal when toddler is near stairs — no LLM involved
+register_alert
+  mission_id="childproof-home"
+  predicate="toddler.near_stairs = 'true'"
+```
+
+Rule engine fires in milliseconds with per-rule debounce (`AtomicI64 last_fired_at`).
+
+**Federated Agents** (`daemon/federated.rs`): World state gossip over Zenoh. Remote entries namespaced `remote:{machine_id}.{key}`. Pattern: `bubbaloop/**/agent/*/world_state`.
 
 ### Safety Invariants
 
