@@ -309,6 +309,30 @@ These are out of scope but represent natural evolution:
 - **Fleet** — Cloud sync of memory and schedules across machines
 - **Voice** — Speech-to-text for hands-free robot control
 - **Visual** — Camera frame analysis in Claude conversations (multimodal)
+
+### Research Track: Physical Memory + Federated Agents
+
+Exploratory directions targeting home IoT, robot brain (VLM→VLA), and software bots.
+
+#### Sensor-Grounded Belief Memory
+
+Memory confirmed or contradicted by sensor readings — not just conversation history:
+
+- **Tier 0 — Live world state:** Structured key-value snapshot of physical reality, updated continuously by a cheap local rule engine (NOT the LLM). Injected at the top of every agent turn. "Dog: sleeping in kitchen, 45min. Last fed: 8am."
+- **Belief update loop:** Camera sees dog at bowl → belief "dog eats at 6pm" is reinforced. 10 days without → belief retracted. LLM sees current belief set, not raw history.
+- **Causal chain episodic memory:** Store `cause → effect → agent_response` triples instead of flat NDJSON. "Motor hot → agent reduced speed → motor cooled." Retrieval returns chains, not isolated events. Prevents event amnesia.
+- **Salience-weighted forgetting:** Physical events (overcurrent, fall detected) have high salience and long retention. Conversational exchanges decay fast. Memory writes filtered by heuristic, not logged blindly.
+- **Context Providers:** Pluggable components assemble the LLM context per turn — each with a token budget. `SensorDigestProvider`, `EventProvider`, `ConversationProvider`. Same agent loop, domain-specific context assembly.
+
+#### Federated Agents (Zenoh as federation bus)
+
+Multi-agent coordination across physical nodes without a central server:
+
+- **World state gossip:** Agents publish compact belief snapshots on Zenoh. Subscribers merge into local world model. No central broker.
+- **Quorum memory:** Critical observations enter shared semantic memory only when N agents independently confirm. "Dog near stairs" triggers alert if 2 cameras agree.
+- **Reactive pre-filter:** Cheap local rule engine watches Zenoh streams, escalates to LLM only on threshold crossings or anomalies. Heartbeat stays slow (60s); reactive layer fires in milliseconds.
+- **Role-based topic namespaces:** Agent roles in `agents.toml` determine Zenoh topic subscriptions. Federation is implicit in the topic tree.
+
 - **Security hardening:**
   - [ ] Zenoh message authentication (HMAC or shared secret on inbox/outbox/daemon topics)
   - [ ] Daemon command auth (prevent unauthenticated shutdown via Zenoh)
