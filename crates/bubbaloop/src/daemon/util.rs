@@ -19,6 +19,19 @@ pub fn get_machine_id() -> String {
         .replace('-', "_")
 }
 
+/// Open a SQLite connection with WAL mode and busy timeout configured.
+///
+/// All daemon SQLite stores should use this instead of duplicating the pragma setup.
+pub fn open_sqlite(path: &std::path::Path) -> anyhow::Result<rusqlite::Connection> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let conn = rusqlite::Connection::open(path)?;
+    conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
+    conn.query_row("PRAGMA busy_timeout=5000", [], |_| Ok(()))?;
+    Ok(conn)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

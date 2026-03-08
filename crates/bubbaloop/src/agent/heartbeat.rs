@@ -101,6 +101,15 @@ impl ArousalState {
         self.arousal += source.boost();
     }
 
+    /// Add an external arousal boost (e.g. from reactive rules).
+    ///
+    /// Phase 3: ReactiveRule arousal integration -- called by the daemon
+    /// when reactive rules fire against the current world state.
+    pub fn add_external_boost(&mut self, boost: f64) {
+        log::debug!("[Heartbeat] external arousal boost: {:.2}", boost);
+        self.arousal += boost;
+    }
+
     /// Get the current arousal level.
     pub fn arousal(&self) -> f64 {
         self.arousal
@@ -212,6 +221,17 @@ mod tests {
         assert_eq!(ArousalSource::NodeCrashRestart.boost(), 3.0);
         assert_eq!(ArousalSource::UserInput.boost(), 2.0);
         assert_eq!(ArousalSource::PendingJobFired.boost(), 1.0);
+    }
+
+    #[test]
+    fn external_boost_adds_arousal() {
+        let mut state = ArousalState::new(&test_caps());
+        assert!(state.is_at_rest());
+        state.add_external_boost(2.5);
+        assert!((state.arousal() - 2.5).abs() < 0.01);
+        assert!(!state.is_at_rest());
+        // interval = 60 / (1 + 2.5) = ~17
+        assert_eq!(state.interval_secs(), 17);
     }
 
     #[test]

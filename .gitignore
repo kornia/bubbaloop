@@ -26,6 +26,8 @@ site/
 # Dashboard build artifacts
 dashboard/node_modules/
 dashboard/dist/
+# Keep the empty dist dir so rust-embed compiles without a built dashboard
+!dashboard/dist/.gitkeep
 
 # Generated proto files (rebuilt each time)
 dashboard/src/proto/*.pb.js

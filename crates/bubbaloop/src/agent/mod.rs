@@ -72,6 +72,9 @@ impl EventSink for StdoutSink {
             AgentEventType::Done => {
                 // Done is implicit in stdout mode
             }
+            AgentEventType::System => {
+                // System events are TUI-only; stdout mode silently ignores them
+            }
         }
     }
 }
@@ -199,7 +202,7 @@ pub async fn run_agent_turn<
     let correlation_id = input.correlation_id;
     // 1. Build system prompt
     let inventory = dispatcher.get_node_inventory().await;
-    let (active_jobs, relevant_episodes, recent_plan, recovered_context) = {
+    let (active_jobs, relevant_episodes, recent_plan, recovered_context, world_state) = {
         let backend = memory.backend.lock().await;
         let active_jobs = backend.semantic.pending_jobs().unwrap_or_default();
         let decay_half_life = soul.capabilities.episodic_decay_half_life_days;
@@ -222,13 +225,51 @@ pub async fn run_agent_turn<
             .ok()
             .flatten()
             .map(|e| EpisodicLog::strip_flush_prefix(&e.content).to_string());
+        let world_state = backend.semantic.world_state_snapshot().unwrap_or_default();
         (
             active_jobs,
             relevant_episodes,
             recent_plan,
             recovered_context,
+            world_state,
         )
     };
+    // Emit system context summary so the TUI shows what the agent loaded
+    // before the first LLM token arrives.
+    {
+        let ws_count = world_state.len();
+        let ep_count = relevant_episodes.len();
+        let mut parts = Vec::new();
+        if ws_count > 0 {
+            parts.push(format!(
+                "world state: {} entr{}",
+                ws_count,
+                if ws_count == 1 { "y" } else { "ies" }
+            ));
+        }
+        if ep_count > 0 {
+            parts.push(format!(
+                "memory: {} episode{}",
+                ep_count,
+                if ep_count == 1 { "" } else { "s" }
+            ));
+        }
+        if !active_jobs.is_empty() {
+            parts.push(format!(
+                "{} pending job{}",
+                active_jobs.len(),
+                if active_jobs.len() == 1 { "" } else { "s" }
+            ));
+        }
+        let summary = if parts.is_empty() {
+            "context loaded".to_string()
+        } else {
+            format!("context — {}", parts.join(", "))
+        };
+        sink.emit(AgentEvent::system(correlation_id, &summary))
+            .await;
+    }
+
     let resource_summary = dispatcher.telemetry_prompt_summary().await;
     let system_prompt = prompt::build_system_prompt_with_soul_path(
         soul,
@@ -239,6 +280,7 @@ pub async fn run_agent_turn<
         recovered_context.as_deref(),
         resource_summary.as_deref(),
         input.soul_path,
+        &world_state,
     );
 
     // Add user input to short-term memory
@@ -276,6 +318,11 @@ pub async fn run_agent_turn<
         Ok(inner) => inner?,
         Err(_elapsed) => {
             log::error!("[Agent] Turn timed out after {}s", TURN_TIMEOUT_SECS);
+            // Sanitize: the turn loop may have pushed an assistant message with
+            // tool_use blocks but was cancelled before pushing matching tool_results.
+            // The Claude API returns 400 "unexpected tool_use" on the next turn if
+            // those blocks are left dangling. Add synthetic error tool_results.
+            sanitize_dangling_tool_use(memory);
             sink.emit(AgentEvent::error(
                 correlation_id,
                 &format!("Turn timed out after {}s", TURN_TIMEOUT_SECS),
@@ -318,9 +365,17 @@ async fn run_turn_loop<
     let mut last_input_tokens = 0u32;
     let mut tool_call_counts: HashMap<u64, u32> = HashMap::new();
     let mut loop_detected = false;
-    for _turn in 0..soul.capabilities.max_turns {
+    let max_turns = soul.capabilities.max_turns;
+    for _turn in 0..max_turns {
         if loop_detected {
             break;
+        }
+        if _turn > 0 {
+            sink.emit(AgentEvent::system(
+                correlation_id,
+                &format!("turn {} / {}", _turn + 1, max_turns),
+            ))
+            .await;
         }
         // Stream response from provider (retry handled inside ClaudeProvider)
         let mut rx = match provider
@@ -452,7 +507,24 @@ async fn run_turn_loop<
                 break;
             }
 
-            sink.emit(AgentEvent::tool(correlation_id, &tc.name)).await;
+            let input_preview: Option<String> = if tc.input.is_null()
+                || tc.input == serde_json::Value::Object(Default::default())
+            {
+                None
+            } else {
+                let s = tc.input.to_string();
+                Some(if s.len() > 200 {
+                    format!("{}…", &s[..200])
+                } else {
+                    s
+                })
+            };
+            sink.emit(AgentEvent::tool(
+                correlation_id,
+                &tc.name,
+                input_preview.as_deref(),
+            ))
+            .await;
             log::info!("[Agent] calling tool: {}", tc.name);
 
             // All tools dispatched through the Dispatcher (memory tools included)
@@ -495,6 +567,9 @@ async fn run_turn_loop<
                 if let Err(e) = backend.episodic.append(&entry) {
                     log::warn!("Failed to log tool result to episodic: {}", e);
                 }
+                // Emit result so CLI --verbose can display it
+                sink.emit(AgentEvent::tool_result(correlation_id, &content))
+                    .await;
             }
         }
 
@@ -546,6 +621,73 @@ async fn run_turn_loop<
     Ok(())
 }
 
+/// Fix dangling tool_use blocks left in short-term memory after a turn timeout.
+///
+/// When `tokio::time::timeout` cancels `run_turn_loop`, the assistant message
+/// with `tool_use` blocks may already be in memory but the matching
+/// `tool_results` user message was never pushed. Claude's API returns
+/// 400 "unexpected tool_use" on the next call if these are left dangling.
+///
+/// This function adds a synthetic error `tool_result` for every unmatched
+/// `tool_use` ID in the last assistant message.
+fn sanitize_dangling_tool_use(memory: &mut Memory) {
+    use crate::agent::provider::{ContentBlock, Message};
+
+    // Collect tool_use IDs from the trailing assistant message (if any)
+    let dangling_ids: Vec<String> = memory
+        .short_term
+        .iter()
+        .rev()
+        .take_while(|m| m.role == "assistant")
+        .flat_map(|m| {
+            m.content.iter().filter_map(|b| {
+                if let ContentBlock::ToolUse { id, .. } = b {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+
+    if dangling_ids.is_empty() {
+        return;
+    }
+
+    // Check whether a tool_results message already follows
+    let already_resolved = memory.short_term.iter().rev().any(|m| {
+        m.content.iter().any(|b| {
+            if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                dangling_ids.contains(tool_use_id)
+            } else {
+                false
+            }
+        })
+    });
+
+    if already_resolved {
+        return;
+    }
+
+    log::warn!(
+        "[Agent] Sanitizing {} dangling tool_use block(s) after turn timeout",
+        dangling_ids.len()
+    );
+
+    let results: Vec<(String, String, Option<bool>)> = dangling_ids
+        .into_iter()
+        .map(|id| {
+            (
+                id,
+                "Error: turn timed out before tool completed".to_string(),
+                Some(true),
+            )
+        })
+        .collect();
+
+    memory.short_term.push(Message::tool_results(results));
+}
+
 /// Truncate a tool result string if it exceeds `MAX_TOOL_RESULT_CHARS`.
 ///
 /// Uses char-boundary-safe slicing to avoid panicking on multi-byte UTF-8.
@@ -582,6 +724,52 @@ fn is_flush_substantive(text: &str) -> bool {
         "nothing noteworthy",
     ];
     !no_content_phrases.iter().any(|p| lower.contains(p))
+}
+
+/// Run a single validation turn to check if a sub-mission is still valid.
+///
+/// Returns `true` if the LLM responds with a word starting with "VALID" (case-insensitive).
+/// Returns `false` for "INVALID [reason]" or any other response.
+///
+/// Invariant I7: micro-turns never write to episodic memory.
+/// Token limits: ~200 tokens in, 50 tokens out (enforced by caller's model config).
+///
+/// This maps to the "VerifyLLM" pattern (pre-execution verification pass).
+pub async fn run_micro_turn<M: ModelProvider>(
+    sub_mission_description: &str,
+    world_state_summary: &str,
+    provider: &M,
+) -> anyhow::Result<bool> {
+    let prompt = format!(
+        "You are a plan validator. You must respond with EXACTLY one of:\n\
+         - VALID\n\
+         - INVALID [brief reason]\n\n\
+         Current world state:\n{}\n\n\
+         Proposed action: {}\n\n\
+         Is this action safe and appropriate given the current world state?",
+        world_state_summary, sub_mission_description
+    );
+
+    let messages = vec![Message::user(&prompt)];
+
+    // Single LLM call, no tools, no history
+    let response = provider
+        .generate(
+            Some("You are a concise plan validator. Respond only with VALID or INVALID [reason]."),
+            &messages,
+            &[], // no tools
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Micro-turn provider error: {}", e))?;
+
+    let response_text = response.text();
+    let valid = response_text.trim().to_uppercase().starts_with("VALID");
+    log::debug!(
+        "[MicroTurn] response={:?} valid={}",
+        response_text.trim(),
+        valid
+    );
+    Ok(valid)
 }
 
 #[cfg(test)]
@@ -684,5 +872,142 @@ mod tests {
     #[test]
     fn truncate_max_tool_result_chars_constant() {
         assert_eq!(MAX_TOOL_RESULT_CHARS, 4096);
+    }
+
+    // ── Micro-turn tests ───────────────────────────────────────────
+
+    /// Mock provider for micro-turn tests — returns a fixed text response.
+    struct MicroTurnMockProvider {
+        response_text: String,
+    }
+
+    impl ModelProvider for MicroTurnMockProvider {
+        async fn generate(
+            &self,
+            _system: Option<&str>,
+            _messages: &[Message],
+            _tools: &[provider::ToolDefinition],
+        ) -> provider::Result<provider::ModelResponse> {
+            Ok(provider::ModelResponse {
+                content: vec![ContentBlock::Text {
+                    text: self.response_text.clone(),
+                }],
+                usage: Usage {
+                    input_tokens: 50,
+                    output_tokens: 5,
+                },
+                stop_reason: Some("end_turn".to_string()),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn micro_turn_valid_response_returns_true() {
+        let provider = MicroTurnMockProvider {
+            response_text: "VALID".to_string(),
+        };
+        let result = run_micro_turn("check sensor", "all systems nominal", &provider)
+            .await
+            .unwrap();
+        assert!(result);
+    }
+
+    #[tokio::test]
+    async fn micro_turn_valid_lowercase_returns_true() {
+        let provider = MicroTurnMockProvider {
+            response_text: "Valid - looks good".to_string(),
+        };
+        let result = run_micro_turn("check sensor", "all systems nominal", &provider)
+            .await
+            .unwrap();
+        assert!(result);
+    }
+
+    #[tokio::test]
+    async fn micro_turn_invalid_response_returns_false() {
+        let provider = MicroTurnMockProvider {
+            response_text: "INVALID obstacle in path".to_string(),
+        };
+        let result = run_micro_turn("move forward", "obstacle detected ahead", &provider)
+            .await
+            .unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn sanitize_adds_tool_results_for_dangling_tool_use() {
+        use crate::agent::provider::{ContentBlock, Message};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let mut memory = Memory::open(dir.path()).unwrap();
+
+        // Push an assistant message with two tool_use blocks (no tool_results after)
+        memory.short_term.push(Message {
+            role: "assistant".to_string(),
+            content: vec![
+                ContentBlock::ToolUse {
+                    id: "tu-1".to_string(),
+                    name: "run_command".to_string(),
+                    input: serde_json::json!({"command": "sleep 300"}),
+                },
+                ContentBlock::ToolUse {
+                    id: "tu-2".to_string(),
+                    name: "write_file".to_string(),
+                    input: serde_json::json!({"path": "/tmp/x", "content": "y"}),
+                },
+            ],
+        });
+
+        sanitize_dangling_tool_use(&mut memory);
+
+        // A tool_results message should have been appended
+        let last = memory.short_term.last().unwrap();
+        assert_eq!(last.role, "user");
+        let ids: Vec<_> = last
+            .content
+            .iter()
+            .filter_map(|b| {
+                if let ContentBlock::ToolResult {
+                    tool_use_id,
+                    is_error,
+                    ..
+                } = b
+                {
+                    Some((tool_use_id.clone(), *is_error))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.iter().any(|(id, _)| id == "tu-1"));
+        assert!(ids.iter().any(|(id, _)| id == "tu-2"));
+        assert!(ids.iter().all(|(_, is_err)| *is_err == Some(true)));
+    }
+
+    #[test]
+    fn sanitize_noop_when_no_dangling_tool_use() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let mut memory = Memory::open(dir.path()).unwrap();
+        let initial_len = memory.short_term.len();
+        sanitize_dangling_tool_use(&mut memory);
+        assert_eq!(
+            memory.short_term.len(),
+            initial_len,
+            "should not add messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn micro_turn_garbage_response_returns_false() {
+        let provider = MicroTurnMockProvider {
+            response_text: "I'm not sure what to do.".to_string(),
+        };
+        let result = run_micro_turn("deploy node", "unknown state", &provider)
+            .await
+            .unwrap();
+        assert!(!result);
     }
 }

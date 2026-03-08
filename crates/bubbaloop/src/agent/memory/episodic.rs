@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// A single episodic log entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LogEntry {
     /// ISO 8601 timestamp.
     pub timestamp: String,
@@ -26,6 +26,18 @@ pub struct LogEntry {
     /// Whether this is a pre-compaction flush entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flush: Option<bool>,
+    /// Unique ID for causal chain tracking.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// ID of the entry that caused this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause_id: Option<String>,
+    /// Salience score (0.0–1.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub salience: Option<f32>,
+    /// Mission this entry is associated with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mission_id: Option<String>,
 }
 
 /// Episodic log with NDJSON files + FTS5 index.
@@ -67,6 +79,19 @@ impl EpisodicLog {
         .query([])?
         .next()?;
 
+        // Episodic metadata table for causal chains and salience (regular, NOT FTS5).
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS episodic_meta (
+                id        TEXT PRIMARY KEY,
+                rowid_ref INTEGER NOT NULL,
+                cause_id  TEXT,
+                salience  REAL,
+                mission_id TEXT,
+                timestamp TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_em_cause ON episodic_meta(cause_id);",
+        )?;
+
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -95,18 +120,38 @@ impl EpisodicLog {
         writeln!(file, "{}", json_line)?;
 
         // 2. Write to FTS5 index
-        let id = uuid::Uuid::new_v4().to_string();
+        let fts_id = entry
+            .id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         self.conn.execute(
             "INSERT INTO fts_episodic (content, id, role, timestamp, job_id) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 entry.content,
-                id,
+                fts_id,
                 entry.role,
                 entry.timestamp,
                 entry.job_id.as_deref().unwrap_or(""),
             ],
         )?;
+
+        // 3. If the entry has an explicit id, write causal metadata
+        if entry.id.is_some() {
+            let rowid_ref = self.conn.last_insert_rowid();
+            self.conn.execute(
+                "INSERT INTO episodic_meta (id, rowid_ref, cause_id, salience, mission_id, timestamp) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    fts_id,
+                    rowid_ref,
+                    entry.cause_id,
+                    entry.salience,
+                    entry.mission_id,
+                    entry.timestamp,
+                ],
+            )?;
+        }
 
         Ok(())
     }
@@ -140,6 +185,10 @@ impl EpisodicLog {
                     Some(job_id)
                 },
                 flush: None,
+                id: None,
+                cause_id: None,
+                salience: None,
+                mission_id: None,
             })
         })?;
 
@@ -221,6 +270,10 @@ impl EpisodicLog {
                     Some(job_id)
                 },
                 flush: None,
+                id: None,
+                cause_id: None,
+                salience: None,
+                mission_id: None,
             };
             scored.push((entry, effective_rank));
         }
@@ -240,6 +293,10 @@ impl EpisodicLog {
             content: content.to_string(),
             job_id: job_id.map(|s| s.to_string()),
             flush: None,
+            id: None,
+            cause_id: None,
+            salience: None,
+            mission_id: None,
         }
     }
 
@@ -429,6 +486,10 @@ impl EpisodicLog {
                     Some(job_id)
                 },
                 flush: None,
+                id: None,
+                cause_id: None,
+                salience: None,
+                mission_id: None,
             })
         })?;
         for row in rows {
@@ -466,6 +527,10 @@ impl EpisodicLog {
                     Some(job_id)
                 },
                 flush: Some(true),
+                id: None,
+                cause_id: None,
+                salience: None,
+                mission_id: None,
             })
         })?;
 
@@ -494,12 +559,71 @@ impl EpisodicLog {
             content: format!("{}{}", FLUSH_PREFIX, content),
             job_id: job_id.map(|s| s.to_string()),
             flush: Some(true),
+            id: None,
+            cause_id: None,
+            salience: None,
+            mission_id: None,
         }
     }
 
     /// Strip the flush prefix from a flush entry's content.
     pub fn strip_flush_prefix(content: &str) -> &str {
         content.strip_prefix(FLUSH_PREFIX).unwrap_or(content)
+    }
+
+    /// Append an entry with causal chain metadata. Returns the generated entry ID.
+    pub fn append_with_cause(
+        &self,
+        role: &str,
+        content: &str,
+        cause_id: Option<&str>,
+        salience: f32,
+    ) -> super::Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let entry = LogEntry {
+            timestamp: super::now_rfc3339(),
+            role: role.to_string(),
+            content: content.to_string(),
+            job_id: None,
+            flush: None,
+            id: Some(id.clone()),
+            cause_id: cause_id.map(|s| s.to_string()),
+            salience: Some(salience),
+            mission_id: None,
+        };
+        self.append(&entry)?;
+        Ok(id)
+    }
+
+    /// Retrieve the causal chain: all entries whose cause_id matches the given id.
+    pub fn causal_chain(&self, cause_id: &str) -> super::Result<Vec<LogEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.content, f.role, f.timestamp, f.job_id, m.id, m.cause_id, m.salience, m.mission_id \
+             FROM episodic_meta m \
+             JOIN fts_episodic f ON f.rowid = m.rowid_ref \
+             WHERE m.cause_id = ?1 \
+             ORDER BY m.timestamp ASC",
+        )?;
+        let rows = stmt.query_map(params![cause_id], |row| {
+            let job_id: String = row.get(3)?;
+            Ok(LogEntry {
+                content: row.get(0)?,
+                role: row.get(1)?,
+                timestamp: row.get(2)?,
+                job_id: if job_id.is_empty() {
+                    None
+                } else {
+                    Some(job_id)
+                },
+                flush: None,
+                id: row.get(4)?,
+                cause_id: row.get(5)?,
+                salience: row.get(6)?,
+                mission_id: row.get(7)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(super::MemoryError::from)
     }
 }
 
@@ -550,8 +674,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "hello world".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         };
         log.append(&entry).unwrap();
 
@@ -570,7 +693,7 @@ mod tests {
                 role: "user".to_string(),
                 content: format!("message {}", i),
                 job_id: Some("job-1".to_string()),
-                flush: None,
+                ..Default::default()
             };
             log.append(&entry).unwrap();
         }
@@ -588,15 +711,13 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "day one".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         };
         let entry2 = LogEntry {
             timestamp: "2026-03-04T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "day two".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         };
         log.append(&entry1).unwrap();
         log.append(&entry2).unwrap();
@@ -613,15 +734,14 @@ mod tests {
             role: "assistant".to_string(),
             content: "Restarted front-door camera".to_string(),
             job_id: Some("job-1".to_string()),
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
         log.append(&LogEntry {
             timestamp: "2026-03-03T10:01:00Z".to_string(),
             role: "user".to_string(),
             content: "What is the weather?".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -638,8 +758,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "hello".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -689,8 +808,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "test message".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -716,16 +834,14 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "assistant".to_string(),
             content: "The password is hunter2".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
         log.append(&LogEntry {
             timestamp: "2026-03-03T10:01:00Z".to_string(),
             role: "user".to_string(),
             content: "weather looks good".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -755,8 +871,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "sensitive data here".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -785,8 +900,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "camera restarted".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -804,8 +918,7 @@ mod tests {
             timestamp: "2025-01-01T10:00:00Z".to_string(),
             role: "assistant".to_string(),
             content: "camera was offline for maintenance".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
         // Recent entry
@@ -813,8 +926,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "assistant".to_string(),
             content: "camera is now online and healthy".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -832,16 +944,14 @@ mod tests {
             timestamp: "2025-01-01T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "ancient forgotten artifact".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
         log.append(&LogEntry {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "recent important update".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -869,8 +979,7 @@ mod tests {
             timestamp: "2020-01-01T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "ancient".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -900,8 +1009,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "assistant".to_string(),
             content: "I checked the sensors.".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
         // First plan
@@ -909,8 +1017,7 @@ mod tests {
             timestamp: "2026-03-03T10:01:00Z".to_string(),
             role: "plan".to_string(),
             content: "Step 1: install node. Step 2: build.".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
         // Second (newer) plan
@@ -919,7 +1026,7 @@ mod tests {
             role: "plan".to_string(),
             content: "Revised plan: restart camera first.".to_string(),
             job_id: Some("job-42".to_string()),
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -936,16 +1043,14 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "plan something".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
         log.append(&LogEntry {
             timestamp: "2026-03-03T10:01:00Z".to_string(),
             role: "assistant".to_string(),
             content: "here is a plan".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -967,8 +1072,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "user".to_string(),
             content: "hello world".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
         // Flush entry
@@ -1010,8 +1114,7 @@ mod tests {
             timestamp: "2026-03-03T10:00:00Z".to_string(),
             role: "system".to_string(),
             content: "System initialized".to_string(),
-            job_id: None,
-            flush: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -1025,5 +1128,52 @@ mod tests {
             EpisodicLog::strip_flush_prefix("regular content"),
             "regular content"
         );
+    }
+
+    #[test]
+    fn causal_chain_roundtrips() {
+        let (log, _dir) = test_episodic();
+
+        // Create a root entry
+        let root_id = log
+            .append_with_cause("user", "camera went offline", None, 0.9)
+            .unwrap();
+        assert!(!root_id.is_empty());
+
+        // Create two effect entries caused by the root
+        let effect1_id = log
+            .append_with_cause("assistant", "restarting camera", Some(&root_id), 0.8)
+            .unwrap();
+        let _effect2_id = log
+            .append_with_cause("assistant", "notified operator", Some(&root_id), 0.7)
+            .unwrap();
+
+        // Create a grandchild effect
+        log.append_with_cause(
+            "system",
+            "camera restarted successfully",
+            Some(&effect1_id),
+            0.6,
+        )
+        .unwrap();
+
+        // Query causal chain from root
+        let chain = log.causal_chain(&root_id).unwrap();
+        assert_eq!(chain.len(), 2, "root should have 2 direct effects");
+        assert!(chain[0].content.contains("restarting camera"));
+        assert!(chain[1].content.contains("notified operator"));
+
+        // Verify metadata
+        assert_eq!(chain[0].cause_id.as_deref(), Some(root_id.as_str()));
+        assert!((chain[0].salience.unwrap() - 0.8).abs() < f32::EPSILON);
+
+        // Query grandchild chain
+        let grandchildren = log.causal_chain(&effect1_id).unwrap();
+        assert_eq!(grandchildren.len(), 1);
+        assert!(grandchildren[0].content.contains("restarted successfully"));
+
+        // Query nonexistent cause returns empty
+        let empty = log.causal_chain("nonexistent-id").unwrap();
+        assert!(empty.is_empty());
     }
 }

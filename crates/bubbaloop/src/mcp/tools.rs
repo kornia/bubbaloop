@@ -89,6 +89,103 @@ pub(crate) struct ClearEpisodicMemoryRequest {
     older_than_days: u32,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct MissionIdRequest {
+    /// ID of the mission.
+    mission_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct RegisterAlertRequest {
+    /// Mission this alert is attached to.
+    mission_id: String,
+    /// World state predicate expression (e.g. "toddler.near_stairs = 'true'").
+    predicate: String,
+    /// Minimum seconds between consecutive firings (default: 60).
+    #[serde(default)]
+    debounce_secs: Option<u32>,
+    /// Arousal boost when rule fires (default: 2.0).
+    #[serde(default)]
+    arousal_boost: Option<f64>,
+    /// Human-readable description of this alert.
+    description: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct AlertIdRequest {
+    /// ID of the alert to unregister.
+    alert_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct ConfigureContextRequest {
+    /// Mission this provider is attached to.
+    mission_id: String,
+    /// Zenoh key expression pattern (e.g. "bubbaloop/**/vision/detections").
+    topic_pattern: String,
+    /// Template for world state key (e.g. "{label}.location").
+    world_state_key_template: String,
+    /// JSON field path to extract as the value.
+    value_field: String,
+    /// Optional filter expression (e.g. "label=dog AND confidence>0.85").
+    #[serde(default)]
+    filter: Option<String>,
+    /// Minimum interval between writes for the same key (seconds).
+    #[serde(default)]
+    min_interval_secs: Option<u32>,
+    /// Maximum age before a world state entry is considered stale (seconds).
+    #[serde(default)]
+    max_age_secs: Option<u32>,
+    /// Optional JSON field path to extract confidence from.
+    #[serde(default)]
+    confidence_field: Option<String>,
+    /// Approximate token budget for this provider's world state entries.
+    #[serde(default)]
+    token_budget: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct RegisterConstraintRequest {
+    /// Mission this constraint is attached to.
+    mission_id: String,
+    /// Constraint type: "workspace", "max_velocity", "forbidden_zone", "max_force"
+    constraint_type: String,
+    /// JSON object with constraint-specific fields.
+    params_json: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct ListConstraintsRequest {
+    /// Mission ID to list constraints for.
+    mission_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct GetBeliefRequest {
+    /// Subject of the belief (e.g. "front_door_camera").
+    subject: String,
+    /// Predicate / relation (e.g. "is_reliable").
+    predicate: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct UpdateBeliefRequest {
+    /// Subject of the belief (e.g. "front_door_camera").
+    subject: String,
+    /// Predicate / relation (e.g. "is_reliable").
+    predicate: String,
+    /// Value (e.g. "true", "mostly", JSON).
+    value: String,
+    /// Confidence (0.0-1.0).
+    confidence: f64,
+    /// How this belief was formed (e.g. "observation", "user_told_me").
+    #[serde(default)]
+    source: Option<String>,
+    /// Free-form notes.
+    #[serde(default)]
+    notes: Option<String>,
+}
+
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
@@ -909,6 +1006,302 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             .await
         {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Context provider tools ────────────────────────────────────
+
+    #[tool(
+        description = "Configure a context provider: a daemon background task that subscribes to a Zenoh topic pattern and writes extracted field values into world state. Required: mission_id, topic_pattern (e.g. 'bubbaloop/**/vision/detections'), world_state_key_template (e.g. '{label}.location'), value_field (JSON path to extract). Optional: filter (e.g. 'confidence>0.8'), min_interval_secs, max_age_secs, confidence_field. Use list_world_state to see results. Admin only."
+    )]
+    async fn configure_context(
+        &self,
+        Parameters(req): Parameters<ConfigureContextRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=configure_context mission_id={}", req.mission_id);
+
+        if req.topic_pattern.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "Error: topic_pattern must not be empty",
+            )]));
+        }
+        if req.world_state_key_template.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "Error: world_state_key_template must not be empty",
+            )]));
+        }
+
+        let params = platform::ConfigureContextParams {
+            mission_id: req.mission_id,
+            topic_pattern: req.topic_pattern,
+            world_state_key_template: req.world_state_key_template,
+            value_field: req.value_field,
+            filter: req.filter,
+            min_interval_secs: req.min_interval_secs,
+            max_age_secs: req.max_age_secs,
+            confidence_field: req.confidence_field,
+            token_budget: req.token_budget,
+        };
+
+        match self.platform.configure_context(params).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Mission lifecycle tools ─────────────────────────────────────
+
+    #[tool(description = "List all missions with their status, expiry, and resources.")]
+    async fn list_missions(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_missions");
+        match self.platform.list_missions().await {
+            Ok(missions) => Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&missions).unwrap_or_else(|_| "[]".to_string()),
+            )])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Pause an active mission. The agent will stop working on it until resumed."
+    )]
+    async fn pause_mission(
+        &self,
+        Parameters(req): Parameters<MissionIdRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=pause_mission id={}", req.mission_id);
+        match self
+            .platform
+            .update_mission_status(req.mission_id, "paused".to_string())
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "Resume a paused mission. The agent will continue working on it.")]
+    async fn resume_mission(
+        &self,
+        Parameters(req): Parameters<MissionIdRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=resume_mission id={}", req.mission_id);
+        match self
+            .platform
+            .update_mission_status(req.mission_id, "active".to_string())
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Cancel an active or paused mission. The agent will stop working on it permanently."
+    )]
+    async fn cancel_mission(
+        &self,
+        Parameters(req): Parameters<MissionIdRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=cancel_mission id={}", req.mission_id);
+        match self
+            .platform
+            .update_mission_status(req.mission_id, "cancelled".to_string())
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Reactive alert tools ────────────────────────────────────────
+
+    #[tool(
+        description = "Register a reactive alert rule. When the world state matches the predicate, the agent's arousal spikes without an LLM call. Admin only."
+    )]
+    async fn register_alert(
+        &self,
+        Parameters(req): Parameters<RegisterAlertRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=register_alert mission_id={}", req.mission_id);
+
+        let params = platform::RegisterAlertParams {
+            mission_id: req.mission_id,
+            predicate: req.predicate,
+            debounce_secs: req.debounce_secs,
+            arousal_boost: req.arousal_boost,
+            description: req.description,
+        };
+
+        match self.platform.register_alert(params).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "Unregister a reactive alert rule by ID. Admin only.")]
+    async fn unregister_alert(
+        &self,
+        Parameters(req): Parameters<AlertIdRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=unregister_alert id={}", req.alert_id);
+        match self.platform.unregister_alert(req.alert_id).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Constraint tools ────────────────────────────────────────────
+
+    #[tool(
+        description = "Register a safety constraint for a mission. Constraints are checked before any actuator command (fail-closed). Admin only."
+    )]
+    async fn register_constraint(
+        &self,
+        Parameters(req): Parameters<RegisterConstraintRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=register_constraint mission_id={} type={}",
+            req.mission_id,
+            req.constraint_type
+        );
+
+        let params = platform::RegisterConstraintParams {
+            mission_id: req.mission_id,
+            constraint_type: req.constraint_type,
+            params_json: req.params_json,
+        };
+
+        match self.platform.register_constraint(params).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "List all safety constraints for a mission. Viewer only.")]
+    async fn list_constraints(
+        &self,
+        Parameters(req): Parameters<ListConstraintsRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_constraints mission_id={}", req.mission_id);
+
+        match self.platform.list_constraints(req.mission_id).await {
+            Ok(constraints) => {
+                let text = serde_json::to_string_pretty(
+                    &constraints
+                        .iter()
+                        .map(|(id, c)| {
+                            serde_json::json!({
+                                "id": id,
+                                "constraint": c,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_else(|_| "[]".to_string());
+                Ok(CallToolResult::success(vec![Content::text(text)]))
+            }
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Belief tools ──────────────────────────────────────────────────
+
+    #[tool(
+        description = "Get a single belief by subject and predicate. Returns the belief as JSON or 'not found'."
+    )]
+    async fn get_belief(
+        &self,
+        Parameters(req): Parameters<GetBeliefRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=get_belief subject={} predicate={}",
+            req.subject,
+            req.predicate
+        );
+        match self.platform.get_belief(req.subject, req.predicate).await {
+            Ok(Some(belief)) => Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&belief).unwrap_or_else(|_| "{}".to_string()),
+            )])),
+            Ok(None) => Ok(CallToolResult::success(vec![Content::text("not found")])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Create or update a belief about the world. Beliefs are durable assertions the agent holds (e.g. 'the dog eats at 08:00'). Operator only."
+    )]
+    async fn update_belief(
+        &self,
+        Parameters(req): Parameters<UpdateBeliefRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=update_belief subject={} predicate={}",
+            req.subject,
+            req.predicate
+        );
+
+        let params = platform::UpdateBeliefParams {
+            subject: req.subject,
+            predicate: req.predicate,
+            value: req.value,
+            confidence: req.confidence,
+            source: req.source,
+            notes: req.notes,
+        };
+
+        match self.platform.update_belief(params).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "List all world state entries. Returns the current world state snapshot as JSON."
+    )]
+    async fn list_world_state(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_world_state");
+        match self.platform.list_world_state().await {
+            Ok(entries) => Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "[]".to_string()),
+            )])),
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: {}",
                 e

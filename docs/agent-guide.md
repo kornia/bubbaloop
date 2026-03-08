@@ -158,11 +158,14 @@ Look for these log lines to confirm:
 ### Step 4: Interact via CLI
 
 ```bash
-# Single message (exits after response)
+# Single message — plain stdout, good for scripting/piping
 bubbaloop agent chat "what is the system status?"
 
-# Interactive REPL
+# Interactive TUI REPL — two-panel layout, scrollable history
 bubbaloop agent chat
+
+# TUI REPL with tool debug info (see every tool call + result)
+bubbaloop agent chat -v
 
 # Target a specific agent
 bubbaloop agent chat -a camera-expert "describe the video feed"
@@ -170,6 +173,10 @@ bubbaloop agent chat -a camera-expert "describe the video feed"
 # List all running agents
 bubbaloop agent list
 ```
+
+**TUI layout:** The top panel shows scrollable conversation history. The bottom panel (always visible, green border) is the input line. Use ↑/↓ or PageUp/PageDown to scroll history while the agent is responding. Press Ctrl-C or type `q` on an empty input line to exit.
+
+**TUI colours:** cyan = agent name, green = agent text, yellow = tool calls, gray = tool results, red = errors, bold white = your messages.
 
 `agent list` queries all manifest Zenoh queryables and prints:
 ```

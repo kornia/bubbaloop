@@ -1,8 +1,9 @@
 //! System prompt builder — injects Soul identity, live node inventory,
-//! job schedules, and episodic search results.
+//! job schedules, episodic search results, and world state.
 
 use crate::agent::memory::episodic::LogEntry;
 use crate::agent::memory::semantic::Job;
+use crate::agent::memory::WorldStateEntry;
 use crate::agent::soul::Soul;
 
 /// Build the system prompt from the Soul identity and live state.
@@ -42,6 +43,42 @@ After you have the answers, do TWO things:
 
 Keep it brief and friendly. Don't over-explain."#;
 
+/// Format world state entries into a token-budget-aware prompt section.
+/// Stale entries are listed first with a warning marker. Never exceeds budget.
+pub fn format_world_state_section(entries: &[WorldStateEntry], token_budget: usize) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+
+    let mut lines = vec!["## WORLD STATE (sensor-grounded, live)".to_string()];
+    let mut approx_tokens = 8usize;
+
+    // Stale entries first (safety-critical awareness)
+    let (stale, fresh): (Vec<_>, Vec<_>) = entries.iter().partition(|e| e.stale);
+
+    for entry in stale.iter().chain(fresh.iter()) {
+        let line = if entry.stale {
+            format!(
+                "  [STALE] {} = {} (conf={:.2})",
+                entry.key, entry.value, entry.confidence
+            )
+        } else {
+            format!(
+                "  {} = {} (conf={:.2})",
+                entry.key, entry.value, entry.confidence
+            )
+        };
+        let line_tokens = line.len() / 4 + 1;
+        if approx_tokens + line_tokens > token_budget {
+            break;
+        }
+        approx_tokens += line_tokens;
+        lines.push(line);
+    }
+
+    lines.join("\n")
+}
+
 pub fn build_system_prompt(
     soul: &Soul,
     node_inventory: &str,
@@ -60,6 +97,7 @@ pub fn build_system_prompt(
         recovered_context,
         resource_summary,
         None,
+        &[], // no world state — callers that need it use build_system_prompt_with_soul_path directly
     )
 }
 
@@ -75,6 +113,7 @@ pub fn build_system_prompt_with_soul_path(
     recovered_context: Option<&str>,
     resource_summary: Option<&str>,
     soul_path: Option<&str>,
+    world_state: &[crate::agent::memory::semantic::WorldStateEntry],
 ) -> String {
     let mut parts = Vec::new();
 
@@ -142,14 +181,28 @@ pub fn build_system_prompt_with_soul_path(
     // Scope — tells the LLM what tools it has
     parts.push(
         "\n## Tools\n\n\
-         You have 30 tools across three categories:\n\
+         You have 49 tools across categories:\n\
          - **Node management:** install, build, start, stop, restart, configure, monitor, query nodes\n\
          - **System:** read and write files, run shell commands\n\
-         - **Memory:** search and manage episodic memory\n\n\
+         - **Memory:** search episodic memory, update beliefs, read world state\n\
+         - **Missions:** list, pause, resume, cancel missions\n\
+         - **Safety:** register and list constraints per mission\n\n\
          Use the right tool for the job. For node operations, use the dedicated node tools.\n\
-         For everything else, use read_file, write_file, or run_command."
+         For everything else, use read_file, write_file, or run_command.\n\n\
+         ### Important: recurring vs one-off actions\n\n\
+         - **run_command** blocks until the command exits. NEVER use shell loops (`while true`, `watch`, `for i in`) \
+         with run_command — they block for the full 30-second timeout and produce no output until they time out.\n\
+         - **schedule_task** is the correct tool for anything that should repeat (\"every 5 seconds\", \"every minute\", \
+         \"daily at 09:00\"). Use a cron expression for the `cron_schedule` field. \
+         Example: check a sensor every 30 seconds → schedule_task with `*/30 * * * * *`."
             .to_string(),
     );
+
+    // Inject live world state — written by context providers, not the LLM.
+    let ws_section = format_world_state_section(world_state, 500);
+    if !ws_section.is_empty() {
+        parts.push(ws_section);
+    }
 
     if let Some(summary) = resource_summary {
         parts.push(summary.to_string());
@@ -271,6 +324,10 @@ mod tests {
             content: "Restarted front-door camera after 5 minutes offline.".to_string(),
             job_id: Some("job-1".to_string()),
             flush: None,
+            id: None,
+            cause_id: None,
+            salience: None,
+            mission_id: None,
         }];
         let prompt = build_system_prompt(&soul, "", &[], &episodes, None, None, None);
         assert!(prompt.contains("Relevant Context"));
@@ -304,6 +361,10 @@ mod tests {
                 content: format!("message {}", i),
                 job_id: None,
                 flush: None,
+                id: None,
+                cause_id: None,
+                salience: None,
+                mission_id: None,
             })
             .collect();
         let prompt = build_system_prompt(&soul, "", &[], &episodes, None, None, None);
@@ -441,6 +502,73 @@ mod tests {
             recovered_pos < config_pos,
             "recovered context should appear before configuration"
         );
+    }
+
+    #[test]
+    fn world_state_section_formats_stale_entries_first() {
+        let entries = vec![
+            WorldStateEntry {
+                key: "cam.status".to_string(),
+                value: "online".to_string(),
+                confidence: 0.95,
+                source_topic: None,
+                source_node: None,
+                last_seen_at: 1000,
+                max_age_secs: 300,
+                stale: false,
+            },
+            WorldStateEntry {
+                key: "temp.reading".to_string(),
+                value: "42".to_string(),
+                confidence: 0.80,
+                source_topic: None,
+                source_node: None,
+                last_seen_at: 500,
+                max_age_secs: 300,
+                stale: true,
+            },
+        ];
+        let section = format_world_state_section(&entries, 500);
+        assert!(section.contains("WORLD STATE"));
+        // Stale entry should appear before fresh
+        let stale_pos = section.find("[STALE]").unwrap();
+        let fresh_pos = section.find("cam.status").unwrap();
+        assert!(
+            stale_pos < fresh_pos,
+            "stale entry should appear before fresh"
+        );
+    }
+
+    #[test]
+    fn world_state_section_respects_token_budget() {
+        let entries: Vec<WorldStateEntry> = (0..20)
+            .map(|i| WorldStateEntry {
+                key: format!("sensor_{}.reading", i),
+                value: format!("value_{}", i),
+                confidence: 0.9,
+                source_topic: None,
+                source_node: None,
+                last_seen_at: 1000,
+                max_age_secs: 300,
+                stale: false,
+            })
+            .collect();
+        // With budget=10, the header alone is ~8 tokens, so very few entries fit
+        let section = format_world_state_section(&entries, 10);
+        // Should have header but only 0-1 entries
+        assert!(section.contains("WORLD STATE"));
+        let entry_count = section.matches("sensor_").count();
+        assert!(
+            entry_count <= 2,
+            "should have very few entries with budget=10, got {}",
+            entry_count
+        );
+    }
+
+    #[test]
+    fn world_state_section_empty_returns_empty_string() {
+        let section = format_world_state_section(&[], 500);
+        assert!(section.is_empty());
     }
 
     #[test]

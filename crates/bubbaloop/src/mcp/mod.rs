@@ -66,11 +66,19 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
                  **Config:** get_node_config, get_node_manifest, list_commands\n\
                  **Proposals:** list_proposals, approve_proposal, reject_proposal\n\
                  **Memory:** list_jobs, delete_job, clear_episodic_memory\n\
+                 **Beliefs:** update_belief, get_belief — durable agent beliefs (subject+predicate model, e.g. subject='front_door_camera' predicate='is_reliable')\n\
+                 **World State:** list_world_state — live sensor-derived key/value snapshot\n\
+                 **Context Providers:** configure_context — wire a Zenoh topic pattern to world state (daemon background task)\n\
+                 **Missions:** list_missions, pause_mission, resume_mission, cancel_mission — YAML-file-driven goals (~/.bubbaloop/agents/{id}/missions/)\n\
+                 **Constraints:** register_constraint, list_constraints — per-mission safety limits (workspace/max_velocity/forbidden_zone/max_force)\n\
+                 **Alerts:** register_alert, unregister_alert — reactive rules that spike arousal when world state matches\n\
                  **System:** get_system_status, get_machine_info, query_zenoh, discover_nodes\n\n\
                  install_node accepts marketplace names (e.g., 'rtsp-camera'), local paths, or GitHub 'user/repo' format.\n\
                  Use discover_capabilities to find nodes by capability (sensor, actuator, processor, gateway).\n\
                  Use get_node_manifest for full node details including topics, commands, and requirements.\n\
                  Streaming data flows through Zenoh (not MCP). Use get_stream_info to get Zenoh connection params.\n\
+                 Missions are created by dropping a YAML file into ~/.bubbaloop/agents/{id}/missions/ — the daemon picks them up automatically.\n\
+                 Constraint params_json format: workspace={\"x\":[-1,1],\"y\":[-1,1],\"z\":[0,2]}, max_velocity=1.5, forbidden_zone={\"center\":[0,0,0],\"radius\":0.3}, max_force=50.0\n\
                  Auth: Bearer token required (see ~/.bubbaloop/mcp-token)."
                     .into(),
             ),

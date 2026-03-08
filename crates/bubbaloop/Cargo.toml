@@ -83,14 +83,18 @@ chrono.workspace = true
 notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
 toml = "0.8"
 
+# TUI for agent chat REPL
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+crossterm = { version = "0.28", features = ["event-stream"] }
+
 # MCP server (core)
 rmcp.workspace = true
 schemars.workspace = true
 tower_governor = "0.8"
 
 [features]
-default = ["dashboard"]
-dashboard = ["dep:rust-embed", "dep:mime_guess", "dep:tokio-tungstenite"]
+default = []
+dashboard = ["dep:rust-embed", "dep:mime_guess", "dep:tokio-tungstenite", "axum/ws"]
 test-harness = ["rmcp/client"]
 
 [dev-dependencies]

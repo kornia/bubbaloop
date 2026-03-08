@@ -44,11 +44,12 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 │  │  Soul | EventSink | Heartbeat | per-agent Memory   │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  3-Tier Memory                                      │  │
-│  │  Short-term (RAM) | Episodic (NDJSON) | Semantic DB │  │
+│  │  4-Tier Memory + Mission Engine                     │  │
+│  │  World State (SQLite) | Short-term (RAM)            │  │
+│  │  Episodic (NDJSON/FTS5) | Semantic (SQLite)         │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (30 tools) — sole control interface      │  │
+│  │  MCP Server (49 tools) — sole control interface     │  │
 │  │  RBAC (Viewer/Operator/Admin) | Bearer token auth   │  │
 │  │  PlatformOperations trait | Rate limiting            │  │
 │  └──────────────────────┬─────────────────────────────┘  │
@@ -141,6 +142,129 @@ Nodes that support imperative actions MUST declare `{topic_prefix}/command` quer
 
 ---
 
+## Physical AI Memory & Mission Engine
+
+Implemented in v0.0.11. Full design: `docs/plans/2026-03-08-physical-ai-memory-mission-implementation.md`
+
+### 4-Tier Memory Model
+
+| Tier | Storage | Who Writes | Token Budget |
+|------|---------|------------|--------------|
+| **0 — Live World State** | SQLite `world_state` table | Context Providers (rule engine, no LLM) | Injected at top of every turn |
+| **1 — Short-term** | RAM `Vec<Message>` | LLM turns | Active turn only |
+| **2 — Episodic** | NDJSON + FTS5 | LLM turns | BM25 search recall |
+| **3 — Semantic** | SQLite | LLM + belief engine | Beliefs + jobs + proposals |
+
+**Causal chains**: `episodic_meta` table (regular table, NOT FTS5) links entries via `cause_id` for `"motor hot → reduced speed → cooled"` recall chains. FTS5 virtual tables do not support `ALTER TABLE` — use join instead.
+
+### Beliefs (`daemon/belief_updater.rs`)
+
+Durable assertions the agent holds about the world, modeled as **subject + predicate → value** triples with confidence scores.
+
+- `update_belief` (Operator): creates or updates a belief, increments `confirmation_count` on repeated update
+- `get_belief` (Viewer): retrieves a belief as JSON or `"not found"`
+- `spawn_belief_decay_task`: daemon background task that periodically reduces `confidence` by the configured rate
+- Token overlap scoring confirms/contradicts existing beliefs from observations
+
+```
+# Example MCP session — tracking camera reliability
+update_belief subject="front_door_camera" predicate="is_reliable" value="true" confidence=0.95 source="heartbeat_monitor"
+→ Belief (front_door_camera, is_reliable) updated with confidence 0.95
+
+get_belief subject="front_door_camera" predicate="is_reliable"
+→ {"id": "...", "subject": "front_door_camera", "predicate": "is_reliable",
+   "value": "true", "confidence": 0.95, "confirmation_count": 1, ...}
+
+# After more heartbeat confirmations:
+update_belief subject="front_door_camera" predicate="is_reliable" value="true" confidence=0.97
+→ confirmation_count becomes 2, confidence updated to 0.97
+```
+
+### Context Providers (`daemon/context_provider.rs`)
+
+Daemon background tasks that subscribe to Zenoh topics and write to world state — no LLM involved. Filter expression: `field=value AND field2>number`. World state key templates support `{field}` substitution from payload. Each provider opens its own rusqlite connection (WAL mode allows concurrent reads).
+
+```
+# Wire a vision node's detections into world state
+configure_context
+  mission_id="security-patrol"
+  topic_pattern="bubbaloop/**/vision/detections"
+  world_state_key_template="{label}.location"
+  value_field="label"
+  filter="confidence>0.8"
+
+# Now list_world_state shows live entries like:
+# [{"key": "person.location", "value": "hallway", "confidence": 0.92, ...}]
+```
+
+### Mission Engine
+
+Missions are the unit of persistent agent intent. The model, DAG evaluator, and MCP control tools are fully implemented in v0.0.11. The file-watcher is implemented and tested but **not yet wired into the main agent runtime loop** — missions are currently inserted programmatically or via the MCP platform layer.
+
+**Mission lifecycle** (`daemon/mission.rs`):
+- States: `Active → Paused → Resumed → Cancelled | Completed | Failed`
+- Each mission is a markdown string stored in SQLite with optional `resources` (JSON array of locked actuator IDs), `depends_on` (other mission IDs), and `expires_at` (Unix timestamp)
+- Filename stem becomes the mission ID: `dog-monitor.md` → ID `"dog-monitor"`
+
+**MCP control tools** (all require a `mission_id`):
+```
+list_missions
+→ [{"id": "security-patrol", "status": "active", "compiled_at": 1772990000, ...}]
+
+pause_mission   mission_id="security-patrol"   → "Mission security-patrol paused"
+resume_mission  mission_id="security-patrol"   → "Mission security-patrol resumed"
+cancel_mission  mission_id="security-patrol"   → "Mission security-patrol cancelled"
+
+# Unknown mission ID → graceful error:
+pause_mission   mission_id="nonexistent"       → "Error: mission not found"
+```
+
+**Mission DAG** (`DagEvaluator::ready_missions()`): resolves `depends_on` dependencies — a mission only becomes `Active` when all its dependencies are `Completed`. `run_micro_turn()` validates sub-mission preconditions with a single LLM call (no tools, no episodic write) before activation.
+
+**Safety Layer** (`daemon/constraints.rs`):
+
+```
+# Register a workspace constraint for a mission (fail-closed)
+register_constraint
+  mission_id="robot-arm-task"
+  constraint_type="workspace"
+  params_json='{"x": [-1.0, 1.0], "y": [-1.0, 1.0], "z": [0.0, 2.0]}'
+
+# Other constraint types:
+#   max_velocity    params_json='1.5'                          (m/s)
+#   forbidden_zone  params_json='{"center":[0,0,0],"radius":0.3}'
+#   max_force       params_json='50.0'                         (N)
+
+list_constraints mission_id="robot-arm-task"
+→ [{"constraint": {"Workspace": {"x": [-1.0, 1.0], "y": [-1.0, 1.0], "z": [0.0, 2.0]}}}]
+```
+
+`ConstraintEngine` validates position goals before any actuator command (Allow | Deny | ValidatorError). `ResourceRegistry` holds exclusive actuator locks with `Drop`-guard release. `CompiledFallback`: `StopActuators | PauseAllMissions | AlertAgent | HaltAndWait` — NO arbitrary Zenoh publish variant.
+
+**Reactive Pre-filter** (`daemon/reactive.rs`):
+
+```
+# Spike arousal when toddler is near stairs — no LLM involved
+register_alert
+  mission_id="childproof-home"
+  predicate="toddler.near_stairs = 'true'"
+```
+
+Rule engine fires in milliseconds with per-rule debounce (`AtomicI64 last_fired_at`).
+
+**Federated Agents** (`daemon/federated.rs`): World state gossip over Zenoh. Remote entries namespaced `remote:{machine_id}.{key}`. Pattern: `bubbaloop/**/agent/*/world_state`.
+
+### Safety Invariants
+
+| ID | Invariant | Enforcer |
+|----|-----------|----------|
+| I2 | Constraint violations synchronously rejected before any actuator command | `ConstraintEngine::validate_position_goal()` |
+| I3 | Fallback actions cannot publish arbitrary Zenoh payloads | `CompiledFallback` enum — no `PublishZenoh` variant |
+| I5 | rusqlite `Connection` never shared across async boundaries | `block_in_place()` for all DB calls |
+| I6 | Resource locks released on drop | `ResourceGuard` Drop impl |
+
+---
+
 ## Telemetry Watchdog
 
 The daemon runs a cross-platform resource watchdog (`daemon/telemetry/`) that prevents OOM crashes on edge devices. Uses the `sysinfo` crate (Linux ARM/x86, macOS).
@@ -196,7 +320,7 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447  # Optional override
 
 ## MCP Server
 
-MCP is the **sole control interface**. 30 MCP tools + 7 agent-internal (37 total) across categories:
+MCP is the **sole control interface**. 39 MCP tools + 10 agent-internal (49 total) across categories:
 
 | Category | Tools |
 |----------|-------|
@@ -204,7 +328,13 @@ MCP is the **sole control interface**. 30 MCP tools + 7 agent-internal (37 total
 | **Lifecycle** | install_node, uninstall_node, start_node, stop_node, restart_node, build_node, remove_node, clean_node, enable_autostart, disable_autostart |
 | **Data** | send_command, query_zenoh |
 | **System** | get_system_status, get_machine_info |
-| **Memory** | list_jobs, delete_job, list_proposals |
+| **Memory** | list_jobs, delete_job, list_proposals, clear_episodic_memory |
+| **Beliefs** | update_belief, get_belief — durable subject+predicate assertions with confidence tracking |
+| **World State** | list_world_state — live sensor-derived snapshot injected into every agent turn |
+| **Context Providers** | configure_context — wire Zenoh topic → world state (no LLM); topic_pattern + value_field + optional filter |
+| **Missions** | list_missions, pause_mission, resume_mission, cancel_mission — YAML-file-driven (`~/.bubbaloop/agents/{id}/missions/`) |
+| **Constraints** | register_constraint, list_constraints — per-mission safety limits; params_json formats: `workspace={"x":[-1,1],"y":[-1,1],"z":[0,2]}`, `max_velocity=1.5`, `forbidden_zone={"center":[0,0,0],"radius":0.3}`, `max_force=50.0` |
+| **Alerts** | register_alert, unregister_alert — reactive arousal triggers when world state predicate matches |
 | **Agent-internal** | read_file, write_file, run_command, memory_search, memory_forget, schedule_task, create_proposal, get_system_telemetry, get_telemetry_history, update_telemetry_config |
 
 ### Transport Options
@@ -293,8 +423,8 @@ MCP is the **sole control interface**. 30 MCP tools + 7 agent-internal (37 total
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 30 MCP tools + 7 agent-internal |
-| Memory | SQLite (rusqlite) + NDJSON | 3-tier: RAM + episodic (NDJSON/FTS5) + semantic (SQLite). Episodic FTS5 index and semantic store share `memory.db` per agent. |
+| Control | MCP (rmcp) | Standard AI agent interface, 39 MCP tools + 10 agent-internal |
+| Memory | SQLite (rusqlite) + NDJSON | 4-tier: world state (live SQLite) + RAM + episodic (NDJSON/FTS5) + semantic (SQLite). World state updated by context providers, not LLM. |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
 | systemd | zbus (D-Bus) | No subprocess spawning, safe |

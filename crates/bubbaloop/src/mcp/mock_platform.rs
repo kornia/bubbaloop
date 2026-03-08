@@ -9,6 +9,11 @@ pub struct MockPlatform {
     pub nodes: Mutex<Vec<NodeInfo>>,
     pub configs: Mutex<HashMap<String, Value>>,
     pub manifests: Mutex<Vec<(String, Value)>>,
+    pub missions: Mutex<Vec<crate::daemon::mission::Mission>>,
+    pub alerts: Mutex<Vec<(String, String, String)>>, // (id, mission_id, predicate)
+    pub constraints: Mutex<Vec<(String, String, crate::daemon::constraints::Constraint)>>, // (id, mission_id, constraint)
+    pub beliefs: Mutex<Vec<crate::agent::memory::semantic::Belief>>,
+    pub world_state: Mutex<Vec<crate::agent::memory::WorldStateEntry>>,
 }
 
 impl Default for MockPlatform {
@@ -29,6 +34,11 @@ impl MockPlatform {
                 is_built: true,
             }]),
             configs: Mutex::new(HashMap::new()),
+            missions: Mutex::new(Vec::new()),
+            alerts: Mutex::new(Vec::new()),
+            constraints: Mutex::new(Vec::new()),
+            beliefs: Mutex::new(Vec::new()),
+            world_state: Mutex::new(Vec::new()),
             manifests: Mutex::new(vec![(
                 "test-node".to_string(),
                 serde_json::json!({
@@ -191,6 +201,196 @@ impl PlatformOperations for MockPlatform {
             older_than_days
         ))
     }
+
+    async fn configure_context(
+        &self,
+        params: super::platform::ConfigureContextParams,
+    ) -> PlatformResult<String> {
+        if params.topic_pattern.is_empty() {
+            return Err(PlatformError::InvalidInput(
+                "topic_pattern must not be empty".to_string(),
+            ));
+        }
+        if params.world_state_key_template.is_empty() {
+            return Err(PlatformError::InvalidInput(
+                "world_state_key_template must not be empty".to_string(),
+            ));
+        }
+        let provider_id = format!("cp-mock-{}", params.mission_id);
+        Ok(format!(
+            "mock: context provider '{}' configured (mission={})",
+            provider_id, params.mission_id
+        ))
+    }
+
+    async fn list_missions(&self) -> PlatformResult<Vec<crate::daemon::mission::Mission>> {
+        Ok(self.missions.lock().unwrap().clone())
+    }
+
+    async fn update_mission_status(
+        &self,
+        mission_id: String,
+        status: String,
+    ) -> PlatformResult<String> {
+        let mut missions = self.missions.lock().unwrap();
+        if let Some(m) = missions.iter_mut().find(|m| m.id == mission_id) {
+            let parsed: crate::daemon::mission::MissionStatus = status
+                .parse()
+                .map_err(|e: String| PlatformError::InvalidInput(e))?;
+            m.status = parsed;
+            Ok(format!("Mission '{}' updated to {}", mission_id, status))
+        } else {
+            Err(PlatformError::NodeNotFound(format!(
+                "Mission '{}' not found",
+                mission_id
+            )))
+        }
+    }
+
+    async fn register_alert(
+        &self,
+        params: super::platform::RegisterAlertParams,
+    ) -> PlatformResult<String> {
+        let alert_id = format!("alert-mock-{}", uuid::Uuid::new_v4());
+        self.alerts
+            .lock()
+            .unwrap()
+            .push((alert_id.clone(), params.mission_id, params.predicate));
+        Ok(format!("Alert '{}' registered", alert_id))
+    }
+
+    async fn unregister_alert(&self, alert_id: String) -> PlatformResult<String> {
+        let mut alerts = self.alerts.lock().unwrap();
+        let before = alerts.len();
+        alerts.retain(|(id, _, _)| *id != alert_id);
+        if alerts.len() < before {
+            Ok(format!("Alert '{}' unregistered", alert_id))
+        } else {
+            Err(PlatformError::NodeNotFound(format!(
+                "Alert '{}' not found",
+                alert_id
+            )))
+        }
+    }
+
+    async fn register_constraint(
+        &self,
+        params: super::platform::RegisterConstraintParams,
+    ) -> PlatformResult<String> {
+        use crate::daemon::constraints::Constraint;
+
+        let constraint: Constraint = match params.constraint_type.as_str() {
+            "max_velocity" => {
+                let v: f64 = serde_json::from_str(&params.params_json)
+                    .map_err(|e| PlatformError::InvalidInput(format!("invalid param: {}", e)))?;
+                Constraint::MaxVelocity(v)
+            }
+            "workspace" => {
+                #[derive(serde::Deserialize)]
+                struct W {
+                    x: (f64, f64),
+                    y: (f64, f64),
+                    z: (f64, f64),
+                }
+                let w: W = serde_json::from_str(&params.params_json)
+                    .map_err(|e| PlatformError::InvalidInput(format!("invalid param: {}", e)))?;
+                Constraint::Workspace {
+                    x: w.x,
+                    y: w.y,
+                    z: w.z,
+                }
+            }
+            "forbidden_zone" => {
+                #[derive(serde::Deserialize)]
+                struct Fz {
+                    center: [f64; 3],
+                    radius: f64,
+                }
+                let fz: Fz = serde_json::from_str(&params.params_json)
+                    .map_err(|e| PlatformError::InvalidInput(format!("invalid param: {}", e)))?;
+                Constraint::ForbiddenZone {
+                    center: fz.center,
+                    radius: fz.radius,
+                }
+            }
+            "max_force" => {
+                let v: f64 = serde_json::from_str(&params.params_json)
+                    .map_err(|e| PlatformError::InvalidInput(format!("invalid param: {}", e)))?;
+                Constraint::MaxForce(v)
+            }
+            other => {
+                return Err(PlatformError::InvalidInput(format!(
+                    "unknown constraint type '{}'",
+                    other
+                )));
+            }
+        };
+
+        let constraint_id = format!("cst-mock-{}", uuid::Uuid::new_v4());
+        self.constraints.lock().unwrap().push((
+            constraint_id.clone(),
+            params.mission_id.clone(),
+            constraint,
+        ));
+        Ok(format!(
+            "Constraint '{}' registered (mission={})",
+            constraint_id, params.mission_id
+        ))
+    }
+
+    async fn list_constraints(
+        &self,
+        mission_id: String,
+    ) -> PlatformResult<Vec<(String, crate::daemon::constraints::Constraint)>> {
+        let all = self.constraints.lock().unwrap();
+        Ok(all
+            .iter()
+            .filter(|(_, mid, _)| *mid == mission_id)
+            .map(|(id, _, c)| (id.clone(), c.clone()))
+            .collect())
+    }
+
+    async fn get_belief(
+        &self,
+        subject: String,
+        predicate: String,
+    ) -> PlatformResult<Option<crate::agent::memory::semantic::Belief>> {
+        let beliefs = self.beliefs.lock().unwrap();
+        Ok(beliefs
+            .iter()
+            .find(|b| b.subject == subject && b.predicate == predicate)
+            .cloned())
+    }
+
+    async fn update_belief(
+        &self,
+        params: super::platform::UpdateBeliefParams,
+    ) -> PlatformResult<String> {
+        let mut beliefs = self.beliefs.lock().unwrap();
+        // Remove existing belief with same subject+predicate if any
+        beliefs.retain(|b| !(b.subject == params.subject && b.predicate == params.predicate));
+        beliefs.push(crate::agent::memory::semantic::Belief {
+            id: format!("belief-mock-{}", uuid::Uuid::new_v4()),
+            subject: params.subject.clone(),
+            predicate: params.predicate.clone(),
+            value: params.value,
+            confidence: params.confidence,
+            source: params.source.unwrap_or_else(|| "mcp".to_string()),
+            first_observed: 0,
+            last_confirmed: 0,
+            confirmation_count: 1,
+            contradiction_count: 0,
+            notes: params.notes,
+        });
+        Ok(format!(
+            "Belief ({}, {}) updated",
+            params.subject, params.predicate
+        ))
+    }
+
+    async fn list_world_state(&self) -> PlatformResult<Vec<crate::agent::memory::WorldStateEntry>> {
+        Ok(self.world_state.lock().unwrap().clone())
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -206,6 +406,11 @@ mod tests {
             nodes: Mutex::new(nodes),
             manifests: Mutex::new(Vec::new()),
             configs: Mutex::new(HashMap::new()),
+            missions: Mutex::new(Vec::new()),
+            alerts: Mutex::new(Vec::new()),
+            constraints: Mutex::new(Vec::new()),
+            beliefs: Mutex::new(Vec::new()),
+            world_state: Mutex::new(Vec::new()),
         }
     }
 
@@ -701,6 +906,8 @@ mod tests {
             "get_node_schema",
             "discover_capabilities",
             "list_jobs",
+            "list_missions",
+            "list_constraints",
         ];
         for tool in &viewer_tools {
             assert_eq!(
@@ -724,6 +931,9 @@ mod tests {
             "enable_autostart",
             "disable_autostart",
             "delete_job",
+            "pause_mission",
+            "resume_mission",
+            "cancel_mission",
         ];
         for tool in &operator_tools {
             assert_eq!(
@@ -745,6 +955,9 @@ mod tests {
             "uninstall_node",
             "clean_node",
             "clear_episodic_memory",
+            "register_alert",
+            "unregister_alert",
+            "register_constraint",
         ];
         for tool in &admin_tools {
             assert_eq!(
@@ -883,6 +1096,43 @@ mod tests {
         assert!(msg.contains("30"));
     }
 
+    #[tokio::test]
+    async fn configure_context_tool_validates_empty_topic_pattern() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::ConfigureContextParams {
+            mission_id: "m1".to_string(),
+            topic_pattern: String::new(),
+            world_state_key_template: "{label}.location".to_string(),
+            value_field: "location".to_string(),
+            filter: None,
+            min_interval_secs: None,
+            max_age_secs: None,
+            confidence_field: None,
+            token_budget: None,
+        };
+        let err = mock.configure_context(params).await.unwrap_err();
+        assert!(matches!(err, PlatformError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn configure_context_tool_saves_valid_config() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::ConfigureContextParams {
+            mission_id: "m1".to_string(),
+            topic_pattern: "bubbaloop/**/detections".to_string(),
+            world_state_key_template: "{label}.location".to_string(),
+            value_field: "location".to_string(),
+            filter: Some("confidence>0.8".to_string()),
+            min_interval_secs: Some(10),
+            max_age_secs: Some(120),
+            confidence_field: Some("confidence".to_string()),
+            token_budget: Some(100),
+        };
+        let msg = mock.configure_context(params).await.unwrap();
+        assert!(msg.contains("cp-mock-"));
+        assert!(msg.contains("m1"));
+    }
+
     #[test]
     fn mock_platform_default_matches_new() {
         let from_new = MockPlatform::new();
@@ -891,5 +1141,245 @@ mod tests {
         let nodes_default = from_default.nodes.lock().unwrap();
         assert_eq!(nodes_new.len(), nodes_default.len());
         assert_eq!(nodes_new[0].name, nodes_default[0].name);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // 5. Mission lifecycle tests
+    // ════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn list_missions_empty() {
+        let mock = MockPlatform::new();
+        let missions = mock.list_missions().await.unwrap();
+        assert!(missions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pause_resume_mission() {
+        use crate::daemon::mission::{Mission, MissionStatus};
+        let mock = MockPlatform::new();
+        mock.missions.lock().unwrap().push(Mission {
+            id: "dog-watch".to_string(),
+            markdown: "Watch the dog.".to_string(),
+            status: MissionStatus::Active,
+            expires_at: None,
+            resources: vec![],
+            sub_mission_ids: vec![],
+            depends_on: vec![],
+            compiled_at: 1700000000,
+        });
+
+        // Pause
+        let msg = mock
+            .update_mission_status("dog-watch".to_string(), "paused".to_string())
+            .await
+            .unwrap();
+        assert!(msg.contains("paused"));
+        assert_eq!(
+            mock.missions.lock().unwrap()[0].status,
+            MissionStatus::Paused
+        );
+
+        // Resume
+        let msg = mock
+            .update_mission_status("dog-watch".to_string(), "active".to_string())
+            .await
+            .unwrap();
+        assert!(msg.contains("active"));
+        assert_eq!(
+            mock.missions.lock().unwrap()[0].status,
+            MissionStatus::Active
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_mission_not_found() {
+        let mock = MockPlatform::new();
+        let err = mock
+            .update_mission_status("nonexistent".to_string(), "cancelled".to_string())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, PlatformError::NodeNotFound(_)));
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // 6. Reactive alert tests
+    // ════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn register_alert_saves_rule() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::RegisterAlertParams {
+            mission_id: "m1".to_string(),
+            predicate: "toddler.near_stairs = true".to_string(),
+            debounce_secs: Some(30),
+            arousal_boost: Some(3.0),
+            description: "Toddler near stairs".to_string(),
+        };
+        let msg = mock.register_alert(params).await.unwrap();
+        assert!(msg.contains("alert-mock-"));
+        assert_eq!(mock.alerts.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unregister_alert_removes_it() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::RegisterAlertParams {
+            mission_id: "m1".to_string(),
+            predicate: "temp > 100".to_string(),
+            debounce_secs: None,
+            arousal_boost: None,
+            description: "High temp".to_string(),
+        };
+        let msg = mock.register_alert(params).await.unwrap();
+        // Extract the alert ID from the response
+        let alert_id = msg
+            .strip_prefix("Alert '")
+            .and_then(|s| s.strip_suffix("' registered"))
+            .unwrap()
+            .to_string();
+
+        assert_eq!(mock.alerts.lock().unwrap().len(), 1);
+
+        let msg = mock.unregister_alert(alert_id.clone()).await.unwrap();
+        assert!(msg.contains("unregistered"));
+        assert!(mock.alerts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unregister_alert_not_found() {
+        let mock = MockPlatform::new();
+        let err = mock
+            .unregister_alert("nonexistent".to_string())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, PlatformError::NodeNotFound(_)));
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // 7. Constraint tests
+    // ════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn register_constraint_workspace() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::RegisterConstraintParams {
+            mission_id: "m1".to_string(),
+            constraint_type: "workspace".to_string(),
+            params_json: r#"{"x":[-1.0,1.0],"y":[-1.0,1.0],"z":[0.0,2.0]}"#.to_string(),
+        };
+        let msg = mock.register_constraint(params).await.unwrap();
+        assert!(msg.contains("cst-mock-"));
+        assert!(msg.contains("m1"));
+
+        let constraints = mock.list_constraints("m1".to_string()).await.unwrap();
+        assert_eq!(constraints.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_constraints_empty() {
+        let mock = MockPlatform::new();
+        let constraints = mock
+            .list_constraints("nonexistent".to_string())
+            .await
+            .unwrap();
+        assert!(constraints.is_empty());
+    }
+
+    #[tokio::test]
+    async fn register_constraint_invalid_type() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::RegisterConstraintParams {
+            mission_id: "m1".to_string(),
+            constraint_type: "nonexistent_type".to_string(),
+            params_json: "{}".to_string(),
+        };
+        let err = mock.register_constraint(params).await.unwrap_err();
+        assert!(matches!(err, PlatformError::InvalidInput(_)));
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // 8. Belief & world state tests
+    // ════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn get_belief_not_found_returns_none() {
+        let mock = MockPlatform::new();
+        let result = mock
+            .get_belief("nonexistent".to_string(), "nothing".to_string())
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_belief_creates_or_updates() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::UpdateBeliefParams {
+            subject: "dog".to_string(),
+            predicate: "eats_at".to_string(),
+            value: "08:00".to_string(),
+            confidence: 0.9,
+            source: Some("observation".to_string()),
+            notes: None,
+        };
+        let msg = mock.update_belief(params).await.unwrap();
+        assert!(msg.contains("dog"));
+        assert!(msg.contains("eats_at"));
+
+        // Verify it can be retrieved
+        let belief = mock
+            .get_belief("dog".to_string(), "eats_at".to_string())
+            .await
+            .unwrap();
+        assert!(belief.is_some());
+        let b = belief.unwrap();
+        assert_eq!(b.value, "08:00");
+        assert!((b.confidence - 0.9).abs() < f64::EPSILON);
+
+        // Update it
+        let params2 = crate::mcp::platform::UpdateBeliefParams {
+            subject: "dog".to_string(),
+            predicate: "eats_at".to_string(),
+            value: "09:00".to_string(),
+            confidence: 0.95,
+            source: None,
+            notes: Some("updated".to_string()),
+        };
+        mock.update_belief(params2).await.unwrap();
+
+        let belief2 = mock
+            .get_belief("dog".to_string(), "eats_at".to_string())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(belief2.value, "09:00");
+    }
+
+    #[tokio::test]
+    async fn list_world_state_returns_snapshot() {
+        let mock = MockPlatform::new();
+        // Empty by default
+        let entries = mock.list_world_state().await.unwrap();
+        assert!(entries.is_empty());
+
+        // Add an entry and verify
+        mock.world_state
+            .lock()
+            .unwrap()
+            .push(crate::agent::memory::WorldStateEntry {
+                key: "cam.status".to_string(),
+                value: "online".to_string(),
+                confidence: 0.95,
+                source_topic: Some("topic/cam".to_string()),
+                source_node: None,
+                last_seen_at: 1000,
+                max_age_secs: 300,
+                stale: false,
+            });
+
+        let entries = mock.list_world_state().await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].key, "cam.status");
     }
 }

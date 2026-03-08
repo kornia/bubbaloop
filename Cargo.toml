@@ -52,7 +52,9 @@ anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 
 # Embedded database (memory layer)
-rusqlite = { version = "0.33", features = ["bundled-full"] }
+# "bundled" uses SQLite 3.45+ which includes FTS5 by default.
+# Avoid "bundled-full" — it compiles FTS3/4, RTREE, JSON1, MATH we don't use.
+rusqlite = { version = "0.33", features = ["bundled"] }
 
 # Cron expression parsing (scheduler)
 cron = "0.15"
@@ -64,8 +66,8 @@ hex = "0.4"
 # System telemetry (cross-platform)
 sysinfo = "0.33"
 
-# HTTP server (dashboard)
-axum = { version = "0.8", features = ["ws"] }
+# HTTP server — ws feature only needed for dashboard WebSocket proxy
+axum = { version = "0.8" }
 
 # Embedded static files (dashboard)
 rust-embed = { version = "8", features = ["compression"] }
@@ -86,3 +88,4 @@ lto = true
 codegen-units = 1
 strip = "symbols"
 opt-level = "z"
+panic = "abort"    # removes unwinding machinery (~300KB); safe for a binary

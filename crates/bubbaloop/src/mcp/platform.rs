@@ -170,6 +170,157 @@ pub trait PlatformOperations: Send + Sync + 'static {
         &self,
         older_than_days: u32,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    // ── Context providers ──────────────────────────────────────────
+
+    /// Configure a context provider: a daemon background task that watches
+    /// a Zenoh topic and writes extracted values to world state.
+    fn configure_context(
+        &self,
+        params: ConfigureContextParams,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    // ── Mission lifecycle ─────────────────────────────────────────────
+
+    /// List all missions.
+    fn list_missions(
+        &self,
+    ) -> impl std::future::Future<Output = PlatformResult<Vec<crate::daemon::mission::Mission>>> + Send;
+
+    /// Update a mission's status. Returns a confirmation message or error.
+    fn update_mission_status(
+        &self,
+        mission_id: String,
+        status: String,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    // ── Reactive alerts ───────────────────────────────────────────────
+
+    /// Register a reactive alert rule that spikes arousal when world state matches.
+    fn register_alert(
+        &self,
+        params: RegisterAlertParams,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Unregister a reactive alert rule by ID.
+    fn unregister_alert(
+        &self,
+        alert_id: String,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    // ── Constraints ───────────────────────────────────────────────────
+
+    /// Register a safety constraint for a mission.
+    fn register_constraint(
+        &self,
+        params: RegisterConstraintParams,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// List all constraints for a mission.
+    fn list_constraints(
+        &self,
+        mission_id: String,
+    ) -> impl std::future::Future<
+        Output = PlatformResult<Vec<(String, crate::daemon::constraints::Constraint)>>,
+    > + Send;
+
+    // ── Belief management ────────────────────────────────────────────
+
+    /// Get a single belief by subject and predicate.
+    fn get_belief(
+        &self,
+        subject: String,
+        predicate: String,
+    ) -> impl std::future::Future<
+        Output = PlatformResult<Option<crate::agent::memory::semantic::Belief>>,
+    > + Send;
+
+    /// Create or update a belief with the given parameters.
+    fn update_belief(
+        &self,
+        params: UpdateBeliefParams,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// List all world state entries.
+    fn list_world_state(
+        &self,
+    ) -> impl std::future::Future<Output = PlatformResult<Vec<crate::agent::memory::WorldStateEntry>>>
+           + Send;
+}
+
+/// Parameters for creating or updating a belief.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UpdateBeliefParams {
+    /// Subject of the belief (e.g. "front_door_camera").
+    pub subject: String,
+    /// Predicate / relation (e.g. "is_reliable").
+    pub predicate: String,
+    /// Value (e.g. "true", "mostly", JSON).
+    pub value: String,
+    /// Confidence (0.0-1.0).
+    pub confidence: f64,
+    /// How this belief was formed (e.g. "observation", "user_told_me").
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Free-form notes.
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// Parameters for registering a safety constraint.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RegisterConstraintParams {
+    /// Mission this constraint is attached to.
+    pub mission_id: String,
+    /// Constraint type: "workspace", "max_velocity", "forbidden_zone", "max_force"
+    pub constraint_type: String,
+    /// JSON object with constraint-specific fields.
+    pub params_json: String,
+}
+
+/// Parameters for registering a reactive alert.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RegisterAlertParams {
+    /// Mission this alert is attached to.
+    pub mission_id: String,
+    /// World state predicate expression (e.g. "toddler.near_stairs = 'true'").
+    pub predicate: String,
+    /// Minimum seconds between consecutive firings (default: 60).
+    #[serde(default)]
+    pub debounce_secs: Option<u32>,
+    /// Arousal boost when rule fires (default: 2.0).
+    #[serde(default)]
+    pub arousal_boost: Option<f64>,
+    /// Human-readable description of this alert.
+    pub description: String,
+}
+
+/// Parameters for configuring a context provider.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ConfigureContextParams {
+    /// Mission this provider is attached to.
+    pub mission_id: String,
+    /// Zenoh key expression pattern (e.g. "bubbaloop/**/vision/detections").
+    pub topic_pattern: String,
+    /// Template for world state key (e.g. "{label}.location").
+    pub world_state_key_template: String,
+    /// JSON field path to extract as the value.
+    pub value_field: String,
+    /// Optional filter expression (e.g. "label=dog AND confidence>0.85").
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// Minimum interval between writes for the same key (seconds).
+    #[serde(default)]
+    pub min_interval_secs: Option<u32>,
+    /// Maximum age before a world state entry is considered stale (seconds).
+    #[serde(default)]
+    pub max_age_secs: Option<u32>,
+    /// Optional JSON field path to extract confidence from.
+    #[serde(default)]
+    pub confidence_field: Option<String>,
+    /// Approximate token budget for this provider's world state entries.
+    #[serde(default)]
+    pub token_budget: Option<u32>,
 }
 
 // ── Re-exports for backward compatibility ─────────────────────────────
