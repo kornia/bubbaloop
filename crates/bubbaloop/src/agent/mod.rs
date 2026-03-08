@@ -584,6 +584,52 @@ fn is_flush_substantive(text: &str) -> bool {
     !no_content_phrases.iter().any(|p| lower.contains(p))
 }
 
+/// Run a single validation turn to check if a sub-mission is still valid.
+///
+/// Returns `true` if the LLM responds with a word starting with "VALID" (case-insensitive).
+/// Returns `false` for "INVALID [reason]" or any other response.
+///
+/// Invariant I7: micro-turns never write to episodic memory.
+/// Token limits: ~200 tokens in, 50 tokens out (enforced by caller's model config).
+///
+/// This maps to the "VerifyLLM" pattern (pre-execution verification pass).
+pub async fn run_micro_turn<M: ModelProvider>(
+    sub_mission_description: &str,
+    world_state_summary: &str,
+    provider: &M,
+) -> anyhow::Result<bool> {
+    let prompt = format!(
+        "You are a plan validator. You must respond with EXACTLY one of:\n\
+         - VALID\n\
+         - INVALID [brief reason]\n\n\
+         Current world state:\n{}\n\n\
+         Proposed action: {}\n\n\
+         Is this action safe and appropriate given the current world state?",
+        world_state_summary, sub_mission_description
+    );
+
+    let messages = vec![Message::user(&prompt)];
+
+    // Single LLM call, no tools, no history
+    let response = provider
+        .generate(
+            Some("You are a concise plan validator. Respond only with VALID or INVALID [reason]."),
+            &messages,
+            &[], // no tools
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Micro-turn provider error: {}", e))?;
+
+    let response_text = response.text();
+    let valid = response_text.trim().to_uppercase().starts_with("VALID");
+    log::debug!(
+        "[MicroTurn] response={:?} valid={}",
+        response_text.trim(),
+        valid
+    );
+    Ok(valid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -684,5 +730,76 @@ mod tests {
     #[test]
     fn truncate_max_tool_result_chars_constant() {
         assert_eq!(MAX_TOOL_RESULT_CHARS, 4096);
+    }
+
+    // ── Micro-turn tests ───────────────────────────────────────────
+
+    /// Mock provider for micro-turn tests — returns a fixed text response.
+    struct MicroTurnMockProvider {
+        response_text: String,
+    }
+
+    impl ModelProvider for MicroTurnMockProvider {
+        async fn generate(
+            &self,
+            _system: Option<&str>,
+            _messages: &[Message],
+            _tools: &[provider::ToolDefinition],
+        ) -> provider::Result<provider::ModelResponse> {
+            Ok(provider::ModelResponse {
+                content: vec![ContentBlock::Text {
+                    text: self.response_text.clone(),
+                }],
+                usage: Usage {
+                    input_tokens: 50,
+                    output_tokens: 5,
+                },
+                stop_reason: Some("end_turn".to_string()),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn micro_turn_valid_response_returns_true() {
+        let provider = MicroTurnMockProvider {
+            response_text: "VALID".to_string(),
+        };
+        let result = run_micro_turn("check sensor", "all systems nominal", &provider)
+            .await
+            .unwrap();
+        assert!(result);
+    }
+
+    #[tokio::test]
+    async fn micro_turn_valid_lowercase_returns_true() {
+        let provider = MicroTurnMockProvider {
+            response_text: "Valid - looks good".to_string(),
+        };
+        let result = run_micro_turn("check sensor", "all systems nominal", &provider)
+            .await
+            .unwrap();
+        assert!(result);
+    }
+
+    #[tokio::test]
+    async fn micro_turn_invalid_response_returns_false() {
+        let provider = MicroTurnMockProvider {
+            response_text: "INVALID obstacle in path".to_string(),
+        };
+        let result = run_micro_turn("move forward", "obstacle detected ahead", &provider)
+            .await
+            .unwrap();
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn micro_turn_garbage_response_returns_false() {
+        let provider = MicroTurnMockProvider {
+            response_text: "I'm not sure what to do.".to_string(),
+        };
+        let result = run_micro_turn("deploy node", "unknown state", &provider)
+            .await
+            .unwrap();
+        assert!(!result);
     }
 }

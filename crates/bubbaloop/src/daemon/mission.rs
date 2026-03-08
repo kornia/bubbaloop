@@ -225,6 +225,46 @@ impl MissionStore {
     }
 }
 
+// ── DAG evaluator ──────────────────────────────────────────────────────
+
+/// Evaluates the mission DAG to find missions that are ready to activate.
+/// A mission is "ready" when all its `depends_on` missions are Completed.
+/// Called on each daemon heartbeat tick. O(N) per tick using cached topo-sort.
+pub struct DagEvaluator;
+
+impl DagEvaluator {
+    /// Returns missions that are Active and have all dependencies Completed.
+    pub fn ready_missions(all_missions: &[Mission]) -> Vec<&Mission> {
+        let completed_ids: std::collections::HashSet<&str> = all_missions
+            .iter()
+            .filter(|m| m.status == MissionStatus::Completed)
+            .map(|m| m.id.as_str())
+            .collect();
+
+        all_missions
+            .iter()
+            .filter(|m| {
+                m.status == MissionStatus::Active
+                    && m.depends_on
+                        .iter()
+                        .all(|dep| completed_ids.contains(dep.as_str()))
+            })
+            .collect()
+    }
+
+    /// Returns missions whose expires_at has passed (for expiry sweeping).
+    pub fn expired_missions(all_missions: &[Mission]) -> Vec<&Mission> {
+        let now = crate::agent::memory::now_epoch_secs() as i64;
+        all_missions
+            .iter()
+            .filter(|m| {
+                m.expires_at.map(|exp| exp < now).unwrap_or(false)
+                    && m.status == MissionStatus::Active
+            })
+            .collect()
+    }
+}
+
 // ── Mission file watcher ────────────────────────────────────────────────
 
 /// Poll a missions directory every 5 seconds for new/changed .md files.
@@ -439,6 +479,115 @@ mod tests {
             assert_eq!(label.parse::<MissionStatus>().unwrap(), status);
         }
         assert!("bogus".parse::<MissionStatus>().is_err());
+    }
+
+    /// Helper: create a default Mission for testing.
+    fn test_mission(id: &str) -> Mission {
+        Mission {
+            id: id.to_string(),
+            markdown: format!("# {}", id),
+            status: MissionStatus::Active,
+            expires_at: None,
+            resources: vec![],
+            sub_mission_ids: vec![],
+            depends_on: vec![],
+            compiled_at: 1700000000,
+        }
+    }
+
+    #[test]
+    fn sub_mission_activates_when_no_depends_on() {
+        let missions = vec![
+            Mission {
+                id: "root".into(),
+                status: MissionStatus::Active,
+                depends_on: vec![],
+                ..test_mission("root")
+            },
+            Mission {
+                id: "child".into(),
+                status: MissionStatus::Active,
+                depends_on: vec![],
+                ..test_mission("child")
+            },
+        ];
+        let ready = DagEvaluator::ready_missions(&missions);
+        assert_eq!(ready.len(), 2);
+    }
+
+    #[test]
+    fn sub_mission_waits_for_dependency_completion() {
+        let missions = vec![
+            Mission {
+                id: "step-1".into(),
+                status: MissionStatus::Active,
+                depends_on: vec![],
+                ..test_mission("step-1")
+            },
+            Mission {
+                id: "step-2".into(),
+                status: MissionStatus::Active,
+                depends_on: vec!["step-1".into()],
+                ..test_mission("step-2")
+            },
+        ];
+        // step-1 is Active (not Completed) -> step-2 should NOT be in ready
+        let ready = DagEvaluator::ready_missions(&missions);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, "step-1");
+    }
+
+    #[test]
+    fn dag_evaluator_returns_ready_when_dependency_completed() {
+        let missions = vec![
+            Mission {
+                id: "dep".into(),
+                status: MissionStatus::Completed,
+                depends_on: vec![],
+                ..test_mission("dep")
+            },
+            Mission {
+                id: "next".into(),
+                status: MissionStatus::Active,
+                depends_on: vec!["dep".into()],
+                ..test_mission("next")
+            },
+        ];
+        let ready = DagEvaluator::ready_missions(&missions);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, "next");
+    }
+
+    #[test]
+    fn dag_evaluator_expired_missions() {
+        let missions = vec![
+            Mission {
+                expires_at: Some(1), // epoch 1 = way in the past
+                ..test_mission("old")
+            },
+            Mission {
+                expires_at: Some(9999999999),
+                ..test_mission("future")
+            },
+            Mission {
+                expires_at: None,
+                ..test_mission("no-expiry")
+            },
+        ];
+        let expired = DagEvaluator::expired_missions(&missions);
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].id, "old");
+    }
+
+    #[test]
+    fn dag_evaluator_expired_skips_non_active() {
+        let missions = vec![Mission {
+            expires_at: Some(1),
+            status: MissionStatus::Completed,
+            ..test_mission("done")
+        }];
+        let expired = DagEvaluator::expired_missions(&missions);
+        assert!(expired.is_empty());
     }
 
     #[test]

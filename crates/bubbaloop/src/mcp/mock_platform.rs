@@ -12,6 +12,8 @@ pub struct MockPlatform {
     pub missions: Mutex<Vec<crate::daemon::mission::Mission>>,
     pub alerts: Mutex<Vec<(String, String, String)>>, // (id, mission_id, predicate)
     pub constraints: Mutex<Vec<(String, String, crate::daemon::constraints::Constraint)>>, // (id, mission_id, constraint)
+    pub beliefs: Mutex<Vec<crate::agent::memory::semantic::Belief>>,
+    pub world_state: Mutex<Vec<crate::agent::memory::WorldStateEntry>>,
 }
 
 impl Default for MockPlatform {
@@ -35,6 +37,8 @@ impl MockPlatform {
             missions: Mutex::new(Vec::new()),
             alerts: Mutex::new(Vec::new()),
             constraints: Mutex::new(Vec::new()),
+            beliefs: Mutex::new(Vec::new()),
+            world_state: Mutex::new(Vec::new()),
             manifests: Mutex::new(vec![(
                 "test-node".to_string(),
                 serde_json::json!({
@@ -345,6 +349,48 @@ impl PlatformOperations for MockPlatform {
             .map(|(id, _, c)| (id.clone(), c.clone()))
             .collect())
     }
+
+    async fn get_belief(
+        &self,
+        subject: String,
+        predicate: String,
+    ) -> PlatformResult<Option<crate::agent::memory::semantic::Belief>> {
+        let beliefs = self.beliefs.lock().unwrap();
+        Ok(beliefs
+            .iter()
+            .find(|b| b.subject == subject && b.predicate == predicate)
+            .cloned())
+    }
+
+    async fn update_belief(
+        &self,
+        params: super::platform::UpdateBeliefParams,
+    ) -> PlatformResult<String> {
+        let mut beliefs = self.beliefs.lock().unwrap();
+        // Remove existing belief with same subject+predicate if any
+        beliefs.retain(|b| !(b.subject == params.subject && b.predicate == params.predicate));
+        beliefs.push(crate::agent::memory::semantic::Belief {
+            id: format!("belief-mock-{}", uuid::Uuid::new_v4()),
+            subject: params.subject.clone(),
+            predicate: params.predicate.clone(),
+            value: params.value,
+            confidence: params.confidence,
+            source: params.source.unwrap_or_else(|| "mcp".to_string()),
+            first_observed: 0,
+            last_confirmed: 0,
+            confirmation_count: 1,
+            contradiction_count: 0,
+            notes: params.notes,
+        });
+        Ok(format!(
+            "Belief ({}, {}) updated",
+            params.subject, params.predicate
+        ))
+    }
+
+    async fn list_world_state(&self) -> PlatformResult<Vec<crate::agent::memory::WorldStateEntry>> {
+        Ok(self.world_state.lock().unwrap().clone())
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -363,6 +409,8 @@ mod tests {
             missions: Mutex::new(Vec::new()),
             alerts: Mutex::new(Vec::new()),
             constraints: Mutex::new(Vec::new()),
+            beliefs: Mutex::new(Vec::new()),
+            world_state: Mutex::new(Vec::new()),
         }
     }
 
@@ -1248,5 +1296,90 @@ mod tests {
         };
         let err = mock.register_constraint(params).await.unwrap_err();
         assert!(matches!(err, PlatformError::InvalidInput(_)));
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // 8. Belief & world state tests
+    // ════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn get_belief_not_found_returns_none() {
+        let mock = MockPlatform::new();
+        let result = mock
+            .get_belief("nonexistent".to_string(), "nothing".to_string())
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_belief_creates_or_updates() {
+        let mock = MockPlatform::new();
+        let params = crate::mcp::platform::UpdateBeliefParams {
+            subject: "dog".to_string(),
+            predicate: "eats_at".to_string(),
+            value: "08:00".to_string(),
+            confidence: 0.9,
+            source: Some("observation".to_string()),
+            notes: None,
+        };
+        let msg = mock.update_belief(params).await.unwrap();
+        assert!(msg.contains("dog"));
+        assert!(msg.contains("eats_at"));
+
+        // Verify it can be retrieved
+        let belief = mock
+            .get_belief("dog".to_string(), "eats_at".to_string())
+            .await
+            .unwrap();
+        assert!(belief.is_some());
+        let b = belief.unwrap();
+        assert_eq!(b.value, "08:00");
+        assert!((b.confidence - 0.9).abs() < f64::EPSILON);
+
+        // Update it
+        let params2 = crate::mcp::platform::UpdateBeliefParams {
+            subject: "dog".to_string(),
+            predicate: "eats_at".to_string(),
+            value: "09:00".to_string(),
+            confidence: 0.95,
+            source: None,
+            notes: Some("updated".to_string()),
+        };
+        mock.update_belief(params2).await.unwrap();
+
+        let belief2 = mock
+            .get_belief("dog".to_string(), "eats_at".to_string())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(belief2.value, "09:00");
+    }
+
+    #[tokio::test]
+    async fn list_world_state_returns_snapshot() {
+        let mock = MockPlatform::new();
+        // Empty by default
+        let entries = mock.list_world_state().await.unwrap();
+        assert!(entries.is_empty());
+
+        // Add an entry and verify
+        mock.world_state
+            .lock()
+            .unwrap()
+            .push(crate::agent::memory::WorldStateEntry {
+                key: "cam.status".to_string(),
+                value: "online".to_string(),
+                confidence: 0.95,
+                source_topic: Some("topic/cam".to_string()),
+                source_node: None,
+                last_seen_at: 1000,
+                max_age_secs: 300,
+                stale: false,
+            });
+
+        let entries = mock.list_world_state().await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].key, "cam.status");
     }
 }
