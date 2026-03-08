@@ -94,7 +94,7 @@ tower_governor = "0.8"
 
 [features]
 default = []
-dashboard = ["dep:rust-embed", "dep:mime_guess", "dep:tokio-tungstenite"]
+dashboard = ["dep:rust-embed", "dep:mime_guess", "dep:tokio-tungstenite", "axum/ws"]
 test-harness = ["rmcp/client"]
 
 [dev-dependencies]
