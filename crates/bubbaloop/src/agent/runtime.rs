@@ -12,6 +12,8 @@ use crate::agent::provider::ollama::OllamaProvider;
 use crate::agent::provider::ModelProvider;
 use crate::agent::soul::Soul;
 use crate::agent::{run_agent_turn, AgentTurnInput, EventSink};
+use crate::daemon::belief_updater::spawn_belief_decay_task;
+use crate::daemon::context_provider::{spawn_provider, ProviderStore};
 use crate::daemon::registry::get_bubbaloop_home;
 use crate::mcp::platform::DaemonPlatform;
 use serde::{Deserialize, Serialize};
@@ -306,6 +308,51 @@ impl AgentRuntime {
             {
                 let retention = soul.read().await.capabilities.episodic_log_retention_days;
                 memory.startup_cleanup(retention).await;
+            }
+
+            // Spawn belief confidence decay — runs hourly, multiplies confidence by 0.9.
+            // Uses the same memory.db that Memory::open created.
+            let belief_db_path = agent_dir.join("memory.db");
+            let belief_decay_shutdown = shutdown_rx.clone();
+            tokio::spawn(spawn_belief_decay_task(
+                belief_db_path,
+                0.9,
+                3600,
+                belief_decay_shutdown,
+            ));
+
+            // Spawn context providers — load from providers.db, subscribe to Zenoh topics,
+            // write extracted values to world_state (no LLM involved).
+            // Created by configure_context MCP tool.
+            let providers_db_path = agent_dir.join("providers.db");
+            if providers_db_path.exists() {
+                match ProviderStore::open(&providers_db_path) {
+                    Ok(store) => match store.list_providers() {
+                        Ok(providers) => {
+                            log::info!(
+                                "[Runtime] Agent '{}': spawning {} context provider(s)",
+                                agent_id,
+                                providers.len()
+                            );
+                            for cfg in providers {
+                                let semantic_db = agent_dir.join("memory.db");
+                                let provider_session = session.clone();
+                                let provider_shutdown = shutdown_rx.clone();
+                                spawn_provider(cfg, provider_session, semantic_db, provider_shutdown);
+                            }
+                        }
+                        Err(e) => log::warn!(
+                            "[Runtime] Agent '{}': failed to list providers: {}",
+                            agent_id,
+                            e
+                        ),
+                    },
+                    Err(e) => log::warn!(
+                        "[Runtime] Agent '{}': failed to open ProviderStore: {}",
+                        agent_id,
+                        e
+                    ),
+                }
             }
 
             // Create outbox sink
