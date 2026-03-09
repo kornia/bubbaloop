@@ -1,7 +1,10 @@
 //! Skill runtime — manages built-in driver tasks.
 
+use crate::skills::builtin::exec::ExecDriver;
 use crate::skills::builtin::http_poll::HttpPollDriver;
 use crate::skills::builtin::system::SystemDriver;
+use crate::skills::builtin::tcp_listen::TcpListenDriver;
+use crate::skills::builtin::webhook::WebhookDriver;
 use crate::skills::builtin::{BuiltInContext, BuiltInDriver};
 use crate::skills::{load_skills, resolve_driver, DriverKind, SkillConfig};
 use std::collections::HashMap;
@@ -71,6 +74,21 @@ impl SkillRuntime {
                     log::error!("[SkillRuntime] system '{}' error: {}", name, e);
                 }
             }),
+            "exec" => tokio::spawn(async move {
+                if let Err(e) = ExecDriver.run(ctx).await {
+                    log::error!("[SkillRuntime] exec '{}' error: {}", name, e);
+                }
+            }),
+            "webhook" => tokio::spawn(async move {
+                if let Err(e) = WebhookDriver.run(ctx).await {
+                    log::error!("[SkillRuntime] webhook '{}' error: {}", name, e);
+                }
+            }),
+            "tcp-listen" => tokio::spawn(async move {
+                if let Err(e) = TcpListenDriver.run(ctx).await {
+                    log::error!("[SkillRuntime] tcp-listen '{}' error: {}", name, e);
+                }
+            }),
             other => {
                 log::warn!(
                     "[SkillRuntime] No implementation for BuiltIn driver '{}'",
@@ -102,6 +120,117 @@ impl SkillRuntime {
             log::debug!("[SkillRuntime] Aborting task for '{}'", name);
             handle.abort();
         }
+    }
+
+    /// Watch the skills directory and hot-reload on YAML file changes.
+    ///
+    /// - YAML created or modified → (re)start the skill if it is enabled and BuiltIn.
+    /// - YAML removed → stop the skill whose name matches the file stem.
+    ///
+    /// Blocks until `shutdown_rx` fires. Designed to run after `load_from_dir()`,
+    /// concurrently with the already-spawned skill tasks.
+    pub async fn watch_skills_dir(
+        &mut self,
+        skills_dir: &Path,
+        mut shutdown_rx: watch::Receiver<()>,
+    ) {
+        use notify::event::RemoveKind;
+        use notify::{Event, EventKind, RecursiveMode, Watcher};
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Event>(32);
+
+        let mut watcher = match notify::recommended_watcher(move |res: notify::Result<Event>| {
+            if let Ok(event) = res {
+                let _ = tx.blocking_send(event);
+            }
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                log::warn!("[SkillRuntime] Hot-reload watcher failed to start: {}", e);
+                let _ = shutdown_rx.changed().await;
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.watch(skills_dir, RecursiveMode::NonRecursive) {
+            log::warn!("[SkillRuntime] Failed to watch skills dir: {}", e);
+            let _ = shutdown_rx.changed().await;
+            return;
+        }
+
+        log::info!(
+            "[SkillRuntime] Hot-reload watching {}",
+            skills_dir.display()
+        );
+
+        loop {
+            tokio::select! {
+                Some(event) = rx.recv() => {
+                    // Only process .yaml files
+                    let yaml_paths: Vec<_> = event.paths.iter()
+                        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("yaml"))
+                        .cloned()
+                        .collect();
+                    if yaml_paths.is_empty() {
+                        continue;
+                    }
+
+                    match event.kind {
+                        EventKind::Create(_) | EventKind::Modify(_) => {
+                            for path in yaml_paths {
+                                let parsed = std::fs::read_to_string(&path)
+                                    .ok()
+                                    .and_then(|s| serde_yaml::from_str::<crate::skills::SkillConfig>(&s).ok());
+                                match parsed {
+                                    Some(skill) if skill.enabled => {
+                                        if let Some(entry) = resolve_driver(&skill.driver) {
+                                            if entry.kind == DriverKind::BuiltIn {
+                                                log::info!(
+                                                    "[SkillRuntime] Hot-reload: (re)starting '{}'",
+                                                    skill.name
+                                                );
+                                                self.start_skill(skill);
+                                            }
+                                        }
+                                    }
+                                    Some(skill) => {
+                                        // enabled: false — stop if running
+                                        log::info!(
+                                            "[SkillRuntime] Hot-reload: skill '{}' disabled, stopping",
+                                            skill.name
+                                        );
+                                        self.stop_skill(&skill.name);
+                                    }
+                                    None => {
+                                        log::warn!(
+                                            "[SkillRuntime] Hot-reload: failed to parse '{}'",
+                                            path.display()
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        EventKind::Remove(RemoveKind::File) => {
+                            for path in yaml_paths {
+                                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                    log::info!(
+                                        "[SkillRuntime] Hot-reload: stopping '{}'",
+                                        stem
+                                    );
+                                    self.stop_skill(stem);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    log::info!("[SkillRuntime] Hot-reload watcher shutting down");
+                    break;
+                }
+            }
+        }
+        // watcher is dropped here, unregistering the watch
     }
 
     /// List active skill names.
@@ -165,16 +294,17 @@ pub async fn run_skill_runtime(
         runtime.tasks.len()
     );
 
-    // Wait for shutdown
-    let mut rx = shutdown_rx;
-    rx.changed().await.ok();
+    // Run hot-reload watcher — blocks until shutdown fires.
+    // Skill tasks are already spawned independently; this loop just reacts to
+    // filesystem events and (re)starts/stops skills as YAML files change.
+    runtime
+        .watch_skills_dir(skills_dir, shutdown_rx.clone())
+        .await;
+
     log::info!(
         "[SkillRuntime] Shutting down, aborting {} tasks",
         runtime.tasks.len()
     );
-    for (name, handle) in runtime.tasks.drain() {
-        log::debug!("[SkillRuntime] Aborting task for '{}'", name);
-        handle.abort();
-    }
+    runtime.shutdown();
     Ok(())
 }

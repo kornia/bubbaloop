@@ -32,6 +32,9 @@ pub mod validation;
 /// YAML skill loader — driver catalog and config parsing
 pub mod skills;
 
+/// Skill hub — community YAML skill template index (fetch, cache, search)
+pub mod skill_hub;
+
 /// Agent layer: OpenClaw-inspired rewrite (Soul, 3-tier memory, adaptive heartbeat)
 pub mod agent;
 

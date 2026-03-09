@@ -19,6 +19,7 @@ enum SkillSubcommand {
     Drivers(DriversCommand),
     List(ListCommand),
     Validate(ValidateCommand),
+    Hub(HubCommand),
 }
 
 /// List all available drivers
@@ -46,13 +47,14 @@ impl SkillCommand {
             SkillSubcommand::Drivers(cmd) => cmd.run(),
             SkillSubcommand::List(cmd) => cmd.run(),
             SkillSubcommand::Validate(cmd) => cmd.run(),
+            SkillSubcommand::Hub(cmd) => cmd.run(),
         }
     }
 }
 
 impl DriversCommand {
     pub fn run(&self) -> anyhow::Result<()> {
-        println!("{:<14} {:<12} {}", "Driver", "Tier", "Description");
+        println!("{:<14} {:<12} Description", "Driver", "Tier");
         println!("{}", "-".repeat(60));
         for entry in DRIVER_CATALOG {
             let tier = match entry.kind {
@@ -77,10 +79,7 @@ impl ListCommand {
             println!("Create a skill YAML file to get started.");
             return Ok(());
         }
-        println!(
-            "{:<20} {:<14} {:<10} {}",
-            "Name", "Driver", "Status", "Intent"
-        );
+        println!("{:<20} {:<14} {:<10} Intent", "Name", "Driver", "Status");
         println!("{}", "-".repeat(70));
         for skill in &skill_configs {
             let status = if skill.enabled { "enabled" } else { "disabled" };
@@ -112,6 +111,161 @@ impl ValidateCommand {
             skill.driver,
             skills::resolve_driver(&skill.driver).map(|e| e.kind)
         );
+        Ok(())
+    }
+}
+
+/// Browse and fetch skill templates from the community hub
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "hub")]
+pub struct HubCommand {
+    #[argh(subcommand)]
+    subcommand: HubSubcommand,
+}
+
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand)]
+enum HubSubcommand {
+    List(HubListCommand),
+    Search(HubSearchCommand),
+    Get(HubGetCommand),
+    Refresh(HubRefreshCommand),
+}
+
+/// List community skill templates
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "list")]
+pub struct HubListCommand {}
+
+/// Search community skill templates
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "search")]
+pub struct HubSearchCommand {
+    /// search query (name, tag, category)
+    #[argh(positional)]
+    pub query: String,
+}
+
+/// Download a skill template to ~/.bubbaloop/skills/
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "get")]
+pub struct HubGetCommand {
+    /// skill name to download
+    #[argh(positional)]
+    pub name: String,
+}
+
+/// Refresh the local hub index cache
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand, name = "refresh")]
+pub struct HubRefreshCommand {}
+
+impl HubCommand {
+    pub fn run(&self) -> anyhow::Result<()> {
+        match &self.subcommand {
+            HubSubcommand::List(cmd) => cmd.run(),
+            HubSubcommand::Search(cmd) => cmd.run(),
+            HubSubcommand::Get(cmd) => cmd.run(),
+            HubSubcommand::Refresh(cmd) => cmd.run(),
+        }
+    }
+}
+
+impl HubListCommand {
+    pub fn run(&self) -> anyhow::Result<()> {
+        use crate::skill_hub;
+        let mut entries = skill_hub::load_cached_hub();
+        if entries.is_empty() {
+            println!("No cached skills. Fetching from hub...");
+            match skill_hub::refresh_hub_cache() {
+                Ok(()) => entries = skill_hub::load_cached_hub(),
+                Err(e) => {
+                    println!(
+                        "Warning: could not fetch hub ({}). No skills available offline.",
+                        e
+                    );
+                    return Ok(());
+                }
+            }
+        }
+        if entries.is_empty() {
+            println!("Hub is empty or not yet set up.");
+            return Ok(());
+        }
+        println!(
+            "{:<24} {:<14} {:<14} Description",
+            "Name", "Category", "Driver"
+        );
+        println!("{}", "-".repeat(80));
+        for e in &entries {
+            println!(
+                "{:<24} {:<14} {:<14} {}",
+                e.name, e.category, e.driver, e.description
+            );
+        }
+        Ok(())
+    }
+}
+
+impl HubSearchCommand {
+    pub fn run(&self) -> anyhow::Result<()> {
+        use crate::skill_hub;
+        let entries = skill_hub::load_cached_hub();
+        if entries.is_empty() {
+            println!("Hub cache is empty. Run `bubbaloop skill hub refresh` first.");
+            return Ok(());
+        }
+        let results = skill_hub::search(&entries, &self.query);
+        if results.is_empty() {
+            println!("No skills matching '{}'", self.query);
+            return Ok(());
+        }
+        for e in &results {
+            println!("{} ({}) — {}", e.name, e.driver, e.description);
+        }
+        Ok(())
+    }
+}
+
+impl HubGetCommand {
+    pub fn run(&self) -> anyhow::Result<()> {
+        use crate::skill_hub;
+        let entries = skill_hub::load_cached_hub();
+        let entry = entries
+            .iter()
+            .find(|e| e.name == self.name)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Skill '{}' not found in hub index. Run `bubbaloop skill hub refresh` first.",
+                    self.name
+                )
+            })?;
+        let yaml = skill_hub::fetch_skill_template(entry)
+            .map_err(|e| anyhow::anyhow!("Failed to fetch template: {}", e))?;
+        let dest = get_bubbaloop_home()
+            .join("skills")
+            .join(format!("{}.yaml", self.name));
+        std::fs::create_dir_all(dest.parent().unwrap())?;
+        std::fs::write(&dest, &yaml)?;
+        println!("Downloaded '{}' to {}", self.name, dest.display());
+        println!(
+            "Edit the file and replace any YOUR_* placeholders before running `bubbaloop up`."
+        );
+        Ok(())
+    }
+}
+
+impl HubRefreshCommand {
+    pub fn run(&self) -> anyhow::Result<()> {
+        use crate::skill_hub;
+        println!("Refreshing skill hub cache...");
+        match skill_hub::refresh_hub_cache() {
+            Ok(()) => {
+                let entries = skill_hub::load_cached_hub();
+                println!("Done. {} skills available.", entries.len());
+            }
+            Err(e) => println!("Failed to refresh: {}", e),
+        }
         Ok(())
     }
 }

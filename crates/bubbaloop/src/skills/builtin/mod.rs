@@ -1,7 +1,10 @@
 //! Built-in driver implementations — run as tokio tasks inside the daemon.
 
+pub mod exec;
 pub mod http_poll;
 pub mod system;
+pub mod tcp_listen;
+pub mod webhook;
 
 use std::collections::HashMap;
 use std::sync::Arc;
