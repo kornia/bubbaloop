@@ -108,11 +108,11 @@ bubbaloop agent chat   # interactive REPL
 
 ---
 
-## What's Next
+## What's Built (Skill Architecture v2)
 
-### Phase 1: YAML Skill Loader + Driver Mapping
+### Three-Tier Skill System ✓
 
-**Goal:** Zero-code sensor configuration. Write 5 lines of YAML, not a Rust project.
+**Goal:** Zero-code sensor configuration. Write 5 lines of YAML, not a Rust project. The tier is resolved automatically — users never select it.
 
 ```yaml
 # ~/.bubbaloop/skills/front-camera.yaml
@@ -120,29 +120,51 @@ name: front-door
 driver: rtsp
 config:
   url: rtsp://192.168.1.100/stream
-  decoder: auto
+intent: Watch the front door. Alert if motion after 11pm.
 ```
 
-**Deliverables:**
-- [x] `~/.bubbaloop/skills/*.yaml` loader — parse driver + config at startup
-- [x] Driver registry: map `driver: rtsp` → marketplace node `rtsp-camera`
-- [x] Auto-install: download precompiled binary if driver not present
-- [x] Config injection: YAML config → node env vars / config.yaml
-- [x] `bubbaloop up` command: load all skills, ensure nodes running
-- [x] Built-in driver catalog (v1):
+| Tier | Who | Driver | How it runs |
+|------|-----|--------|-------------|
+| **1 — BuiltIn** | 91% of users | `http-poll`, `system`, `exec`, `webhook`, `tcp-listen` | tokio task inside daemon, zero download |
+| **2 — Marketplace** | hardware users | `rtsp`, `v4l2`, `serial`, `gpio` | precompiled binary, systemd service |
+| **3 — Custom Rust** | node authors | any | `cargo build` + process (existing path) |
 
-| Driver | Marketplace Node | Use Case |
-|--------|-----------------|----------|
-| `rtsp` | rtsp-camera | IP cameras, NVRs |
-| `v4l2` | v4l2-camera | USB webcams, CSI cameras |
-| `serial` | serial-bridge | Arduino, UART, RS-485 |
-| `gpio` | gpio-controller | Buttons, LEDs, relays |
-| `http-poll` | http-sensor | REST APIs, weather services |
-| `mqtt` | mqtt-bridge | Home automation, industrial |
-| `modbus` | modbus-bridge | Industrial IoT, PLCs |
-| `system` | system-telemetry | CPU, RAM, disk, temperature |
+**Deliverables (all complete):**
+- [x] `DriverKind::BuiltIn` vs `DriverKind::Marketplace` enum
+- [x] `resolve.rs` cascade: `BuiltIn | LocalBinary | MarketplaceDownload` — invisible to user
+- [x] `skills/builtin/` runtime: tokio tasks sharing daemon Zenoh session
+- [x] Built-in drivers: `http-poll`, `system`, `exec` (allowlisted), `webhook` (localhost axum), `tcp-listen`
+- [x] Health heartbeats published on `{topic}/health` at 5s interval
+- [x] Hot-reload: `notify` watcher on `~/.bubbaloop/skills/` — no restart needed
+- [x] `bubbaloop up` cascade — all three tiers, single UX
+- [x] `bubbaloop skill drivers` — catalog with tier column
+- [x] `bubbaloop skill list` — active skills with status
+- [x] `bubbaloop skill validate <file>` — YAML validation
+- [x] `bubbaloop skill hub list/search/get/refresh` — community skill templates
+- [x] Skill Hub: `kornia/bubbaloop-skills` index, local cache at `~/.bubbaloop/cache/skills_hub.yaml`
 
-**New deps:** None. **New code:** ~300-500 lines.
+**Webcam example (Tier 2 — RTSP, downloads binary once):**
+```yaml
+name: front-cam
+driver: rtsp
+config:
+  url: rtsp://192.168.1.10/stream
+  fps: 15
+intent: Monitor entrance. Alert if person detected after 11pm.
+```
+
+**HTTP snapshot example (Tier 1 — runs inside daemon, zero download):**
+```yaml
+name: doorbell
+driver: http-poll
+config:
+  url: http://192.168.1.20/snapshot.jpg
+  interval_secs: 1
+```
+
+**Tier 3 (deferred — ship when first node author requests it):**
+- `SourceNode` / `SinkNode` / `ProcessorNode` SDK traits (universal dataflow)
+- `bubbaloop-node-sdk-macros` proc-macro crate
 
 ---
 

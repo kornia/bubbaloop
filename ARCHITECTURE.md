@@ -85,6 +85,80 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 
 ---
 
+## Skill System (Three-Tier)
+
+A **skill** is an intent declaration in YAML. The daemon resolves which tier to use automatically — the user writes the same YAML regardless of tier.
+
+```yaml
+name: entrance-watch
+driver: rtsp                     # tier resolved from this
+config:
+  url: rtsp://192.168.1.10/stream
+  fps: 15
+intent: |                        # agent reads this
+  Monitor the front entrance.
+  Alert if a person appears between 11pm and 6am.
+on:
+  - trigger: person_detected
+    between: "23:00-06:00"
+    action: notify
+```
+
+### Driver Resolution Cascade
+
+```
+resolve(skill, nodes_dir):
+  1. Is driver BuiltIn?   → spawn tokio task inside daemon (zero download)
+  2. Binary already local? → register + start (existing systemd path)
+  3. Otherwise            → download from marketplace, then register + start
+```
+
+All three paths say "started" in the CLI output. Tier is an implementation detail.
+
+### Built-in Drivers (Tier 1 — tokio tasks, share daemon Zenoh session)
+
+| Driver | Use Case | Config keys |
+|--------|----------|-------------|
+| `http-poll` | REST APIs, snapshots, weather | `url`, `interval_secs` |
+| `system` | CPU, RAM, disk metrics | `interval_secs` |
+| `exec` | Shell command on interval (allowlisted binaries) | `command`, `interval_secs` |
+| `webhook` | HTTP POST receiver on localhost | `port` |
+| `tcp-listen` | TCP socket receiver on localhost | `port` |
+
+**Security constraints for built-in drivers:**
+- `exec`: binary allowlist (`python`, `python3`, `node`, `cat`, `echo`, `curl`, `jq`, `date`) — shells (`bash`, `sh`) are excluded to prevent argument-bypass
+- `webhook` + `tcp-listen`: bind `127.0.0.1` only, never `0.0.0.0`
+- `tcp-listen`: capped at 16 MiB per connection
+
+### Marketplace Drivers (Tier 2 — subprocess, systemd)
+
+| Driver | Marketplace Node | Reason for subprocess |
+|--------|-----------------|----------------------|
+| `rtsp` | `rtsp-camera` | Needs gstreamer |
+| `v4l2` | `v4l2-camera` | Needs v4l2 native bindings |
+| `serial` | `serial-bridge` | Needs serialport crate |
+| `gpio` | `gpio-controller` | Needs GPIO hardware access |
+
+### Hot-reload
+
+The daemon watches `~/.bubbaloop/skills/` with `notify`. YAML create/modify → restart skill task. YAML delete → stop skill. No daemon restart needed.
+
+### Skill Hub
+
+Community skill templates live at `kornia/bubbaloop-skills`. Cache at `~/.bubbaloop/cache/skills_hub.yaml`.
+
+```bash
+bubbaloop skill hub refresh   # fetch index
+bubbaloop skill hub search weather
+bubbaloop skill hub get weather-station  # download YAML template
+```
+
+### The Agent's Role
+
+The `intent:` and `on:` fields are the agent's surface. The daemon ignores them — it only sees `driver:` and `config:`. The agent reads `intent` as context and (future) executes `on:` handlers. These are orthogonal: **agent resolves intent, daemon runs plumbing**.
+
+---
+
 ## Node Contract
 
 Every sensor node MUST implement these standard queryables:
