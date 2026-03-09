@@ -535,6 +535,28 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         })
     };
 
+    // Start built-in skill runtime
+    let skill_task = {
+        let skill_session = session.clone();
+        let skill_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            let skills_dir = crate::daemon::registry::get_bubbaloop_home().join("skills");
+            let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+            let machine_id = crate::daemon::util::get_machine_id();
+            if let Err(e) = crate::skills::runtime::run_skill_runtime(
+                skill_session,
+                &skills_dir,
+                &scope,
+                &machine_id,
+                skill_shutdown,
+            )
+            .await
+            {
+                log::error!("Skill runtime error: {}", e);
+            }
+        })
+    };
+
     // Start daemon gateway (Zenoh manifest + command/event topics)
     let gateway_task = {
         let gw_session = session.clone();
@@ -560,6 +582,7 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
     log::info!("  MCP server: http://127.0.0.1:{}/mcp", mcp_port);
     log::info!("  Agent runtime: active");
     log::info!("  Daemon gateway: active");
+    log::info!("  Skill runtime: active (0 built-in skills at startup; count updated at runtime)");
     log::info!("  Nodes: {} registered", initial_list.nodes.len());
     log::info!("  Health monitor: active (Zenoh heartbeats)");
     log::info!("  Telemetry watchdog: active");
@@ -571,7 +594,7 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
     log::info!("Shutdown signal received, waiting for tasks to gracefully finish...");
 
     // Wait for all tasks to complete gracefully (they all listen to shutdown_rx)
-    let _ = tokio::join!(mcp_task, agent_task, gateway_task);
+    let _ = tokio::join!(mcp_task, agent_task, gateway_task, skill_task);
 
     log::info!("Bubbaloop daemon stopped.");
 

@@ -11,7 +11,9 @@
 //!   url: rtsp://192.168.1.10/stream
 //! ```
 
+pub mod builtin;
 pub mod resolve;
+pub mod runtime;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
