@@ -11,6 +11,8 @@
 //!   url: rtsp://192.168.1.10/stream
 //! ```
 
+pub mod resolve;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -46,12 +48,15 @@ pub struct SkillConfig {
     /// Driver-specific key/value parameters.
     #[serde(default)]
     pub config: HashMap<String, serde_yaml::Value>,
+    /// Free-form agent-readable intent declaration (what should the agent do with this data).
+    #[serde(default)]
+    pub intent: String,
+    /// Declarative event handlers (agent-executed).
+    #[serde(default)]
+    pub on: Vec<serde_yaml::Value>,
     /// Optional cron-style schedule (Phase 4 placeholder).
     #[serde(default)]
     pub schedule: Option<String>,
-    /// Free-form agent-readable instructions (optional).
-    #[serde(default)]
-    pub body: String,
     /// Declarative actions list (Phase 4 placeholder).
     #[serde(default)]
     pub actions: Vec<serde_yaml::Value>,
@@ -61,55 +66,100 @@ fn default_enabled() -> bool {
     true
 }
 
+/// Whether a driver runs built-in inside the daemon or requires a marketplace binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverKind {
+    /// Runs as a tokio task inside the daemon — no binary download needed.
+    BuiltIn,
+    /// Requires downloading a precompiled binary from the marketplace.
+    Marketplace,
+}
+
 /// Maps a driver name to the corresponding marketplace node.
 #[derive(Debug, Clone, Copy)]
 pub struct DriverEntry {
     pub driver_name: &'static str,
-    pub marketplace_node: &'static str,
+    pub kind: DriverKind,
+    /// Marketplace node name. None for BuiltIn drivers.
+    pub marketplace_node: Option<&'static str>,
     pub description: &'static str,
+}
+
+impl DriverEntry {
+    pub fn is_builtin(&self) -> bool {
+        self.kind == DriverKind::BuiltIn
+    }
 }
 
 /// Built-in driver catalog.
 pub static DRIVER_CATALOG: &[DriverEntry] = &[
+    // ── BuiltIn drivers (run as tokio tasks inside the daemon) ──────────────
+    DriverEntry {
+        driver_name: "http-poll",
+        kind: DriverKind::BuiltIn,
+        marketplace_node: None,
+        description: "REST APIs, weather services, HTTP sensors",
+    },
+    DriverEntry {
+        driver_name: "system",
+        kind: DriverKind::BuiltIn,
+        marketplace_node: None,
+        description: "CPU, RAM, disk, temperature",
+    },
+    DriverEntry {
+        driver_name: "exec",
+        kind: DriverKind::BuiltIn,
+        marketplace_node: None,
+        description: "Run a shell command on interval, publish stdout",
+    },
+    DriverEntry {
+        driver_name: "webhook",
+        kind: DriverKind::BuiltIn,
+        marketplace_node: None,
+        description: "Receive HTTP POST webhooks, publish body",
+    },
+    DriverEntry {
+        driver_name: "tcp-listen",
+        kind: DriverKind::BuiltIn,
+        marketplace_node: None,
+        description: "Raw TCP listener, publish received data",
+    },
+    // ── Marketplace drivers (require precompiled binary download) ────────────
     DriverEntry {
         driver_name: "rtsp",
-        marketplace_node: "rtsp-camera",
-        description: "IP cameras, NVRs",
+        kind: DriverKind::Marketplace,
+        marketplace_node: Some("rtsp-camera"),
+        description: "IP cameras, NVRs, ONVIF",
     },
     DriverEntry {
         driver_name: "v4l2",
-        marketplace_node: "v4l2-camera",
+        kind: DriverKind::Marketplace,
+        marketplace_node: Some("v4l2-camera"),
         description: "USB webcams, CSI cameras",
     },
     DriverEntry {
         driver_name: "serial",
-        marketplace_node: "serial-bridge",
+        kind: DriverKind::Marketplace,
+        marketplace_node: Some("serial-bridge"),
         description: "Arduino, UART, RS-485",
     },
     DriverEntry {
         driver_name: "gpio",
-        marketplace_node: "gpio-controller",
+        kind: DriverKind::Marketplace,
+        marketplace_node: Some("gpio-controller"),
         description: "Buttons, LEDs, relays",
     },
     DriverEntry {
-        driver_name: "http-poll",
-        marketplace_node: "http-sensor",
-        description: "REST APIs, weather services",
-    },
-    DriverEntry {
         driver_name: "mqtt",
-        marketplace_node: "mqtt-bridge",
-        description: "Home automation, industrial",
+        kind: DriverKind::Marketplace,
+        marketplace_node: Some("mqtt-bridge"),
+        description: "Home automation, industrial MQTT",
     },
     DriverEntry {
         driver_name: "modbus",
-        marketplace_node: "modbus-bridge",
+        kind: DriverKind::Marketplace,
+        marketplace_node: Some("modbus-bridge"),
         description: "Industrial IoT, PLCs",
-    },
-    DriverEntry {
-        driver_name: "system",
-        marketplace_node: "system-telemetry",
-        description: "CPU, RAM, disk, temperature",
     },
 ];
 
@@ -253,21 +303,30 @@ actions:
     // ── resolve_driver ───────────────────────────────────────────────────────
 
     #[test]
-    fn resolve_all_builtin_drivers() {
+    fn resolve_known_marketplace_drivers() {
         let cases = [
             ("rtsp", "rtsp-camera"),
             ("v4l2", "v4l2-camera"),
             ("serial", "serial-bridge"),
             ("gpio", "gpio-controller"),
-            ("http-poll", "http-sensor"),
             ("mqtt", "mqtt-bridge"),
             ("modbus", "modbus-bridge"),
-            ("system", "system-telemetry"),
         ];
         for (driver, node) in cases {
-            let entry = resolve_driver(driver)
-                .unwrap_or_else(|| panic!("driver '{}' not found in catalog", driver));
-            assert_eq!(entry.marketplace_node, node);
+            let entry =
+                resolve_driver(driver).unwrap_or_else(|| panic!("driver '{}' not found", driver));
+            assert_eq!(entry.kind, DriverKind::Marketplace);
+            assert_eq!(entry.marketplace_node, Some(node));
+        }
+    }
+
+    #[test]
+    fn resolve_builtin_drivers() {
+        for name in &["http-poll", "system", "exec", "webhook", "tcp-listen"] {
+            let entry =
+                resolve_driver(name).unwrap_or_else(|| panic!("driver '{}' not found", name));
+            assert_eq!(entry.kind, DriverKind::BuiltIn);
+            assert_eq!(entry.marketplace_node, None);
         }
     }
 
@@ -287,7 +346,8 @@ actions:
             driver: "rtsp".into(),
             enabled: true,
             config: HashMap::new(),
-            body: String::new(),
+            intent: String::new(),
+            on: vec![],
             schedule: None,
             actions: Vec::new(),
         };
@@ -301,7 +361,8 @@ actions:
             driver: "rtsp".into(),
             enabled: true,
             config: HashMap::new(),
-            body: String::new(),
+            intent: String::new(),
+            on: vec![],
             schedule: None,
             actions: Vec::new(),
         };
@@ -318,7 +379,8 @@ actions:
             driver: "rtsp".into(),
             enabled: true,
             config: HashMap::new(),
-            body: String::new(),
+            intent: String::new(),
+            on: vec![],
             schedule: None,
             actions: Vec::new(),
         };
@@ -335,7 +397,8 @@ actions:
             driver: "unknown-driver".into(),
             enabled: true,
             config: HashMap::new(),
-            body: String::new(),
+            intent: String::new(),
+            on: vec![],
             schedule: None,
             actions: Vec::new(),
         };
@@ -414,5 +477,15 @@ actions:
         }
         let skills = load_skills(dir.path()).unwrap();
         assert_eq!(skills.len(), 3);
+    }
+
+    // ── DriverEntry::is_builtin ──────────────────────────────────────────────
+
+    #[test]
+    fn is_builtin_helper() {
+        let builtin = resolve_driver("http-poll").unwrap();
+        assert!(builtin.is_builtin());
+        let marketplace = resolve_driver("rtsp").unwrap();
+        assert!(!marketplace.is_builtin());
     }
 }

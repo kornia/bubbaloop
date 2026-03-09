@@ -113,7 +113,18 @@ impl UpCommand {
                 }
             };
 
-            let marketplace_node = driver_entry.marketplace_node;
+            let marketplace_node = match driver_entry.marketplace_node {
+                Some(n) => n,
+                None => {
+                    // BuiltIn drivers don't map to a marketplace node — skip legacy path.
+                    println!(
+                        "  [skip] Driver '{}' is built-in (not yet supported by `up`)",
+                        skill.driver
+                    );
+                    skipped_count += 1;
+                    continue;
+                }
+            };
             println!("  node:   {}", marketplace_node);
 
             let registry_node = match registry::find_by_name(&registry_nodes, marketplace_node) {
