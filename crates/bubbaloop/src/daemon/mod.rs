@@ -423,23 +423,32 @@ async fn dispatch_daemon_command(
         }
         gateway::DaemonCommandType::StartSkill { name } => {
             validate_name!(name);
-            let skill_names = {
+            let already_running = {
                 let rt = skill_runtime.lock().await;
-                rt.list_skills()
+                rt.list_skills().contains(name)
             };
-            if skill_names.contains(name) {
+            if already_running {
                 events.push(gateway::DaemonEvent::result(
                     id,
                     &format!("Skill '{}' already running", name),
                 ));
             } else {
-                events.push(gateway::DaemonEvent::error(
-                    id,
-                    &format!(
-                        "Skill '{}' not found (is it configured in ~/.bubbaloop/skills/?)",
-                        name
-                    ),
-                ));
+                // Load skill config from disk by name
+                let skills_dir = crate::daemon::registry::get_bubbaloop_home().join("skills");
+                let skills = crate::skills::load_skills(&skills_dir).unwrap_or_default();
+                if let Some(skill) = skills.into_iter().find(|s| s.name == *name) {
+                    let mut rt = skill_runtime.lock().await;
+                    rt.start_skill(skill);
+                    events.push(gateway::DaemonEvent::result(
+                        id,
+                        &format!("Started skill '{}'", name),
+                    ));
+                } else {
+                    events.push(gateway::DaemonEvent::error(
+                        id,
+                        &format!("Skill '{}' not found in ~/.bubbaloop/skills/", name),
+                    ));
+                }
             }
         }
         gateway::DaemonCommandType::StopSkill { name } => {

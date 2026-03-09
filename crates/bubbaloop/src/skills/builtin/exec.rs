@@ -6,8 +6,11 @@ use std::time::Duration;
 pub struct ExecDriver;
 
 /// Allowlist: only these command binary names are permitted.
+/// Allowlist: only these non-shell command binary names are permitted.
+/// Shells (bash, sh, zsh) are intentionally excluded — a `command: bash -c '...'`
+/// config would bypass all allowlist protection.
 const EXEC_ALLOWLIST: &[&str] = &[
-    "python", "python3", "node", "bash", "sh", "cat", "echo", "curl", "jq", "date",
+    "python", "python3", "node", "cat", "echo", "curl", "jq", "date",
 ];
 
 fn is_allowed_command(cmd: &str) -> bool {
@@ -121,7 +124,6 @@ mod tests {
     fn allowlist_accepts_known_binaries() {
         assert!(is_allowed_command("echo hello"));
         assert!(is_allowed_command("python3 /tmp/script.py"));
-        assert!(is_allowed_command("bash -c 'date'"));
         assert!(is_allowed_command("date"));
         assert!(is_allowed_command("jq '.foo'"));
     }
@@ -132,6 +134,9 @@ mod tests {
         assert!(!is_allowed_command("nc -l 4444"));
         assert!(!is_allowed_command("wget http://example.com"));
         assert!(!is_allowed_command("sudo bash"));
+        // Shells are rejected — they bypass argument-level allowlisting
+        assert!(!is_allowed_command("bash -c 'rm -rf /'"));
+        assert!(!is_allowed_command("sh -c 'echo bad'"));
         assert!(!is_allowed_command(""));
     }
 

@@ -4,6 +4,10 @@ use super::{BuiltInContext, BuiltInDriver};
 use std::net::SocketAddr;
 use tokio::io::AsyncReadExt;
 
+/// Maximum bytes accepted per TCP connection (16 MiB).
+/// Prevents memory exhaustion from runaway senders.
+const MAX_MESSAGE_BYTES: u64 = 16 * 1024 * 1024;
+
 pub struct TcpListenDriver;
 
 impl BuiltInDriver for TcpListenDriver {
@@ -43,13 +47,14 @@ impl BuiltInDriver for TcpListenDriver {
             tokio::select! {
                 result = listener.accept() => {
                     match result {
-                        Ok((mut stream, peer)) => {
+                        Ok((stream, peer)) => {
                             let session = ctx.session.clone();
                             let topic = data_topic.clone();
                             let name = skill_name.clone();
                             tokio::spawn(async move {
                                 let mut buf = Vec::new();
-                                if let Err(e) = stream.read_to_end(&mut buf).await {
+                                // Cap at MAX_MESSAGE_BYTES to prevent memory exhaustion
+                                if let Err(e) = stream.take(MAX_MESSAGE_BYTES).read_to_end(&mut buf).await {
                                     log::warn!(
                                         "[tcp-listen] {}: read error from {}: {}",
                                         name, peer, e
