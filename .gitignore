@@ -78,3 +78,6 @@ Thumbs.db
 # External repos and stale build artifacts (node source lives in separate repos)
 bubbaloop-nodes-official/
 crates/bubbaloop-nodes/
+
+# Git worktrees
+.worktrees/
