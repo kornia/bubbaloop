@@ -21,7 +21,7 @@ use argh::FromArgs;
 use bubbaloop::cli::launch::LaunchCommand;
 use bubbaloop::cli::{
     AgentCommand, DaemonCommand, DebugCommand, LoginCommand, LogoutCommand, MarketplaceCommand,
-    NodeCommand, UpCommand,
+    NodeCommand, SkillCommand, UpCommand,
 };
 
 /// Bubbaloop - AI-native orchestration for Physical AI
@@ -50,6 +50,7 @@ enum Command {
     Marketplace(MarketplaceCommand),
     Debug(DebugCommand),
     Up(UpCommand),
+    Skill(SkillCommand),
     InitTls(InitTlsArgs),
 }
 
@@ -243,6 +244,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("  up        Load skills and ensure sensor nodes are running:");
             eprintln!("              -s, --skills-dir <path>: Skills directory");
             eprintln!("              --dry-run: Show what would be done");
+            eprintln!("  skill     Manage skills and driver catalog:");
+            eprintln!("              drivers: List all available drivers with tier");
+            eprintln!("              list: Show active skills in ~/.bubbaloop/skills/");
+            eprintln!("              validate <file>: Validate a skill YAML file");
             eprintln!("  debug     Debug Zenoh connectivity:");
             eprintln!("              info, topics, query, subscribe");
             eprintln!("  init-tls  Print TLS/mTLS certificate generation guide");
@@ -439,6 +444,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.run()
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        }
+        Some(Command::Skill(cmd)) => {
+            if let Err(e) = cmd.run().await {
+                eprintln!("Error: {}", e);
+            }
         }
         Some(Command::InitTls(args)) => {
             let cert_dir = args.output_dir.unwrap_or_else(|| {
