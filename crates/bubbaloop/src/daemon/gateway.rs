@@ -55,6 +55,12 @@ pub enum DaemonCommandType {
     Health,
     /// Graceful daemon shutdown.
     Shutdown,
+    /// Start a built-in skill by name.
+    StartSkill { name: String },
+    /// Stop a built-in skill by name.
+    StopSkill { name: String },
+    /// List all active built-in skills.
+    ListSkills,
 }
 
 // ── Event (Daemon → CLI) ────────────────────────────────────────
@@ -260,6 +266,13 @@ mod tests {
             },
             DaemonCommandType::Health,
             DaemonCommandType::Shutdown,
+            DaemonCommandType::StartSkill {
+                name: "system".to_string(),
+            },
+            DaemonCommandType::StopSkill {
+                name: "system".to_string(),
+            },
+            DaemonCommandType::ListSkills,
         ];
         for command in commands {
             let cmd = DaemonCommand {

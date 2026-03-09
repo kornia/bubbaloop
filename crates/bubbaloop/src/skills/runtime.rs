@@ -96,9 +96,32 @@ impl SkillRuntime {
         }
     }
 
+    /// Abort all running skill tasks and clear the task map.
+    pub fn shutdown(&mut self) {
+        for (name, handle) in self.tasks.drain() {
+            log::debug!("[SkillRuntime] Aborting task for '{}'", name);
+            handle.abort();
+        }
+    }
+
     /// List active skill names.
     pub fn list_skills(&self) -> Vec<String> {
         self.tasks.keys().cloned().collect()
+    }
+
+    /// Returns a synthetic `NodeInfo` for each active built-in skill.
+    pub fn get_skill_states(&self) -> Vec<crate::mcp::platform::NodeInfo> {
+        self.tasks
+            .keys()
+            .map(|name| crate::mcp::platform::NodeInfo {
+                name: name.clone(),
+                status: "Running".to_string(),
+                health: "Healthy".to_string(),
+                node_type: "builtin".to_string(),
+                installed: true,
+                is_built: true,
+            })
+            .collect()
     }
 
     /// Load and start all enabled BuiltIn skills from the skills directory.

@@ -120,6 +120,7 @@ async fn run_daemon_gateway(
     mcp_port: u16,
     shutdown_tx: tokio::sync::watch::Sender<()>,
     mut shutdown_rx: tokio::sync::watch::Receiver<()>,
+    skill_runtime: Arc<tokio::sync::Mutex<crate::skills::runtime::SkillRuntime>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = util::get_machine_id();
@@ -208,6 +209,7 @@ async fn run_daemon_gateway(
                                 let events = dispatch_daemon_command(
                                     &cmd,
                                     &platform,
+                                    &skill_runtime,
                                     &shutdown_tx,
                                     start_time,
                                     mcp_port,
@@ -246,6 +248,7 @@ async fn run_daemon_gateway(
 async fn dispatch_daemon_command(
     cmd: &gateway::DaemonCommand,
     platform: &std::sync::Arc<crate::mcp::platform::DaemonPlatform>,
+    skill_runtime: &Arc<tokio::sync::Mutex<crate::skills::runtime::SkillRuntime>>,
     shutdown_tx: &tokio::sync::watch::Sender<()>,
     start_time: std::time::Instant,
     mcp_port: u16,
@@ -269,7 +272,10 @@ async fn dispatch_daemon_command(
 
     match &cmd.command {
         gateway::DaemonCommandType::ListNodes => match platform.list_nodes().await {
-            Ok(nodes) => {
+            Ok(mut nodes) => {
+                // Merge built-in skills into the node list
+                let rt = skill_runtime.lock().await;
+                nodes.extend(rt.get_skill_states());
                 let text = serde_json::to_string(&nodes).unwrap_or_default();
                 events.push(gateway::DaemonEvent::result(id, &text));
             }
@@ -415,6 +421,42 @@ async fn dispatch_daemon_command(
             events.push(gateway::DaemonEvent::result(id, "shutting down"));
             shutdown_tx.send(()).ok();
         }
+        gateway::DaemonCommandType::StartSkill { name } => {
+            validate_name!(name);
+            let skill_names = {
+                let rt = skill_runtime.lock().await;
+                rt.list_skills()
+            };
+            if skill_names.contains(name) {
+                events.push(gateway::DaemonEvent::result(
+                    id,
+                    &format!("Skill '{}' already running", name),
+                ));
+            } else {
+                events.push(gateway::DaemonEvent::error(
+                    id,
+                    &format!(
+                        "Skill '{}' not found (is it configured in ~/.bubbaloop/skills/?)",
+                        name
+                    ),
+                ));
+            }
+        }
+        gateway::DaemonCommandType::StopSkill { name } => {
+            validate_name!(name);
+            let mut rt = skill_runtime.lock().await;
+            rt.stop_skill(name);
+            events.push(gateway::DaemonEvent::result(
+                id,
+                &format!("Stopped skill '{}'", name),
+            ));
+        }
+        gateway::DaemonCommandType::ListSkills => {
+            let rt = skill_runtime.lock().await;
+            let names = rt.list_skills();
+            let text = serde_json::to_string(&names).unwrap_or_default();
+            events.push(gateway::DaemonEvent::result(id, &text));
+        }
     }
 
     events.push(gateway::DaemonEvent::done(id));
@@ -535,25 +577,30 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         })
     };
 
-    // Start built-in skill runtime
+    // Create shared skill runtime (Arc<Mutex> so gateway can dispatch skill commands)
+    let skill_runtime = {
+        let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
+        let machine_id = crate::daemon::util::get_machine_id();
+        let skills_dir = crate::daemon::registry::get_bubbaloop_home().join("skills");
+        let mut rt = crate::skills::runtime::SkillRuntime::new(
+            session.clone(),
+            scope,
+            machine_id,
+            shutdown_rx.clone(),
+        );
+        rt.load_from_dir(&skills_dir);
+        Arc::new(tokio::sync::Mutex::new(rt))
+    };
+
+    // Start built-in skill runtime — wait for shutdown then abort all tasks
     let skill_task = {
-        let skill_session = session.clone();
-        let skill_shutdown = shutdown_rx.clone();
+        let sr = skill_runtime.clone();
+        let mut skill_shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
-            let skills_dir = crate::daemon::registry::get_bubbaloop_home().join("skills");
-            let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
-            let machine_id = crate::daemon::util::get_machine_id();
-            if let Err(e) = crate::skills::runtime::run_skill_runtime(
-                skill_session,
-                &skills_dir,
-                &scope,
-                &machine_id,
-                skill_shutdown,
-            )
-            .await
-            {
-                log::error!("Skill runtime error: {}", e);
-            }
+            skill_shutdown.changed().await.ok();
+            log::info!("Skill runtime shutting down");
+            let mut rt = sr.lock().await;
+            rt.shutdown();
         })
     };
 
@@ -563,6 +610,7 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         let gw_manager = node_manager.clone();
         let gw_shutdown_tx = shutdown_tx.clone();
         let gw_shutdown_rx = shutdown_rx.clone();
+        let gw_skill_runtime = skill_runtime.clone();
         tokio::spawn(async move {
             if let Err(e) = run_daemon_gateway(
                 gw_session,
@@ -570,6 +618,7 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
                 mcp_port,
                 gw_shutdown_tx,
                 gw_shutdown_rx,
+                gw_skill_runtime,
             )
             .await
             {
