@@ -18,6 +18,8 @@ pub struct DaemonPlatform {
     pub machine_id: String,
     /// Cached path to the default agent's memory.db.
     agent_db_path: PathBuf,
+    /// Registry of running built-in drivers.
+    driver_registry: Arc<crate::daemon::builtin_drivers::DriverRegistry>,
 }
 
 impl DaemonPlatform {
@@ -29,12 +31,33 @@ impl DaemonPlatform {
         machine_id: String,
     ) -> Self {
         let agent_db_path = Self::compute_agent_db_path();
+        let driver_registry = Arc::new(crate::daemon::builtin_drivers::DriverRegistry::new());
         Self {
             node_manager,
             session,
             scope,
             machine_id,
             agent_db_path,
+            driver_registry,
+        }
+    }
+
+    /// Create a new DaemonPlatform with an existing DriverRegistry (for shared shutdown).
+    pub fn with_driver_registry(
+        node_manager: Arc<NodeManager>,
+        session: Arc<Session>,
+        scope: String,
+        machine_id: String,
+        driver_registry: Arc<crate::daemon::builtin_drivers::DriverRegistry>,
+    ) -> Self {
+        let agent_db_path = Self::compute_agent_db_path();
+        Self {
+            node_manager,
+            session,
+            scope,
+            machine_id,
+            agent_db_path,
+            driver_registry,
         }
     }
 
@@ -700,6 +723,57 @@ impl PlatformOperations for DaemonPlatform {
         store
             .world_state_snapshot()
             .map_err(|e| PlatformError::Internal(e.to_string()))
+    }
+
+    async fn start_builtin_driver(
+        &self,
+        skill_name: &str,
+        driver_name: &str,
+        config: &std::collections::HashMap<String, serde_yaml::Value>,
+    ) -> PlatformResult<String> {
+        let driver =
+            crate::daemon::builtin_drivers::create_driver(driver_name).ok_or_else(|| {
+                PlatformError::InvalidInput(format!("Unknown built-in driver: {}", driver_name))
+            })?;
+
+        self.driver_registry
+            .start_driver(
+                driver,
+                self.session.clone(),
+                self.scope.clone(),
+                self.machine_id.clone(),
+                skill_name.to_string(),
+                config.clone(),
+            )
+            .await
+            .map_err(|e| PlatformError::CommandFailed(e.to_string()))?;
+
+        log::info!(
+            "[MCP] tool=start_builtin_driver skill={} driver={}",
+            skill_name,
+            driver_name
+        );
+        Ok(format!(
+            "Started built-in driver '{}' for skill '{}'",
+            driver_name, skill_name
+        ))
+    }
+
+    async fn stop_builtin_driver(&self, skill_name: &str) -> PlatformResult<String> {
+        self.driver_registry
+            .stop_driver(skill_name)
+            .await
+            .map_err(|e| PlatformError::CommandFailed(e.to_string()))?;
+
+        log::info!("[MCP] tool=stop_builtin_driver skill={}", skill_name);
+        Ok(format!(
+            "Stopped built-in driver for skill '{}'",
+            skill_name
+        ))
+    }
+
+    async fn list_builtin_drivers(&self) -> PlatformResult<Vec<(String, String)>> {
+        Ok(self.driver_registry.list_running().await)
     }
 
     async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {

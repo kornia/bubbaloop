@@ -240,7 +240,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("              setup [-a <id>]: Configure provider, model, and identity (no daemon needed)");
             eprintln!("              chat [-a agent[@machine]] [message]: Send messages to agents");
             eprintln!("              list [--all]: Show running agents and capabilities");
-            eprintln!("  up        Load skills and ensure sensor nodes are running:");
+            eprintln!("  up        Load skills and ensure source nodes are running:");
             eprintln!("              -s, --skills-dir <path>: Skills directory");
             eprintln!("              --dry-run: Show what would be done");
             eprintln!("  debug     Debug Zenoh connectivity:");

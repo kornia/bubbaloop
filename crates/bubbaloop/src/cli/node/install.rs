@@ -494,6 +494,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_set_executable() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();

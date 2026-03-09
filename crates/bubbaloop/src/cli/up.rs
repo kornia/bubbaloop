@@ -1,4 +1,4 @@
-//! `bubbaloop up` — Load all skills and ensure sensor nodes are running.
+//! `bubbaloop up` — Load all skills and ensure source nodes are running.
 //!
 //! Reads all YAML skill files from `~/.bubbaloop/skills/`, resolves the
 //! corresponding marketplace nodes, installs missing nodes, injects
@@ -113,97 +113,134 @@ impl UpCommand {
                 }
             };
 
-            let marketplace_node = driver_entry.marketplace_node;
-            println!("  node:   {}", marketplace_node);
+            match driver_entry.tier {
+                skills::DriverTier::BuiltIn => {
+                    // ── Built-in: start as async task inside the daemon ──
+                    println!("  tier:   built-in");
 
-            let registry_node = match registry::find_by_name(&registry_nodes, marketplace_node) {
-                Some(n) => n,
-                None => {
-                    println!("  [skip] Node '{}' not in registry", marketplace_node);
-                    skipped_count += 1;
-                    continue;
-                }
-            };
-
-            // Step 1: Download if not installed locally
-            let node_dir = if is_node_installed(marketplace_node) {
-                resolve_node_dir(&registry_node)
-            } else if self.dry_run {
-                println!("  [dry-run] Would install {}", marketplace_node);
-                skipped_count += 1;
-                continue;
-            } else {
-                println!("  Installing {}...", marketplace_node);
-                let dir = marketplace::download_precompiled(&registry_node)?;
-                println!("  Downloaded to {}", dir);
-                PathBuf::from(&dir)
-            };
-
-            // Step 2: Write per-skill config (each skill gets its own file)
-            let config_path = if !skill.config.is_empty() && !self.dry_run {
-                let cfg_dir = get_bubbaloop_home().join("skills-config").join(&skill.name);
-                match write_node_config(&cfg_dir, &skill.config) {
-                    Ok(()) => {
-                        let p = cfg_dir.join("config.yaml");
-                        println!("  Config written to {}", p.display());
-                        Some(p.display().to_string())
+                    if self.dry_run {
+                        println!("  [dry-run] Would start built-in driver '{}'", skill.driver);
+                        continue;
                     }
-                    Err(e) => {
-                        println!("  [warn] Config write failed: {}", e);
-                        None
+
+                    match client
+                        .start_builtin_driver(&skill.name, &skill.driver, &skill.config)
+                        .await
+                    {
+                        Ok(msg) => {
+                            if msg.contains("already") || msg.contains("Already") {
+                                println!("  [ok] Already running");
+                                already_running += 1;
+                            } else {
+                                println!("  [ok] Started (built-in)");
+                                started_count += 1;
+                            }
+                        }
+                        Err(e) => {
+                            println!("  [err] Failed to start built-in driver: {}", e);
+                            skipped_count += 1;
+                        }
                     }
                 }
-            } else {
-                None
-            };
+                skills::DriverTier::Marketplace => {
+                    // ── Marketplace: download binary + register + systemd ──
+                    let marketplace_node = driver_entry.marketplace_node;
+                    println!("  tier:   marketplace");
+                    println!("  node:   {}", marketplace_node);
 
-            if self.dry_run {
-                println!("  [dry-run] Would register + start {}", skill.name);
-                continue;
-            }
+                    let registry_node =
+                        match registry::find_by_name(&registry_nodes, marketplace_node) {
+                            Some(n) => n,
+                            None => {
+                                println!("  [skip] Node '{}' not in registry", marketplace_node);
+                                skipped_count += 1;
+                                continue;
+                            }
+                        };
 
-            // Step 3: Register with daemon as a named instance
-            // Each skill becomes its own node instance (e.g. "entrance-cam" backed by rtsp-camera binary)
-            let node_path = node_dir.display().to_string();
-            let instance_name = &skill.name;
-            match client
-                .add_node(&node_path, Some(instance_name), config_path.as_deref())
-                .await
-            {
-                Ok(msg) => {
-                    log::debug!("Registered {}: {}", instance_name, msg);
-                }
-                Err(e) => {
-                    println!("  [warn] Could not register with daemon: {}", e);
-                    skipped_count += 1;
-                    continue;
-                }
-            }
-
-            // Step 4: Install systemd service
-            match client.send_node_command(instance_name, "install").await {
-                Ok(msg) => {
-                    log::debug!("Installed service for {}: {}", instance_name, msg);
-                }
-                Err(_) => {
-                    log::debug!("Service install for {} (may already exist)", instance_name);
-                }
-            }
-
-            // Step 5: Start the node
-            match client.send_node_command(instance_name, "start").await {
-                Ok(msg) => {
-                    if msg.contains("already") || msg.contains("Running") {
-                        println!("  [ok] Already running");
-                        already_running += 1;
+                    // Step 1: Download if not installed locally
+                    let node_dir = if is_node_installed(marketplace_node) {
+                        resolve_node_dir(&registry_node)
+                    } else if self.dry_run {
+                        println!("  [dry-run] Would install {}", marketplace_node);
+                        skipped_count += 1;
+                        continue;
                     } else {
-                        println!("  [ok] Started");
-                        started_count += 1;
+                        println!("  Installing {}...", marketplace_node);
+                        let dir = marketplace::download_precompiled(&registry_node)?;
+                        println!("  Downloaded to {}", dir);
+                        PathBuf::from(&dir)
+                    };
+
+                    // Step 2: Write per-skill config (each skill gets its own file)
+                    let config_path = if !skill.config.is_empty() && !self.dry_run {
+                        let cfg_dir = get_bubbaloop_home().join("skills-config").join(&skill.name);
+                        match write_node_config(&cfg_dir, &skill.config) {
+                            Ok(()) => {
+                                let p = cfg_dir.join("config.yaml");
+                                println!("  Config written to {}", p.display());
+                                Some(p.display().to_string())
+                            }
+                            Err(e) => {
+                                println!("  [warn] Config write failed: {}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    if self.dry_run {
+                        println!("  [dry-run] Would register + start {}", skill.name);
+                        continue;
                     }
-                }
-                Err(e) => {
-                    println!("  [err] Failed to start: {}", e);
-                    skipped_count += 1;
+
+                    // Step 3: Register with daemon as a named instance
+                    let node_path = node_dir.display().to_string();
+                    let instance_name = &skill.name;
+                    match client
+                        .add_node(&node_path, Some(instance_name), config_path.as_deref())
+                        .await
+                    {
+                        Ok(msg) => {
+                            log::debug!("Registered {}: {}", instance_name, msg);
+                        }
+                        Err(e) => {
+                            println!("  [warn] Could not register with daemon: {}", e);
+                            skipped_count += 1;
+                            continue;
+                        }
+                    }
+
+                    // Step 4: Install systemd service
+                    match client.send_node_command(instance_name, "install").await {
+                        Ok(msg) => {
+                            log::debug!("Installed service for {}: {}", instance_name, msg);
+                        }
+                        Err(_) => {
+                            log::debug!(
+                                "Service install for {} (may already exist)",
+                                instance_name
+                            );
+                        }
+                    }
+
+                    // Step 5: Start the node
+                    match client.send_node_command(instance_name, "start").await {
+                        Ok(msg) => {
+                            if msg.contains("already") || msg.contains("Running") {
+                                println!("  [ok] Already running");
+                                already_running += 1;
+                            } else {
+                                println!("  [ok] Started");
+                                started_count += 1;
+                            }
+                        }
+                        Err(e) => {
+                            println!("  [err] Failed to start: {}", e);
+                            skipped_count += 1;
+                        }
+                    }
                 }
             }
         }

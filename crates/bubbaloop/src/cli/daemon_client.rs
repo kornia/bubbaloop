@@ -326,6 +326,34 @@ impl DaemonClient {
         })
         .await
     }
+
+    /// Start a built-in driver for a skill.
+    pub async fn start_builtin_driver(
+        &self,
+        skill_name: &str,
+        driver_name: &str,
+        config: &std::collections::HashMap<String, serde_yaml::Value>,
+    ) -> Result<String> {
+        self.send(DaemonCommandType::StartBuiltinDriver {
+            skill_name: skill_name.to_string(),
+            driver_name: driver_name.to_string(),
+            config: config.clone(),
+        })
+        .await
+    }
+
+    /// Stop a built-in driver by skill name.
+    pub async fn stop_builtin_driver(&self, skill_name: &str) -> Result<String> {
+        self.send(DaemonCommandType::StopBuiltinDriver {
+            skill_name: skill_name.to_string(),
+        })
+        .await
+    }
+
+    /// List running built-in drivers.
+    pub async fn list_builtin_drivers(&self) -> Result<String> {
+        self.send(DaemonCommandType::ListBuiltinDrivers).await
+    }
 }
 
 /// Run the daemon status command: query manifest and print a summary.

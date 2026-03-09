@@ -83,6 +83,10 @@ struct InitArgs {
     #[argh(option, short = 't', default = "String::from(\"rust\")")]
     node_type: String,
 
+    /// node category: source, sink, or processor (default: source)
+    #[argh(option, short = 'k', default = "String::from(\"source\")")]
+    category: String,
+
     /// output directory (default: ./<name> in current directory)
     #[argh(option, short = 'o')]
     output: Option<String>,
@@ -518,6 +522,15 @@ fn init_node(args: InitArgs) -> Result<()> {
         )));
     }
 
+    // Validate category
+    let category = args.category.to_lowercase();
+    if !matches!(category.as_str(), "source" | "sink" | "processor") {
+        return Err(NodeError::CommandFailed(format!(
+            "Invalid category '{}'. Use: source, sink, or processor",
+            args.category
+        )));
+    }
+
     // Determine output directory (default: ./<name> in current directory)
     let output_dir = args
         .output
@@ -530,6 +543,7 @@ fn init_node(args: InitArgs) -> Result<()> {
         &args.node_type,
         &args.author,
         &args.description,
+        &category,
         &output_dir,
     )
     .map_err(|e| NodeError::CommandFailed(e.to_string()))?;

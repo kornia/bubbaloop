@@ -32,16 +32,18 @@ pub struct TemplateVars {
     pub node_name_snake: String,  // snake_case: my_sensor
     pub author: String,
     pub description: String,
+    pub category: String, // source, sink, or processor
 }
 
 impl TemplateVars {
-    pub fn new(name: &str, author: &str, description: &str) -> Self {
+    pub fn new(name: &str, author: &str, description: &str, category: &str) -> Self {
         Self {
             node_name: to_kebab_case(name),
             node_name_pascal: to_pascal_case(name),
             node_name_snake: to_snake_case(name),
             author: author.to_string(),
             description: description.to_string(),
+            category: category.to_string(),
         }
     }
 }
@@ -154,6 +156,8 @@ pub fn process_template(content: &str, vars: &TemplateVars) -> String {
         .replace("{{node_name}}", &vars.node_name)
         .replace("{{node_name_pascal}}", &vars.node_name_pascal)
         .replace("{{node_name_snake}}", &vars.node_name_snake)
+        // Category variable (source, sink, processor)
+        .replace("{{category}}", &vars.category)
         // Legacy plugin-style variables (for backwards compatibility with *-plugin templates)
         .replace("{{plugin_name}}", &vars.node_name)
         .replace("{{plugin_name_pascal}}", &vars.node_name_pascal)
@@ -168,6 +172,7 @@ pub fn create_node_at(
     node_type: &str,
     author: &str,
     description: &str,
+    category: &str,
     output_dir: &Path,
 ) -> Result<PathBuf> {
     // Validate node type
@@ -196,7 +201,7 @@ pub fn create_node_at(
     log::info!("Creating node at: {}", output_dir.display());
 
     // Template variables
-    let vars = TemplateVars::new(name, author, description);
+    let vars = TemplateVars::new(name, author, description, category);
 
     // Copy and process template files
     copy_template(&template_dir, output_dir, &vars)?;
@@ -243,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_process_template_substitution() {
-        let vars = TemplateVars::new("my-sensor", "Test Author", "A test node");
+        let vars = TemplateVars::new("my-sensor", "Test Author", "A test node", "source");
         let input = "name = \"{{node_name}}\"\nclass {{node_name_pascal}}Node\nmod {{node_name_snake}}\nauthor: {{author}}\ndesc: {{description}}";
         let result = process_template(input, &vars);
         assert!(result.contains("name = \"my-sensor\""));
@@ -254,8 +259,16 @@ mod tests {
     }
 
     #[test]
+    fn test_process_template_category_substitution() {
+        let vars = TemplateVars::new("my-node", "Author", "desc", "sink");
+        let input = "capabilities: [{{category}}]";
+        let result = process_template(input, &vars);
+        assert_eq!(result, "capabilities: [sink]");
+    }
+
+    #[test]
     fn test_process_template_legacy_plugin_vars() {
-        let vars = TemplateVars::new("my-sensor", "Author", "desc");
+        let vars = TemplateVars::new("my-sensor", "Author", "desc", "source");
         let input = "{{plugin_name}} / {{plugin_name_pascal}}";
         let result = process_template(input, &vars);
         assert_eq!(result, "my-sensor / MySensor");
@@ -263,16 +276,17 @@ mod tests {
 
     #[test]
     fn test_template_vars_new() {
-        let vars = TemplateVars::new("rtsp-camera", "Team", "Camera node");
+        let vars = TemplateVars::new("rtsp-camera", "Team", "Camera node", "processor");
         assert_eq!(vars.node_name, "rtsp-camera");
         assert_eq!(vars.node_name_pascal, "RtspCamera");
         assert_eq!(vars.node_name_snake, "rtsp_camera");
+        assert_eq!(vars.category, "processor");
     }
 
     #[test]
     fn test_create_node_at_invalid_type() {
         let tmp = std::env::temp_dir().join("bubbaloop_test_invalid_type");
-        let result = create_node_at("test", "java", "author", "desc", &tmp);
+        let result = create_node_at("test", "java", "author", "desc", "source", &tmp);
         assert!(matches!(result, Err(TemplateError::InvalidType(_))));
     }
 
@@ -314,7 +328,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("bubbaloop_test_nonempty");
         let _ = fs::create_dir_all(&tmp);
         let _ = fs::write(tmp.join("existing.txt"), "data");
-        let result = create_node_at("test", "rust", "author", "desc", &tmp);
+        let result = create_node_at("test", "rust", "author", "desc", "source", &tmp);
         assert!(matches!(result, Err(TemplateError::DirectoryExists(_))));
         let _ = fs::remove_dir_all(&tmp);
     }

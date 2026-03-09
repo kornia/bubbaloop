@@ -46,7 +46,7 @@ impl MockPlatform {
                     "version": "1.0.0",
                     "type": "rust",
                     "description": "A test node",
-                    "capabilities": ["sensor"],
+                    "capabilities": ["source"],
                     "publishes": [],
                     "subscribes": [],
                     "commands": [],
@@ -193,6 +193,29 @@ impl PlatformOperations for MockPlatform {
 
     async fn delete_job(&self, id: &str) -> PlatformResult<String> {
         Ok(format!("mock: job '{}' deleted", id))
+    }
+
+    async fn start_builtin_driver(
+        &self,
+        skill_name: &str,
+        driver_name: &str,
+        _config: &std::collections::HashMap<String, serde_yaml::Value>,
+    ) -> PlatformResult<String> {
+        Ok(format!(
+            "mock: started built-in driver '{}' for skill '{}'",
+            driver_name, skill_name
+        ))
+    }
+
+    async fn stop_builtin_driver(&self, skill_name: &str) -> PlatformResult<String> {
+        Ok(format!(
+            "mock: stopped built-in driver for skill '{}'",
+            skill_name
+        ))
+    }
+
+    async fn list_builtin_drivers(&self) -> PlatformResult<Vec<(String, String)>> {
+        Ok(vec![])
     }
 
     async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {

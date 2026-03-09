@@ -58,7 +58,7 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Bubbaloop skill runtime for AI agents. Controls physical sensor nodes via MCP.\n\n\
+                "Bubbaloop skill runtime for AI agents. Controls physical source/sink nodes via MCP.\n\n\
                  **Discovery:** list_nodes, get_node_health, get_node_schema, get_stream_info, discover_capabilities\n\
                  **Lifecycle:** start_node, stop_node, restart_node, build_node, install_node, remove_node, uninstall_node, clean_node\n\
                  **Autostart:** enable_autostart, disable_autostart\n\
@@ -74,7 +74,7 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
                  **Alerts:** register_alert, unregister_alert — reactive rules that spike arousal when world state matches\n\
                  **System:** get_system_status, get_machine_info, query_zenoh, discover_nodes\n\n\
                  install_node accepts marketplace names (e.g., 'rtsp-camera'), local paths, or GitHub 'user/repo' format.\n\
-                 Use discover_capabilities to find nodes by capability (sensor, actuator, processor, gateway).\n\
+                 Use discover_capabilities to find nodes by capability (source, sink, processor, gateway).\n\
                  Use get_node_manifest for full node details including topics, commands, and requirements.\n\
                  Streaming data flows through Zenoh (not MCP). Use get_stream_info to get Zenoh connection params.\n\
                  Missions are created by dropping a YAML file into ~/.bubbaloop/agents/{id}/missions/ — the daemon picks them up automatically.\n\

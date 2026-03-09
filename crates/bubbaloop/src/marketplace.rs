@@ -118,10 +118,17 @@ pub fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
 }
 
 /// Set a file as executable (chmod 755).
+#[cfg(unix)]
 pub fn set_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let perms = std::fs::Permissions::from_mode(0o755);
     std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+/// Set a file as executable (no-op on Windows — executability is determined by extension).
+#[cfg(not(unix))]
+pub fn set_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 

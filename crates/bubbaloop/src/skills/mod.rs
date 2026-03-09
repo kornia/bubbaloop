@@ -1,7 +1,7 @@
-//! YAML Skill Loader — configure sensors with 5-line YAML files.
+//! YAML Skill Loader — configure sources with 5-line YAML files.
 //!
 //! Skills map a human-readable driver name to a marketplace node,
-//! letting users express sensor configuration without writing Rust.
+//! letting users express source configuration without writing Rust.
 //!
 //! Example skill file (`~/.bubbaloop/skills/my-camera.yaml`):
 //! ```yaml
@@ -61,55 +61,111 @@ fn default_enabled() -> bool {
     true
 }
 
-/// Maps a driver name to the corresponding marketplace node.
+/// How a driver is executed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverTier {
+    /// Runs as a tokio task inside the daemon process.
+    BuiltIn,
+    /// Downloaded as a precompiled binary, runs as a systemd service.
+    Marketplace,
+}
+
+/// Maps a driver name to execution tier and marketplace node fallback.
 #[derive(Debug, Clone, Copy)]
 pub struct DriverEntry {
     pub driver_name: &'static str,
     pub marketplace_node: &'static str,
     pub description: &'static str,
+    pub tier: DriverTier,
 }
 
-/// Built-in driver catalog.
+/// Driver catalog — built-in drivers first, then marketplace drivers.
 pub static DRIVER_CATALOG: &[DriverEntry] = &[
-    DriverEntry {
-        driver_name: "rtsp",
-        marketplace_node: "rtsp-camera",
-        description: "IP cameras, NVRs",
-    },
-    DriverEntry {
-        driver_name: "v4l2",
-        marketplace_node: "v4l2-camera",
-        description: "USB webcams, CSI cameras",
-    },
-    DriverEntry {
-        driver_name: "serial",
-        marketplace_node: "serial-bridge",
-        description: "Arduino, UART, RS-485",
-    },
-    DriverEntry {
-        driver_name: "gpio",
-        marketplace_node: "gpio-controller",
-        description: "Buttons, LEDs, relays",
-    },
+    // ── Built-in drivers (run inside daemon as async tasks) ──
     DriverEntry {
         driver_name: "http-poll",
         marketplace_node: "http-sensor",
         description: "REST APIs, weather services",
+        tier: DriverTier::BuiltIn,
     },
     DriverEntry {
-        driver_name: "mqtt",
-        marketplace_node: "mqtt-bridge",
-        description: "Home automation, industrial",
+        driver_name: "webhook",
+        marketplace_node: "webhook-listener",
+        description: "Incoming HTTP hooks",
+        tier: DriverTier::BuiltIn,
     },
     DriverEntry {
-        driver_name: "modbus",
-        marketplace_node: "modbus-bridge",
-        description: "Industrial IoT, PLCs",
+        driver_name: "exec",
+        marketplace_node: "exec-runner",
+        description: "Shell command on interval",
+        tier: DriverTier::BuiltIn,
+    },
+    DriverEntry {
+        driver_name: "cron-task",
+        marketplace_node: "cron-runner",
+        description: "Shell command on cron schedule",
+        tier: DriverTier::BuiltIn,
     },
     DriverEntry {
         driver_name: "system",
         marketplace_node: "system-telemetry",
         description: "CPU, RAM, disk, temperature",
+        tier: DriverTier::BuiltIn,
+    },
+    DriverEntry {
+        driver_name: "tcp-listen",
+        marketplace_node: "tcp-listener",
+        description: "Raw TCP socket listener",
+        tier: DriverTier::BuiltIn,
+    },
+    DriverEntry {
+        driver_name: "udp-listen",
+        marketplace_node: "udp-listener",
+        description: "Raw UDP socket listener",
+        tier: DriverTier::BuiltIn,
+    },
+    DriverEntry {
+        driver_name: "file-watch",
+        marketplace_node: "file-watcher",
+        description: "File/dir change watcher",
+        tier: DriverTier::BuiltIn,
+    },
+    DriverEntry {
+        driver_name: "mqtt",
+        marketplace_node: "mqtt-bridge",
+        description: "Home automation, industrial",
+        tier: DriverTier::BuiltIn,
+    },
+    DriverEntry {
+        driver_name: "modbus",
+        marketplace_node: "modbus-bridge",
+        description: "Industrial IoT, PLCs",
+        tier: DriverTier::BuiltIn,
+    },
+    // ── Marketplace drivers (external binary, systemd) ──
+    DriverEntry {
+        driver_name: "rtsp",
+        marketplace_node: "rtsp-camera",
+        description: "IP cameras, NVRs",
+        tier: DriverTier::Marketplace,
+    },
+    DriverEntry {
+        driver_name: "v4l2",
+        marketplace_node: "v4l2-camera",
+        description: "USB webcams, CSI cameras",
+        tier: DriverTier::Marketplace,
+    },
+    DriverEntry {
+        driver_name: "serial",
+        marketplace_node: "serial-bridge",
+        description: "Arduino, UART, RS-485",
+        tier: DriverTier::Marketplace,
+    },
+    DriverEntry {
+        driver_name: "gpio",
+        marketplace_node: "gpio-controller",
+        description: "Buttons, LEDs, relays",
+        tier: DriverTier::Marketplace,
     },
 ];
 
@@ -253,21 +309,30 @@ actions:
     // ── resolve_driver ───────────────────────────────────────────────────────
 
     #[test]
-    fn resolve_all_builtin_drivers() {
+    fn resolve_all_catalog_drivers() {
         let cases = [
-            ("rtsp", "rtsp-camera"),
-            ("v4l2", "v4l2-camera"),
-            ("serial", "serial-bridge"),
-            ("gpio", "gpio-controller"),
-            ("http-poll", "http-sensor"),
-            ("mqtt", "mqtt-bridge"),
-            ("modbus", "modbus-bridge"),
-            ("system", "system-telemetry"),
+            // Built-in drivers
+            ("http-poll", "http-sensor", DriverTier::BuiltIn),
+            ("webhook", "webhook-listener", DriverTier::BuiltIn),
+            ("exec", "exec-runner", DriverTier::BuiltIn),
+            ("cron-task", "cron-runner", DriverTier::BuiltIn),
+            ("system", "system-telemetry", DriverTier::BuiltIn),
+            ("tcp-listen", "tcp-listener", DriverTier::BuiltIn),
+            ("udp-listen", "udp-listener", DriverTier::BuiltIn),
+            ("file-watch", "file-watcher", DriverTier::BuiltIn),
+            ("mqtt", "mqtt-bridge", DriverTier::BuiltIn),
+            ("modbus", "modbus-bridge", DriverTier::BuiltIn),
+            // Marketplace drivers
+            ("rtsp", "rtsp-camera", DriverTier::Marketplace),
+            ("v4l2", "v4l2-camera", DriverTier::Marketplace),
+            ("serial", "serial-bridge", DriverTier::Marketplace),
+            ("gpio", "gpio-controller", DriverTier::Marketplace),
         ];
-        for (driver, node) in cases {
+        for (driver, node, tier) in cases {
             let entry = resolve_driver(driver)
                 .unwrap_or_else(|| panic!("driver '{}' not found in catalog", driver));
             assert_eq!(entry.marketplace_node, node);
+            assert_eq!(entry.tier, tier, "wrong tier for driver '{}'", driver);
         }
     }
 

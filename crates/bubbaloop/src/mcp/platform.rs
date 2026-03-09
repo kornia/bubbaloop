@@ -151,6 +151,27 @@ pub trait PlatformOperations: Send + Sync + 'static {
         recurrence: bool,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
 
+    // ── Built-in drivers ──────────────────────────────────────────
+
+    /// Start a built-in driver for a skill.
+    fn start_builtin_driver(
+        &self,
+        skill_name: &str,
+        driver_name: &str,
+        config: &std::collections::HashMap<String, serde_yaml::Value>,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Stop a built-in driver by skill name.
+    fn stop_builtin_driver(
+        &self,
+        skill_name: &str,
+    ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// List running built-in drivers.
+    fn list_builtin_drivers(
+        &self,
+    ) -> impl std::future::Future<Output = PlatformResult<Vec<(String, String)>>> + Send;
+
     // ── Memory admin ────────────────────────────────────────────────
 
     /// List jobs, optionally filtered by status. Returns JSON string.

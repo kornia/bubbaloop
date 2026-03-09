@@ -29,17 +29,25 @@
 mod config;
 mod context;
 mod health;
+pub mod prelude;
+pub mod processor;
 mod schema;
 mod shutdown;
+pub mod sink;
+pub mod source;
 mod zenoh_session;
 
 pub use context::NodeContext;
+pub use processor::{run_processor, Processor};
+pub use sink::{run_sink, Sink};
+pub use source::{run_source, Source};
 
 // Re-exports for convenience (so nodes don't need to add these deps)
 pub use anyhow;
 pub use async_trait;
 pub use log;
 pub use prost;
+pub use serde_json;
 pub use tokio;
 pub use zenoh;
 

@@ -45,7 +45,7 @@ pub(crate) struct InstallNodeRequest {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct DiscoverCapabilitiesParams {
-    /// Filter by capability type: "sensor", "actuator", "processor", "gateway". Omit for all.
+    /// Filter by capability type: "source", "sink", "processor", "gateway". Omit for all.
     #[serde(default)]
     capability: Option<String>,
 }
@@ -184,6 +184,23 @@ pub(crate) struct UpdateBeliefRequest {
     /// Free-form notes.
     #[serde(default)]
     notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct StartBuiltinDriverRequest {
+    /// Skill name (from ~/.bubbaloop/skills/*.yaml)
+    skill_name: String,
+    /// Built-in driver name (e.g., "http-poll", "system", "webhook")
+    driver_name: String,
+    /// Driver configuration as key-value pairs (e.g., {"url": "https://example.com", "interval_secs": 60})
+    #[serde(default)]
+    config: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct StopBuiltinDriverRequest {
+    /// Skill name to stop the driver for
+    skill_name: String,
 }
 
 // ── Tool implementations ──────────────────────────────────────────
@@ -543,7 +560,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Discover available node capabilities. Returns nodes grouped by capability type (sensor, actuator, processor, gateway). Optionally filter by a single capability type."
+        description = "Discover available node capabilities. Returns nodes grouped by capability type (source, sink, processor, gateway). Optionally filter by a single capability type."
     )]
     async fn discover_capabilities(
         &self,
@@ -1302,6 +1319,86 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             Ok(entries) => Ok(CallToolResult::success(vec![Content::text(
                 serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "[]".to_string()),
             )])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    // ── Built-in driver tools ──────────────────────────────────────
+
+    #[tool(
+        description = "Start a built-in driver for a skill. Built-in drivers run as async tasks inside the daemon (no binary download needed). Available drivers: http-poll, webhook, exec, cron-task, system, tcp-listen, udp-listen, file-watch, mqtt, modbus. Admin only."
+    )]
+    async fn start_builtin_driver(
+        &self,
+        Parameters(req): Parameters<StartBuiltinDriverRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=start_builtin_driver skill={} driver={}",
+            req.skill_name,
+            req.driver_name
+        );
+        // Convert serde_json::Value config to serde_yaml::Value for the platform layer
+        let yaml_config: std::collections::HashMap<String, serde_yaml::Value> = req
+            .config
+            .into_iter()
+            .map(|(k, v)| {
+                let yaml_val: serde_yaml::Value =
+                    serde_yaml::from_str(&v.to_string()).unwrap_or(serde_yaml::Value::Null);
+                (k, yaml_val)
+            })
+            .collect();
+        match self
+            .platform
+            .start_builtin_driver(&req.skill_name, &req.driver_name, &yaml_config)
+            .await
+        {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "Stop a running built-in driver by skill name. Admin only.")]
+    async fn stop_builtin_driver(
+        &self,
+        Parameters(req): Parameters<StopBuiltinDriverRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=stop_builtin_driver skill={}", req.skill_name);
+        match self.platform.stop_builtin_driver(&req.skill_name).await {
+            Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "List all running built-in drivers. Returns skill name and driver name for each active driver."
+    )]
+    async fn list_builtin_drivers(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_builtin_drivers");
+        match self.platform.list_builtin_drivers().await {
+            Ok(drivers) => {
+                let json_drivers: Vec<serde_json::Value> = drivers
+                    .iter()
+                    .map(|(skill, driver)| {
+                        serde_json::json!({
+                            "skill_name": skill,
+                            "driver_name": driver,
+                        })
+                    })
+                    .collect();
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&json_drivers)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                )]))
+            }
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: {}",
                 e
