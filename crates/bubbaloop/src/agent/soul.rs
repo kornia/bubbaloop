@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Default identity prompt, embedded at compile time.
-const DEFAULT_IDENTITY: &str = r#"You are Bubbaloop, an AI agent that manages physical sensors and hardware
+const DEFAULT_IDENTITY: &str = r#"You are Bubbaloop, an AI agent that manages physical sources and devices
 through the Bubbaloop skill runtime.
 
 Your job is to keep the fleet healthy and do what the user asks.
@@ -195,7 +195,7 @@ impl Soul {
 
         let focus = prompt_with_default(
             "  Describe your agent's focus (e.g., \"home security cameras\",\n  \"weather monitoring station\", \"robot fleet\")",
-            "general-purpose sensor management",
+            "general-purpose node management",
         )?;
 
         let approval = prompt_with_default(
@@ -210,7 +210,7 @@ impl Soul {
 
         // Generate personalized identity
         let identity = format!(
-            "You are {name}, an AI agent that manages physical sensors and hardware\n\
+            "You are {name}, an AI agent that manages physical sources and devices\n\
              through the Bubbaloop skill runtime.\n\
              \n\
              Your focus: {focus}\n\

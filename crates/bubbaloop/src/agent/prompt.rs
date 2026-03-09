@@ -210,9 +210,9 @@ pub fn build_system_prompt_with_soul_path(
 
     // Current node inventory
     parts.push(format!(
-        "\n## Current Sensor Inventory\n\n{}",
+        "\n## Current Node Inventory\n\n{}",
         if node_inventory.is_empty() {
-            "No sensors installed."
+            "No nodes installed."
         } else {
             node_inventory
         }
@@ -265,7 +265,7 @@ mod tests {
         let soul = Soul::default();
         let prompt = build_system_prompt(&soul, "", &[], &[], None, None, None);
         assert!(prompt.contains("Bubbaloop"));
-        assert!(prompt.contains("No sensors installed."));
+        assert!(prompt.contains("No nodes installed."));
         assert!(prompt.contains("claude-sonnet-4-20250514"));
     }
 
@@ -293,7 +293,7 @@ mod tests {
         assert!(prompt.contains("test-model"));
         assert!(prompt.contains("Operating Mode: Propose"));
         assert!(prompt.contains("cam"));
-        assert!(!prompt.contains("No sensors installed."));
+        assert!(!prompt.contains("No nodes installed."));
     }
 
     #[test]

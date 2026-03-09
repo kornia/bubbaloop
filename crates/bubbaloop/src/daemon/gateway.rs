@@ -51,6 +51,16 @@ pub enum DaemonCommandType {
     EnableAutostart { name: String },
     /// Disable autostart for a node.
     DisableAutostart { name: String },
+    /// Start a built-in driver for a skill.
+    StartBuiltinDriver {
+        skill_name: String,
+        driver_name: String,
+        config: std::collections::HashMap<String, serde_yaml::Value>,
+    },
+    /// Stop a built-in driver by skill name.
+    StopBuiltinDriver { skill_name: String },
+    /// List running built-in drivers.
+    ListBuiltinDrivers,
     /// Query daemon health.
     Health,
     /// Graceful daemon shutdown.
@@ -258,6 +268,15 @@ mod tests {
             DaemonCommandType::DisableAutostart {
                 name: "cam".to_string(),
             },
+            DaemonCommandType::StartBuiltinDriver {
+                skill_name: "my-sensor".to_string(),
+                driver_name: "system".to_string(),
+                config: std::collections::HashMap::new(),
+            },
+            DaemonCommandType::StopBuiltinDriver {
+                skill_name: "my-sensor".to_string(),
+            },
+            DaemonCommandType::ListBuiltinDrivers,
             DaemonCommandType::Health,
             DaemonCommandType::Shutdown,
         ];

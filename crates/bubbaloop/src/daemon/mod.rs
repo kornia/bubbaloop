@@ -1,6 +1,6 @@
 //! Bubbaloop Skill Runtime
 //!
-//! Lightweight daemon for managing sensor/actuator nodes as discoverable skills.
+//! Lightweight daemon for managing source/sink nodes as discoverable skills.
 //!
 //! # Architecture
 //!
@@ -13,6 +13,7 @@
 //! The daemon never makes autonomous decisions — it's a passive skill runtime.
 
 pub mod belief_updater;
+pub mod builtin_drivers;
 pub mod constraints;
 pub mod context_provider;
 pub mod federated;
@@ -120,17 +121,19 @@ async fn run_daemon_gateway(
     mcp_port: u16,
     shutdown_tx: tokio::sync::watch::Sender<()>,
     mut shutdown_rx: tokio::sync::watch::Receiver<()>,
+    driver_registry: std::sync::Arc<builtin_drivers::DriverRegistry>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = util::get_machine_id();
     let start_time = std::time::Instant::now();
 
     // Create platform for dispatching commands
-    let platform = std::sync::Arc::new(crate::mcp::platform::DaemonPlatform::new(
+    let platform = std::sync::Arc::new(crate::mcp::platform::DaemonPlatform::with_driver_registry(
         node_manager.clone(),
         session.clone(),
         scope.clone(),
         machine_id.clone(),
+        driver_registry,
     ));
 
     // 1. Register manifest queryable
@@ -410,6 +413,34 @@ async fn dispatch_daemon_command(
             let text = serde_json::to_string(&manifest).unwrap_or_default();
             events.push(gateway::DaemonEvent::result(id, &text));
         }
+        gateway::DaemonCommandType::StartBuiltinDriver {
+            skill_name,
+            driver_name,
+            config,
+        } => {
+            match platform
+                .start_builtin_driver(skill_name, driver_name, config)
+                .await
+            {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
+        gateway::DaemonCommandType::StopBuiltinDriver { skill_name } => {
+            match platform.stop_builtin_driver(skill_name).await {
+                Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
+        gateway::DaemonCommandType::ListBuiltinDrivers => {
+            match platform.list_builtin_drivers().await {
+                Ok(drivers) => {
+                    let text = serde_json::to_string(&drivers).unwrap_or_default();
+                    events.push(gateway::DaemonEvent::result(id, &text));
+                }
+                Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
+            }
+        }
         gateway::DaemonCommandType::Shutdown => {
             log::info!("[Gateway] Received shutdown command");
             events.push(gateway::DaemonEvent::result(id, "shutting down"));
@@ -496,6 +527,9 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         telemetry::TelemetryService::start(node_manager.clone(), shutdown_rx.clone()).await,
     );
 
+    // Create shared driver registry for built-in drivers
+    let driver_registry = std::sync::Arc::new(builtin_drivers::DriverRegistry::new());
+
     // Start MCP server (HTTP on port 8088)
     let mcp_port: u16 = std::env::var("BUBBALOOP_MCP_PORT")
         .ok()
@@ -541,6 +575,7 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         let gw_manager = node_manager.clone();
         let gw_shutdown_tx = shutdown_tx.clone();
         let gw_shutdown_rx = shutdown_rx.clone();
+        let gw_driver_registry = driver_registry.clone();
         tokio::spawn(async move {
             if let Err(e) = run_daemon_gateway(
                 gw_session,
@@ -548,6 +583,7 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
                 mcp_port,
                 gw_shutdown_tx,
                 gw_shutdown_rx,
+                gw_driver_registry,
             )
             .await
             {
@@ -569,6 +605,9 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
     shutdown_wait.changed().await.ok();
 
     log::info!("Shutdown signal received, waiting for tasks to gracefully finish...");
+
+    // Stop all built-in drivers
+    driver_registry.stop_all().await;
 
     // Wait for all tasks to complete gracefully (they all listen to shutdown_rx)
     let _ = tokio::join!(mcp_task, agent_task, gateway_task);

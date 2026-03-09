@@ -276,7 +276,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "capability": { "type": "string", "description": "Filter by type: sensor, actuator, processor, gateway" }
+                        "capability": { "type": "string", "description": "Filter by type: source, sink, processor, gateway" }
                     },
                     "required": []
                 }),
@@ -525,6 +525,40 @@ impl<P: PlatformOperations> Dispatcher<P> {
                     "required": []
                 }),
             },
+            // ── Built-in driver tools ─────────────────────────────────
+            ToolDefinition {
+                name: "start_builtin_driver".to_string(),
+                description: "Start a built-in driver for a skill. Built-in drivers run as async \
+                    tasks inside the daemon (no binary download needed). Available: http-poll, \
+                    webhook, exec, cron-task, system, tcp-listen, udp-listen, file-watch, mqtt, modbus."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "skill_name": { "type": "string", "description": "Skill name" },
+                        "driver_name": { "type": "string", "description": "Built-in driver name" },
+                        "config": { "type": "object", "description": "Driver config key-value pairs" }
+                    },
+                    "required": ["skill_name", "driver_name"]
+                }),
+            },
+            ToolDefinition {
+                name: "stop_builtin_driver".to_string(),
+                description: "Stop a running built-in driver by skill name.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "skill_name": { "type": "string", "description": "Skill name to stop" }
+                    },
+                    "required": ["skill_name"]
+                }),
+            },
+            ToolDefinition {
+                name: "list_builtin_drivers".to_string(),
+                description: "List all running built-in drivers with their skill and driver names."
+                    .to_string(),
+                input_schema: empty_object,
+            },
         ]
     }
 
@@ -577,12 +611,16 @@ impl<P: PlatformOperations> Dispatcher<P> {
             "get_system_telemetry" => self.handle_get_system_telemetry().await,
             "get_telemetry_history" => self.handle_get_telemetry_history(input).await,
             "update_telemetry_config" => self.handle_update_telemetry_config(input).await,
+            "start_builtin_driver" => self.handle_start_builtin_driver(input).await,
+            "stop_builtin_driver" => self.handle_stop_builtin_driver(input).await,
+            "list_builtin_drivers" => self.handle_list_builtin_drivers().await,
             _ => ToolResult::error(format!(
                 "Unknown tool: {}. Use your available tools: node management \
                  (list_nodes, start_node, etc.), system (read_file, write_file, \
                  run_command), memory (memory_search, memory_forget), jobs/proposals \
                  (schedule_task, list_jobs, delete_job, create_proposal, list_proposals), \
-                 or telemetry (get_system_telemetry, get_telemetry_history, update_telemetry_config).",
+                 telemetry (get_system_telemetry, get_telemetry_history, update_telemetry_config), \
+                 or drivers (start_builtin_driver, stop_builtin_driver, list_builtin_drivers).",
                 name
             )),
         };
@@ -1437,6 +1475,65 @@ impl<P: PlatformOperations> Dispatcher<P> {
             Err(e) => ToolResult::error(format!("Error updating telemetry config: {}", e)),
         }
     }
+
+    // ── Built-in driver tool handlers ──────────────────────────────
+
+    async fn handle_start_builtin_driver(&self, input: &Value) -> ToolResult {
+        let skill_name = match input.get("skill_name").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => return ToolResult::error("Missing required parameter: skill_name".to_string()),
+        };
+        let driver_name = match input.get("driver_name").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                return ToolResult::error("Missing required parameter: driver_name".to_string())
+            }
+        };
+        let config: std::collections::HashMap<String, serde_yaml::Value> = input
+            .get("config")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        match self
+            .platform
+            .start_builtin_driver(&skill_name, &driver_name, &config)
+            .await
+        {
+            Ok(msg) => ToolResult::success(msg),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_stop_builtin_driver(&self, input: &Value) -> ToolResult {
+        let skill_name = match input.get("skill_name").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => return ToolResult::error("Missing required parameter: skill_name".to_string()),
+        };
+        match self.platform.stop_builtin_driver(&skill_name).await {
+            Ok(msg) => ToolResult::success(msg),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_list_builtin_drivers(&self) -> ToolResult {
+        match self.platform.list_builtin_drivers().await {
+            Ok(drivers) => {
+                let json_drivers: Vec<Value> = drivers
+                    .iter()
+                    .map(|(skill, driver)| {
+                        json!({
+                            "skill_name": skill,
+                            "driver_name": driver,
+                        })
+                    })
+                    .collect();
+                let text = serde_json::to_string_pretty(&json_drivers)
+                    .unwrap_or_else(|_| "[]".to_string());
+                ToolResult::success(text)
+            }
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1444,7 +1541,7 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    const TOOL_COUNT: usize = 37;
+    const TOOL_COUNT: usize = 40;
 
     #[test]
     fn tool_definitions_count() {
