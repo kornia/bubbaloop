@@ -19,7 +19,7 @@ pub enum DriverResolution {
 ///
 /// Returns `None` if the driver is unknown.
 pub fn resolve(skill: &SkillConfig, nodes_dir: &Path) -> Option<DriverResolution> {
-    let entry = resolve_driver(&skill.driver)?;
+    let entry = resolve_driver(skill.driver.as_deref()?)?;
     if entry.kind == DriverKind::BuiltIn {
         return Some(DriverResolution::BuiltIn);
     }
@@ -58,13 +58,16 @@ mod tests {
     fn skill(driver: &str) -> SkillConfig {
         SkillConfig {
             name: "test".into(),
-            driver: driver.into(),
+            driver: Some(driver.into()),
             enabled: true,
             config: HashMap::new(),
             intent: String::new(),
             on: vec![],
             schedule: None,
             actions: vec![],
+            operators: vec![],
+            links: vec![],
+            vars: HashMap::new(),
         }
     }
 

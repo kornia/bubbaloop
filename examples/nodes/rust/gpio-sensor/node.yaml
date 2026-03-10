@@ -1,0 +1,27 @@
+apiVersion: bubbaloop.dev/v1
+name: gpio-sensor
+version: "0.1.0"
+type: rust
+description: GPIO pin sensor — reads digital/analog pin state and publishes readings
+author: Bubbaloop Team
+build: cargo build --release
+command: ./target/release/gpio_sensor_node
+
+role: source
+
+capabilities:
+  - sensor
+
+publishes:
+  - suffix: gpio/{instance}/reading
+    description: "Sensor reading from a GPIO pin (JSON encoded)"
+    schema_type: "json"
+    rate_hz: 1.0
+
+requires:
+  hardware:
+    - gpio
+
+# On real hardware, also add the appropriate GPIO crate:
+#   Raspberry Pi: rppal = "0.19"
+#   Generic Linux: gpio-cdev = "0.6"

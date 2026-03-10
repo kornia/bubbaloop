@@ -1,0 +1,9 @@
+# PIR motion detector on GPIO pin 17 (simulated)
+# On real hardware the PIR sensor output wire connects directly to this pin.
+# active_high: true means the pin goes HIGH when motion is detected.
+name: motion-pir-17
+publish_topic: gpio/motion/reading
+pin: 17
+sensor_type: motion
+interval_secs: 0.1
+active_high: true

@@ -1,0 +1,68 @@
+# System resource monitoring — CPU, RAM, disk, temperature
+#
+# Publishes: bubbaloop/{scope}/{machine_id}/system-monitor/data
+# Driver: system (builtin — reports sysinfo metrics as JSON)
+#
+# The system driver emits a JSON object with these fields:
+#   cpu_percent        — overall CPU utilization (0–100)
+#   memory_percent     — RAM utilization (0–100)
+#   memory_used_mb     — RAM in use (megabytes)
+#   memory_total_mb    — total RAM (megabytes)
+#   disk_percent       — root filesystem usage (0–100)
+#   disk_used_gb       — disk in use (gigabytes)
+#   disk_total_gb      — total disk (gigabytes)
+#   load_avg_1m        — 1-minute load average
+#   uptime_secs        — seconds since boot
+#   cpu_temp_celsius   — CPU temperature (null if not available)
+#
+# Usage:
+#   cp examples/skills/simple/system-monitor.yaml ~/.bubbaloop/skills/
+#   bubbaloop up
+
+name: system-monitor
+driver: system
+
+config:
+  # How often to sample system metrics (seconds).
+  # 10s is a good balance: responsive alerts without excessive disk writes.
+  interval_secs: 10
+
+intent: |
+  Monitor system health for this machine. Alert me when resource usage
+  could affect node performance or stability.
+
+  Track trends over time — a single CPU spike is normal, but sustained
+  high usage (> 3 consecutive readings above 90%) warrants investigation.
+
+  For disk warnings, include the top-level suggestion to check logs and
+  remove old recordings if applicable.
+
+# on: handlers fire when a condition is met.
+# The agent receives a coalesced summary, not raw samples.
+on:
+  - trigger: data
+    condition: "cpu_percent > 90"
+    action: notify
+    message: "High CPU: ${cpu_percent}% on ${machine_id} — check running nodes"
+    cooldown: 5m
+
+  - trigger: data
+    condition: "memory_percent > 85"
+    action: notify
+    message: "High memory: ${memory_percent}% (${memory_used_mb}MB / ${memory_total_mb}MB) — consider restarting heavy nodes"
+    cooldown: 10m
+
+  - trigger: data
+    condition: "disk_percent > 80"
+    action: notify
+    message: "Disk at ${disk_percent}% (${disk_used_gb}GB / ${disk_total_gb}GB) — check logs and old recordings"
+    cooldown: 1h
+
+  - trigger: data
+    condition: "cpu_temp_celsius > 85"
+    action: notify
+    message: "CPU temperature critical: ${cpu_temp_celsius}C — check cooling"
+    cooldown: 15m
+
+# Agent reviews system health summary hourly and on first start.
+schedule: "0 * * * *"

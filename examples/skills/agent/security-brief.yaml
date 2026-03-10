@@ -1,0 +1,55 @@
+# Agent-driven daily security briefing
+#
+# Format: v2 (single driver)
+# Driver: system (builtin — gives the agent system state context)
+#
+# This skill is agent-heavy: the system driver provides raw metrics,
+# but the agent's job is to synthesize them into actionable security briefs.
+#
+# The 'intent:' field here is the primary configuration — it tells the agent
+# exactly what analysis to perform and how to present it.
+#
+# Compare to system-monitor.yaml which is event-heavy (alert on thresholds).
+# This skill is insight-heavy (produce a qualitative summary).
+#
+# Usage:
+#   cp examples/skills/agent/security-brief.yaml ~/.bubbaloop/skills/
+#   bubbaloop up
+#   # Agent runs at 8am daily and on demand via: bubbaloop agent chat
+
+name: security-brief
+driver: system
+
+config:
+  # 60-second polling gives the agent fresh data when it wakes.
+  # The agent doesn't read every sample — it reads the most recent state.
+  interval_secs: 60
+
+intent: |
+  You are the security monitor for this device.
+
+  Every morning at 8am (triggered by schedule), produce a structured security brief
+  with exactly three sections:
+
+  1. SYSTEM HEALTH (2-3 sentences)
+     Current CPU, memory, disk usage. Flag anything above 70% as "elevated".
+     Include uptime — a recent reboot may indicate unexpected restart.
+
+  2. ANOMALIES (bullet list, or "None detected" if clean)
+     Review the past 24 hours of world state for:
+     - CPU spikes above 80% lasting more than 5 minutes
+     - Memory pressure events (> 90% usage)
+     - Disk writes unusually high (if telemetry available)
+     - Any nodes that stopped and restarted unexpectedly
+
+  3. RECOMMENDED ACTIONS (numbered list, or "None required" if clean)
+     Specific, actionable items only. No generic advice.
+     Examples: "Run: bubbaloop node logs rtsp-camera — it restarted 3 times"
+               "Disk at 85% — review /data/recordings/ for old files"
+
+  Format: plain text, no markdown headers, 8 lines maximum.
+  Tone: concise and factual, like a sysadmin handoff note.
+
+# schedule: the agent wakes at 8am every day to produce the brief.
+# The system driver runs continuously; the agent only reads current state.
+schedule: "0 8 * * *"

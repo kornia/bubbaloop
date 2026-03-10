@@ -1,0 +1,43 @@
+apiVersion: bubbaloop.dev/v1
+name: serial-sensor
+version: "0.1.0"
+type: python
+description: Reads a serial port line-by-line, parses JSON or CSV, publishes to Zenoh
+author: Bubbaloop Team
+command: python main.py
+
+role: source
+
+outputs:
+  - name: data
+    topic_suffix: "{instance}/data"
+    encoding: json
+    description: Parsed sensor readings from the serial port
+    tier: event
+    rate_hz: 2.0
+
+config_schema:
+  type: object
+  properties:
+    name:
+      type: string
+      description: Node instance name (used in topic path)
+      default: arduino-sensor
+    port:
+      type: string
+      description: Serial port path. Use "mock" for simulation.
+      default: mock
+    baud_rate:
+      type: integer
+      description: Baud rate
+      default: 115200
+    interval_secs:
+      type: number
+      description: Polling interval in mock mode (seconds)
+      default: 0.5
+
+requires:
+  hardware:
+    - serial
+  software:
+    - pyserial  # optional — only needed when port != mock

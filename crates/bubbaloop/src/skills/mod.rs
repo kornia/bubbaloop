@@ -3,12 +3,34 @@
 //! Skills map a human-readable driver name to a marketplace node,
 //! letting users express sensor configuration without writing Rust.
 //!
-//! Example skill file (`~/.bubbaloop/skills/my-camera.yaml`):
+//! Example v2 skill file (`~/.bubbaloop/skills/my-camera.yaml`):
 //! ```yaml
 //! name: my-camera
 //! driver: rtsp
 //! config:
 //!   url: rtsp://192.168.1.10/stream
+//! ```
+//!
+//! Example v3 pipeline skill file:
+//! ```yaml
+//! name: weather-pipeline
+//! operators:
+//!   - id: fetch
+//!     driver: http-poll
+//!     config:
+//!       url: https://api.open-meteo.com/v1/forecast
+//!     outputs:
+//!       data:
+//!         topic: weather/raw
+//!         rate: 1fps
+//! links:
+//!   - from: fetch/data
+//!     to: dashboard
+//! on:
+//!   - trigger: fetch/error
+//!     action: log
+//!     message: "Fetch failed"
+//!     cooldown: 5m
 //! ```
 
 pub mod builtin;
@@ -26,6 +48,8 @@ pub enum SkillError {
     InvalidName(String),
     #[error("Unknown driver '{0}' — run `bubbaloop skill drivers` to see available drivers")]
     UnknownDriver(String),
+    #[error("Skill format error: {0}")]
+    InvalidFormat(String),
     #[error("Skill file '{path}' failed to parse: {source}")]
     ParseError {
         path: String,
@@ -37,17 +61,79 @@ pub enum SkillError {
 
 pub type Result<T> = std::result::Result<T, SkillError>;
 
+/// Output port definition on an operator.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct OutputDef {
+    /// Override topic name. Defaults to `bubbaloop/{scope}/{machine_id}/{skill_name}/{output_id}`.
+    #[serde(default)]
+    pub topic: Option<String>,
+    /// Rate limit: "30fps", "1fps", "5s", etc.
+    #[serde(default)]
+    pub rate: Option<String>,
+}
+
+/// A stage in a v3 pipeline.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OperatorDef {
+    /// Unique ID within this pipeline (used in links: `from: op_id/output`).
+    pub id: String,
+    /// Driver identifier (e.g. `http-poll`, `rtsp`).
+    pub driver: String,
+    /// Driver-specific key/value parameters.
+    #[serde(default)]
+    pub config: HashMap<String, serde_yaml::Value>,
+    /// Named output ports with optional topic/rate overrides.
+    #[serde(default)]
+    pub outputs: HashMap<String, OutputDef>,
+}
+
+/// A link connecting operator outputs in a pipeline.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LinkDef {
+    /// Source: `"op_id/output"` or `"op_id"` (implicit single output).
+    pub from: String,
+    /// Sink: `"op_id"` or well-known sinks `"dashboard"`, `"log"`, `"null"`.
+    pub to: String,
+}
+
+/// Declarative event handler (replaces Vec<serde_yaml::Value>).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EventHandler {
+    /// Event source: `"{op_id}/{event_name}"` or legacy trigger name.
+    pub trigger: String,
+    /// Optional simple predicate: `"value > 80"`.
+    #[serde(default)]
+    pub condition: Option<String>,
+    /// Action: `"notify"` | `"log"` | `"agent.wake"` | `"zenoh.publish"`.
+    pub action: String,
+    /// Human-readable message template.
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Minimum time between firings: `"5m"`, `"30s"`.
+    #[serde(default)]
+    pub cooldown: Option<String>,
+    /// Only fire during this time window: `"23:00-06:00"`.
+    #[serde(default)]
+    pub between: Option<String>,
+}
+
 /// A skill configuration parsed from a YAML file.
+///
+/// Supports two formats:
+/// - **v2** (single-driver): `driver:` is set, `operators:` is empty.
+/// - **v3** (pipeline): `operators:` is non-empty, `driver:` is absent.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SkillConfig {
     /// Node name — must satisfy `[a-zA-Z0-9_-]{1,64}`.
     pub name: String,
-    /// Driver identifier (e.g. `rtsp`, `v4l2`, `serial`).
-    pub driver: String,
+    /// Driver identifier (v2 format only, e.g. `rtsp`, `v4l2`, `serial`).
+    /// Absent in v3 pipeline format.
+    #[serde(default)]
+    pub driver: Option<String>,
     /// Whether this skill is active. Defaults to true; set false to skip on `bubbaloop up`.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    /// Driver-specific key/value parameters.
+    /// Driver-specific key/value parameters (v2 only; v3 puts config per-operator).
     #[serde(default)]
     pub config: HashMap<String, serde_yaml::Value>,
     /// Free-form agent-readable intent declaration (what should the agent do with this data).
@@ -55,13 +141,45 @@ pub struct SkillConfig {
     pub intent: String,
     /// Declarative event handlers (agent-executed).
     #[serde(default)]
-    pub on: Vec<serde_yaml::Value>,
+    pub on: Vec<EventHandler>,
     /// Optional cron-style schedule (Phase 4 placeholder).
     #[serde(default)]
     pub schedule: Option<String>,
     /// Declarative actions list (Phase 4 placeholder).
     #[serde(default)]
     pub actions: Vec<serde_yaml::Value>,
+    // ── v3 pipeline fields ────────────────────────────────────────────────────
+    /// Pipeline operators (v3 format only).
+    #[serde(default)]
+    pub operators: Vec<OperatorDef>,
+    /// Data-flow links between operators (v3 format only).
+    #[serde(default)]
+    pub links: Vec<LinkDef>,
+    /// Shared variables available to all operators in this pipeline.
+    #[serde(default)]
+    pub vars: HashMap<String, String>,
+}
+
+impl SkillConfig {
+    /// Returns the operators list.
+    ///
+    /// For v3 skills this is the `operators` field directly.
+    /// For v2 skills (single `driver:`), this auto-wraps into a single-operator list
+    /// so callers can treat both formats uniformly.
+    pub fn to_operators(&self) -> Vec<OperatorDef> {
+        if !self.operators.is_empty() {
+            self.operators.clone()
+        } else if let Some(ref driver) = self.driver {
+            vec![OperatorDef {
+                id: self.name.clone(),
+                driver: driver.clone(),
+                config: self.config.clone(),
+                outputs: HashMap::new(),
+            }]
+        } else {
+            vec![]
+        }
+    }
 }
 
 fn default_enabled() -> bool {
@@ -171,11 +289,40 @@ pub fn resolve_driver(name: &str) -> Option<&'static DriverEntry> {
 }
 
 /// Validate a skill config against naming rules and the driver catalog.
+///
+/// Enforces:
+/// - Valid node name.
+/// - Exactly one of `driver` (v2) or `operators` (v3) is set — not both, not neither.
+/// - For v2: the driver must exist in the catalog.
+/// - For v3: each operator's driver must exist in the catalog.
 pub fn validate_skill(skill: &SkillConfig) -> Result<()> {
     crate::validation::validate_node_name(&skill.name).map_err(SkillError::InvalidName)?;
 
-    if resolve_driver(&skill.driver).is_none() {
-        return Err(SkillError::UnknownDriver(skill.driver.clone()));
+    match (&skill.driver, skill.operators.is_empty()) {
+        (Some(driver), true) => {
+            // v2 format — validate the single driver
+            if resolve_driver(driver).is_none() {
+                return Err(SkillError::UnknownDriver(driver.clone()));
+            }
+        }
+        (None, false) => {
+            // v3 format — validate each operator's driver
+            for op in &skill.operators {
+                if resolve_driver(&op.driver).is_none() {
+                    return Err(SkillError::UnknownDriver(op.driver.clone()));
+                }
+            }
+        }
+        (Some(_), false) => {
+            return Err(SkillError::InvalidFormat(
+                "cannot have both 'driver' and 'operators'".into(),
+            ));
+        }
+        (None, true) => {
+            return Err(SkillError::InvalidFormat(
+                "must have either 'driver' or 'operators'".into(),
+            ));
+        }
     }
 
     Ok(())
@@ -226,7 +373,11 @@ pub fn load_skills(skills_dir: &Path) -> Result<Vec<SkillConfig>> {
 
         match validate_skill(&skill) {
             Ok(()) => {
-                log::debug!("Loaded skill '{}' (driver: {})", skill.name, skill.driver);
+                log::debug!(
+                    "Loaded skill '{}' (driver: {})",
+                    skill.name,
+                    skill.driver.as_deref().unwrap_or("<pipeline>")
+                );
                 skills.push(skill);
             }
             Err(err) => {
@@ -259,7 +410,7 @@ actions:
 "#;
         let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(skill.name, "my-camera");
-        assert_eq!(skill.driver, "rtsp");
+        assert_eq!(skill.driver.as_deref(), Some("rtsp"));
         assert!(skill.enabled); // defaults to true
         assert_eq!(
             skill.config["url"],
@@ -274,7 +425,7 @@ actions:
         let yaml = "name: webcam\ndriver: v4l2\n";
         let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(skill.name, "webcam");
-        assert_eq!(skill.driver, "v4l2");
+        assert_eq!(skill.driver.as_deref(), Some("v4l2"));
         assert!(skill.enabled); // defaults to true
         assert!(skill.config.is_empty());
         assert!(skill.schedule.is_none());
@@ -296,10 +447,175 @@ actions:
     }
 
     #[test]
-    fn parse_missing_driver_fails() {
+    fn parse_missing_driver_succeeds_as_v3_candidate() {
+        // With driver optional, missing driver alone parses fine — validation catches
+        // the "must have either driver or operators" constraint.
         let yaml = "name: my-camera\n";
         let result: std::result::Result<SkillConfig, _> = serde_yaml::from_str(yaml);
-        assert!(result.is_err(), "expected parse error for missing driver");
+        assert!(
+            result.is_ok(),
+            "name-only YAML should parse (driver is optional now)"
+        );
+        let skill = result.unwrap();
+        assert!(skill.driver.is_none());
+        // validate_skill should reject it (neither driver nor operators)
+        assert!(matches!(
+            validate_skill(&skill),
+            Err(SkillError::InvalidFormat(_))
+        ));
+    }
+
+    // ── v3 pipeline YAML parsing ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_v3_pipeline_yaml() {
+        let yaml = r#"
+name: weather-pipeline
+operators:
+  - id: fetch
+    driver: http-poll
+    config:
+      url: https://api.open-meteo.com/v1/forecast
+    outputs:
+      data:
+        topic: weather/raw
+        rate: 1fps
+links:
+  - from: fetch/data
+    to: dashboard
+on:
+  - trigger: fetch/error
+    action: log
+    message: "Fetch failed"
+    cooldown: 5m
+vars:
+  api_key: "abc123"
+"#;
+        let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(skill.name, "weather-pipeline");
+        assert!(skill.driver.is_none());
+        assert_eq!(skill.operators.len(), 1);
+        assert_eq!(skill.operators[0].id, "fetch");
+        assert_eq!(skill.operators[0].driver, "http-poll");
+        assert_eq!(
+            skill.operators[0].outputs["data"].topic.as_deref(),
+            Some("weather/raw")
+        );
+        assert_eq!(
+            skill.operators[0].outputs["data"].rate.as_deref(),
+            Some("1fps")
+        );
+        assert_eq!(skill.links.len(), 1);
+        assert_eq!(skill.links[0].from, "fetch/data");
+        assert_eq!(skill.links[0].to, "dashboard");
+        assert_eq!(skill.on.len(), 1);
+        assert_eq!(skill.on[0].trigger, "fetch/error");
+        assert_eq!(skill.on[0].action, "log");
+        assert_eq!(skill.on[0].cooldown.as_deref(), Some("5m"));
+        assert_eq!(skill.vars["api_key"], "abc123");
+    }
+
+    #[test]
+    fn validate_v3_pipeline_valid() {
+        let yaml = r#"
+name: my-pipeline
+operators:
+  - id: src
+    driver: http-poll
+    config:
+      url: https://example.com/api
+"#;
+        let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(validate_skill(&skill).is_ok());
+    }
+
+    #[test]
+    fn validate_v3_rejects_unknown_operator_driver() {
+        let yaml = r#"
+name: bad-pipeline
+operators:
+  - id: src
+    driver: not-a-driver
+"#;
+        let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(
+            validate_skill(&skill),
+            Err(SkillError::UnknownDriver(_))
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_both_driver_and_operators() {
+        let yaml = r#"
+name: conflict
+driver: rtsp
+operators:
+  - id: src
+    driver: http-poll
+"#;
+        let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(
+            validate_skill(&skill),
+            Err(SkillError::InvalidFormat(_))
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_neither_driver_nor_operators() {
+        let yaml = "name: empty\n";
+        let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(
+            validate_skill(&skill),
+            Err(SkillError::InvalidFormat(_))
+        ));
+    }
+
+    // ── to_operators ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn to_operators_v2_wraps_single_driver() {
+        let yaml = "name: cam\ndriver: rtsp\nconfig:\n  url: rtsp://x\n";
+        let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
+        let ops = skill.to_operators();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].id, "cam");
+        assert_eq!(ops[0].driver, "rtsp");
+        assert!(ops[0].config.contains_key("url"));
+    }
+
+    #[test]
+    fn to_operators_v3_returns_operators_as_is() {
+        let yaml = r#"
+name: pipeline
+operators:
+  - id: a
+    driver: http-poll
+  - id: b
+    driver: system
+"#;
+        let skill: SkillConfig = serde_yaml::from_str(yaml).unwrap();
+        let ops = skill.to_operators();
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0].id, "a");
+        assert_eq!(ops[1].id, "b");
+    }
+
+    #[test]
+    fn to_operators_empty_skill_returns_empty() {
+        let skill = SkillConfig {
+            name: "x".into(),
+            driver: None,
+            enabled: true,
+            config: HashMap::new(),
+            intent: String::new(),
+            on: vec![],
+            schedule: None,
+            actions: vec![],
+            operators: vec![],
+            links: vec![],
+            vars: HashMap::new(),
+        };
+        assert!(skill.to_operators().is_empty());
     }
 
     // ── resolve_driver ───────────────────────────────────────────────────────
@@ -345,13 +661,16 @@ actions:
     fn validate_valid_skill() {
         let skill = SkillConfig {
             name: "my-camera".into(),
-            driver: "rtsp".into(),
+            driver: Some("rtsp".into()),
             enabled: true,
             config: HashMap::new(),
             intent: String::new(),
             on: vec![],
             schedule: None,
             actions: Vec::new(),
+            operators: vec![],
+            links: vec![],
+            vars: HashMap::new(),
         };
         assert!(validate_skill(&skill).is_ok());
     }
@@ -360,13 +679,16 @@ actions:
     fn validate_rejects_invalid_name() {
         let skill = SkillConfig {
             name: "bad name!".into(),
-            driver: "rtsp".into(),
+            driver: Some("rtsp".into()),
             enabled: true,
             config: HashMap::new(),
             intent: String::new(),
             on: vec![],
             schedule: None,
             actions: Vec::new(),
+            operators: vec![],
+            links: vec![],
+            vars: HashMap::new(),
         };
         assert!(matches!(
             validate_skill(&skill),
@@ -378,13 +700,16 @@ actions:
     fn validate_rejects_empty_name() {
         let skill = SkillConfig {
             name: "".into(),
-            driver: "rtsp".into(),
+            driver: Some("rtsp".into()),
             enabled: true,
             config: HashMap::new(),
             intent: String::new(),
             on: vec![],
             schedule: None,
             actions: Vec::new(),
+            operators: vec![],
+            links: vec![],
+            vars: HashMap::new(),
         };
         assert!(matches!(
             validate_skill(&skill),
@@ -396,13 +721,16 @@ actions:
     fn validate_rejects_unknown_driver() {
         let skill = SkillConfig {
             name: "my-sensor".into(),
-            driver: "unknown-driver".into(),
+            driver: Some("unknown-driver".into()),
             enabled: true,
             config: HashMap::new(),
             intent: String::new(),
             on: vec![],
             schedule: None,
             actions: Vec::new(),
+            operators: vec![],
+            links: vec![],
+            vars: HashMap::new(),
         };
         assert!(matches!(
             validate_skill(&skill),
@@ -444,7 +772,7 @@ actions:
         let skills = load_skills(dir.path()).unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "cam1");
-        assert_eq!(skills[0].driver, "rtsp");
+        assert_eq!(skills[0].driver.as_deref(), Some("rtsp"));
     }
 
     #[test]

@@ -1,0 +1,88 @@
+# Home presence detection via network reachability + system metrics
+#
+# Format: v3 pipeline (multi-operator)
+# Drivers used:
+#   - system   (builtin — reports CPU/RAM/disk)
+#   - exec     (builtin — runs ping to check if on home network)
+#
+# No extra hardware needed. Uses the device's own network connectivity
+# as a proxy for whether someone is home:
+#   - Machine reachable on home LAN -> someone is home
+#   - Machine unreachable / no home router -> away
+#
+# This works well for a Jetson or Pi that travels with a person
+# (laptop/phone hotspot model) OR for a home server that detects
+# presence by pinging other home devices.
+#
+# Usage:
+#   cp examples/skills/pipeline/home-presence.yaml ~/.bubbaloop/skills/
+#   # Edit the router_ip below
+#   bubbaloop up
+
+name: home-presence
+version: 3
+
+vars:
+  router_ip: "192.168.1.1"    # Your home router's IP address
+
+operators:
+  # system: publishes machine metrics — used by agent for context.
+  # Provides uptime, CPU, memory as background state.
+  - id: system
+    driver: system
+    config:
+      interval_secs: 60
+
+  # network: pings the home router every 2 minutes.
+  # If reachable: {"home":true,"latency_ms":2}
+  # If unreachable: {"home":false,"latency_ms":null}
+  #
+  # ping flags:
+  #   -c1   — single ping
+  #   -W2   — 2 second wait
+  # We capture latency with awk for richer data in the JSON.
+  - id: network
+    driver: exec
+    config:
+      command: "bash -c 'result=$(ping -c1 -W2 ${router_ip} 2>/dev/null); if [ $? -eq 0 ]; then ms=$(echo \"$result\" | tail -1 | awk -F/ \"{print \\$5}\"); echo \"{\\\"home\\\":true,\\\"latency_ms\\\":$ms}\"; else echo \"{\\\"home\\\":false,\\\"latency_ms\\\":null}\"; fi'"
+      interval_secs: 120
+
+links:
+  - from: system
+    to: dashboard
+
+  - from: network
+    to: dashboard
+
+intent: |
+  Track home presence and automate routines accordingly.
+
+  When arriving home (network check transitions from false to true):
+  - Notify me with a welcome message
+  - Note the time of arrival for the daily activity log
+
+  When leaving (network check stays false for 3+ consecutive readings, ~6 min):
+  - Notify that the house is now in "away" mode
+  - Remind me to check if any intensive nodes should be paused to save power
+
+  Every evening at 9pm: generate a brief activity summary:
+  - Total time home vs. away today
+  - Any unusual patterns (arrived much later/earlier than typical)
+
+  Don't alert on single missed pings — only on sustained absence (3+ misses).
+
+on:
+  - trigger: network/data
+    condition: "home == true"
+    action: notify
+    message: "Welcome home. Arrival logged."
+    cooldown: 1h
+
+  - trigger: network/data
+    condition: "home == false"
+    action: log
+    message: "Network check: not on home network (latency_ms=${latency_ms})"
+    cooldown: 5m
+
+# Daily summary at 9pm.
+schedule: "0 21 * * *"

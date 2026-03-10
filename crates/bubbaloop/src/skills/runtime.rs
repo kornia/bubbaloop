@@ -42,7 +42,7 @@ impl SkillRuntime {
 
     /// Start a built-in skill. No-op if the driver is not BuiltIn.
     pub fn start_skill(&mut self, skill: SkillConfig) {
-        let entry = match resolve_driver(&skill.driver) {
+        let entry = match skill.driver.as_deref().and_then(resolve_driver) {
             Some(e) if e.kind == DriverKind::BuiltIn => e,
             _ => return,
         };
@@ -183,7 +183,7 @@ impl SkillRuntime {
                                     .and_then(|s| serde_yaml::from_str::<crate::skills::SkillConfig>(&s).ok());
                                 match parsed {
                                     Some(skill) if skill.enabled => {
-                                        if let Some(entry) = resolve_driver(&skill.driver) {
+                                        if let Some(entry) = skill.driver.as_deref().and_then(resolve_driver) {
                                             if entry.kind == DriverKind::BuiltIn {
                                                 log::info!(
                                                     "[SkillRuntime] Hot-reload: (re)starting '{}'",
@@ -261,7 +261,7 @@ impl SkillRuntime {
                     if !skill.enabled {
                         continue;
                     }
-                    if let Some(entry) = resolve_driver(&skill.driver) {
+                    if let Some(entry) = skill.driver.as_deref().and_then(resolve_driver) {
                         if entry.kind == DriverKind::BuiltIn {
                             self.start_skill(skill);
                         }

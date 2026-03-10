@@ -1,0 +1,5 @@
+name: home-mqtt
+broker: mock          # mock mode — no broker needed. Real: 192.168.1.1 or mqtt.broker.com
+broker_port: 1883
+mqtt_topic: home/+/temperature   # MQTT topic to subscribe to (+ and # wildcards supported)
+interval_secs: 5.0               # Only used in mock mode

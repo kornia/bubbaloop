@@ -90,7 +90,10 @@ impl ListCommand {
             };
             println!(
                 "{:<20} {:<14} {:<10} {}",
-                skill.name, skill.driver, status, intent
+                skill.name,
+                skill.driver.as_deref().unwrap_or("<pipeline>"),
+                status,
+                intent
             );
         }
         Ok(())
@@ -108,8 +111,12 @@ impl ValidateCommand {
         println!(
             "  '{}' is valid (driver: {}, kind: {:?})",
             skill.name,
-            skill.driver,
-            skills::resolve_driver(&skill.driver).map(|e| e.kind)
+            skill.driver.as_deref().unwrap_or("<pipeline>"),
+            skill
+                .driver
+                .as_deref()
+                .and_then(skills::resolve_driver)
+                .map(|e| e.kind)
         );
         Ok(())
     }

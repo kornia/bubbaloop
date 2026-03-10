@@ -257,11 +257,15 @@ pub fn extract_field(field: &str, sample: &serde_json::Value) -> Option<String> 
 ///
 /// Each provider opens its own `SemanticStore` connection to the same database file.
 /// WAL mode supports concurrent writers serialized by SQLite.
+///
+/// When `world_state_notify` is provided, a `notify_one()` is triggered after each
+/// successful world-state write so the agent loop can react immediately.
 pub fn spawn_provider(
     cfg: ProviderConfig,
     session: std::sync::Arc<zenoh::Session>,
     semantic_db_path: std::path::PathBuf,
     mut shutdown: tokio::sync::watch::Receiver<()>,
+    world_state_notify: Option<std::sync::Arc<tokio::sync::Notify>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         log::info!(
@@ -382,6 +386,12 @@ pub fn spawn_provider(
                         );
                     } else {
                         last_write.insert(resolved_key, now_secs);
+                        // Notify the agent loop that world state has changed so it
+                        // can evaluate reactive rules immediately without waiting for
+                        // the next heartbeat interval.
+                        if let Some(ref notify) = world_state_notify {
+                            notify.notify_one();
+                        }
                     }
                 }
                 _ = shutdown.changed() => {

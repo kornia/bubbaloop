@@ -1,0 +1,56 @@
+# Weather monitoring via Open-Meteo free API (no API key needed)
+#
+# Publishes: bubbaloop/{scope}/{machine_id}/weather/data
+# Driver: http-poll (builtin — no marketplace download required)
+#
+# Usage:
+#   cp examples/skills/simple/weather.yaml ~/.bubbaloop/skills/
+#   bubbaloop up
+#
+# Customize: change latitude/longitude to your city.
+# Open-Meteo docs: https://open-meteo.com/en/docs
+
+name: weather
+driver: http-poll
+
+config:
+  # San Francisco — replace with your coordinates
+  url: "https://api.open-meteo.com/v1/forecast?latitude=37.7749&longitude=-122.4194&current_weather=true&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation_probability_120h"
+  # Poll every 5 minutes — Open-Meteo free tier allows ~10k req/day
+  interval_secs: 300
+  # Fail fast if API is slow; daemon will retry next interval
+  timeout_secs: 10
+
+# intent: tells the agent what to do with the data stream.
+# Write it in plain English — the agent reads this at startup.
+# Be specific: vague intents produce vague agent behavior.
+intent: |
+  Monitor San Francisco weather conditions. I care about:
+  - Freezing risk: alert if temperature drops below 5 degrees C
+  - High winds: alert if wind_speed > 50 km/h (affects outdoor plans)
+  - Rain likelihood: notify if precipitation_probability > 80%
+
+  When alerting, include the current value and a brief suggestion
+  (e.g. "bring a jacket"). Don't repeat alerts within 1 hour.
+
+# on: declarative event handlers evaluated by the EventBridge.
+# The agent wakes only on these derived events — never on raw HTTP responses.
+# condition: simple predicate on the JSON payload fields.
+# cooldown: minimum time between repeated firings of this handler.
+on:
+  - trigger: data
+    condition: "current_weather.temperature < 5"
+    action: notify
+    message: "Freezing alert: temperature is ${current_weather.temperature}C in San Francisco"
+    cooldown: 1h
+
+  - trigger: data
+    condition: "current_weather.windspeed > 50"
+    action: notify
+    message: "High wind alert: ${current_weather.windspeed} km/h — avoid outdoor activities"
+    cooldown: 2h
+
+# schedule: cron expression for periodic agent check-ins.
+# Independent of the polling interval above.
+# Here: agent reviews weather summary every morning at 7am.
+schedule: "0 7 * * *"

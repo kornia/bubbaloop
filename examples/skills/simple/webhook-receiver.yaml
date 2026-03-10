@@ -1,0 +1,57 @@
+# Receive HTTP POST webhooks from external systems
+#
+# Publishes: bubbaloop/{scope}/{machine_id}/github-events/data
+# Driver: webhook (builtin — listens on localhost:9090/webhook, publishes POST body as JSON)
+#
+# The webhook driver:
+#   - Binds localhost only (never 0.0.0.0 — security requirement)
+#   - Accepts POST requests to the configured path
+#   - Publishes the JSON request body to the Zenoh topic
+#   - Returns HTTP 200 {"ok":true} to the caller
+#
+# To expose this to the internet for GitHub webhooks, use a tunnel:
+#   ngrok http 9090
+# Then configure the ngrok URL as your GitHub webhook endpoint.
+#
+# Usage:
+#   cp examples/skills/simple/webhook-receiver.yaml ~/.bubbaloop/skills/
+#   bubbaloop up
+#   # Test: curl -X POST http://localhost:9090/webhook -H 'Content-Type: application/json' -d '{"event":"ping"}'
+
+name: github-events
+driver: webhook
+
+config:
+  # Port to listen on. Must be > 1024 (no root required).
+  # Ensure this port is free before starting.
+  port: 9090
+  # Path to handle. Other paths return 404.
+  path: /webhook
+
+intent: |
+  Receive GitHub webhook events for my repositories. I care about:
+  - New pull requests that need review (ping me with title + author)
+  - CI failures on the main branch (which commit, which workflow)
+  - New issues tagged "bug" or "security"
+  - Dependency vulnerability alerts (Dependabot)
+
+  For PR reviews: mention if the PR has been open > 24 hours without review.
+  For CI failures: include a link to the failed run if available in the payload.
+
+on:
+  - trigger: data
+    condition: "event == \"pull_request\" and action == \"opened\""
+    action: notify
+    message: "New PR opened: ${pull_request.title} by ${pull_request.user.login} — review needed"
+
+  - trigger: data
+    condition: "event == \"workflow_run\" and action == \"completed\" and workflow_run.conclusion == \"failure\""
+    action: notify
+    message: "CI failed on ${workflow_run.head_branch}: ${workflow_run.name} — ${workflow_run.html_url}"
+    cooldown: 10m
+
+  - trigger: data
+    condition: "event == \"issues\" and action == \"opened\""
+    action: notify
+    message: "New issue: ${issue.title} by ${issue.user.login}"
+    cooldown: 1m

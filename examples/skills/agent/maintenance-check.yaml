@@ -1,0 +1,69 @@
+# Scheduled maintenance reminders
+#
+# Format: v2 (single driver)
+# Driver: exec (builtin — collects uptime + disk info for the agent)
+#
+# The exec driver runs a shell command and publishes stdout as JSON.
+# The agent reads this JSON to determine whether maintenance is needed.
+#
+# This skill combines:
+#   - exec driver: provides real system data (uptime, disk usage)
+#   - intent: tells the agent what logic to apply to that data
+#   - on: handles threshold breaches immediately
+#   - schedule: triggers periodic deeper analysis
+#
+# Usage:
+#   cp examples/skills/agent/maintenance-check.yaml ~/.bubbaloop/skills/
+#   bubbaloop up
+
+name: maintenance-check
+driver: exec
+
+config:
+  # Collect uptime in seconds and disk usage percentage.
+  # Output JSON with both fields for reliable condition matching.
+  # 'uptime -s' gives start datetime; we compute elapsed seconds.
+  # 'df -h /' gives disk info; awk extracts the percentage integer.
+  command: "bash -c 'uptime_secs=$(( $(date +%s) - $(date -d \"$(uptime -s)\" +%s 2>/dev/null || echo $(date +%s)) )); disk_pct=$(df / | tail -1 | awk \"{print \\$5}\" | tr -d \"%\"); echo \"{\\\"uptime_secs\\\":$uptime_secs,\\\"uptime_days\\\":$((uptime_secs/86400)),\\\"disk_percent\\\":$disk_pct}'"
+  interval_secs: 3600    # Check once per hour — changes slowly
+
+intent: |
+  Track system maintenance state and remind me when action is needed.
+  Keep a mental note of what reminders you have already sent to avoid repetition.
+
+  Rules to apply on each hourly check:
+  - uptime_days > 30: remind me to schedule a maintenance window for OS updates.
+    Say exactly: "System uptime is N days — recommend scheduling updates this week."
+    Don't repeat this reminder until uptime increases by 7 more days.
+
+  - disk_percent > 80: alert immediately with specific cleanup suggestions:
+    1. Check ~/.bubbaloop/agents/{id}/episodic.ndjson — can compress old entries
+    2. Check /data/recordings/ — delete clips older than 30 days
+    3. Run: journalctl --vacuum-size=500M
+
+  On the first of each month (detected by schedule: "0 0 1 * *"):
+  Generate a maintenance checklist covering:
+  - OS updates pending (suggest: apt list --upgradable 2>/dev/null | head -20)
+  - Bubbaloop version check (suggest: bubbaloop --version)
+  - Review installed nodes — remove any unused ones
+  - Backup check — confirm ~/.bubbaloop/ is backed up
+
+on:
+  - trigger: data
+    condition: "disk_percent > 80"
+    action: notify
+    message: "Disk at ${disk_percent}% — maintenance required. Check logs and recordings."
+    cooldown: 6h
+
+  - trigger: data
+    condition: "disk_percent > 90"
+    action: notify
+    message: "CRITICAL: Disk at ${disk_percent}% — immediate cleanup needed. Nodes may fail."
+    cooldown: 1h
+
+# Two schedules:
+#   - Monthly: deep maintenance checklist (first of month at midnight)
+#   - The hourly exec provides data; agent uses the uptime/disk rules above.
+# Note: only one schedule field is supported; use the monthly for explicit checklists.
+# The hourly data is available for on: handlers without a schedule entry.
+schedule: "0 0 1 * *"

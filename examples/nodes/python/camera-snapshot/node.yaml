@@ -1,0 +1,37 @@
+apiVersion: bubbaloop.dev/v1
+name: camera-snapshot
+version: "0.1.0"
+type: python
+description: HTTP snapshot camera — polls JPEG endpoint and publishes frames
+author: Bubbaloop Team
+command: python main.py
+
+role: source
+
+outputs:
+  - name: snapshot
+    topic_suffix: "{instance}/snapshot"
+    encoding: bytes
+    description: Raw JPEG bytes from the camera snapshot endpoint
+    tier: event
+    rate_hz: 1.0
+
+config_schema:
+  type: object
+  required: [url]
+  properties:
+    name:
+      type: string
+      description: Node instance name (used in topic path)
+      default: entrance-snapshot
+    url:
+      type: string
+      description: Base URL of the camera (e.g. http://192.168.1.10). Use mock:// for simulation.
+    interval_secs:
+      type: number
+      description: Polling interval in seconds
+      default: 1.0
+
+requires:
+  hardware:
+    - network

@@ -1,0 +1,92 @@
+# Security camera pipeline: RTSP stream + webhook alerting
+#
+# Format: v3 pipeline (multi-operator)
+# Drivers used:
+#   - rtsp       (marketplace — requires 'rtsp-camera' node binary)
+#   - webhook    (builtin — no download required)
+#
+# Install marketplace dependency first:
+#   bubbaloop node install rtsp-camera
+#
+# Then copy and edit this file:
+#   cp examples/skills/pipeline/entrance-watch.yaml ~/.bubbaloop/skills/
+#   # Edit cam.config.url to your camera's RTSP URL
+#   bubbaloop up
+#
+# Topics published:
+#   bubbaloop/{scope}/{machine_id}/entrance-watch/cam/stream     — 15fps live stream
+#   bubbaloop/{scope}/{machine_id}/entrance-watch/cam/snapshot   — 1fps for agent/ML use
+#
+# The 'version: 3' field switches to pipeline mode.
+# In v3, top-level 'driver:' is replaced by 'operators:' + 'links:'.
+
+name: entrance-watch
+version: 3
+
+operators:
+  # cam: RTSP source operator
+  # Connects to an IP camera or NVR.
+  # Replace the URL with your camera's actual stream address.
+  - id: cam
+    driver: rtsp
+    config:
+      url: "rtsp://192.168.1.10:554/stream"    # Replace with your camera URL
+      # Optional: reduce decode latency for live dashboard view
+      latency: 200
+      # Optional: request specific resolution (camera may override)
+      width: 640
+      height: 480
+
+    # outputs: named ports with optional rate override.
+    # The rtsp driver produces frames; we slice them at two rates.
+    outputs:
+      stream:
+        rate: 15fps       # Full(ish) rate for the dashboard live view
+      snapshot:
+        rate: 1fps        # Decimated rate for ML/agent use — saves compute
+
+  # alert: webhook sink operator
+  # Forwards event payloads via HTTP POST to a local alert endpoint.
+  # The daemon's webhook driver handles retries and connection errors.
+  - id: alert
+    driver: webhook
+    config:
+      url: "http://localhost:9090/alerts"
+      method: POST
+
+# links: explicit data-flow wiring between operators and reserved sinks.
+# Reserved sink names: "dashboard" (Bubbaloop UI), "log" (daemon log), "null" (discard).
+# Format: {operator_id}/{output_name} or just {operator_id} for single-output operators.
+links:
+  - from: cam/stream
+    to: dashboard      # Live view in Bubbaloop dashboard
+
+  - from: cam/snapshot
+    to: alert          # Forward 1fps snapshots to alert endpoint for processing
+
+intent: |
+  Watch the front entrance camera 24/7.
+
+  Time-based alerting rules:
+  - Between 11pm and 6am: alert on ANY detected motion immediately.
+  - During business hours (8am–6pm): alert only if motion persists > 30 seconds.
+  - Weekends: alert if any motion detected between midnight and 8am.
+
+  Always: when alerting, include the timestamp and note which entrance.
+  Don't repeat the same alert within 30 seconds (camera noise filter).
+
+  If the camera feed goes offline (no frames for 60+ seconds), alert me.
+
+on:
+  # Motion detected during night hours
+  - trigger: cam/snapshot
+    action: notify
+    message: "Motion detected at front entrance — camera snapshot available"
+    between: "23:00-06:00"
+    cooldown: 30s
+
+  # Camera offline detection (future: EventBridge heartbeat monitor)
+  - trigger: cam/error
+    action: notify
+    message: "Entrance camera offline or unreachable — check power and network"
+    cooldown: 5m

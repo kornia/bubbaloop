@@ -105,12 +105,18 @@ impl UpCommand {
 
         for skill in &active_skills {
             println!("\n  skill:  {}", skill.name);
-            println!("  driver: {}", skill.driver);
+            println!(
+                "  driver: {}",
+                skill.driver.as_deref().unwrap_or("<pipeline>")
+            );
 
             let resolution = match resolve(skill, &nodes_dir) {
                 Some(r) => r,
                 None => {
-                    println!("  [skip] Unknown driver '{}'", skill.driver);
+                    println!(
+                        "  [skip] Unknown driver '{}'",
+                        skill.driver.as_deref().unwrap_or("<none>")
+                    );
                     skipped_count += 1;
                     continue;
                 }

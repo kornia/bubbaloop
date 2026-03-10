@@ -15,6 +15,7 @@ use crate::agent::{run_agent_turn, AgentTurnInput, EventSink};
 use crate::daemon::belief_updater::spawn_belief_decay_task;
 use crate::daemon::context_provider::{spawn_provider, ProviderStore};
 use crate::daemon::mission::{watch_missions_dir, Mission, MissionStatus, MissionStore};
+use crate::daemon::reactive::{evaluate_rules, ReactiveRule, ReactiveRuleStore};
 use crate::daemon::registry::get_bubbaloop_home;
 use crate::mcp::platform::DaemonPlatform;
 use serde::{Deserialize, Serialize};
@@ -322,6 +323,11 @@ impl AgentRuntime {
                 belief_decay_shutdown,
             ));
 
+            // World-state change notify — shared between context providers and agent_loop.
+            // Providers call notify_one() after each successful upsert so the agent
+            // can immediately evaluate reactive rules without waiting for the heartbeat.
+            let world_state_notify = Arc::new(Notify::new());
+
             // Spawn context providers — load from providers.db, subscribe to Zenoh topics,
             // write extracted values to world_state (no LLM involved).
             // Created by configure_context MCP tool.
@@ -344,6 +350,7 @@ impl AgentRuntime {
                                     provider_session,
                                     semantic_db,
                                     provider_shutdown,
+                                    Some(world_state_notify.clone()),
                                 );
                             }
                         }
@@ -519,6 +526,7 @@ impl AgentRuntime {
             // The marker is removed once the agent writes its own identity.md.
             let onboarding_marker = agent_dir.join(".needs-onboarding");
             let identity_path = soul_dir.join("identity.md");
+            let reactive_rules_db = agent_dir.join("reactive_rules.db");
 
             tokio::spawn(agent_loop(
                 agent_id_clone,
@@ -532,6 +540,8 @@ impl AgentRuntime {
                 job_notify,
                 identity_path,
                 onboarding_marker,
+                world_state_notify,
+                reactive_rules_db,
             ));
 
             log::info!(
@@ -637,6 +647,8 @@ async fn agent_loop(
     job_notify: Arc<Notify>,
     identity_path: std::path::PathBuf,
     onboarding_marker: std::path::PathBuf,
+    world_state_notify: Arc<Notify>,
+    reactive_rules_db: std::path::PathBuf,
 ) {
     let initial_caps = soul.read().await.capabilities.clone();
     let mut arousal = ArousalState::new(&initial_caps);
@@ -651,9 +663,10 @@ async fn agent_loop(
     loop {
         let interval = std::time::Duration::from_secs(arousal.interval_secs());
 
-        // Select on inbox, job notify, heartbeat, or shutdown.
+        // Select on inbox, job notify, world-state change, heartbeat, or shutdown.
         // Both job_notify and heartbeat lead to job polling after the select.
         let mut poll_jobs = false;
+        let mut eval_reactive = false;
 
         tokio::select! {
             // Inbox message
@@ -701,15 +714,82 @@ async fn agent_loop(
                 poll_jobs = true;
             }
 
+            // World-state change notify — a context provider wrote a new value.
+            // Evaluate reactive rules immediately to boost arousal without waiting
+            // for the next heartbeat tick.
+            _ = world_state_notify.notified() => {
+                eval_reactive = true;
+            }
+
             // Heartbeat tick (job polling)
             _ = tokio::time::sleep(interval) => {
                 poll_jobs = true;
+                eval_reactive = true;
             }
 
             // Shutdown
             _ = shutdown_rx.changed() => {
                 log::info!("[Agent:{}] Shutting down", agent_id);
                 break;
+            }
+        }
+
+        // Evaluate reactive rules against current world state.
+        // Loads rules from reactive_rules.db (if it exists) and world state from SemanticStore.
+        // Fires rules that match, summing their arousal boosts.
+        if eval_reactive {
+            let rules: Vec<ReactiveRule> = if reactive_rules_db.exists() {
+                match ReactiveRuleStore::open(&reactive_rules_db) {
+                    Ok(store) => match store.list_rules() {
+                        Ok(configs) => configs.into_iter().map(ReactiveRule::from).collect(),
+                        Err(e) => {
+                            log::warn!("[Agent:{}] Failed to list reactive rules: {}", agent_id, e);
+                            vec![]
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!(
+                            "[Agent:{}] Failed to open reactive rule store: {}",
+                            agent_id,
+                            e
+                        );
+                        vec![]
+                    }
+                }
+            } else {
+                vec![]
+            };
+
+            if !rules.is_empty() {
+                // Read world state snapshot from semantic memory (blocking rusqlite)
+                let snapshot = {
+                    let backend = memory.backend.lock().await;
+                    tokio::task::block_in_place(|| {
+                        backend.semantic.world_state_snapshot().unwrap_or_default()
+                    })
+                };
+
+                // Convert to HashMap<&str, &str> for evaluate_rules.
+                // We collect owned strings first so we can borrow them.
+                let owned: Vec<(String, String)> = snapshot
+                    .iter()
+                    .filter(|e| !e.stale)
+                    .map(|e| (e.key.clone(), e.value.clone()))
+                    .collect();
+                let world_state_map: HashMap<&str, &str> = owned
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+
+                let boost = evaluate_rules(&rules, &world_state_map);
+                if boost > 0.0 {
+                    log::info!(
+                        "[Agent:{}] Reactive rules fired, arousal boost: {:.2}",
+                        agent_id,
+                        boost
+                    );
+                    arousal.add_external_boost(boost);
+                }
             }
         }
 

@@ -1,0 +1,2 @@
+zenoh
+# pyserial  # uncomment for real serial port hardware

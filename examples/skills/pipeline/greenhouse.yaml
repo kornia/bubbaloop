@@ -1,0 +1,130 @@
+# Multi-sensor greenhouse monitoring
+#
+# Format: v3 pipeline (multi-operator)
+# Drivers used:
+#   - http-poll  (builtin x3 — temperature, humidity, light sensors via HTTP)
+#   - webhook    (builtin — sends alerts to a local endpoint)
+#
+# All drivers are builtin — no marketplace download required.
+#
+# Assumes your greenhouse has HTTP-accessible sensors (common with
+# ESP32/Raspberry Pi sensor nodes running a simple HTTP server).
+# Adapt the URLs to match your sensor endpoints.
+#
+# Usage:
+#   cp examples/skills/pipeline/greenhouse.yaml ~/.bubbaloop/skills/
+#   # Edit the sensor URLs and alert_url below
+#   bubbaloop up
+
+name: greenhouse
+version: 3
+
+# vars: shared variables available to all operators via ${var_name}.
+# Change these to customize the skill without editing operator configs.
+# Variables resolve in this order: operator config -> skill vars -> env vars.
+vars:
+  greenhouse_name: "Main Greenhouse"
+  sensor_host: "192.168.1.50"     # IP of your sensor hub
+  alert_url: "http://localhost:9090/greenhouse-alerts"
+
+operators:
+  # temperature: polls a temperature sensor endpoint every 30 seconds.
+  # Expected response: {"value": 22.5, "unit": "celsius"}
+  - id: temperature
+    driver: http-poll
+    config:
+      url: "http://${sensor_host}/api/temperature"
+      interval_secs: 30
+      timeout_secs: 5
+
+  # humidity: polls a humidity sensor endpoint every 30 seconds.
+  # Expected response: {"value": 65.2, "unit": "percent"}
+  - id: humidity
+    driver: http-poll
+    config:
+      url: "http://${sensor_host}/api/humidity"
+      interval_secs: 30
+      timeout_secs: 5
+
+  # light: polls a lux sensor every 60 seconds.
+  # Light changes more slowly than temp/humidity.
+  # Expected response: {"value": 4200, "unit": "lux"}
+  - id: light
+    driver: http-poll
+    config:
+      url: "http://${sensor_host}/api/light"
+      interval_secs: 60
+      timeout_secs: 5
+
+  # alerter: HTTP POST sink for structured alert messages.
+  # Replace with Slack, Discord, PagerDuty, or any webhook endpoint.
+  - id: alerter
+    driver: webhook
+    config:
+      url: "${alert_url}"
+      method: POST
+
+# links: route sensor data to the dashboard and alerter.
+# All three sensors go to dashboard for live visualization.
+# Temperature and humidity go to alerter for condition monitoring.
+# Light is dashboard-only (informational).
+links:
+  - from: temperature
+    to: dashboard
+
+  - from: humidity
+    to: dashboard
+
+  - from: light
+    to: dashboard
+
+  - from: temperature
+    to: alerter
+
+  - from: humidity
+    to: alerter
+
+intent: |
+  Monitor ${greenhouse_name} environmental conditions around the clock.
+
+  Optimal ranges for this greenhouse:
+  - Temperature: 18–28°C (below 15°C = frost risk, above 32°C = heat stress)
+  - Humidity: 40–70% (below 30% = too dry, above 80% = fungal risk)
+  - Light: 2000–8000 lux during daytime (informational only)
+
+  Alert if any condition leaves the safe range. If both temperature AND
+  humidity are out of range simultaneously, that's higher priority — mention both.
+
+  Every hour: generate a one-line status summary (all green / warning / critical).
+  Every morning at 6am: full status report with trend direction (rising/falling).
+
+  If any sensor stops reporting (no data for 5 minutes), alert on the sensor failure
+  separately — a silent sensor could mean the hub went offline.
+
+on:
+  - trigger: temperature/data
+    condition: "value > 32"
+    action: notify
+    message: "Heat stress in ${greenhouse_name}: temperature is ${value}C (safe max: 32C)"
+    cooldown: 10m
+
+  - trigger: temperature/data
+    condition: "value < 15"
+    action: notify
+    message: "Frost risk in ${greenhouse_name}: temperature is ${value}C (safe min: 15C)"
+    cooldown: 10m
+
+  - trigger: humidity/data
+    condition: "value > 80"
+    action: notify
+    message: "Fungal risk in ${greenhouse_name}: humidity is ${value}% (safe max: 80%)"
+    cooldown: 10m
+
+  - trigger: humidity/data
+    condition: "value < 30"
+    action: notify
+    message: "Too dry in ${greenhouse_name}: humidity is ${value}% (safe min: 30%)"
+    cooldown: 15m
+
+# Agent check-ins: hourly summary + 6am daily report.
+schedule: "0 * * * *"

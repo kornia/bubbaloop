@@ -1,0 +1,48 @@
+apiVersion: bubbaloop.dev/v1
+name: mqtt-bridge
+version: "0.1.0"
+type: python
+description: Subscribes to MQTT topics and republishes messages to Zenoh as JSON
+author: Bubbaloop Team
+command: python main.py
+
+role: source
+
+outputs:
+  - name: data
+    topic_suffix: "{instance}/data"
+    encoding: json
+    description: |
+      MQTT message envelope: {"topic": str, "payload": any, "timestamp_ms": int}
+    tier: deliberation
+    rate_hz: 0.2
+
+config_schema:
+  type: object
+  properties:
+    name:
+      type: string
+      description: Node instance name (used in topic path)
+      default: home-mqtt
+    broker:
+      type: string
+      description: MQTT broker hostname or IP. Use "mock" for simulation.
+      default: mock
+    broker_port:
+      type: integer
+      description: MQTT broker port
+      default: 1883
+    mqtt_topic:
+      type: string
+      description: MQTT topic to subscribe to (supports + and # wildcards)
+      default: "home/+/temperature"
+    interval_secs:
+      type: number
+      description: Message interval in mock mode (seconds)
+      default: 5.0
+
+requires:
+  hardware:
+    - network
+  software:
+    - paho-mqtt  # optional — only needed when broker != mock

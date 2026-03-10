@@ -1,0 +1,32 @@
+[package]
+name = "gpio_sensor_node"
+version = "0.1.0"
+authors = ["Bubbaloop Team"]
+license = "Apache-2.0"
+edition = "2021"
+description = "GPIO pin sensor — reads digital/analog pin state and publishes readings over Zenoh"
+
+# Self-contained example: uses zenoh directly (no bubbaloop-node-sdk git dep)
+# so it works without network access during development.
+# To migrate to the SDK, see the comment block at the bottom of src/main.rs.
+
+[[bin]]
+name = "gpio_sensor_node"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+argh = "0.1"
+ctrlc = "3.4"
+env_logger = "0.11"
+log = "0.4"
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+thiserror = "2.0"
+tokio = { version = "1", features = ["full"] }
+zenoh = "1.0"
+hostname = "0.4"
+
+[workspace]

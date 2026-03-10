@@ -1,0 +1,4 @@
+name: arduino-sensor
+port: mock          # mock mode — no hardware needed. Real: /dev/ttyUSB0 or /dev/ttyACM0
+baud_rate: 115200
+interval_secs: 0.5  # Only used in mock mode; real serial is interrupt-driven

@@ -1,0 +1,51 @@
+# Service port health check
+#
+# Publishes: bubbaloop/{scope}/{machine_id}/service-health/data
+# Driver: exec (builtin — runs a shell command on interval, publishes stdout as JSON)
+#
+# The exec driver runs the command every interval_secs seconds.
+# stdout must be valid JSON (the driver wraps non-JSON stdout in {"output":"..."}).
+# stderr is captured to daemon logs (not published).
+#
+# This example uses netcat (nc) to check if port 8080 is open.
+# Replace localhost/8080 with any host:port you want to monitor.
+#
+# Requirements: netcat (nc) — installed on most Linux systems.
+#   Ubuntu/Debian: apt install netcat-openbsd
+#   Jetson: already available
+#
+# Usage:
+#   cp examples/skills/simple/port-scanner.yaml ~/.bubbaloop/skills/
+#   bubbaloop up
+
+name: service-health
+driver: exec
+
+config:
+  # nc flags:
+  #   -z  — scan mode (don't send data, just check port)
+  #   -w2 — 2 second timeout
+  # Exit code 0 = port open, non-zero = port closed/unreachable.
+  # We emit JSON so the on: condition can pattern match on "status".
+  command: "bash -c 'nc -z -w2 localhost 8080 2>/dev/null && echo {\"status\":\"up\",\"port\":8080} || echo {\"status\":\"down\",\"port\":8080}'"
+  interval_secs: 30
+
+intent: |
+  Monitor the local web service on port 8080.
+  Alert me immediately if the service goes down.
+  When it comes back up, also notify so I know recovery happened.
+
+  If the service is down for more than 5 minutes consecutively,
+  suggest checking the node logs with: bubbaloop node logs <node-name>
+
+on:
+  - trigger: data
+    condition: "status == \"down\""
+    action: notify
+    message: "Service on port 8080 is DOWN — check the process or node logs"
+    cooldown: 2m
+
+  # Tip: add a "up after down" handler once EventBridge supports state tracking.
+  # For now, the agent will notice recovery on its next scheduled check.
+
+schedule: "*/5 * * * *"   # Agent awareness check every 5 minutes

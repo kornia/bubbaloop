@@ -1,0 +1,78 @@
+# Development camera simulator — test pipelines without real hardware
+#
+# Format: v3 pipeline (multi-operator)
+# Drivers used:
+#   - exec   (builtin x2 — generates fake camera frames + logs them)
+#
+# Simulates a camera producing frame metadata at 10fps.
+# Use this to develop and test pipelines before deploying with a real
+# RTSP or v4l2 camera node.
+#
+# To migrate to a real camera:
+#   1. Replace the 'fake-cam' operator (driver: exec) with:
+#        driver: rtsp
+#        config:
+#          url: "rtsp://your-camera-ip/stream"
+#      or:
+#        driver: v4l2
+#        config:
+#          device: /dev/video0
+#   2. Run: bubbaloop node install rtsp-camera  (or v4l2-camera)
+#   3. bubbaloop up
+#
+# Usage:
+#   cp examples/skills/pipeline/dev-camera.yaml ~/.bubbaloop/skills/
+#   bubbaloop up
+#   # Watch topics: bubbaloop skill list
+
+name: dev-camera
+version: 3
+
+operators:
+  # fake-cam: generates synthetic frame metadata every 100ms (simulated 10fps).
+  # Output JSON mimics what a real camera node would publish.
+  # $RANDOM gives a pseudo-random frame ID; $(date +%s%3N) gives ms timestamp.
+  - id: fake-cam
+    driver: exec
+    config:
+      command: "bash -c 'echo {\"frame_id\":'$((RANDOM % 100000))',\"width\":640,\"height\":480,\"format\":\"jpeg\",\"timestamp_ms\":'$(date +%s%3N)',\"source\":\"dev-simulator\"}'"
+      interval_secs: 0.1    # 10 fps synthetic stream
+
+    # Two output ports: same data, two rates (mimicking a real camera).
+    outputs:
+      stream:
+        rate: 10fps       # Full simulated rate for dashboard
+      snapshot:
+        rate: 1fps        # Decimated for agent/ML testing
+
+  # frame-logger: logs a heartbeat every 5 seconds to confirm frames are flowing.
+  # Replace with a real processor (person-detect, etc.) when ready.
+  - id: frame-logger
+    driver: exec
+    config:
+      command: "bash -c 'echo {\"logged\":true,\"ts\":'$(date +%s)',\"msg\":\"frame pipeline active\"}'"
+      interval_secs: 5
+
+links:
+  - from: fake-cam/stream
+    to: dashboard         # Verify in dashboard: see frame metadata scrolling
+
+  - from: fake-cam/snapshot
+    to: frame-logger      # Pipe snapshots to logger (stand-in for ML operator)
+
+intent: |
+  Development camera simulator. This skill is for testing pipeline logic
+  without requiring real camera hardware.
+
+  Monitor that frames are flowing at the expected rate (~10fps).
+  If the frame rate drops significantly or frames stop, alert me —
+  it may indicate the exec driver or daemon has an issue.
+
+  This skill is intentionally simple: no production alerting needed.
+  Just confirm the pipeline topology works before deploying with real hardware.
+
+on:
+  - trigger: fake-cam/error
+    action: notify
+    message: "Dev camera simulator error — exec driver may have failed"
+    cooldown: 30s

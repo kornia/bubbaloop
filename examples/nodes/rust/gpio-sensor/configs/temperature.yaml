@@ -1,0 +1,8 @@
+# Temperature sensor on GPIO pin 4 (simulated)
+# On real hardware this maps to a one-wire sensor (DS18B20) or ADC-attached thermistor.
+name: temp-gpio-4
+publish_topic: gpio/temperature/reading
+pin: 4
+sensor_type: temperature
+interval_secs: 5.0
+active_high: true
