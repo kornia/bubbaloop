@@ -120,6 +120,16 @@ pub trait PlatformOperations: Send + Sync + 'static {
         &self,
         name: &str,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
+
+    /// Publish a text message to a Zenoh topic.
+    ///
+    /// Used by agents to send messages to other agents' inboxes.
+    /// Topic must start with `bubbaloop/` and contain no wildcards.
+    fn publish_to_topic(
+        &self,
+        topic: &str,
+        message: &str,
+    ) -> impl std::future::Future<Output = PlatformResult<()>> + Send;
 }
 
 // ── DaemonPlatform: real implementation backed by NodeManager + Zenoh ────
@@ -481,6 +491,13 @@ impl PlatformOperations for DaemonPlatform {
             Err(PlatformError::CommandFailed(result.message))
         }
     }
+
+    async fn publish_to_topic(&self, topic: &str, message: &str) -> PlatformResult<()> {
+        self.session
+            .put(topic, message)
+            .await
+            .map_err(|e| PlatformError::Internal(format!("Zenoh put failed: {}", e)))
+    }
 }
 
 /// Query a Zenoh key expression and return text results.
@@ -675,6 +692,11 @@ pub mod mock {
             } else {
                 Err(PlatformError::NodeNotFound(name.to_string()))
             }
+        }
+
+        async fn publish_to_topic(&self, topic: &str, _message: &str) -> PlatformResult<()> {
+            log::debug!("mock: publish_to_topic {}", topic);
+            Ok(())
         }
     }
 }

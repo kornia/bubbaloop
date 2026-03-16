@@ -298,6 +298,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 bubbaloop::agent::AgentConfig {
                     model: cmd.model,
                     provider: cmd.provider,
+                    name: cmd.name,
                 },
                 session,
                 node_manager,

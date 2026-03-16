@@ -14,15 +14,22 @@ pub struct Dispatcher<P: PlatformOperations> {
     platform: Arc<P>,
     scope: String,
     machine_id: String,
+    agent_name: String,
 }
 
 impl<P: PlatformOperations> Dispatcher<P> {
     /// Create a new dispatcher.
-    pub fn new(platform: Arc<P>, scope: String, machine_id: String) -> Self {
+    pub fn new(
+        platform: Arc<P>,
+        scope: String,
+        machine_id: String,
+        agent_name: String,
+    ) -> Self {
         Self {
             platform,
             scope,
             machine_id,
+            agent_name,
         }
     }
 
@@ -269,12 +276,36 @@ impl<P: PlatformOperations> Dispatcher<P> {
                     "required": []
                 }),
             },
+            ToolDefinition {
+                name: "publish_to_topic".to_string(),
+                description: "Publish a message to a Zenoh topic. Use \
+                    bubbaloop/{scope}/agent/{name}/inbox to address a named agent. \
+                    Sender identity is injected automatically — do not include it in \
+                    the message. Example: topic=\"bubbaloop/local/agent/worker/inbox\", \
+                    message=\"process dataset X\"."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "topic": {
+                            "type": "string",
+                            "description": "Zenoh topic to publish to (must start with \
+                                \"bubbaloop/\", no wildcards)"
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Text message to send"
+                        }
+                    },
+                    "required": ["topic", "message"]
+                }),
+            },
         ]
     }
 
     /// Dispatch a tool call by name, returning a `ContentBlock::ToolResult`.
     ///
-    /// Maps all 24 tool names to the corresponding `PlatformOperations` method.
+    /// Maps all 25 tool names to the corresponding `PlatformOperations` method.
     pub async fn call_tool(&self, tool_use_id: &str, name: &str, input: &Value) -> ContentBlock {
         let (text, is_error) = match name {
             // ── No-parameter tools ──────────────────────────────────
@@ -315,6 +346,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             "query_zenoh" => self.handle_query_zenoh(input).await,
             "install_node" => self.handle_install_node(input).await,
             "discover_capabilities" => self.handle_discover_capabilities(input).await,
+            "publish_to_topic" => self.handle_publish_to_topic(input).await,
 
             _ => (format!("Unknown tool: {}", name), Some(true)),
         };
@@ -733,6 +765,37 @@ impl<P: PlatformOperations> Dispatcher<P> {
             Err(e) => (format!("Error: {}", e), Some(true)),
         }
     }
+
+    async fn handle_publish_to_topic(&self, input: &Value) -> (String, Option<bool>) {
+        let topic = match input.get("topic").and_then(|v| v.as_str()) {
+            Some(t) => t.to_string(),
+            None => return ("Missing required parameter: topic".to_string(), Some(true)),
+        };
+        let message = match input.get("message").and_then(|v| v.as_str()) {
+            Some(m) => m.to_string(),
+            None => return ("Missing required parameter: message".to_string(), Some(true)),
+        };
+        if let Err(e) = validation::validate_publish_topic(&topic) {
+            return (format!("Validation error: {}", e), Some(true));
+        }
+        let envelope = json!({
+            "sender": self.agent_name,
+            "message": message,
+        });
+        log::info!(
+            "[Agent] publish_to_topic: {} -> {}",
+            self.agent_name,
+            topic
+        );
+        match self
+            .platform
+            .publish_to_topic(&topic, &envelope.to_string())
+            .await
+        {
+            Ok(()) => (format!("Published to {}", topic), None),
+            Err(e) => (format!("Error: {}", e), Some(true)),
+        }
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -743,7 +806,7 @@ mod tests {
     use std::collections::HashSet;
 
     /// Expected number of tools exposed by the dispatcher.
-    const TOOL_COUNT: usize = 24;
+    const TOOL_COUNT: usize = 25;
 
     #[test]
     fn tool_definitions_count() {

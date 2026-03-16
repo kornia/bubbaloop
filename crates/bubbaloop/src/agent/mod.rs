@@ -55,6 +55,8 @@ pub struct AgentConfig {
     pub model: Option<String>,
     /// Provider selection (claude, ollama)
     pub provider: Option<String>,
+    /// Agent name for inbox routing (CLI --name → BUBBALOOP_AGENT_NAME → "default").
+    pub name: Option<String>,
 }
 
 /// Create a lightweight Zenoh session for the agent.
@@ -145,6 +147,11 @@ pub async fn run_agent(
     // 2. Create dispatcher with DaemonPlatform
     let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = crate::daemon::util::get_machine_id();
+    let agent_name = config
+        .name
+        .clone()
+        .or_else(|| std::env::var("BUBBALOOP_AGENT_NAME").ok())
+        .unwrap_or_else(|| "default".to_string());
     let node_manager_ref = node_manager.clone();
     let platform = Arc::new(DaemonPlatform {
         node_manager,
@@ -154,7 +161,12 @@ pub async fn run_agent(
     });
     let sched_scope = scope.clone();
     let sched_machine_id = machine_id.clone();
-    let dispatcher = Dispatcher::new(platform.clone(), scope.clone(), machine_id.clone());
+    let dispatcher = Dispatcher::new(
+        platform.clone(),
+        scope.clone(),
+        machine_id.clone(),
+        agent_name.clone(),
+    );
 
     // 3. Get tool definitions
     let tools = Dispatcher::<DaemonPlatform>::tool_definitions();
@@ -266,6 +278,52 @@ pub async fn run_agent(
         }
     });
 
+    // 5c. Subscribe to this agent's inbox topic on the Zenoh bus.
+    //
+    // Other agents publish to bubbaloop/{scope}/agent/{name}/inbox.
+    // Messages are stored via log_event() so they surface automatically
+    // in the "Recent Events" section of the next system prompt turn.
+    let inbox_topic = format!("bubbaloop/{}/agent/{}/inbox", scope, agent_name);
+    let inbox_session = session.clone();
+    match inbox_session.declare_subscriber(&inbox_topic).await {
+        Ok(inbox_subscriber) => {
+            let inbox_memory = Memory::open(&memory_path)?;
+            let mut inbox_shutdown_rx = shutdown_tx.subscribe();
+            let inbox_topic_log = inbox_topic.clone();
+            tokio::spawn(async move {
+                log::info!("[Agent] inbox listening on: {}", inbox_topic_log);
+                loop {
+                    tokio::select! {
+                        Ok(sample) = inbox_subscriber.recv_async() => {
+                            let bytes = sample.payload().to_bytes();
+                            let payload_str = String::from_utf8_lossy(&bytes).into_owned();
+                            let (sender, message) = if let Ok(v) =
+                                serde_json::from_str::<serde_json::Value>(&payload_str)
+                            {
+                                let s = v["sender"].as_str().unwrap_or("unknown").to_owned();
+                                let m = v["message"].as_str().unwrap_or(&payload_str).to_owned();
+                                (s, m)
+                            } else {
+                                ("unknown-agent".to_owned(), payload_str)
+                            };
+                            if let Err(e) = inbox_memory.log_event(
+                                &sender,
+                                "agent_message",
+                                Some(&message),
+                            ) {
+                                log::warn!("[Agent] failed to persist inbox message: {}", e);
+                            }
+                        }
+                        _ = inbox_shutdown_rx.changed() => break,
+                    }
+                }
+            });
+        }
+        Err(e) => {
+            log::warn!("[Agent] could not subscribe to inbox {}: {}", inbox_topic, e);
+        }
+    }
+
     // 6. Welcome message
     let model_name = config
         .model
@@ -286,6 +344,7 @@ pub async fn run_agent(
     println!();
     println!("  Bubbaloop Agent v{}", env!("CARGO_PKG_VERSION"));
     println!("  Model: {}", model_name);
+    println!("  Name: {} | Inbox: {}", agent_name, inbox_topic);
     println!("  Tools: {} | Nodes: {}", tools.len(), node_count);
     println!();
     println!("  Type a message to chat, 'quit' to exit.");
