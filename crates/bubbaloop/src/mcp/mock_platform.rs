@@ -391,6 +391,11 @@ impl PlatformOperations for MockPlatform {
     async fn list_world_state(&self) -> PlatformResult<Vec<crate::agent::memory::WorldStateEntry>> {
         Ok(self.world_state.lock().unwrap().clone())
     }
+
+    async fn publish_to_topic(&self, topic: &str, _message: &str) -> PlatformResult<()> {
+        log::debug!("[MockPlatform] publish_to_topic: {}", topic);
+        Ok(())
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────

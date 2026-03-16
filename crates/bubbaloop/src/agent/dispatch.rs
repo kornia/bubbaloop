@@ -36,6 +36,7 @@ pub struct Dispatcher<P: PlatformOperations> {
     platform: Arc<P>,
     scope: String,
     machine_id: String,
+    agent_name: String,
     memory_backend: Option<Arc<tokio::sync::Mutex<crate::agent::memory::MemoryBackend>>>,
     job_notify: Option<Arc<tokio::sync::Notify>>,
     episodic_decay_half_life_days: u32,
@@ -49,6 +50,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             platform,
             scope,
             machine_id,
+            agent_name: String::new(),
             memory_backend: None,
             job_notify: None,
             episodic_decay_half_life_days: 7,
@@ -79,6 +81,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
         platform: Arc<P>,
         scope: String,
         machine_id: String,
+        agent_name: String,
         memory_backend: Arc<tokio::sync::Mutex<crate::agent::memory::MemoryBackend>>,
         job_notify: Option<Arc<tokio::sync::Notify>>,
         episodic_decay_half_life_days: u32,
@@ -87,6 +90,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             platform,
             scope,
             machine_id,
+            agent_name,
             memory_backend: Some(memory_backend),
             job_notify,
             episodic_decay_half_life_days,
@@ -525,6 +529,27 @@ impl<P: PlatformOperations> Dispatcher<P> {
                     "required": []
                 }),
             },
+            ToolDefinition {
+                name: "publish_to_topic".to_string(),
+                description: "Publish a message to a Zenoh topic. Use topic \
+                    bubbaloop/{scope}/agent/{name}/inbox to address a named agent's inbox. \
+                    Inbox messages surface in the recipient's next prompt turn under Recent Events."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "topic": {
+                            "type": "string",
+                            "description": "Zenoh key expression (must start with 'bubbaloop/')"
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Message text to deliver"
+                        }
+                    },
+                    "required": ["topic", "message"]
+                }),
+            },
         ]
     }
 
@@ -577,6 +602,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             "get_system_telemetry" => self.handle_get_system_telemetry().await,
             "get_telemetry_history" => self.handle_get_telemetry_history(input).await,
             "update_telemetry_config" => self.handle_update_telemetry_config(input).await,
+            "publish_to_topic" => self.handle_publish_to_topic(input).await,
             _ => ToolResult::error(format!(
                 "Unknown tool: {}. Use your available tools: node management \
                  (list_nodes, start_node, etc.), system (read_file, write_file, \
@@ -1437,6 +1463,37 @@ impl<P: PlatformOperations> Dispatcher<P> {
             Err(e) => ToolResult::error(format!("Error updating telemetry config: {}", e)),
         }
     }
+
+    async fn handle_publish_to_topic(&self, input: &Value) -> ToolResult {
+        let topic = match input.get("topic").and_then(|v| v.as_str()) {
+            Some(t) => t.to_string(),
+            None => return ToolResult::error("Missing required parameter: topic".to_string()),
+        };
+        let message = match input.get("message").and_then(|v| v.as_str()) {
+            Some(m) => m.to_string(),
+            None => return ToolResult::error("Missing required parameter: message".to_string()),
+        };
+        if let Err(e) = crate::validation::validate_publish_topic(&topic) {
+            return ToolResult::error(format!("Validation error: {}", e));
+        }
+        let envelope = json!({
+            "sender": self.agent_name,
+            "message": message,
+        });
+        log::info!(
+            "[Agent] publish_to_topic: {} -> {}",
+            self.agent_name,
+            topic
+        );
+        match self
+            .platform
+            .publish_to_topic(&topic, &envelope.to_string())
+            .await
+        {
+            Ok(()) => ToolResult::success(format!("Published to {}", topic)),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1444,7 +1501,7 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    const TOOL_COUNT: usize = 37;
+    const TOOL_COUNT: usize = 38;
 
     #[test]
     fn tool_definitions_count() {

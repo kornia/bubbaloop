@@ -383,6 +383,7 @@ impl AgentRuntime {
                     platform.clone(),
                     scope.clone(),
                     machine_id.clone(),
+                    agent_id.clone(),
                     memory.backend.clone(),
                     Some(job_notify.clone()),
                     decay,
@@ -431,6 +432,53 @@ impl AgentRuntime {
                             e
                         );
                     }
+                }
+            });
+
+            // Subscribe to this agent's inbox topic so other agents can send messages.
+            // Messages are appended to episodic memory and surface in the next prompt turn.
+            let inbox_topic = format!("bubbaloop/{}/agent/{}/inbox", scope, agent_id);
+            let inbox_session = session.clone();
+            let inbox_backend = memory.backend.clone();
+            let mut inbox_shutdown = shutdown_rx.clone();
+            let inbox_agent_id = agent_id.clone();
+            tokio::spawn(async move {
+                match inbox_session.declare_subscriber(&inbox_topic).await {
+                    Ok(sub) => {
+                        log::info!("[Runtime] Agent '{}' inbox: {}", inbox_agent_id, inbox_topic);
+                        loop {
+                            tokio::select! {
+                                Ok(sample) = sub.recv_async() => {
+                                    let bytes = sample.payload().to_bytes();
+                                    let payload = String::from_utf8_lossy(&bytes).into_owned();
+                                    let (sender, message) = if let Ok(v) =
+                                        serde_json::from_str::<serde_json::Value>(&payload)
+                                    {
+                                        let s = v["sender"].as_str().unwrap_or("unknown").to_owned();
+                                        let m = v["message"].as_str().unwrap_or(&payload).to_owned();
+                                        (s, m)
+                                    } else {
+                                        ("unknown-agent".to_owned(), payload)
+                                    };
+                                    let entry = crate::agent::memory::episodic::EpisodicLog::make_entry(
+                                        "system",
+                                        &format!("[agent_message from {}] {}", sender, message),
+                                        None,
+                                    );
+                                    let backend = inbox_backend.lock().await;
+                                    if let Err(e) = backend.episodic.append(&entry) {
+                                        log::warn!("[Runtime] Failed to persist inbox message: {}", e);
+                                    }
+                                }
+                                _ = inbox_shutdown.changed() => break,
+                            }
+                        }
+                    }
+                    Err(e) => log::warn!(
+                        "[Runtime] Agent '{}' could not subscribe to inbox: {}",
+                        inbox_agent_id,
+                        e
+                    ),
                 }
             });
 
