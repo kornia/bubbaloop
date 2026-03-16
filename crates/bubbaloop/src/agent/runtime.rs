@@ -445,7 +445,11 @@ impl AgentRuntime {
             tokio::spawn(async move {
                 match inbox_session.declare_subscriber(&inbox_topic).await {
                     Ok(sub) => {
-                        log::info!("[Runtime] Agent '{}' inbox: {}", inbox_agent_id, inbox_topic);
+                        log::info!(
+                            "[Runtime] Agent '{}' inbox: {}",
+                            inbox_agent_id,
+                            inbox_topic
+                        );
                         loop {
                             tokio::select! {
                                 Ok(sample) = sub.recv_async() => {

@@ -1480,11 +1480,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             "sender": self.agent_name,
             "message": message,
         });
-        log::info!(
-            "[Agent] publish_to_topic: {} -> {}",
-            self.agent_name,
-            topic
-        );
+        log::info!("[Agent] publish_to_topic: {} -> {}", self.agent_name, topic);
         match self
             .platform
             .publish_to_topic(&topic, &envelope.to_string())
