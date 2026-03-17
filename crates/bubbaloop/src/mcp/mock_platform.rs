@@ -3,7 +3,7 @@
 use super::platform::{NodeCommand, NodeInfo, PlatformError, PlatformOperations, PlatformResult};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub struct MockPlatform {
     pub nodes: Mutex<Vec<NodeInfo>>,
@@ -14,6 +14,8 @@ pub struct MockPlatform {
     pub constraints: Mutex<Vec<(String, String, crate::daemon::constraints::Constraint)>>, // (id, mission_id, constraint)
     pub beliefs: Mutex<Vec<crate::agent::memory::semantic::Belief>>,
     pub world_state: Mutex<Vec<crate::agent::memory::WorldStateEntry>>,
+    /// Optional real Zenoh session for e2e tests that need actual pub/sub.
+    pub zenoh_session: Option<Arc<zenoh::Session>>,
 }
 
 impl Default for MockPlatform {
@@ -52,7 +54,15 @@ impl MockPlatform {
                     "commands": [],
                 }),
             )]),
+            zenoh_session: None,
         }
+    }
+
+    /// Attach a real Zenoh session so `publish_to_topic` makes actual pub/sub calls.
+    /// Used by e2e tests that verify the full Zenoh delivery path.
+    pub fn with_session(mut self, session: Arc<zenoh::Session>) -> Self {
+        self.zenoh_session = Some(session);
+        self
     }
 }
 
@@ -392,7 +402,13 @@ impl PlatformOperations for MockPlatform {
         Ok(self.world_state.lock().unwrap().clone())
     }
 
-    async fn publish_to_topic(&self, topic: &str, _message: &str) -> PlatformResult<()> {
+    async fn publish_to_topic(&self, topic: &str, message: &str) -> PlatformResult<()> {
+        if let Some(ref session) = self.zenoh_session {
+            session
+                .put(topic, message)
+                .await
+                .map_err(|e| PlatformError::Internal(format!("Zenoh put failed: {}", e)))?;
+        }
         log::debug!("[MockPlatform] publish_to_topic: {}", topic);
         Ok(())
     }
@@ -416,6 +432,7 @@ mod tests {
             constraints: Mutex::new(Vec::new()),
             beliefs: Mutex::new(Vec::new()),
             world_state: Mutex::new(Vec::new()),
+            zenoh_session: None,
         }
     }
 

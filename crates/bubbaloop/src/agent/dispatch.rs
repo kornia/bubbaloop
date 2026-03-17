@@ -1537,4 +1537,180 @@ mod tests {
         assert!(r.is_error);
         assert_eq!(r.text, "bad");
     }
+
+    // ── E2E: agent-to-agent messaging via real Zenoh pub/sub ────────────────
+    //
+    // Proves the full chain without a running daemon or LLM:
+    //
+    //   Dispatcher.call_tool("publish_to_topic")
+    //     → MockPlatform (real Zenoh session) → session.put()
+    //     → Zenoh peer TCP delivery
+    //     → inbox subscriber (mirrors runtime.rs exactly)
+    //     → EpisodicLog::append()
+    //     → assert "[agent_message from coordinator] hello worker"
+
+    /// Open a Zenoh peer session that listens on the given TCP port.
+    async fn open_listen_session(port: u16) -> std::sync::Arc<zenoh::Session> {
+        let mut cfg = zenoh::Config::default();
+        cfg.insert_json5("mode", "\"peer\"").unwrap();
+        cfg.insert_json5("listen/endpoints", &format!("[\"tcp/127.0.0.1:{}\"]", port))
+            .unwrap();
+        cfg.insert_json5("scouting/multicast/enabled", "false")
+            .unwrap();
+        std::sync::Arc::new(zenoh::open(cfg).await.unwrap())
+    }
+
+    /// Open a Zenoh peer session that connects to the given TCP port.
+    async fn open_connect_session(port: u16) -> std::sync::Arc<zenoh::Session> {
+        let mut cfg = zenoh::Config::default();
+        cfg.insert_json5("mode", "\"peer\"").unwrap();
+        cfg.insert_json5(
+            "connect/endpoints",
+            &format!("[\"tcp/127.0.0.1:{}\"]", port),
+        )
+        .unwrap();
+        cfg.insert_json5("scouting/multicast/enabled", "false")
+            .unwrap();
+        std::sync::Arc::new(zenoh::open(cfg).await.unwrap())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn e2e_agent_messaging_pub_sub() {
+        // Unique port for this test — avoids conflicts with other test runs
+        const PORT: u16 = 14_789;
+
+        // ── 1. Open two Zenoh peer sessions (no router needed) ──────────────
+        // Worker session listens; coordinator session connects.
+        let worker_session = open_listen_session(PORT).await;
+        let coordinator_session = open_connect_session(PORT).await;
+
+        eprintln!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        eprintln!(" Bubbaloop — agent-to-agent messaging demo");
+        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        eprintln!("[coordinator] Zenoh session open (peer TCP :{PORT})");
+        eprintln!("[worker]      Zenoh session open (peer TCP :{PORT})");
+
+        // ── 2. Real memory backend for the worker ────────────────────────────
+        let tmpdir = tempfile::tempdir().unwrap();
+        let worker_memory = crate::agent::memory::Memory::open(tmpdir.path()).unwrap();
+
+        // ── 3. Worker subscribes to its inbox ────────────────────────────────
+        let inbox = "bubbaloop/local/agent/worker/inbox";
+        eprintln!("[worker]      Subscribed to inbox: {}", inbox);
+
+        let sub = worker_session
+            .declare_subscriber(inbox)
+            .await
+            .expect("failed to declare subscriber");
+
+        // Spawn the inbox handler — mirrors runtime.rs:446-479 exactly
+        let backend = worker_memory.backend.clone();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            if let Ok(sample) = sub.recv_async().await {
+                let bytes = sample.payload().to_bytes();
+                let payload = String::from_utf8_lossy(&bytes).into_owned();
+
+                let (sender, msg) =
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) {
+                        let s = v["sender"].as_str().unwrap_or("unknown").to_owned();
+                        let m = v["message"].as_str().unwrap_or(&payload).to_owned();
+                        (s, m)
+                    } else {
+                        ("unknown-agent".to_owned(), payload)
+                    };
+
+                let content = format!("[agent_message from {}] {}", sender, msg);
+                eprintln!(
+                    "[worker]      Inbox received → episodic log: \"{}\"",
+                    content
+                );
+
+                let entry = crate::agent::memory::episodic::EpisodicLog::make_entry(
+                    "system", &content, None,
+                );
+                backend.lock().await.episodic.append(&entry).unwrap();
+                let _ = done_tx.send(());
+            }
+        });
+
+        // Give the subscriber a moment to register
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        // ── 4. Coordinator sends via Dispatcher.call_tool ────────────────────
+        let coordinator_tmpdir = tempfile::tempdir().unwrap();
+        let coordinator_memory =
+            crate::agent::memory::Memory::open(coordinator_tmpdir.path()).unwrap();
+        let platform = std::sync::Arc::new(
+            crate::mcp::platform::mock::MockPlatform::new().with_session(coordinator_session),
+        );
+        let dispatcher = Dispatcher::new_with_memory(
+            platform,
+            "local".to_string(),
+            "test-machine".to_string(),
+            "coordinator".to_string(),
+            coordinator_memory.backend,
+            None,
+            7,
+        );
+
+        let input = json!({
+            "topic": "bubbaloop/local/agent/worker/inbox",
+            "message": "hello worker"
+        });
+        eprintln!(
+            "[coordinator] Calling publish_to_topic({:?}, \"hello worker\")",
+            "bubbaloop/local/agent/worker/inbox"
+        );
+
+        let result = dispatcher
+            .call_tool("demo-tool-id", "publish_to_topic", &input)
+            .await;
+
+        match &result {
+            crate::agent::provider::ContentBlock::ToolResult {
+                is_error, content, ..
+            } => {
+                eprintln!(
+                    "[coordinator] Tool result: {} (is_error={:?})",
+                    content, is_error
+                );
+                assert!(
+                    is_error.is_none(),
+                    "publish_to_topic returned error: {}",
+                    content
+                );
+            }
+            other => panic!("unexpected ContentBlock variant: {:?}", other),
+        }
+
+        // ── 5. Wait for delivery and assert the episodic log entry ───────────
+        tokio::time::timeout(std::time::Duration::from_secs(5), done_rx)
+            .await
+            .expect("message never arrived within 5 s")
+            .expect("done sender dropped");
+
+        let backend = worker_memory.backend.lock().await;
+        let entries = backend.episodic.search("coordinator", 10).unwrap();
+
+        assert!(
+            !entries.is_empty(),
+            "no entries found in worker episodic log"
+        );
+        let entry = &entries[0];
+        eprintln!("[worker]      Episodic log entry: \"{}\"", entry.content);
+        assert!(
+            entry
+                .content
+                .contains("[agent_message from coordinator] hello worker"),
+            "unexpected entry content: {}",
+            entry.content
+        );
+
+        eprintln!("\n✓  Message delivered and logged.");
+        eprintln!("   topic   : bubbaloop/local/agent/worker/inbox");
+        eprintln!("   sender  : coordinator");
+        eprintln!("   log     : \"{}\"", entry.content);
+        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    }
 }
