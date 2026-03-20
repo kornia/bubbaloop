@@ -17,5 +17,5 @@ npx pbjs -t static-module -w es6 \
 npx pbts -o src/proto/messages.pb.d.ts src/proto/messages.pb.js
 
 # Fix protobufjs 7.x bug that adds incorrect 'error' parameter to decode functions
-sed -i 's/function decode(reader, length, error)/function decode(reader, length)/g' src/proto/messages.pb.js
-sed -i 's/if (tag === error)/if (false)/g' src/proto/messages.pb.js
+sed -i '' 's/function decode(reader, length, error)/function decode(reader, length)/g' src/proto/messages.pb.js
+sed -i '' 's/if (tag === error)/if (false)/g' src/proto/messages.pb.js
