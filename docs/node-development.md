@@ -351,7 +351,10 @@ async fn main() -> Result<()> {
         .callback({
             let descriptor = DESCRIPTOR.to_vec();
             move |query| {
-                let _ = query.reply(&query.key_expr().clone(), descriptor.as_slice());
+                let descriptor_clone = descriptor.clone();
+                tokio::spawn(async move {
+                    let _ = query.reply(&query.key_expr().clone(), descriptor_clone.as_slice()).await;
+                });
             }
         })
         .await?;
