@@ -20,9 +20,12 @@ pub async fn declare_schema_queryable(
             let descriptor = descriptor.to_vec();
             move |query| {
                 log::debug!("Schema query received");
-                if let Err(e) = query.reply(&query.key_expr().clone(), descriptor.as_slice()) {
-                    log::warn!("Failed to reply to schema query: {}", e);
-                }
+                let descriptor_clone = descriptor.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = query.reply(&query.key_expr().clone(), descriptor_clone.as_slice()).await {
+                        log::warn!("Failed to reply to schema query: {}", e);
+                    }
+                });
             }
         })
         .await
