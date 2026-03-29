@@ -242,7 +242,7 @@ export function NodeDiscoveryProvider({
     if (!currentSession) return [];
 
     try {
-      const receiver = await currentSession.get("bubbaloop/daemon/nodes", {
+      const receiver = await currentSession.get("bubbaloop/**/daemon/nodes", {
         timeout: Duration.milliseconds.of(5000),
       });
 

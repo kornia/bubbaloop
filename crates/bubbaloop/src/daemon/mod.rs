@@ -172,7 +172,38 @@ async fn run_daemon_gateway(
         }
     });
 
-    // 2. Subscribe to command topic and dispatch
+    // 2. Register nodes queryable (returns protobuf NodeList for dashboard)
+    let nodes_key = gateway::nodes_topic(&scope, &machine_id);
+    let nodes_session = session.clone();
+    let nodes_nm = node_manager.clone();
+    let mut nodes_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        match nodes_session.declare_queryable(&nodes_key).await {
+            Ok(queryable) => loop {
+                tokio::select! {
+                    result = queryable.recv_async() => {
+                        match result {
+                            Ok(query) => {
+                                let node_list = nodes_nm.get_node_list().await;
+                                let mut buf = Vec::new();
+                                use prost::Message as _;
+                                if node_list.encode(&mut buf).is_ok() {
+                                    let _ = query.reply(&nodes_key, buf).await;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    _ = nodes_shutdown.changed() => break,
+                }
+            },
+            Err(e) => {
+                log::warn!("[Gateway] Failed to register nodes queryable: {}", e);
+            }
+        }
+    });
+
+    // 3. Subscribe to command topic and dispatch
     let cmd_topic = gateway::command_topic(&scope, &machine_id);
     let evt_topic = gateway::events_topic(&scope, &machine_id);
 
