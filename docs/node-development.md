@@ -1,6 +1,6 @@
-# Skillet Development Guide
+# Node Development Guide
 
-> A "skillet" is a self-describing sensor or actuator capability in bubbaloop. Historically called "nodes", skillets are the core building blocks of the platform.
+> A "node" is a self-describing sensor or actuator capability in bubbaloop. Historically called "nodes", nodes are the core building blocks of the platform.
 
 ## Where Nodes Live
 
@@ -78,9 +78,9 @@ ln -s ~/my-nodes/my-sensor ~/.bubbaloop/nodes/my-sensor
 bubbaloop node add ~/.bubbaloop/nodes/my-sensor
 ```
 
-## What is a Skillet?
+## What is a node?
 
-A skillet is an autonomous process that:
+A node is an autonomous process that:
 - Connects to the Zenoh data plane
 - Publishes sensor data (protobuf-encoded)
 - Serves a manifest describing its capabilities
@@ -88,11 +88,11 @@ A skillet is an autonomous process that:
 - Reports health via periodic heartbeats
 - Manages its own lifecycle (start, stop, restart)
 
-Skillets run as systemd user services managed by the bubbaloop daemon. They can run on any machine — the daemon scopes all topics by `scope` and `machine_id` for multi-machine deployments.
+nodes run as systemd user services managed by the bubbaloop daemon. They can run on any machine — the daemon scopes all topics by `scope` and `machine_id` for multi-machine deployments.
 
-> **Recommended:** Use the [Node SDK](#node-sdk-recommended) to create Rust skillets with ~50 lines of code. The manual approach below is for advanced use cases or Python nodes.
+> **Recommended:** Use the [Node SDK](#node-sdk-recommended) to create Rust nodes with ~50 lines of code. The manual approach below is for advanced use cases or Python nodes.
 
-## Anatomy of a Skillet
+## Anatomy of a node
 
 ### Required Components
 
@@ -106,7 +106,7 @@ Skillets run as systemd user services managed by the bubbaloop daemon. They can 
 
 ### Zenoh Topics
 
-Every skillet operates within a scoped topic hierarchy:
+Every node operates within a scoped topic hierarchy:
 
 ```
 bubbaloop/{scope}/{machine_id}/{node_name}/schema      → FileDescriptorSet bytes
@@ -130,7 +130,7 @@ bubbaloop/{scope}/{machine_id}/health/{node_name}      → Periodic heartbeat
 
 ### Manifest Format
 
-The manifest is a JSON document served via Zenoh queryable that describes the skillet's capabilities:
+The manifest is a JSON document served via Zenoh queryable that describes the node's capabilities:
 
 ```json
 {
@@ -160,9 +160,9 @@ The manifest is a JSON document served via Zenoh queryable that describes the sk
 }
 ```
 
-### Schema Contract (Protobuf Skillets)
+### Schema Contract (Protobuf nodes)
 
-Every skillet that publishes protobuf messages **MUST** serve its FileDescriptorSet via a Zenoh queryable. This enables runtime schema discovery for dashboards, AI agents, and cross-node type checking.
+Every node that publishes protobuf messages **MUST** serve its FileDescriptorSet via a Zenoh queryable. This enables runtime schema discovery for dashboards, AI agents, and cross-node type checking.
 
 **Requirements:**
 
@@ -197,7 +197,7 @@ Every skillet that publishes protobuf messages **MUST** serve its FileDescriptor
        .compile_protos(&["protos/my_node.proto", "protos/header.proto"], &["protos/"])?;
    ```
 
-4. **Include all .proto files** the skillet uses (including `header.proto` from bubbaloop-schemas):
+4. **Include all .proto files** the node uses (including `header.proto` from bubbaloop-schemas):
    - Copy header.proto into node's `protos/` directory
    - Reference it in your message definitions: `import "header.proto";`
 
@@ -216,7 +216,7 @@ Every skillet that publishes protobuf messages **MUST** serve its FileDescriptor
 - Serving JSON instead of raw FileDescriptorSet bytes
 - Missing `header.proto` in FileDescriptorSet
 
-## Creating a Rust Skillet
+## Creating a Rust node
 
 ### Step 1: Scaffold
 
@@ -266,7 +266,7 @@ message SensorReading {
 
 ### Step 3: Implement the main loop
 
-Example from `openmeteo` skillet:
+Example from `openmeteo` node:
 
 ```rust
 // src/main.rs
@@ -536,9 +536,9 @@ bubbaloop node list
 bubbaloop node stop my-sensor
 ```
 
-## Creating a Python Skillet
+## Creating a Python node
 
-Python skillets follow the same contract but use `eclipse-zenoh` and `protobuf` for serialization.
+Python nodes follow the same contract but use `eclipse-zenoh` and `protobuf` for serialization.
 
 ### Step 1: Scaffold
 
@@ -566,7 +566,7 @@ Same as Rust (Step 2 above).
 
 ### Step 3: Implement the main loop
 
-Example from `network-monitor` skillet:
+Example from `network-monitor` node:
 
 ```python
 #!/usr/bin/env python3
@@ -850,7 +850,7 @@ Same as Rust (Step 7 above).
 
 ## node.yaml Format
 
-The `node.yaml` file is the marketplace metadata that describes your skillet:
+The `node.yaml` file is the marketplace metadata that describes your node:
 
 ```yaml
 name: my-sensor
@@ -886,8 +886,35 @@ requires:
 - `type` — `"rust"` or `"python"`
 - `description` — Human-readable description
 - `author` — Your name or team
-- `build` — Command to build the skillet
-- `command` — Command to run the skillet
+- `build` — Command to build the node
+- `command` — Command to run the node (see below)
+
+**`command` values:**
+
+| Value                              | When to use                            | Example                                                      |
+| ---------------------------------- | -------------------------------------- | ------------------------------------------------------------ |
+| *(omit)*                           | Python node with `main.py` — default   | —                                                            |
+| `./target/release/<name>`          | Rust binary (default path)             | `./target/release/my-node`                                   |
+| `pixi run python main.py`          | Python script via pixi                 | `pixi run python main.py`                                    |
+| `pixi run python <script>`         | Python non-default entrypoint via pixi | `pixi run python sensor.py`                                  |
+| `pixi run python -m pkg.module`    | Python package module via pixi         | `pixi run python -m smartpower.nodes.runner config.yaml`     |
+| `python3 <script>`                 | Python without pixi                    | `python3 main.py`                                            |
+| `/abs/path/to/binary`              | Absolute path to any executable        | `/usr/local/bin/my-tool`                                     |
+
+The daemon resolves relative paths to the node directory and absolute tool paths:
+
+- `pixi` → `~/.pixi/bin/pixi`
+- `cargo` → `~/.cargo/bin/cargo`
+
+**`is_built` detection logic for `command`:**
+
+The daemon checks whether the node's main artifact exists on disk before allowing it to start.
+The detection order for multi-token commands is:
+
+1. If `-m module.path` is present → checks for `module/path.py` in the node directory.
+   Example: `pixi run python -m smartpower.nodes.runner config.yaml` → checks `smartpower/nodes/runner.py`. Config files (e.g. `config.yaml`) are intentionally skipped.
+2. Otherwise → looks for the first token that exists as a file in the node directory.
+   Example: `pixi run python main.py` → finds `main.py`.
 
 **Optional fields:**
 - `capabilities` — List of skill types: `sensor`, `actuator`, `processor`, `gateway`
@@ -939,7 +966,7 @@ queryable = session.declare_queryable("my-sensor/schema")
 
 ### 3. Include header.proto in your FileDescriptorSet
 
-The `Header` message is the standard metadata envelope for all skillet messages:
+The `Header` message is the standard metadata envelope for all node messages:
 
 ```protobuf
 message Header {
@@ -952,7 +979,7 @@ message Header {
 }
 ```
 
-Every skillet message should include a `Header` as the first field:
+Every node message should include a `Header` as the first field:
 
 ```protobuf
 message SensorReading {
@@ -978,7 +1005,7 @@ Load at startup and validate all fields (bounds checking, required fields, forma
 
 ### 5. Graceful shutdown on SIGTERM
 
-The daemon sends SIGTERM when stopping a skillet. Always handle it gracefully:
+The daemon sends SIGTERM when stopping a node. Always handle it gracefully:
 
 ```rust
 // Rust: tokio::sync::watch channel pattern
@@ -1007,7 +1034,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 ### 6. Publish health heartbeats every 5 seconds
 
-The daemon marks a skillet unhealthy if no heartbeat arrives for 30 seconds. Publish every 5 seconds for safety margin:
+The daemon marks a node unhealthy if no heartbeat arrives for 30 seconds. Publish every 5 seconds for safety margin:
 
 ```rust
 // Rust: spawn background task
@@ -1077,7 +1104,7 @@ if not (0.01 <= rate_hz <= 1000.0):
 
 ## Node SDK (Recommended)
 
-The `bubbaloop-node-sdk` crate reduces Rust skillet boilerplate from ~300 lines to ~50 lines. It provides:
+The `bubbaloop-node-sdk` crate reduces Rust node boilerplate from ~300 lines to ~50 lines. It provides:
 
 - Automatic Zenoh session creation (client mode, enforced)
 - Automatic health heartbeat publishing (5s interval)
@@ -1087,7 +1114,7 @@ The `bubbaloop-node-sdk` crate reduces Rust skillet boilerplate from ~300 lines 
 - Automatic scope/machine_id resolution
 - Automatic logging initialization
 
-**With the SDK, a complete skillet will look like this:**
+**With the SDK, a complete node will look like this:**
 
 ```rust
 use bubbaloop_node_sdk::{Node, NodeContext};
@@ -1190,11 +1217,11 @@ prost-build = "0.14"
 
 **Status:** Shipped. See `crates/bubbaloop-node-sdk/` in the bubbaloop repo.
 
-**Migration path:** Existing skillets continue to work unchanged. New Rust skillets should use the SDK. The SDK is a standalone crate (not in workspace), depended on via git, following the same pattern as `bubbaloop-schemas`.
+**Migration path:** Existing nodes continue to work unchanged. New Rust nodes should use the SDK. The SDK is a standalone crate (not in workspace), depended on via git, following the same pattern as `bubbaloop-schemas`.
 
-## Complete Skillet Checklist
+## Complete node Checklist
 
-Before submitting a new skillet, verify ALL items:
+Before submitting a new node, verify ALL items:
 
 ### Structure
 - [ ] `node.yaml` exists with: name, version, type, description, author, build, command
@@ -1238,7 +1265,7 @@ Before submitting a new skillet, verify ALL items:
 - [ ] Manual integration test: verify data publishing with `z_sub`
 - [ ] End-to-end test: register with daemon, verify `bubbaloop node list` shows HEALTHY
 
-## Reference Skillets
+## Reference nodes
 
 **Rust examples:**
 - `openmeteo/` — Weather data publisher (HTTP API, auto-discovery, complex config)
@@ -1248,14 +1275,14 @@ Before submitting a new skillet, verify ALL items:
 - `network-monitor/` — Network connectivity checks (HTTP, DNS, ping)
 
 **Best practices reference:**
-- `rtsp-camera/` is the compliance reference — only skillet with full validation tests
+- `rtsp-camera/` is the compliance reference — only node with full validation tests
 - `openmeteo/` demonstrates config defaults and graceful degradation
 - `network-monitor/` demonstrates Python patterns (protobuf compilation, signal handling)
 
 ## Getting Help
 
 - **Architecture overview:** `/home/nvidia/bubbaloop/ARCHITECTURE.md` (lines 85-220: Node Contract)
-- **Official skillets repo:** https://github.com/kornia/bubbaloop-nodes-official
+- **Official nodes repo:** https://github.com/kornia/bubbaloop-nodes-official
 - **Node SDK design:** `/home/nvidia/bubbaloop/docs/plans/2026-02-24-node-sdk-design.md`
 - **Bubbaloop CLI reference:** `bubbaloop node --help`
 - **Zenoh documentation:** https://zenoh.io/docs/
