@@ -429,18 +429,47 @@ pub fn list_nodes() -> Result<Vec<(NodeEntry, Option<NodeManifest>)>> {
 pub fn check_is_built(node_path: &str, manifest: &NodeManifest) -> bool {
     let path = Path::new(node_path);
 
-    if let Some(ref command) = manifest.command {
-        let binary_path = path.join(command);
-        binary_path.exists()
-    } else if manifest.node_type == "rust" {
-        // Check for target/release or target/debug binary
+    if manifest.node_type == "rust" {
+        // Rust: check for compiled binary in release or debug
         let release_path = path.join("target/release").join(&manifest.name);
         let debug_path = path.join("target/debug").join(&manifest.name);
         release_path.exists() || debug_path.exists()
+    } else if let Some(ref command) = manifest.command {
+        // `command` can be:
+        //   - a single relative path:  "./my-binary"
+        //   - a shell invocation:      "pixi run python main.py"
+        //                              "pixi run python -m smartpower.nodes.runner config.yaml"
+        //                              "python3 sensor.py"
+        //                              "/usr/bin/python3 main.py"
+        //
+        // Strategy: walk the tokens and return true as soon as we find one
+        // that looks like a file relative to node_path (ends with a known
+        // script extension or exists on disk).
+        let tokens: Vec<&str> = command.split_whitespace().collect();
+        if tokens.len() == 1 {
+            // Single token — treat as a file path relative to the node dir
+            path.join(tokens[0]).exists()
+        } else {
+            // Multi-token shell command.
+            // Special case: `-m module.path` → check for module/path.py
+            if let Some(pos) = tokens.iter().position(|t| *t == "-m") {
+                if let Some(module) = tokens.get(pos + 1) {
+                    let module_file = module.replace('.', "/") + ".py";
+                    if path.join(&module_file).exists() {
+                        return true;
+                    }
+                }
+            }
+            // General case: find the first token that is a file in the node dir
+            // (handles "pixi run python main.py", "python3 sensor.py", etc.)
+            tokens.iter().any(|t| {
+                let candidate = path.join(t);
+                candidate.exists() && candidate.is_file()
+            })
+        }
     } else {
-        // Python - check for main.py and venv
-        let main_py = path.join("main.py");
-        main_py.exists()
+        // No command specified — Python/other script: check for main.py
+        path.join("main.py").exists()
     }
 }
 
