@@ -110,9 +110,7 @@ export function NodesViewPanel({
 
         // Look up target node to route command to correct machine
         const targetNode = nodes.find((n) => n.name === nodeName);
-        const commandKey = targetNode?.machine_id
-          ? `bubbaloop/${targetNode.machine_id}/daemon/command`
-          : "bubbaloop/daemon/command";
+        const commandKey = "bubbaloop/**/daemon/command";
 
         const cmd = NodeCommandProto.create({
           command: commandMap[command] ?? CommandType.COMMAND_TYPE_START,
@@ -206,9 +204,7 @@ export function NodesViewPanel({
 
       // Look up target node to route logs request to correct machine
       const targetNode = nodes.find((n) => n.name === nodeName);
-      const commandKey = targetNode?.machine_id
-        ? `bubbaloop/${targetNode.machine_id}/daemon/command`
-        : "bubbaloop/daemon/command";
+      const commandKey = "bubbaloop/**/daemon/command";
 
       const cmd = NodeCommandProto.create({
         command: CommandType.COMMAND_TYPE_GET_LOGS,
