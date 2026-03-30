@@ -438,7 +438,7 @@ pub fn check_is_built(node_path: &str, manifest: &NodeManifest) -> bool {
         // `command` can be:
         //   - a single relative path:  "./my-binary"
         //   - a shell invocation:      "pixi run python main.py"
-        //                              "pixi run python -m smartpower.nodes.runner config.yaml"
+        //                              "pixi run python -m nodes.runner config.yaml"
         //                              "python3 sensor.py"
         //                              "/usr/bin/python3 main.py"
         //
