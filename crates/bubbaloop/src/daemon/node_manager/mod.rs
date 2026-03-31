@@ -8,7 +8,8 @@ pub mod health;
 pub mod lifecycle;
 
 use crate::daemon::registry::{self, NodeManifest};
-use crate::daemon::systemd::{self, ActiveState, SystemdClient, SystemdSignalEvent};
+use crate::daemon::supervisor::Supervisor;
+use crate::daemon::systemd::{self, ActiveState, SystemdSignalEvent};
 use crate::schemas::daemon::v1::{
     CommandResult, CommandType, HealthStatus, NodeCommand, NodeEvent, NodeList, NodeState,
     NodeStatus,
@@ -159,8 +160,8 @@ impl CachedNode {
 pub struct NodeManager {
     /// Cached node states
     pub(crate) nodes: RwLock<HashMap<String, CachedNode>>,
-    /// Systemd client
-    pub(crate) systemd: SystemdClient,
+    /// Process supervisor (systemd on Linux, native on Docker/macOS)
+    pub(crate) supervisor: Supervisor,
     /// Channel to broadcast state changes
     pub(crate) event_tx: broadcast::Sender<NodeEvent>,
     /// Nodes currently being built (prevents concurrent builds)
@@ -176,7 +177,7 @@ pub struct NodeManager {
 impl NodeManager {
     /// Create a new node manager
     pub async fn new() -> Result<Arc<Self>> {
-        let systemd = SystemdClient::new().await?;
+        let supervisor = Supervisor::detect().await;
         let (event_tx, _) = broadcast::channel(100);
 
         let machine_id = super::util::get_machine_id();
@@ -197,7 +198,7 @@ impl NodeManager {
 
         let manager = Arc::new(Self {
             nodes: RwLock::new(HashMap::new()),
-            systemd,
+            supervisor,
             event_tx,
             building_nodes: Mutex::new(HashSet::new()),
             machine_id,
@@ -226,7 +227,7 @@ impl NodeManager {
     /// Instead, we collect dirty nodes and schedule a debounced refresh on a
     /// separate task that runs after a short delay, coalescing rapid signal bursts.
     pub async fn start_signal_listener(self: Arc<Self>) -> Result<()> {
-        let mut signal_rx = self.systemd.subscribe_to_signals().await?;
+        let mut signal_rx = self.supervisor.subscribe_to_signals().await?;
 
         tokio::spawn(async move {
             log::info!("Signal listener started");
@@ -310,20 +311,13 @@ impl NodeManager {
 
     /// Refresh a single node's state
     pub async fn refresh_node(&self, name: &str) -> Result<()> {
-        let service_name = systemd::get_service_name(name);
-
-        // Get systemd state
-        let active_state = self.systemd.get_active_state(&service_name).await?;
-        let installed = systemd::is_service_installed(name);
+        let installed = self.supervisor.is_installed(name);
+        let active_state = self.supervisor.get_active_state(name).await?;
         let autostart_enabled = if installed {
-            self.systemd
-                .is_enabled(&service_name)
-                .await
-                .unwrap_or(false)
+            self.supervisor.is_enabled(name).await
         } else {
             false
         };
-
         let status = active_state_to_node_status(active_state, installed);
 
         // Update the node in our cache
@@ -381,20 +375,13 @@ impl NodeManager {
             let key = eff_name.clone();
             seen.insert(key.clone());
 
-            let service_name = systemd::get_service_name(&eff_name);
-
-            // Get systemd state
-            let active_state = self.systemd.get_active_state(&service_name).await?;
-            let installed = systemd::is_service_installed(&eff_name);
+            let installed = self.supervisor.is_installed(&eff_name);
+            let active_state = self.supervisor.get_active_state(&eff_name).await?;
             let autostart_enabled = if installed {
-                self.systemd
-                    .is_enabled(&service_name)
-                    .await
-                    .unwrap_or(false)
+                self.supervisor.is_enabled(&eff_name).await
             } else {
                 false
             };
-
             let status = active_state_to_node_status(active_state, installed);
 
             let is_built = manifest
@@ -584,6 +571,15 @@ impl NodeManager {
     async fn get_logs(&self, name: &str) -> Result<String> {
         // Check if node exists
         let _path = self.find_node_path(name).await?;
+
+        if self.supervisor.is_native() {
+            return Ok(
+                "Logs via journalctl are only available with the systemd backend. \
+Native supervisor is a development fallback for Docker/non-systemd environments. \
+Run the node directly or capture stdout/stderr from the foreground process."
+                    .to_string(),
+            );
+        }
 
         let service_name = systemd::get_service_name(name);
 

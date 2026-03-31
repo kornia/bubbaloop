@@ -18,7 +18,7 @@ pub(crate) async fn restart_node(name: &str) -> Result<()> {
 
 pub(crate) async fn view_logs(args: LogsArgs) -> Result<()> {
     if args.follow {
-        // Use journalctl directly for follow mode (streaming, no daemon needed)
+        // Follow mode is only available for the systemd backend.
         let service = format!("bubbaloop-{}.service", args.name);
         let status = Command::new("journalctl")
             .args(["--user", "-u", &service, "-f", "--no-pager"])
@@ -26,7 +26,7 @@ pub(crate) async fn view_logs(args: LogsArgs) -> Result<()> {
 
         if !status.success() {
             return Err(NodeError::CommandFailed(format!(
-                "journalctl failed for service {}. Is the service installed?",
+                "journalctl failed for service {}. This command only works when the node is installed as a systemd service.",
                 service
             )));
         }

@@ -6,7 +6,7 @@
 //! - `bubbaloop daemon stop` — graceful stop via Zenoh gateway
 //! - `bubbaloop daemon restart` — stop + start
 //! - `bubbaloop daemon status` — query manifest, show uptime/nodes/agents
-//! - `bubbaloop daemon logs` — journalctl follow
+//! - `bubbaloop daemon logs` — journalctl follow (systemd backend only)
 //! - `bubbaloop daemon fix` — doctor-style auto-fix
 
 use argh::FromArgs;
@@ -60,7 +60,7 @@ pub struct RestartCommand {}
 #[argh(subcommand, name = "status")]
 pub struct StatusCommand {}
 
-/// Follow daemon logs via journalctl
+/// Follow daemon logs via journalctl (systemd backend only)
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand, name = "logs")]
 pub struct LogsCommand {}
