@@ -911,10 +911,13 @@ The daemon resolves relative paths to the node directory and absolute tool paths
 The daemon checks whether the node's main artifact exists on disk before allowing it to start.
 The detection order for multi-token commands is:
 
-1. If `-m module.path` is present → checks for `module/path.py` in the node directory.
-   Example: `pixi run python -m smartpower.nodes.runner config.yaml` → checks `smartpower/nodes/runner.py`. Config files (e.g. `config.yaml`) are intentionally skipped.
-2. Otherwise → looks for the first token that exists as a file in the node directory.
-   Example: `pixi run python main.py` → finds `main.py`.
+1. **Rust nodes:** Checks for binary in `target/release/<name>` or `target/debug/<name>`. Fallback: first non-flag, non-absolute token in `command` (for non-standard cross-compilation paths).
+2. **No command (Python):** Defaults to `main.py`.
+3. **Command with `-m module.path`:** Converts dots to slashes and checks `module/path.py`.
+   Example: `pixi run python -m smartpower.nodes.runner` → checks `smartpower/nodes/runner.py`.
+4. **Command with `*.py` token:** Checks for that script file.
+   Example: `pixi run python sensor.py` → finds `sensor.py`.
+5. **Anything else (external binary, pixi task, etc.):** Assumes built (optimistic fallback).
 
 **Optional fields:**
 - `capabilities` — List of skill types: `sensor`, `actuator`, `processor`, `gateway`
@@ -1219,7 +1222,7 @@ prost-build = "0.14"
 
 **Migration path:** Existing nodes continue to work unchanged. New Rust nodes should use the SDK. The SDK is a standalone crate (not in workspace), depended on via git, following the same pattern as `bubbaloop-schemas`.
 
-## Complete node Checklist
+## Complete Node Checklist
 
 Before submitting a new node, verify ALL items:
 
