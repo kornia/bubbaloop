@@ -57,20 +57,4 @@ mod tests {
         assert!(!response.success);
         assert_eq!(response.error, Some("Node not found".to_string()));
     }
-
-    /// Regression guard: the error message shown when journalctl fails in
-    /// follow-mode must mention "systemd service" so users understand why.
-    #[test]
-    fn follow_mode_error_message_mentions_systemd_service() {
-        let service = "bubbaloop-test.service";
-        let error_msg = format!(
-            "journalctl failed for service {}. \
-             This command only works when the node is installed as a systemd service.",
-            service
-        );
-        assert!(
-            error_msg.contains("systemd service"),
-            "Error message must mention 'systemd service' for user guidance"
-        );
-    }
 }

@@ -65,6 +65,14 @@ impl NativeSupervisor {
         Self::procs_dir().join(format!("{name}.pid"))
     }
 
+    fn stdout_path(name: &str) -> PathBuf {
+        Self::procs_dir().join(format!("{name}.stdout"))
+    }
+
+    fn stderr_path(name: &str) -> PathBuf {
+        Self::procs_dir().join(format!("{name}.stderr"))
+    }
+
     fn read_config(name: &str) -> Option<ProcConfig> {
         let content = std::fs::read_to_string(Self::config_path(name)).ok()?;
         serde_json::from_str(&content).ok()
@@ -161,6 +169,8 @@ impl NativeSupervisor {
         self.stop_unit(name).await.ok(); // best-effort stop
 
         let _ = std::fs::remove_file(Self::config_path(name));
+        let _ = std::fs::remove_file(Self::stdout_path(name));
+        let _ = std::fs::remove_file(Self::stderr_path(name));
         Self::remove_pid(name);
 
         self.emit(SystemdSignalEvent::UnitRemoved {
@@ -194,9 +204,19 @@ impl NativeSupervisor {
             .split_first()
             .ok_or_else(|| SystemdError::OperationFailed("empty command".to_string()))?;
 
+        // Redirect stdout/stderr to log files so child output does not
+        // pollute the daemon's own logs and users have a basic log trail.
+        std::fs::create_dir_all(Self::procs_dir()).map_err(SystemdError::Io)?;
+        let stdout_file = std::fs::File::create(Self::stdout_path(name))
+            .map_err(|e| SystemdError::OperationFailed(format!("stdout log: {e}")))?;
+        let stderr_file = std::fs::File::create(Self::stderr_path(name))
+            .map_err(|e| SystemdError::OperationFailed(format!("stderr log: {e}")))?;
+
         let child = tokio::process::Command::new(exe)
             .args(args)
             .current_dir(&config.work_dir)
+            .stdout(stdout_file)
+            .stderr(stderr_file)
             .spawn()
             .map_err(|e| SystemdError::OperationFailed(format!("Failed to spawn {name}: {e}")))?;
 
@@ -206,23 +226,23 @@ impl NativeSupervisor {
 
         Self::write_pid(name, pid)?;
 
-        // Spawn watcher: when process exits, emit JobRemoved
+        // Spawn watcher: when process exits, clean up PID file and emit JobRemoved.
+        // We move `child` into the task and call `child.wait()` so tokio reaps it
+        // properly. NOTE: dropping a `tokio::process::Child` without waiting sends
+        // SIGKILL — we must `.wait()` to keep the process alive.
         let name_owned = name.to_string();
         let event_tx = self.event_tx.clone();
         tokio::spawn(async move {
-            // Re-own child so we can wait on it
-            drop(child); // child is moved into this task
+            let mut child = child;
+            let status = child.wait().await;
 
-            // Poll until PID disappears (cross-platform)
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                if !Self::is_pid_alive(pid) {
-                    break;
-                }
-            }
+            let result = match &status {
+                Ok(s) if s.success() => "done",
+                Ok(_) => "failed",
+                Err(_) => "failed",
+            };
 
             Self::remove_pid(&name_owned);
-            let result = "done"; // we don't know exit code without the handle
             let unit = format!("bubbaloop-{name_owned}.service");
             let _ = event_tx.send(SystemdSignalEvent::JobRemoved {
                 unit,
@@ -231,13 +251,17 @@ impl NativeSupervisor {
             });
         });
 
-        self.emit(Self::job_removed_event(name, "done")); // "started" approximation
         log::info!("[NativeSupervisor] Started {name} (pid={pid})");
 
         Ok(())
     }
 
     /// Stop the process by sending SIGTERM via `/bin/kill`.
+    ///
+    /// **Caveat (dev-only backend):** Between reading the PID file and sending
+    /// the signal there is a small window where the PID could be recycled by
+    /// the OS and reassigned to an unrelated process. This is inherent to
+    /// PID-file management and acceptable for a development-only supervisor.
     pub async fn stop_unit(&self, name: &str) -> Result<()> {
         let pid = Self::read_pid(name)
             .filter(|&pid| Self::is_pid_alive(pid))
