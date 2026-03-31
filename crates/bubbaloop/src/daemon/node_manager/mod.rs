@@ -888,4 +888,97 @@ mod tests {
     fn test_journalctl_uses_absolute_path() {
         assert!(JOURNALCTL_PATH.starts_with('/'));
     }
+
+    #[tokio::test]
+    async fn get_logs_returns_native_fallback_message() {
+        // NodeManager::new() auto-detects Native supervisor in Docker
+        let manager = NodeManager::new().await.unwrap();
+        if !manager.supervisor.is_native() {
+            return; // skip on systemd environments
+        }
+
+        // Insert a fake node so find_node_path succeeds
+        {
+            let mut nodes = manager.nodes.write().await;
+            nodes.insert(
+                "test-logs-native".to_string(),
+                CachedNode {
+                    path: "/tmp/fake-node".to_string(),
+                    manifest: None,
+                    status: NodeStatus::Stopped,
+                    installed: false,
+                    autostart_enabled: false,
+                    is_built: false,
+                    build_state: BuildState::default(),
+                    last_updated_ms: 0,
+                    health_status: HealthStatus::Unknown,
+                    last_health_check_ms: 0,
+                    name_override: Some("test-logs-native".to_string()),
+                    config_override: None,
+                },
+            );
+        }
+
+        let result = manager.get_logs("test-logs-native").await.unwrap();
+        assert!(
+            result.contains("journalctl"),
+            "Message should mention journalctl: {}",
+            result
+        );
+        assert!(
+            result.contains("systemd backend"),
+            "Message should mention systemd backend: {}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn native_node_manager_lifecycle_start_stop_restart() {
+        let manager = NodeManager::new().await.unwrap();
+        if !manager.supervisor.is_native() {
+            return; // skip on systemd environments
+        }
+
+        let name = format!(
+            "nm-integ-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+
+        // Install a service directly through the supervisor
+        manager
+            .supervisor
+            .install_service("/tmp", &name, "rust", Some("sleep 60"), &[])
+            .await
+            .unwrap();
+        assert!(manager.supervisor.is_installed(&name));
+
+        // start_node goes through NodeManager → supervisor
+        let msg = manager.start_node(&name).await.unwrap();
+        assert!(msg.contains("Started"));
+        // Give the spawned process a moment
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let state = manager.supervisor.get_active_state(&name).await.unwrap();
+        assert_eq!(state, ActiveState::Active);
+
+        // restart_node
+        let msg = manager.restart_node(&name).await.unwrap();
+        assert!(msg.contains("Restarted"));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let state = manager.supervisor.get_active_state(&name).await.unwrap();
+        assert_eq!(state, ActiveState::Active);
+
+        // stop_node
+        let msg = manager.stop_node(&name).await.unwrap();
+        assert!(msg.contains("Stopped"));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let state = manager.supervisor.get_active_state(&name).await.unwrap();
+        assert_eq!(state, ActiveState::Inactive);
+
+        // Cleanup
+        manager.supervisor.uninstall_service(&name).await.unwrap();
+        assert!(!manager.supervisor.is_installed(&name));
+    }
 }

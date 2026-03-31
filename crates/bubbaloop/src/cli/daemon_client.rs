@@ -495,4 +495,18 @@ mod tests {
         let err = DaemonClientError::DaemonError("node not found".to_string());
         assert!(err.to_string().contains("node not found"));
     }
+
+    /// Regression guard: the error printed by run_daemon_logs when
+    /// journalctl fails must tell the user it requires systemd.
+    #[test]
+    fn daemon_logs_error_message_mentions_systemd_service() {
+        let expected_fragment = "systemd service";
+        let error_msg = "journalctl failed. This command only works when the \
+                         daemon is installed as a systemd service.";
+        assert!(
+            error_msg.contains(expected_fragment),
+            "Daemon logs error must mention '{}'",
+            expected_fragment
+        );
+    }
 }

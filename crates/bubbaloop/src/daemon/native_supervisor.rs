@@ -345,3 +345,180 @@ impl NativeSupervisor {
         rx
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn unique_name(prefix: &str) -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0))
+            .as_nanos();
+        format!("{prefix}-{now}")
+    }
+
+    fn cleanup_node_files(name: &str) {
+        let _ = std::fs::remove_file(NativeSupervisor::config_path(name));
+        let _ = std::fs::remove_file(NativeSupervisor::pid_path(name));
+    }
+
+    async fn wait_for_active_state(
+        sup: &NativeSupervisor,
+        name: &str,
+        expected: ActiveState,
+        timeout_ms: u64,
+    ) {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            let state = sup.get_active_state(name).await.unwrap();
+            if state == expected {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("timed out waiting for state {expected:?}, got {state:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn install_start_stop_uninstall_cycle() {
+        let sup = NativeSupervisor::new();
+        let name = unique_name("native-cycle");
+        cleanup_node_files(&name);
+
+        sup.install_service("/tmp", &name, "rust", Some("sleep 30"))
+            .unwrap();
+        assert!(NativeSupervisor::is_installed(&name));
+
+        sup.start_unit(&name).await.unwrap();
+        wait_for_active_state(&sup, &name, ActiveState::Active, 2_000).await;
+
+        sup.stop_unit(&name).await.unwrap();
+        wait_for_active_state(&sup, &name, ActiveState::Inactive, 2_000).await;
+
+        sup.uninstall_service(&name).await.unwrap();
+        assert!(!NativeSupervisor::is_installed(&name));
+
+        cleanup_node_files(&name);
+    }
+
+    #[tokio::test]
+    async fn autostart_enable_disable_persists() {
+        let sup = NativeSupervisor::new();
+        let name = unique_name("native-autostart");
+        cleanup_node_files(&name);
+
+        sup.install_service("/tmp", &name, "rust", Some("sleep 5"))
+            .unwrap();
+
+        assert!(!sup.is_enabled(&name));
+        sup.enable_unit(&name).unwrap();
+        assert!(sup.is_enabled(&name));
+
+        sup.disable_unit(&name).unwrap();
+        assert!(!sup.is_enabled(&name));
+
+        sup.uninstall_service(&name).await.unwrap();
+        cleanup_node_files(&name);
+    }
+
+    #[tokio::test]
+    async fn stale_pid_file_is_cleaned_and_state_is_inactive() {
+        let sup = NativeSupervisor::new();
+        let name = unique_name("native-stale");
+        cleanup_node_files(&name);
+
+        sup.install_service("/tmp", &name, "rust", Some("sleep 5"))
+            .unwrap();
+
+        std::fs::write(NativeSupervisor::pid_path(&name), "4294967295").unwrap();
+        let state = sup.get_active_state(&name).await.unwrap();
+        assert_eq!(state, ActiveState::Inactive);
+        assert!(!NativeSupervisor::pid_path(&name).exists());
+
+        sup.uninstall_service(&name).await.unwrap();
+        cleanup_node_files(&name);
+    }
+
+    #[tokio::test]
+    async fn expected_errors_for_missing_service_and_empty_command() {
+        let sup = NativeSupervisor::new();
+        let missing = unique_name("native-missing");
+        cleanup_node_files(&missing);
+
+        match sup.start_unit(&missing).await {
+            Err(SystemdError::ServiceNotFound(s)) => assert_eq!(s, missing),
+            other => panic!("expected ServiceNotFound from start_unit, got {other:?}"),
+        }
+
+        match sup.stop_unit(&missing).await {
+            Err(SystemdError::ServiceNotFound(s)) => assert_eq!(s, missing),
+            other => panic!("expected ServiceNotFound from stop_unit, got {other:?}"),
+        }
+
+        match sup.enable_unit(&missing) {
+            Err(SystemdError::ServiceNotFound(s)) => assert_eq!(s, missing),
+            other => panic!("expected ServiceNotFound from enable_unit, got {other:?}"),
+        }
+
+        match sup.disable_unit(&missing) {
+            Err(SystemdError::ServiceNotFound(s)) => assert_eq!(s, missing),
+            other => panic!("expected ServiceNotFound from disable_unit, got {other:?}"),
+        }
+
+        let empty_cmd_name = unique_name("native-emptycmd");
+        cleanup_node_files(&empty_cmd_name);
+        sup.install_service("/tmp", &empty_cmd_name, "rust", Some("   "))
+            .unwrap();
+        match sup.start_unit(&empty_cmd_name).await {
+            Err(SystemdError::OperationFailed(msg)) => {
+                assert!(msg.contains("empty command"));
+            }
+            other => panic!("expected OperationFailed(empty command), got {other:?}"),
+        }
+        sup.uninstall_service(&empty_cmd_name).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn subscribe_to_signals_receives_install_and_uninstall_events() {
+        let sup = NativeSupervisor::new();
+        let name = unique_name("native-signals");
+        cleanup_node_files(&name);
+
+        let mut rx = sup.subscribe_to_signals();
+
+        sup.install_service("/tmp", &name, "rust", Some("sleep 5"))
+            .unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out waiting for UnitNew")
+            .expect("channel closed before UnitNew");
+
+        match first {
+            SystemdSignalEvent::UnitNew { unit, node_name } => {
+                assert_eq!(unit, format!("bubbaloop-{name}.service"));
+                assert_eq!(node_name, Some(name.clone()));
+            }
+            other => panic!("expected UnitNew, got {other:?}"),
+        }
+
+        sup.uninstall_service(&name).await.unwrap();
+        let second = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out waiting for UnitRemoved")
+            .expect("channel closed before UnitRemoved");
+
+        match second {
+            SystemdSignalEvent::UnitRemoved { unit, node_name } => {
+                assert_eq!(unit, format!("bubbaloop-{name}.service"));
+                assert_eq!(node_name, Some(name.clone()));
+            }
+            other => panic!("expected UnitRemoved, got {other:?}"),
+        }
+
+        cleanup_node_files(&name);
+    }
+}

@@ -165,3 +165,59 @@ impl Supervisor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_name(prefix: &str) -> String {
+        format!(
+            "{}-{}",
+            prefix,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+
+    #[test]
+    fn native_variant_reports_is_native() {
+        let sup = Supervisor::Native(NativeSupervisor::new());
+        assert!(sup.is_native());
+    }
+
+    #[tokio::test]
+    async fn native_dispatcher_delegates_full_lifecycle() {
+        let sup = Supervisor::Native(NativeSupervisor::new());
+        let name = unique_name("sup-dlg");
+
+        // Install through the Supervisor dispatcher
+        sup.install_service("/tmp", &name, "rust", Some("sleep 30"), &[])
+            .await
+            .unwrap();
+        assert!(sup.is_installed(&name));
+
+        // Start through dispatcher
+        sup.start_unit(&name).await.unwrap();
+
+        // Check state through dispatcher
+        let state = sup.get_active_state(&name).await.unwrap();
+        assert!(
+            matches!(state, ActiveState::Active | ActiveState::Inactive),
+            "Expected active or inactive after start, got {:?}",
+            state
+        );
+
+        // Enable / disable autostart through dispatcher
+        sup.enable_unit(&name).await.unwrap();
+        assert!(sup.is_enabled(&name).await);
+        sup.disable_unit(&name).await.unwrap();
+        assert!(!sup.is_enabled(&name).await);
+
+        // Stop + uninstall through dispatcher
+        sup.stop_unit(&name).await.unwrap();
+        sup.uninstall_service(&name).await.unwrap();
+        assert!(!sup.is_installed(&name));
+    }
+}
