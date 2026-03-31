@@ -468,12 +468,19 @@ pub fn check_is_built(node_path: &str, manifest: &NodeManifest) -> bool {
 
     let tokens: Vec<&str> = command.split_whitespace().collect();
 
+    // Empty or whitespace-only command cannot be resolved — not built
+    if tokens.is_empty() {
+        return false;
+    }
+
     // Check `-m module.path` → module/path.py
     if let Some(pos) = tokens.iter().position(|t| *t == "-m") {
-        if let Some(module) = tokens.get(pos + 1) {
-            let module_file = module.replace('.', "/") + ".py";
-            return path.join(&module_file).exists();
-        }
+        let Some(module) = tokens.get(pos + 1) else {
+            // `-m` with no following token is malformed — not built
+            return false;
+        };
+        let module_file = module.replace('.', "/") + ".py";
+        return path.join(&module_file).exists();
     }
 
     // Find first *.py token and check it exists in node dir
@@ -759,6 +766,20 @@ mod tests {
             command: command.map(String::from),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn test_is_built_empty_command_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = manifest_with("python", Some(""));
+        assert!(!check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_m_without_module_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = manifest_with("python", Some("pixi run python -m"));
+        assert!(!check_is_built(dir.path().to_str().unwrap(), &m));
     }
 
     #[test]
