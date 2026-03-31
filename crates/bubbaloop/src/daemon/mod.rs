@@ -242,6 +242,7 @@ async fn run_daemon_gateway(
                                                 success: false,
                                                 message: format!("Invalid command payload: {}", e),
                                                 responding_machine: cmd_queryable_machine_id.clone(),
+                                                timestamp_ms: util::now_ms(),
                                                 ..Default::default()
                                             };
                                             let mut buf = Vec::new();
@@ -265,24 +266,43 @@ async fn run_daemon_gateway(
                                     log::info!("[Gateway] Command query: {:?} for {}", cmd.command, cmd.node_name);
 
                                     use crate::mcp::platform::{NodeCommand as PlatformCmd, PlatformOperations};
-                                    let platform_cmd = match cmd.command {
-                                        0 => PlatformCmd::Start,
-                                        1 => PlatformCmd::Stop,
-                                        2 => PlatformCmd::Restart,
-                                        3 => PlatformCmd::Install,
-                                        4 => PlatformCmd::Uninstall,
-                                        5 => PlatformCmd::Build,
-                                        6 => PlatformCmd::Clean,
-                                        7 => PlatformCmd::EnableAutostart,
-                                        8 => PlatformCmd::DisableAutostart,
-                                        12 => PlatformCmd::GetLogs,
-                                        _ => {
+                                    use crate::schemas::daemon::v1::CommandType;
+
+                                    let platform_cmd = match CommandType::try_from(cmd.command) {
+                                        Ok(CommandType::Start) => PlatformCmd::Start,
+                                        Ok(CommandType::Stop) => PlatformCmd::Stop,
+                                        Ok(CommandType::Restart) => PlatformCmd::Restart,
+                                        Ok(CommandType::Install) => PlatformCmd::Install,
+                                        Ok(CommandType::Uninstall) => PlatformCmd::Uninstall,
+                                        Ok(CommandType::Build) => PlatformCmd::Build,
+                                        Ok(CommandType::Clean) => PlatformCmd::Clean,
+                                        Ok(CommandType::EnableAutostart) => PlatformCmd::EnableAutostart,
+                                        Ok(CommandType::DisableAutostart) => PlatformCmd::DisableAutostart,
+                                        Ok(CommandType::GetLogs) => PlatformCmd::GetLogs,
+                                        Ok(CommandType::AddNode) | Ok(CommandType::RemoveNode) | Ok(CommandType::Refresh) => {
+                                            log::warn!("[Gateway] Unsupported command type in queryable: {}", cmd.command);
+                                            let err = CommandResult {
+                                                request_id: cmd.request_id.clone(),
+                                                success: false,
+                                                message: format!("Command type {} not supported by queryable interface", cmd.command),
+                                                responding_machine: cmd_queryable_machine_id.clone(),
+                                                timestamp_ms: util::now_ms(),
+                                                ..Default::default()
+                                            };
+                                            let mut buf = Vec::new();
+                                            if err.encode(&mut buf).is_ok() {
+                                                let _ = query.reply(&cmd_queryable_key, buf).await;
+                                            }
+                                            continue;
+                                        }
+                                        Err(_) => {
                                             log::warn!("[Gateway] Unknown command type: {}", cmd.command);
                                             let err = CommandResult {
                                                 request_id: cmd.request_id.clone(),
                                                 success: false,
                                                 message: format!("Unknown command type: {}", cmd.command),
                                                 responding_machine: cmd_queryable_machine_id.clone(),
+                                                timestamp_ms: util::now_ms(),
                                                 ..Default::default()
                                             };
                                             let mut buf = Vec::new();
@@ -297,10 +317,7 @@ async fn run_daemon_gateway(
                                         .execute_command(&cmd.node_name, platform_cmd)
                                         .await;
 
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .map(|d| d.as_millis() as i64)
-                                        .unwrap_or(0);
+                                    let now_ms = util::now_ms();
 
                                     let cmd_result = match result {
                                         Ok(msg) => CommandResult {
