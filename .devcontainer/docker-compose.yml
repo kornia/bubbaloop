@@ -1,0 +1,39 @@
+services:
+  # Main development container — your code lives here
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ..:/workspace:cached
+      - cargo-cache:/root/.cargo/registry
+      - cargo-git:/root/.cargo/git
+      - target-cache:/workspace/target
+      - pixi-cache:/root/.pixi
+      - ${HOME}/.ssh:/root/.ssh:ro
+    ports:
+      - "8088:8088"   # Bubbaloop MCP server
+      - "5173:5173"   # Vite dashboard (browser access from Mac)
+      - "10001:10001" # Zenoh WebSocket bridge (browser access from Mac)
+    environment:
+      - RUST_LOG=info
+      - BUBBALOOP_ZENOH_ENDPOINT=tcp/zenoh:7447
+      - BUBBALOOP_ALLOW_NO_SYSTEMD=1
+      - CARGO_BUILD_JOBS=1
+      - CARGO_PROFILE_RELEASE_LTO=off
+
+    depends_on:
+      - zenoh
+    command: sleep infinity
+
+  # Zenoh router — internal only, not exposed to Mac host
+  # Dev container connects via Docker network: tcp/zenoh:7447
+  zenoh:
+    image: eclipse/zenoh:1.1.0
+    restart: unless-stopped
+
+volumes:
+  cargo-cache:
+  cargo-git:
+  target-cache:
+  pixi-cache:

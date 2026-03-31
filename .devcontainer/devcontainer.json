@@ -1,0 +1,43 @@
+{
+  "name": "Bubbaloop Dev",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+
+  // Forward all relevant ports to the Mac host
+  "forwardPorts": [
+    7447,   // Zenoh router
+    10001,  // Zenoh WebSocket bridge (dashboard)
+    8088,   // Bubbaloop MCP server
+    5173    // Vite dashboard dev server
+  ],
+  "portsAttributes": {
+    "5173": { "label": "Dashboard", "onAutoForward": "openBrowser" },
+    "8088": { "label": "MCP Server" },
+    "10001": { "label": "Zenoh WS Bridge" },
+    "7447": { "label": "Zenoh Router" }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb",        // CodeLLDB for breakpoints
+        "tamasfe.even-better-toml",
+        "ms-vscode.hexeditor",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "rust-analyzer.cargo.features": "all",
+        "rust-analyzer.check.command": "clippy",
+        "lldb.executable": "/usr/bin/lldb",
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  // Prepare project env after container creation
+  "postCreateCommand": "pixi install && pixi run bridge-build",
+  "postStartCommand": "echo '\\nBubbaloop dev ready!\\n  pixi run daemon     — MCP server + agent runtime\\n  pixi run bridge     — Zenoh WebSocket bridge (port 10001)\\n  pixi run dashboard  — React dashboard (port 5173)\\n'"
+}
