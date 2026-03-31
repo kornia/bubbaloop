@@ -81,45 +81,35 @@ impl Supervisor {
 
     pub async fn start_unit(&self, node_name: &str) -> Result<()> {
         match self {
-            Supervisor::Systemd(c) => {
-                c.start_unit(&systemd::get_service_name(node_name)).await
-            }
+            Supervisor::Systemd(c) => c.start_unit(&systemd::get_service_name(node_name)).await,
             Supervisor::Native(n) => n.start_unit(node_name).await,
         }
     }
 
     pub async fn stop_unit(&self, node_name: &str) -> Result<()> {
         match self {
-            Supervisor::Systemd(c) => {
-                c.stop_unit(&systemd::get_service_name(node_name)).await
-            }
+            Supervisor::Systemd(c) => c.stop_unit(&systemd::get_service_name(node_name)).await,
             Supervisor::Native(n) => n.stop_unit(node_name).await,
         }
     }
 
     pub async fn restart_unit(&self, node_name: &str) -> Result<()> {
         match self {
-            Supervisor::Systemd(c) => {
-                c.restart_unit(&systemd::get_service_name(node_name)).await
-            }
+            Supervisor::Systemd(c) => c.restart_unit(&systemd::get_service_name(node_name)).await,
             Supervisor::Native(n) => n.restart_unit(node_name).await,
         }
     }
 
     pub async fn enable_unit(&self, node_name: &str) -> Result<()> {
         match self {
-            Supervisor::Systemd(c) => {
-                c.enable_unit(&systemd::get_service_name(node_name)).await
-            }
+            Supervisor::Systemd(c) => c.enable_unit(&systemd::get_service_name(node_name)).await,
             Supervisor::Native(n) => n.enable_unit(node_name),
         }
     }
 
     pub async fn disable_unit(&self, node_name: &str) -> Result<()> {
         match self {
-            Supervisor::Systemd(c) => {
-                c.disable_unit(&systemd::get_service_name(node_name)).await
-            }
+            Supervisor::Systemd(c) => c.disable_unit(&systemd::get_service_name(node_name)).await,
             Supervisor::Native(n) => n.disable_unit(node_name),
         }
     }
@@ -136,12 +126,9 @@ impl Supervisor {
     ) -> Result<()> {
         match self {
             Supervisor::Systemd(_) => {
-                systemd::install_service(node_path, node_name, node_type, command, depends_on)
-                    .await
+                systemd::install_service(node_path, node_name, node_type, command, depends_on).await
             }
-            Supervisor::Native(n) => {
-                n.install_service(node_path, node_name, node_type, command)
-            }
+            Supervisor::Native(n) => n.install_service(node_path, node_name, node_type, command),
         }
     }
 
@@ -156,9 +143,7 @@ impl Supervisor {
 
     /// Subscribe to lifecycle signals. Returns a receiver of `SystemdSignalEvent`.
     /// On systemd: real D-Bus signals. On native: mpsc events from process watcher tasks.
-    pub async fn subscribe_to_signals(
-        &self,
-    ) -> Result<mpsc::Receiver<SystemdSignalEvent>> {
+    pub async fn subscribe_to_signals(&self) -> Result<mpsc::Receiver<SystemdSignalEvent>> {
         match self {
             Supervisor::Systemd(c) => c.subscribe_to_signals().await,
             Supervisor::Native(n) => Ok(n.subscribe_to_signals()),

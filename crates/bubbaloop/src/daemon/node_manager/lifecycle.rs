@@ -54,7 +54,13 @@ impl NodeManager {
         };
 
         self.supervisor
-            .install_service(&path, name, &manifest.node_type, command.as_deref(), &manifest.depends_on)
+            .install_service(
+                &path,
+                name,
+                &manifest.node_type,
+                command.as_deref(),
+                &manifest.depends_on,
+            )
             .await?;
 
         drop(nodes);

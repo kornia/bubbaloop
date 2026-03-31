@@ -198,9 +198,7 @@ impl NativeSupervisor {
             .args(args)
             .current_dir(&config.work_dir)
             .spawn()
-            .map_err(|e| {
-                SystemdError::OperationFailed(format!("Failed to spawn {name}: {e}"))
-            })?;
+            .map_err(|e| SystemdError::OperationFailed(format!("Failed to spawn {name}: {e}")))?;
 
         let pid = child.id().ok_or_else(|| {
             SystemdError::OperationFailed("could not get PID after spawn".to_string())
