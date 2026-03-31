@@ -232,9 +232,30 @@ async fn run_daemon_gateway(
                                         Ok(c) => c,
                                         Err(e) => {
                                             log::warn!("[Gateway] Invalid NodeCommand: {}", e);
+                                            let err = CommandResult {
+                                                success: false,
+                                                message: format!("Invalid command payload: {}", e),
+                                                responding_machine: cmd_queryable_machine_id.clone(),
+                                                ..Default::default()
+                                            };
+                                            let mut buf = Vec::new();
+                                            if err.encode(&mut buf).is_ok() {
+                                                let _ = query.reply(&cmd_queryable_key, buf).await;
+                                            }
                                             continue;
                                         }
                                     };
+                                    // If target_machine is set, only respond if it matches our
+                                    // machine_id. This prevents fan-out on the wildcard query path.
+                                    if !cmd.target_machine.is_empty()
+                                        && cmd.target_machine != cmd_queryable_machine_id
+                                    {
+                                        log::debug!(
+                                            "[Gateway] Command for '{}', skipping (local='{}')",
+                                            cmd.target_machine, cmd_queryable_machine_id
+                                        );
+                                        continue;
+                                    }
                                     log::info!("[Gateway] Command query: {:?} for {}", cmd.command, cmd.node_name);
 
                                     use crate::mcp::platform::{NodeCommand as PlatformCmd, PlatformOperations};
@@ -251,6 +272,17 @@ async fn run_daemon_gateway(
                                         12 => PlatformCmd::GetLogs,
                                         _ => {
                                             log::warn!("[Gateway] Unknown command type: {}", cmd.command);
+                                            let err = CommandResult {
+                                                request_id: cmd.request_id.clone(),
+                                                success: false,
+                                                message: format!("Unknown command type: {}", cmd.command),
+                                                responding_machine: cmd_queryable_machine_id.clone(),
+                                                ..Default::default()
+                                            };
+                                            let mut buf = Vec::new();
+                                            if err.encode(&mut buf).is_ok() {
+                                                let _ = query.reply(&cmd_queryable_key, buf).await;
+                                            }
                                             continue;
                                         }
                                     };
@@ -294,7 +326,9 @@ async fn run_daemon_gateway(
         }
     });
 
-    // 4. Subscribe to command topic and dispatch
+    // 4. Subscribe to command topic and dispatch (legacy JSON pub/sub for CLI clients).
+    //    The protobuf queryable above handles the dashboard's request/reply API.
+    //    Both coexist on the same topic; their payload formats are distinct.
     let cmd_topic = gateway::command_topic(&scope, &machine_id);
     let evt_topic = gateway::events_topic(&scope, &machine_id);
 

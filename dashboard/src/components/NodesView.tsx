@@ -110,6 +110,9 @@ export function NodesViewPanel({
 
         // Look up target node to route command to correct machine
         const targetNode = nodes.find((n) => n.name === nodeName);
+        // Use wildcard path: the dashboard doesn't know the Zenoh scope/machine-id
+        // at query time. Fan-out is safe because NodeCommand includes target_machine
+        // and each daemon skips commands not addressed to it.
         const commandKey = "bubbaloop/**/daemon/command";
 
         const cmd = NodeCommandProto.create({

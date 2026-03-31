@@ -460,9 +460,20 @@ pub fn check_is_built(node_path: &str, manifest: &NodeManifest) -> bool {
                     }
                 }
             }
-            // General case: find the first token that is a file in the node dir
-            // (handles "pixi run python main.py", "python3 sensor.py", etc.)
+            // General case: find the first token that looks like a script or
+            // binary, skipping flags (`-flag`), and config/data files.
+            // e.g. "pixi run python main.py config.yaml" → matches main.py,
+            //       not config.yaml.
+            const SKIP_EXTS: &[&str] = &[
+                ".yaml", ".yml", ".json", ".toml", ".txt", ".cfg", ".ini", ".env",
+            ];
             tokens.iter().any(|t| {
+                if t.starts_with('-') {
+                    return false;
+                }
+                if SKIP_EXTS.iter().any(|ext| t.ends_with(ext)) {
+                    return false;
+                }
                 let candidate = path.join(t);
                 candidate.exists() && candidate.is_file()
             })
@@ -732,5 +743,84 @@ mod tests {
                 effective_name(&entries[i], &manifest)
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // check_is_built tests
+    // -----------------------------------------------------------------------
+
+    fn manifest_with(node_type: &str, command: Option<&str>) -> NodeManifest {
+        NodeManifest {
+            name: "test-node".to_string(),
+            version: "1.0.0".to_string(),
+            node_type: node_type.to_string(),
+            description: "Test".to_string(),
+            command: command.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_is_built_rust_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let release_dir = dir.path().join("target/release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        std::fs::write(release_dir.join("test-node"), b"").unwrap();
+        assert!(check_is_built(dir.path().to_str().unwrap(), &manifest_with("rust", None)));
+    }
+
+    #[test]
+    fn test_is_built_rust_debug() {
+        let dir = tempfile::tempdir().unwrap();
+        let debug_dir = dir.path().join("target/debug");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        std::fs::write(debug_dir.join("test-node"), b"").unwrap();
+        assert!(check_is_built(dir.path().to_str().unwrap(), &manifest_with("rust", None)));
+    }
+
+    #[test]
+    fn test_is_built_rust_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!check_is_built(dir.path().to_str().unwrap(), &manifest_with("rust", None)));
+    }
+
+    #[test]
+    fn test_is_built_no_command_finds_main_py() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.py"), b"").unwrap();
+        assert!(check_is_built(dir.path().to_str().unwrap(), &manifest_with("python", None)));
+    }
+
+    #[test]
+    fn test_is_built_no_command_missing_main_py() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!check_is_built(dir.path().to_str().unwrap(), &manifest_with("python", None)));
+    }
+
+    #[test]
+    fn test_is_built_module_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("smartpower/nodes")).unwrap();
+        std::fs::write(dir.path().join("smartpower/nodes/runner.py"), b"").unwrap();
+        let m = manifest_with("python", Some("pixi run python -m smartpower.nodes.runner config.yaml"));
+        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_config_only_no_false_positive() {
+        let dir = tempfile::tempdir().unwrap();
+        // Only config.yaml exists — must NOT match
+        std::fs::write(dir.path().join("config.yaml"), b"").unwrap();
+        let m = manifest_with("python", Some("pixi run python main.py config.yaml"));
+        assert!(!check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_script_found_despite_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.py"), b"").unwrap();
+        std::fs::write(dir.path().join("config.yaml"), b"").unwrap();
+        let m = manifest_with("python", Some("pixi run python main.py config.yaml"));
+        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
     }
 }
