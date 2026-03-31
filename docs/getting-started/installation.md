@@ -59,7 +59,9 @@ For contributors or building from source.
 |----------|--------|-------|
 | Ubuntu 22.04+ | Supported | Primary development platform |
 | NVIDIA Jetson | Supported | Tested on JetPack 5.x/6.x |
-| macOS | Not supported yet | Future target; development-only experiments exist, but no supported install/runtime flow |
+| Raspberry Pi 5 | Supported | Tested on Raspberry Pi 5 (ARM64 Linux) |
+| Docker | Supported (development) | Tested in the project devcontainer (non-systemd fallback mode) |
+| macOS | Not supported | Future target; no supported install/runtime flow today |
 | Windows | Not tested | WSL2 may work |
 
 ### Hardware Requirements
