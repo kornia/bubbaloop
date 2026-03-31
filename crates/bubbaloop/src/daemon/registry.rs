@@ -766,7 +766,10 @@ mod tests {
         let release_dir = dir.path().join("target/release");
         std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(release_dir.join("test-node"), b"").unwrap();
-        assert!(check_is_built(dir.path().to_str().unwrap(), &manifest_with("rust", None)));
+        assert!(check_is_built(
+            dir.path().to_str().unwrap(),
+            &manifest_with("rust", None)
+        ));
     }
 
     #[test]
@@ -775,26 +778,38 @@ mod tests {
         let debug_dir = dir.path().join("target/debug");
         std::fs::create_dir_all(&debug_dir).unwrap();
         std::fs::write(debug_dir.join("test-node"), b"").unwrap();
-        assert!(check_is_built(dir.path().to_str().unwrap(), &manifest_with("rust", None)));
+        assert!(check_is_built(
+            dir.path().to_str().unwrap(),
+            &manifest_with("rust", None)
+        ));
     }
 
     #[test]
     fn test_is_built_rust_missing() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!check_is_built(dir.path().to_str().unwrap(), &manifest_with("rust", None)));
+        assert!(!check_is_built(
+            dir.path().to_str().unwrap(),
+            &manifest_with("rust", None)
+        ));
     }
 
     #[test]
     fn test_is_built_no_command_finds_main_py() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("main.py"), b"").unwrap();
-        assert!(check_is_built(dir.path().to_str().unwrap(), &manifest_with("python", None)));
+        assert!(check_is_built(
+            dir.path().to_str().unwrap(),
+            &manifest_with("python", None)
+        ));
     }
 
     #[test]
     fn test_is_built_no_command_missing_main_py() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!check_is_built(dir.path().to_str().unwrap(), &manifest_with("python", None)));
+        assert!(!check_is_built(
+            dir.path().to_str().unwrap(),
+            &manifest_with("python", None)
+        ));
     }
 
     #[test]
@@ -802,7 +817,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("smartpower/nodes")).unwrap();
         std::fs::write(dir.path().join("smartpower/nodes/runner.py"), b"").unwrap();
-        let m = manifest_with("python", Some("pixi run python -m smartpower.nodes.runner config.yaml"));
+        let m = manifest_with(
+            "python",
+            Some("pixi run python -m smartpower.nodes.runner config.yaml"),
+        );
         assert!(check_is_built(dir.path().to_str().unwrap(), &m));
     }
 

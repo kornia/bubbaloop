@@ -199,7 +199,7 @@ async fn run_daemon_gateway(
                         _ = nodes_shutdown.changed() => break,
                     }
                 }
-            },
+            }
             Err(e) => {
                 log::warn!("[Gateway] Failed to register nodes queryable: {}", e);
             }
@@ -217,9 +217,15 @@ async fn run_daemon_gateway(
         use crate::schemas::daemon::v1::{CommandResult, NodeCommand};
         use prost::Message as _;
 
-        match cmd_queryable_session.declare_queryable(&cmd_queryable_key).await {
+        match cmd_queryable_session
+            .declare_queryable(&cmd_queryable_key)
+            .await
+        {
             Ok(queryable) => {
-                log::info!("[Gateway] Command queryable registered: {}", cmd_queryable_key);
+                log::info!(
+                    "[Gateway] Command queryable registered: {}",
+                    cmd_queryable_key
+                );
                 loop {
                     tokio::select! {
                         result = queryable.recv_async() => {
