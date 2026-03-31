@@ -428,7 +428,8 @@ pub fn list_nodes() -> Result<Vec<(NodeEntry, Option<NodeManifest>)>> {
 /// Check if a node's binary/script is built.
 ///
 /// Detection order:
-/// 1. Rust nodes: binary in `target/release/<name>` or `target/debug/<name>`
+/// 1. Rust nodes: binary in `target/release/<name>` or `target/debug/<name>`.
+///    Fallback: first relative token in `command` (for non-standard binary locations).
 /// 2. No `command`: check for `main.py` in the node directory
 /// 3. Command with `-m module.path`: check `module/path.py` in node dir
 ///    e.g. `pixi run python -m smartpower.nodes.runner` → `smartpower/nodes/runner.py`
@@ -440,10 +441,24 @@ pub fn check_is_built(node_path: &str, manifest: &NodeManifest) -> bool {
     let path = Path::new(node_path);
 
     if manifest.node_type == "rust" {
-        // Rust: check for compiled binary in release or debug
+        // Standard cargo output locations
         let release_path = path.join("target/release").join(&manifest.name);
         let debug_path = path.join("target/debug").join(&manifest.name);
-        return release_path.exists() || debug_path.exists();
+        if release_path.exists() || debug_path.exists() {
+            return true;
+        }
+        // Fallback: command may point to a non-standard relative binary path
+        // (e.g. `command: "target/aarch64-unknown-linux-gnu/release/my-node"`).
+        // Absolute paths and flags are ignored — they don't live in the node dir.
+        if let Some(ref command) = manifest.command {
+            if let Some(token) = command
+                .split_whitespace()
+                .find(|t| !t.starts_with('-') && !std::path::Path::new(t).is_absolute())
+            {
+                return path.join(token).exists();
+            }
+        }
+        return false;
     }
 
     let Some(ref command) = manifest.command else {
@@ -777,6 +792,20 @@ mod tests {
             dir.path().to_str().unwrap(),
             &manifest_with("rust", None)
         ));
+    }
+
+    #[test]
+    fn test_is_built_rust_non_standard_command() {
+        let dir = tempfile::tempdir().unwrap();
+        // Non-standard cross-compilation target path
+        let cross_dir = dir.path().join("target/aarch64-unknown-linux-gnu/release");
+        std::fs::create_dir_all(&cross_dir).unwrap();
+        std::fs::write(cross_dir.join("test-node"), b"").unwrap();
+        let m = manifest_with(
+            "rust",
+            Some("target/aarch64-unknown-linux-gnu/release/test-node"),
+        );
+        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
     }
 
     #[test]
