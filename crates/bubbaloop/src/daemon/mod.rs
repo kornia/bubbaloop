@@ -297,6 +297,11 @@ async fn run_daemon_gateway(
                                         .execute_command(&cmd.node_name, platform_cmd)
                                         .await;
 
+                                    let now_ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_millis() as i64)
+                                        .unwrap_or(0);
+
                                     let cmd_result = match result {
                                         Ok(msg) => CommandResult {
                                             request_id: cmd.request_id.clone(),
@@ -304,6 +309,7 @@ async fn run_daemon_gateway(
                                             message: msg.clone(),
                                             output: msg,
                                             responding_machine: cmd_queryable_machine_id.clone(),
+                                            timestamp_ms: now_ms,
                                             ..Default::default()
                                         },
                                         Err(e) => CommandResult {
@@ -311,6 +317,7 @@ async fn run_daemon_gateway(
                                             success: false,
                                             message: e.to_string(),
                                             responding_machine: cmd_queryable_machine_id.clone(),
+                                            timestamp_ms: now_ms,
                                             ..Default::default()
                                         },
                                     };
