@@ -1,6 +1,6 @@
 # Node Development Guide
 
-> A "node" is a self-describing sensor or actuator capability in bubbaloop. Historically called "nodes", nodes are the core building blocks of the platform.
+> A "node" is a self-describing sensor or actuator capability in bubbaloop. Historically called "skillets", nodes are the core building blocks of the platform.
 
 ## Where Nodes Live
 
@@ -88,7 +88,7 @@ A node is an autonomous process that:
 - Reports health via periodic heartbeats
 - Manages its own lifecycle (start, stop, restart)
 
-nodes run as systemd user services managed by the bubbaloop daemon. They can run on any machine — the daemon scopes all topics by `scope` and `machine_id` for multi-machine deployments.
+Nodes run as systemd user services managed by the bubbaloop daemon. They can run on any machine — the daemon scopes all topics by `scope` and `machine_id` for multi-machine deployments.
 
 > **Recommended:** Use the [Node SDK](#node-sdk-recommended) to create Rust nodes with ~50 lines of code. The manual approach below is for advanced use cases or Python nodes.
 

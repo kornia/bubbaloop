@@ -301,7 +301,8 @@ async fn run_daemon_gateway(
                                         Ok(msg) => CommandResult {
                                             request_id: cmd.request_id.clone(),
                                             success: true,
-                                            message: msg,
+                                            message: msg.clone(),
+                                            output: msg,
                                             responding_machine: cmd_queryable_machine_id.clone(),
                                             ..Default::default()
                                         },

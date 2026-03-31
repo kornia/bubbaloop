@@ -425,7 +425,17 @@ pub fn list_nodes() -> Result<Vec<(NodeEntry, Option<NodeManifest>)>> {
     Ok(nodes)
 }
 
-/// Check if a node's binary/script is built
+/// Check if a node's binary/script is built.
+///
+/// Detection order:
+/// 1. Rust nodes: binary in `target/release/<name>` or `target/debug/<name>`
+/// 2. No `command`: check for `main.py` in the node directory
+/// 3. Command with `-m module.path`: check `module/path.py` in node dir
+///    e.g. `pixi run python -m smartpower.nodes.runner` → `smartpower/nodes/runner.py`
+/// 4. Command with a `*.py` token: check that file in node dir
+///    e.g. `pixi run python sensor.py` → `sensor.py`
+///    e.g. `python3 main.py` → `main.py`
+/// 5. Anything else (external binary, pixi task, etc.): assume built (`true`)
 pub fn check_is_built(node_path: &str, manifest: &NodeManifest) -> bool {
     let path = Path::new(node_path);
 
@@ -433,55 +443,31 @@ pub fn check_is_built(node_path: &str, manifest: &NodeManifest) -> bool {
         // Rust: check for compiled binary in release or debug
         let release_path = path.join("target/release").join(&manifest.name);
         let debug_path = path.join("target/debug").join(&manifest.name);
-        release_path.exists() || debug_path.exists()
-    } else if let Some(ref command) = manifest.command {
-        // `command` can be:
-        //   - a single relative path:  "./my-binary"
-        //   - a shell invocation:      "pixi run python main.py"
-        //                              "pixi run python -m nodes.runner config.yaml"
-        //                              "python3 sensor.py"
-        //                              "/usr/bin/python3 main.py"
-        //
-        // Strategy: walk the tokens and return true as soon as we find one
-        // that looks like a file relative to node_path (ends with a known
-        // script extension or exists on disk).
-        let tokens: Vec<&str> = command.split_whitespace().collect();
-        if tokens.len() == 1 {
-            // Single token — treat as a file path relative to the node dir
-            path.join(tokens[0]).exists()
-        } else {
-            // Multi-token shell command.
-            // Special case: `-m module.path` → check for module/path.py
-            if let Some(pos) = tokens.iter().position(|t| *t == "-m") {
-                if let Some(module) = tokens.get(pos + 1) {
-                    let module_file = module.replace('.', "/") + ".py";
-                    if path.join(&module_file).exists() {
-                        return true;
-                    }
-                }
-            }
-            // General case: find the first token that looks like a script or
-            // binary, skipping flags (`-flag`), and config/data files.
-            // e.g. "pixi run python main.py config.yaml" → matches main.py,
-            //       not config.yaml.
-            const SKIP_EXTS: &[&str] = &[
-                ".yaml", ".yml", ".json", ".toml", ".txt", ".cfg", ".ini", ".env",
-            ];
-            tokens.iter().any(|t| {
-                if t.starts_with('-') {
-                    return false;
-                }
-                if SKIP_EXTS.iter().any(|ext| t.ends_with(ext)) {
-                    return false;
-                }
-                let candidate = path.join(t);
-                candidate.exists() && candidate.is_file()
-            })
-        }
-    } else {
-        // No command specified — Python/other script: check for main.py
-        path.join("main.py").exists()
+        return release_path.exists() || debug_path.exists();
     }
+
+    let Some(ref command) = manifest.command else {
+        // No command — default Python entrypoint
+        return path.join("main.py").exists();
+    };
+
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+
+    // Check `-m module.path` → module/path.py
+    if let Some(pos) = tokens.iter().position(|t| *t == "-m") {
+        if let Some(module) = tokens.get(pos + 1) {
+            let module_file = module.replace('.', "/") + ".py";
+            return path.join(&module_file).exists();
+        }
+    }
+
+    // Find first *.py token and check it exists in node dir
+    if let Some(script) = tokens.iter().find(|t| t.ends_with(".py")) {
+        return path.join(script).exists();
+    }
+
+    // External binary, pixi task, or other launcher — assume built
+    true
 }
 
 /// Get current timestamp as ISO 8601 string (RFC 3339 format)
@@ -839,6 +825,39 @@ mod tests {
         std::fs::write(dir.path().join("main.py"), b"").unwrap();
         std::fs::write(dir.path().join("config.yaml"), b"").unwrap();
         let m = manifest_with("python", Some("pixi run python main.py config.yaml"));
+        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_absolute_interpreter_no_false_positive() {
+        let dir = tempfile::tempdir().unwrap();
+        // /usr/bin/python3 exists on the system but main.py is missing
+        let m = manifest_with("python", Some("/usr/bin/python3 main.py"));
+        assert!(!check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_absolute_interpreter_with_script() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.py"), b"").unwrap();
+        let m = manifest_with("python", Some("/usr/bin/python3 main.py"));
+        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_non_default_script() {
+        // "pixi run python sensor.py" — script is not main.py
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("sensor.py"), b"").unwrap();
+        let m = manifest_with("python", Some("pixi run python sensor.py"));
+        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_pixi_task_no_py_returns_true() {
+        // "pixi run run" — no .py token, external launcher, assume built
+        let dir = tempfile::tempdir().unwrap();
+        let m = manifest_with("python", Some("pixi run run"));
         assert!(check_is_built(dir.path().to_str().unwrap(), &m));
     }
 }

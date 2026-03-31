@@ -1,14 +1,12 @@
-/**
- * NodeDiscoveryContext — Hybrid node discovery via daemon API + direct manifest queries.
- *
- * Two independent discovery loops:
- * 1. Manifest discovery: queries `bubbaloop/** /manifest` (every 10s, backs off to 30s)
- *    Each running node responds with its JSON manifest.
- * 2. Daemon polling: queries `bubbaloop/** /daemon/nodes` (every 3s) for protobuf NodeList.
- *
- * Results are merged: manifest provides rich metadata, daemon provides runtime state.
- * When daemon is down, nodes discovered via manifest still appear (status = 'unknown').
- */
+// NodeDiscoveryContext — Hybrid node discovery via daemon API + direct manifest queries.
+//
+// Two independent discovery loops:
+// 1. Manifest discovery: queries `bubbaloop/**/manifest` (every 10s, backs off to 30s)
+//    Each running node responds with its JSON manifest.
+// 2. Daemon polling: queries `bubbaloop/**/daemon/nodes` (every 3s) for protobuf NodeList.
+//
+// Results are merged: manifest provides rich metadata, daemon provides runtime state.
+// When daemon is down, nodes discovered via manifest still appear (status = 'unknown').
 
 import {
   createContext,
