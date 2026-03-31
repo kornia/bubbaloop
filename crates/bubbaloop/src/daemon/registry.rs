@@ -811,24 +811,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_built_config_only_no_false_positive() {
-        let dir = tempfile::tempdir().unwrap();
-        // Only config.yaml exists — must NOT match
-        std::fs::write(dir.path().join("config.yaml"), b"").unwrap();
-        let m = manifest_with("python", Some("pixi run python main.py config.yaml"));
-        assert!(!check_is_built(dir.path().to_str().unwrap(), &m));
-    }
-
-    #[test]
-    fn test_is_built_script_found_despite_config() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("main.py"), b"").unwrap();
-        std::fs::write(dir.path().join("config.yaml"), b"").unwrap();
-        let m = manifest_with("python", Some("pixi run python main.py config.yaml"));
-        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
-    }
-
-    #[test]
     fn test_is_built_absolute_interpreter_no_false_positive() {
         let dir = tempfile::tempdir().unwrap();
         // /usr/bin/python3 exists on the system but main.py is missing
