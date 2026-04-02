@@ -189,10 +189,33 @@ pub struct SystemdClient {
 }
 
 impl SystemdClient {
-    /// Create a new systemd client connected to the user session bus
+    /// Create a new systemd client connected to the user session bus.
+    ///
+    /// Opening the session bus succeeds in any D-Bus environment.
+    /// Call `probe()` afterward to confirm `org.freedesktop.systemd1` is present.
     pub async fn new() -> Result<Self> {
         let connection = Connection::session().await?;
         Ok(Self { connection })
+    }
+
+    /// Verify that `org.freedesktop.systemd1` is registered and responding.
+    ///
+    /// Calls `GetUnit("basic.target")` — any systemd-level response (including
+    /// "no such unit") proves the service is present. A D-Bus transport error
+    /// (e.g. `ServiceUnknown`) means systemd is not on this bus.
+    pub async fn probe(&self) -> Result<()> {
+        Self::with_timeout(3, "probe_systemd", || async {
+            let manager = self.manager().await?;
+            match manager.get_unit("basic.target").await {
+                // Service responded — systemd is present.
+                Ok(_) => Ok(()),
+                // Application-level D-Bus error from systemd itself — still present.
+                Err(zbus::Error::MethodError(..)) => Ok(()),
+                // Transport / FDO error (ServiceUnknown, etc.) — systemd not on bus.
+                Err(e) => Err(SystemdError::Connection(e)),
+            }
+        })
+        .await
     }
 
     async fn manager(&self) -> Result<SystemdManagerProxy<'_>> {

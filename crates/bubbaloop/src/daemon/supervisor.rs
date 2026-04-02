@@ -24,15 +24,31 @@ pub enum Supervisor {
 
 impl Supervisor {
     /// Detect the best available backend. Never fails — falls back to Native.
+    ///
+    /// Detection is two-step: first open the D-Bus session connection, then
+    /// probe `org.freedesktop.systemd1` directly. Environments with D-Bus but
+    /// without systemd (some containers) have a session bus but no systemd
+    /// service — the probe step catches that and selects the native backend.
     pub async fn detect() -> Self {
-        match SystemdClient::new().await {
-            Ok(client) => {
+        let client = match SystemdClient::new().await {
+            Ok(c) => c,
+            Err(err) => {
+                log::warn!(
+                    "[Supervisor] D-Bus session unavailable ({err}), \
+                     using native process supervisor"
+                );
+                return Supervisor::Native(NativeSupervisor::new());
+            }
+        };
+
+        match client.probe().await {
+            Ok(()) => {
                 log::info!("[Supervisor] Using systemd backend");
                 Supervisor::Systemd(client)
             }
             Err(err) => {
                 log::warn!(
-                    "[Supervisor] systemd unavailable ({err}), \
+                    "[Supervisor] org.freedesktop.systemd1 not responding ({err}), \
                      using native process supervisor for development fallback \
                      (Docker/macOS, no journalctl/systemd integration)"
                 );
