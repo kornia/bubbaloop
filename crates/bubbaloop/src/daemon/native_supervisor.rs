@@ -218,6 +218,11 @@ impl NativeSupervisor {
         Ok(())
     }
 
+    /// Returns the directory where configs, PIDs, and logs are stored.
+    pub fn procs_dir_path(&self) -> &std::path::Path {
+        &self.procs_dir
+    }
+
     /// Returns true if a config file exists for the node.
     pub fn is_installed(&self, name: &str) -> bool {
         self.config_path(name).exists()
@@ -244,7 +249,9 @@ impl NativeSupervisor {
             }
         }
 
-        // Split command into executable + args (simple whitespace split)
+        // Split command into executable + args (simple whitespace split).
+        // NOTE: quoted/escaped arguments and paths with spaces are not supported
+        // in this dev-only backend. Use a wrapper script for complex invocations.
         let parts: Vec<&str> = config.command.split_whitespace().collect();
         let (exe, args) = parts
             .split_first()
@@ -282,21 +289,20 @@ impl NativeSupervisor {
         let pid_path = self.pid_path(name);
         tokio::spawn(async move {
             let mut child = child;
-            let status = child.wait().await;
+            child.wait().await.ok();
 
-            let result = match &status {
-                Ok(s) if s.success() => "done",
-                Ok(_) => "failed",
-                Err(_) => "failed",
-            };
-
-            let _ = std::fs::remove_file(&pid_path);
-            let unit = format!("bubbaloop-{name_owned}.service");
-            let _ = event_tx.send(SystemdSignalEvent::JobRemoved {
-                unit,
-                result: result.to_string(),
-                node_name: Some(name_owned),
-            });
+            // Only emit a JobRemoved event for *unexpected* exits (crashes).
+            // If stop_unit already removed the PID file (intentional stop), skip
+            // emission to avoid a spurious "failed" event racing with the "done"
+            // event already emitted by stop_unit.
+            if std::fs::remove_file(&pid_path).is_ok() {
+                let unit = format!("bubbaloop-{name_owned}.service");
+                let _ = event_tx.send(SystemdSignalEvent::JobRemoved {
+                    unit,
+                    result: "failed".to_string(),
+                    node_name: Some(name_owned),
+                });
+            }
         });
 
         log::info!("[NativeSupervisor] Started {name} (pid={pid})");

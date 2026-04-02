@@ -213,6 +213,8 @@ impl NodeManager {
         let n = manager.supervisor.start_native_autostart().await;
         if n > 0 {
             log::info!("[NodeManager] Native autostart: started {n} node(s)");
+            // Refresh so the cache reflects the newly running nodes.
+            manager.refresh_all().await?;
         }
 
         Ok(manager)
@@ -582,13 +584,13 @@ impl NodeManager {
         // Check if node exists
         let _path = self.find_node_path(name).await?;
 
-        if self.supervisor.is_native() {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+        if let Some(procs_dir) = self.supervisor.native_procs_dir() {
+            let dir = procs_dir.display();
             return Ok(format!(
                 "Logs via journalctl are only available with the systemd backend. \
 Native supervisor writes node output to log files instead. \
-Check stdout: {home}/.bubbaloop/procs/{name}.stdout — \
-check stderr: {home}/.bubbaloop/procs/{name}.stderr"
+Check stdout: {dir}/{name}.stdout — \
+check stderr: {dir}/{name}.stderr"
             ));
         }
 

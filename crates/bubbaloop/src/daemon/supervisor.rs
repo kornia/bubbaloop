@@ -45,6 +45,14 @@ impl Supervisor {
         matches!(self, Supervisor::Native(_))
     }
 
+    /// Returns the native supervisor's procs directory, or `None` on systemd.
+    pub fn native_procs_dir(&self) -> Option<&std::path::Path> {
+        match self {
+            Supervisor::Native(n) => Some(n.procs_dir_path()),
+            Supervisor::Systemd(_) => None,
+        }
+    }
+
     // ── Process state ──────────────────────────────────────────────────────
 
     /// Get the active state of a node by node name (not service name).
