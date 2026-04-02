@@ -49,16 +49,21 @@ Key source files in `crates/bubbaloop/src/`:
 ### Node SDK (`crates/bubbaloop-node-sdk/`)
 
 Batteries-included framework for writing nodes. Reduces boilerplate from ~300 to ~50 lines.
-- `lib.rs` — `Node` trait, `run_node()`, re-exports (zenoh, prost, tokio, anyhow, log)
-- `context.rs` — `NodeContext` (session, scope, machine_id, shutdown_rx, `topic()` helper)
+- `lib.rs` — `Node` trait, `run_node()`, re-exports (zenoh, prost, tokio, anyhow, log, serde_json)
+- `context.rs` — `NodeContext` (session, scope, machine_id, shutdown_rx, `topic()`, `publisher_proto()`, `publisher_json()`, `subscriber()`, `subscriber_raw()`)
+- `publisher.rs` — `ProtoPublisher<T>` (APPLICATION_PROTOBUF + schema suffix), `JsonPublisher` (APPLICATION_JSON)
+- `subscriber.rs` — `TypedSubscriber<T>` (auto-decode), `RawSubscriber` (raw Sample access)
 - `config.rs` — Generic YAML config loading
 - `zenoh_session.rs` — Client-mode Zenoh session (scouting disabled)
 - `health.rs` — Background health heartbeat (5s interval)
-- `schema.rs` — Schema queryable (FileDescriptorSet serving)
+- `schema.rs` — Schema queryable (FileDescriptorSet serving, protobuf nodes only)
 - `shutdown.rs` — SIGINT/SIGTERM signal handling via watch channel
 
 Standalone crate (NOT in workspace). Nodes depend via git:
 `bubbaloop-node-sdk = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }`
+
+Python SDK: `python-sdk/` — pure Python wrapper over zenoh-python, same API. Install:
+`pip install git+https://github.com/kornia/bubbaloop.git#subdirectory=python-sdk`
 
 Nodes repo: [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official)
 
@@ -138,13 +143,29 @@ Always commit: `Cargo.lock`, `pixi.lock`, `package-lock.json`
 
 ## Dashboard View Components
 
-New view components that decode protobuf MUST gate their subscription callback on schema readiness:
+### Encoding-First Decode (preferred)
+
+New view components should read `sample.encoding()` as the primary decode signal:
+```ts
+import { getEncodingInfo } from '../lib/zenoh';
+
+const handleSample = (sample: Sample) => {
+  const encoding = getEncodingInfo(sample);
+  // APPLICATION_JSON (5) → JSON.parse()
+  // APPLICATION_PROTOBUF (13) → SchemaRegistry decode (with on-demand schema fetch)
+  // ZENOH_BYTES (0) or unknown → sniff fallback
+};
+```
+
+### Legacy Gating (backward compat for old nodes)
+
+For views that must support old nodes publishing without encoding:
 ```ts
 const schemaReady = useSchemaReady();  // from hooks/useSchemaReady
 useZenohSubscription(topic, schemaReady ? handleSample : undefined);
 ```
-This prevents the race where Zenoh delivers messages before `fetchSchemas()` completes.
-Exception: views with their own fallback decode chain (like JsonView) don't need gating.
+This prevents the race where Zenoh delivers messages before schemas load.
+Exception: views using encoding-first decode don't need gating.
 
 ## Pitfalls
 
@@ -158,7 +179,9 @@ Exception: views with their own fallback decode chain (like JsonView) don't need
 - mold linker config ready in `.cargo/config.toml` — activate with `sudo apt install mold clang`
 - Logs must go to stderr (convention: never pollute stdout)
 - Zenoh session: MUST use `"client"` mode for router routing; check `BUBBALOOP_ZENOH_ENDPOINT` env var
-- Dashboard schema race: subscriptions start before schemas load — always use `useSchemaReady()` gating
+- Dashboard schema race: for old nodes without encoding, use `useSchemaReady()` gating. New nodes with encoding decode on first sample.
+- Daemon wire format: ALL daemon messages are JSON (not protobuf). Dashboard uses `JSON.parse()` for daemon responses.
+- Zenoh default encoding: samples published without explicit encoding get `ZENOH_BYTES` (id=0). Dashboard treats this as "no signal" → sniff fallback.
 - OAuth tokens require Claude CLI identity headers (user-agent, x-app, anthropic-beta) — see `agent/provider/claude.rs::OAUTH_BETA_HEADERS`
 - Agent robustness constants in `agent/mod.rs`: `TURN_TIMEOUT_SECS=120`, `TOOL_CALL_TIMEOUT_SECS=30`, `MAX_TOOL_RESULT_CHARS=4096` — change these to tune agent behavior
 - `run_turn_loop()` is the inner async fn wrapped by `tokio::time::timeout` — keep turn-level logic there, finalization (Done event, trim) in `run_agent_turn()`

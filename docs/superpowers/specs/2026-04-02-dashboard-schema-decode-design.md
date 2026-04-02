@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-02
 **Status**: Approved
-**Scope**: Node SDK publish API, Python PyO3 bindings, dashboard decode pipeline, daemon JSON migration
+**Scope**: Node SDK publish API, Python SDK (pure Python), dashboard decode pipeline, daemon JSON migration
 
 ## Problem
 
@@ -134,38 +134,50 @@ The typed subscriber reads the incoming sample's `Encoding` to decide how to dec
 | `APPLICATION_JSON` | Deserialize into target type via serde / dict |
 | Missing/unknown | Try proto -> JSON -> return raw bytes |
 
-## PyO3 Bindings
+## Python SDK
+
+### Approach: Pure Python Wrapper (not PyO3)
+
+A pure Python package that wraps `zenoh-python` with the same API surface as the Rust SDK. No compilation needed — installable directly from git URL.
+
+```
+pip install git+https://github.com/kornia/bubbaloop.git#subdirectory=python-sdk
+```
 
 ### Stack
 
 ```
-Python asyncio -> PyO3 (pyo3-async-runtimes) -> Rust SDK -> Rust zenoh
+Python asyncio -> bubbaloop_sdk (pure Python) -> zenoh-python -> Zenoh
 ```
 
-No dependency on zenoh-python. The Rust zenoh session is used directly, giving Python nodes the same performance as Rust nodes for I/O.
+### API (mirrors Rust SDK)
 
-### Async Support
+```python
+from bubbaloop_sdk import NodeContext
 
-All publish/subscribe methods are async, using `pyo3_async_runtimes::tokio::future_into_py()` to convert Rust futures into Python awaitables.
+async def run():
+    ctx = await NodeContext.connect()
 
-### GIL Handling
+    # Protobuf — type name from msg.DESCRIPTOR.full_name, extracted automatically
+    camera_pub = await ctx.publisher_proto("camera/front/compressed", CompressedImage)
+    await camera_pub.put(msg)
 
-The GIL is held only for argument extraction (microseconds). All encoding, serialization, and network I/O runs GIL-free on the tokio runtime.
+    # JSON — no schema needed
+    weather_pub = await ctx.publisher_json("weather/current")
+    await weather_pub.put({"temperature": 22.5})
 
+    # Typed subscriber
+    async for msg in ctx.subscriber("weather/+/current", CurrentWeather):
+        print(f"temp: {msg.temperature}")
 ```
-|-- GIL held (us) --|-------- GIL released (ms) --------|
-   extract args         serialize -> zenoh put -> network
-```
 
-For `publish_proto`:
-1. **GIL held**: extract `msg.DESCRIPTOR.full_name` (string) and `msg.SerializeToString()` (bytes) — done once at publisher creation for type name, per-message for serialization
-2. **GIL released**: Zenoh `publisher.put(bytes)` — all network I/O
+Internally, `publisher_proto()` calls `session.declare_publisher()` with `Encoding.APPLICATION_PROTOBUF` and the schema suffix from `msg.DESCRIPTOR.full_name`. `publisher_json()` uses `Encoding.APPLICATION_JSON`.
 
-For `publish_json`:
-1. **GIL held**: extract Python dict
-2. **GIL released**: `serde_json` serialization + Zenoh publish
+The schema queryable for protobuf nodes is declared from `msg.DESCRIPTOR.file.serialized_pb` — no separate descriptor.bin needed.
 
-Multiple Python nodes in the same process can publish concurrently without blocking each other.
+### Future: PyO3 for Performance
+
+A PyO3 binding (Rust SDK exposed to Python via `pyo3-async-runtimes`) can replace the pure Python wrapper later for GIL-free I/O performance. The API surface stays identical — it's a drop-in replacement. This is deferred to avoid build complexity (maturin, platform-specific wheels).
 
 ## Dashboard Decode Pipeline
 
@@ -256,7 +268,7 @@ Both phases are backward compatible. No breaking changes at any point.
 1. Dashboard decodes JSON messages on first sample without any schema fetch
 2. Dashboard decodes protobuf messages on first sample (after one-time schema fetch per node type)
 3. Old nodes without encoding still work via sniff fallback
-4. Rust and Python nodes use the same SDK API surface via PyO3
-5. GIL is never held during network I/O in Python nodes
+4. Rust and Python nodes use the same SDK API surface (pure Python wrapper over zenoh-python)
+5. Python SDK installable from git URL without compilation
 6. Daemon gateway messages are pure JSON — no protobuf encoding in daemon
 7. No polling loops in the dashboard for schema discovery
