@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload } from '../lib/zenoh';
+import { getSamplePayload, getEncodingInfo, hasExplicitEncoding, EncodingPredefined } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useFleetContext } from '../contexts/FleetContext';
@@ -134,13 +134,38 @@ export function CameraView({
     try {
       const payload = getSamplePayload(sample);
       const sampleTopic = sample.keyexpr().toString();
+      const encodingInfo = getEncodingInfo(sample);
+
+      // If sample has an explicit encoding that is NOT protobuf, skip (CameraView
+      // only handles protobuf CompressedImage or unencoded binary).
+      if (
+        hasExplicitEncoding(encodingInfo) &&
+        encodingInfo.id !== EncodingPredefined.APPLICATION_PROTOBUF &&
+        encodingInfo.id !== EncodingPredefined.APPLICATION_OCTET_STREAM
+      ) {
+        return;
+      }
 
       // Use SchemaRegistry to look up CompressedImage type and decode directly.
       // This preserves raw bytes (no base64 roundtrip) for H264 decoding.
-      const msgType = registry.lookupType('bubbaloop.camera.v1.CompressedImage');
+      // When encoding carries a schema suffix, try it directly; otherwise fall back to
+      // well-known type name lookup.
+      const typeName = (encodingInfo.id === EncodingPredefined.APPLICATION_PROTOBUF && encodingInfo.schema)
+        ? encodingInfo.schema
+        : 'bubbaloop.camera.v1.CompressedImage';
+
+      const msgType = registry.lookupType(typeName);
       if (!msgType) {
-        // Schema not yet available — trigger discovery for node-specific schemas
-        discoverForTopic(sampleTopic);
+        // Schema not yet available — trigger discovery for node-specific schemas.
+        // Only gate on schemaReady for legacy nodes (no explicit encoding); nodes
+        // with APPLICATION_PROTOBUF encoding trigger on-demand fetch instead.
+        if (!hasExplicitEncoding(encodingInfo)) {
+          console.warn(`[CameraView] CompressedImage schema NOT found. Topic: ${sampleTopic}. Triggering discovery...`);
+          discoverForTopic(sampleTopic);
+        } else {
+          // Has explicit protobuf encoding but type not cached yet — discover async
+          discoverForTopic(sampleTopic);
+        }
         return;
       }
 
@@ -178,33 +203,43 @@ export function CameraView({
     }
   }, [registry, discoverForTopic]);
 
-  // Auto-detect correct topic from discovered topics using the camera name.
-  // Scans availableTopics for a display name matching "camera/{cameraName}/compressed"
-  // and subscribes to the matching raw key expression.
+  // Auto-detect correct topic from discovered topics.
+  // Priority: 1) exact name match, 2) first camera/*/compressed topic found.
   const autoDetectedRef = useRef(false);
   useEffect(() => {
     if (autoDetectedRef.current || !onTopicChange || availableTopics.length === 0) return;
 
-    // Use cameraName prop as hint (e.g., "entrance")
     const cameraHint = cameraName?.toLowerCase();
-    if (!cameraHint) return;
 
-    // Find a discovered topic matching "camera/{name}/compressed" in display name
-    for (const dt of availableTopics) {
+    // Collect all camera topics matching camera/*/compressed pattern
+    const cameraTopics = availableTopics.filter(dt => {
       const d = dt.display.toLowerCase();
-      if (d.includes(`camera/${cameraHint}/compressed`) || d.includes(`camera%${cameraHint}%compressed`)) {
-        autoDetectedRef.current = true;
-        const rawBase = normalizeTopicPattern(dt.raw);
-        const newTopic = rawBase + '/**';
-        console.log(`[CameraView] Auto-detected topic for "${cameraHint}": -> ${newTopic}`);
-        onTopicChange(newTopic);
-        return;
-      }
-    }
+      return /camera\/[^/]+\/compressed/.test(d);
+    });
+
+    console.log(`[CameraView] Auto-detect: hint="${cameraHint}", availableTopics=${availableTopics.length}, cameraTopics=${cameraTopics.length}`, cameraTopics.map(t => t.display));
+
+    if (cameraTopics.length === 0) return;
+
+    // Try exact name match first, then fall back to first discovered camera
+    const match = (cameraHint && cameraTopics.find(dt => {
+      const d = dt.display.toLowerCase();
+      return d.includes(`camera/${cameraHint}/compressed`);
+    })) || cameraTopics[0];
+
+    autoDetectedRef.current = true;
+    const rawBase = normalizeTopicPattern(match.raw);
+    const newTopic = rawBase + '/**';
+    console.log(`[CameraView] Auto-detected topic for "${cameraHint}": -> ${newTopic}`);
+    onTopicChange(newTopic);
   }, [availableTopics, cameraName, onTopicChange]);
 
-  // Subscribe to camera topic — gate callback on schema readiness so we don't
-  // drop frames (especially keyframes) before schemas are available to decode them
+  // Subscribe to camera topic.
+  // Gate on schemaReady for backward compat with legacy nodes (no explicit encoding).
+  // When schemaReady is false, pass undefined so the subscription stays active for
+  // topic discovery but samples are not processed until schemas arrive.
+  // Nodes with explicit APPLICATION_PROTOBUF encoding will also benefit from gating
+  // since schema discovery happens on first sample via discoverForTopic().
   useZenohSubscription(topic, schemaReady ? handleSample : undefined);
 
   // Periodically update metadata state when info panel is visible

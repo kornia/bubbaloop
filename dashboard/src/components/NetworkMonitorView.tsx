@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload, extractMachineId } from '../lib/zenoh';
+import { getSamplePayload, extractMachineId, getEncodingInfo, hasExplicitEncoding, EncodingPredefined } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useFleetContext } from '../contexts/FleetContext';
@@ -177,6 +177,25 @@ export function NetworkMonitorViewPanel({
       const payload = getSamplePayload(sample);
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
+      const encodingInfo = getEncodingInfo(sample);
+
+      // JSON-encoded samples (new nodes with explicit encoding) — decode directly
+      if (hasExplicitEncoding(encodingInfo) && (
+        encodingInfo.id === EncodingPredefined.APPLICATION_JSON ||
+        encodingInfo.id === EncodingPredefined.TEXT_JSON
+      )) {
+        try {
+          const text = new TextDecoder().decode(payload);
+          const raw = JSON.parse(text) as Record<string, unknown>;
+          const checks = ((raw.checks as Record<string, unknown>[]) ?? []).map(toHealthCheck);
+          const summary = raw.summary as Summary | undefined;
+          const status: NetworkStatus = { checks, summary };
+          const base = pendingRef.current ?? new Map(statusMapRef.current);
+          base.set(machineId, { status, lastUpdate: Date.now() });
+          pendingRef.current = base;
+          return;
+        } catch { /* fall through to protobuf path */ }
+      }
 
       if (!tryDecode(payload, topic, machineId)) {
         // Schema not loaded yet — trigger discovery
@@ -187,7 +206,11 @@ export function NetworkMonitorViewPanel({
     }
   }, [tryDecode, discoverForTopic]);
 
-  // Gate callback on schema readiness — samples are ignored until schemas load
+  // Subscribe to network monitor topic.
+  // For samples with explicit encoding, decoding works immediately. Legacy samples (no
+  // encoding) still need schemas loaded first. Gate on schemaReady for backward compat:
+  // when schemaReady is false, pass undefined so the subscription stays active for topic
+  // discovery but samples are not processed until schemas arrive.
   const { messageCount } = useZenohSubscription(networkTopic, schemaReady ? handleSample : undefined);
 
   // Filter entries by selectedMachineId if set

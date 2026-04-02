@@ -1,4 +1,4 @@
-import { Session, Config, Subscriber, Sample } from '@eclipse-zenoh/zenoh-ts';
+import { Session, Config, Subscriber, Sample, Encoding, EncodingPredefined } from '@eclipse-zenoh/zenoh-ts';
 import { useEffect, useRef, useState, useCallback } from 'react';
 
 export interface ZenohConfig {
@@ -175,6 +175,44 @@ export function useZenohSubscriber(
     fps,
     instantFps,
   };
+}
+
+/**
+ * Encoding information extracted from a Zenoh sample.
+ * id=0 (ZENOH_BYTES) and id=1 (ZENOH_STRING) mean "no encoding signal" — use sniff fallback.
+ */
+export interface EncodingInfo {
+  /** EncodingPredefined numeric id */
+  id: EncodingPredefined;
+  /** Optional schema suffix (e.g. "bubbaloop.camera.v1.CompressedImage") */
+  schema?: string;
+}
+
+// Re-export EncodingPredefined so callers don't need to import from zenoh-ts directly
+export { Encoding, EncodingPredefined };
+
+/**
+ * Extract encoding information from a Zenoh sample.
+ * Returns the encoding id and optional schema suffix.
+ * ZENOH_BYTES (0) and ZENOH_STRING (1) are treated as "no encoding signal".
+ */
+export function getEncodingInfo(sample: Sample): EncodingInfo {
+  try {
+    const encoding: Encoding = sample.encoding();
+    const [id, schema] = encoding.toIdSchema();
+    return { id, schema };
+  } catch {
+    // If encoding() throws for any reason, treat as no signal
+    return { id: EncodingPredefined.ZENOH_BYTES };
+  }
+}
+
+/**
+ * Returns true when the encoding id carries a meaningful format signal.
+ * ZENOH_BYTES (0) and ZENOH_STRING (1) are the "no encoding" defaults.
+ */
+export function hasExplicitEncoding(info: EncodingInfo): boolean {
+  return info.id !== EncodingPredefined.ZENOH_BYTES && info.id !== EncodingPredefined.ZENOH_STRING;
 }
 
 /**

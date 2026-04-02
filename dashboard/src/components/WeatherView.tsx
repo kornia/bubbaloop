@@ -1,6 +1,6 @@
 import { useCallback, useState, useEffect } from 'react';
 import { Sample, IntoZBytes } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload, extractMachineId } from '../lib/zenoh';
+import { getSamplePayload, extractMachineId, getEncodingInfo, hasExplicitEncoding, EncodingPredefined } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
@@ -144,6 +144,20 @@ export function WeatherViewPanel({
       const payload = getSamplePayload(sample);
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
+      const encodingInfo = getEncodingInfo(sample);
+
+      // For JSON-encoded samples, try JSON decode first (new nodes with explicit encoding)
+      if (hasExplicitEncoding(encodingInfo) && (
+        encodingInfo.id === EncodingPredefined.APPLICATION_JSON ||
+        encodingInfo.id === EncodingPredefined.TEXT_JSON
+      )) {
+        try {
+          const text = new TextDecoder().decode(payload);
+          const data = JSON.parse(text) as CurrentWeather;
+          setCurrentMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
+          return;
+        } catch { /* fall through */ }
+      }
 
       const result = registry.decode('bubbaloop.weather.v1.CurrentWeather', payload);
       if (result) {
@@ -207,7 +221,11 @@ export function WeatherViewPanel({
     }
   }, [registry, discoverForTopic]);
 
-  // Subscribe to all three topics — gate callbacks on schema readiness
+  // Subscribe to all three topics.
+  // For samples with explicit encoding, decoding works immediately. Legacy samples (no
+  // encoding) still need schemas loaded first. Gate on schemaReady for backward compat:
+  // when schemaReady is false, pass undefined so the subscription stays active for topic
+  // discovery but samples are not processed until schemas arrive.
   const { messageCount: currentCount } = useZenohSubscription(currentTopic, schemaReady ? handleCurrentSample : undefined);
   const { messageCount: hourlyCount } = useZenohSubscription(hourlyTopic, schemaReady ? handleHourlySample : undefined);
   const { messageCount: dailyCount } = useZenohSubscription(dailyTopic, schemaReady ? handleDailySample : undefined);
