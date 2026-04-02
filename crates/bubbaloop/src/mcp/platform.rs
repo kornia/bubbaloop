@@ -246,6 +246,17 @@ pub trait PlatformOperations: Send + Sync + 'static {
         &self,
     ) -> impl std::future::Future<Output = PlatformResult<Vec<crate::agent::memory::WorldStateEntry>>>
            + Send;
+
+    // ── Agent messaging ───────────────────────────────────────────────
+
+    /// Publish a raw message to a Zenoh topic.
+    ///
+    /// Used by `publish_to_topic` tool to send agent-to-agent messages.
+    fn publish_to_topic(
+        &self,
+        topic: &str,
+        message: &str,
+    ) -> impl std::future::Future<Output = PlatformResult<()>> + Send;
 }
 
 /// Parameters for creating or updating a belief.

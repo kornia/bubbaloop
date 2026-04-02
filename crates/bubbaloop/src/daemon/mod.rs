@@ -45,9 +45,9 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>, zeno
     // Configure Zenoh session
     let mut config = zenoh::Config::default();
 
-    // Peer mode — allows direct connections from co-located nodes
+    // Client mode — routes through zenohd so queryables are reachable
     config
-        .insert_json5("mode", "\"peer\"")
+        .insert_json5("mode", "\"client\"")
         .expect("Failed to set Zenoh mode");
 
     // Resolve endpoint: parameter > env var > default
@@ -174,7 +174,194 @@ async fn run_daemon_gateway(
         }
     });
 
-    // 2. Subscribe to command topic and dispatch
+    // 2. Register nodes queryable (returns protobuf NodeList for dashboard)
+    let nodes_key = gateway::nodes_topic(&scope, &machine_id);
+    let nodes_session = session.clone();
+    let nodes_nm = node_manager.clone();
+    let mut nodes_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        match nodes_session.declare_queryable(&nodes_key).await {
+            Ok(queryable) => {
+                log::info!("[Gateway] Nodes queryable registered: {}", nodes_key);
+                loop {
+                    tokio::select! {
+                        result = queryable.recv_async() => {
+                            match result {
+                                Ok(query) => {
+                                    let node_list = nodes_nm.get_node_list().await;
+                                    let mut buf = Vec::new();
+                                    use prost::Message as _;
+                                    if node_list.encode(&mut buf).is_ok() {
+                                        let _ = query.reply(&nodes_key, buf).await;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        _ = nodes_shutdown.changed() => break,
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[Gateway] Failed to register nodes queryable: {}", e);
+            }
+        }
+    });
+
+    // 3. Register command queryable (for dashboard / Zenoh GET clients)
+    //    Accepts protobuf NodeCommand, returns protobuf CommandResult.
+    let cmd_queryable_key = gateway::command_topic(&scope, &machine_id);
+    let cmd_queryable_session = session.clone();
+    let cmd_queryable_platform = platform.clone();
+    let cmd_queryable_machine_id = machine_id.clone();
+    let mut cmd_queryable_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        use crate::schemas::daemon::v1::{CommandResult, NodeCommand};
+        use prost::Message as _;
+
+        match cmd_queryable_session
+            .declare_queryable(&cmd_queryable_key)
+            .await
+        {
+            Ok(queryable) => {
+                log::info!(
+                    "[Gateway] Command queryable registered: {}",
+                    cmd_queryable_key
+                );
+                loop {
+                    tokio::select! {
+                        result = queryable.recv_async() => {
+                            match result {
+                                Ok(query) => {
+                                    let payload = query.payload()
+                                        .map(|p| p.to_bytes().to_vec())
+                                        .unwrap_or_default();
+                                    let cmd = match NodeCommand::decode(payload.as_slice()) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            log::warn!("[Gateway] Invalid NodeCommand: {}", e);
+                                            let err = CommandResult {
+                                                success: false,
+                                                message: format!("Invalid command payload: {}", e),
+                                                responding_machine: cmd_queryable_machine_id.clone(),
+                                                timestamp_ms: util::now_ms(),
+                                                ..Default::default()
+                                            };
+                                            let mut buf = Vec::new();
+                                            if err.encode(&mut buf).is_ok() {
+                                                let _ = query.reply(&cmd_queryable_key, buf).await;
+                                            }
+                                            continue;
+                                        }
+                                    };
+                                    // If target_machine is set, only respond if it matches our
+                                    // machine_id. This prevents fan-out on the wildcard query path.
+                                    if !cmd.target_machine.is_empty()
+                                        && cmd.target_machine != cmd_queryable_machine_id
+                                    {
+                                        log::debug!(
+                                            "[Gateway] Command for '{}', skipping (local='{}')",
+                                            cmd.target_machine, cmd_queryable_machine_id
+                                        );
+                                        continue;
+                                    }
+                                    log::info!("[Gateway] Command query: {:?} for {}", cmd.command, cmd.node_name);
+
+                                    use crate::mcp::platform::{NodeCommand as PlatformCmd, PlatformOperations};
+                                    use crate::schemas::daemon::v1::CommandType;
+
+                                    let platform_cmd = match CommandType::try_from(cmd.command) {
+                                        Ok(CommandType::Start) => PlatformCmd::Start,
+                                        Ok(CommandType::Stop) => PlatformCmd::Stop,
+                                        Ok(CommandType::Restart) => PlatformCmd::Restart,
+                                        Ok(CommandType::Install) => PlatformCmd::Install,
+                                        Ok(CommandType::Uninstall) => PlatformCmd::Uninstall,
+                                        Ok(CommandType::Build) => PlatformCmd::Build,
+                                        Ok(CommandType::Clean) => PlatformCmd::Clean,
+                                        Ok(CommandType::EnableAutostart) => PlatformCmd::EnableAutostart,
+                                        Ok(CommandType::DisableAutostart) => PlatformCmd::DisableAutostart,
+                                        Ok(CommandType::GetLogs) => PlatformCmd::GetLogs,
+                                        Ok(CommandType::AddNode) | Ok(CommandType::RemoveNode) | Ok(CommandType::Refresh) => {
+                                            log::warn!("[Gateway] Unsupported command type in queryable: {}", cmd.command);
+                                            let err = CommandResult {
+                                                request_id: cmd.request_id.clone(),
+                                                success: false,
+                                                message: format!("Command type {} not supported by queryable interface", cmd.command),
+                                                responding_machine: cmd_queryable_machine_id.clone(),
+                                                timestamp_ms: util::now_ms(),
+                                                ..Default::default()
+                                            };
+                                            let mut buf = Vec::new();
+                                            if err.encode(&mut buf).is_ok() {
+                                                let _ = query.reply(&cmd_queryable_key, buf).await;
+                                            }
+                                            continue;
+                                        }
+                                        Err(_) => {
+                                            log::warn!("[Gateway] Unknown command type: {}", cmd.command);
+                                            let err = CommandResult {
+                                                request_id: cmd.request_id.clone(),
+                                                success: false,
+                                                message: format!("Unknown command type: {}", cmd.command),
+                                                responding_machine: cmd_queryable_machine_id.clone(),
+                                                timestamp_ms: util::now_ms(),
+                                                ..Default::default()
+                                            };
+                                            let mut buf = Vec::new();
+                                            if err.encode(&mut buf).is_ok() {
+                                                let _ = query.reply(&cmd_queryable_key, buf).await;
+                                            }
+                                            continue;
+                                        }
+                                    };
+
+                                    let result = cmd_queryable_platform
+                                        .execute_command(&cmd.node_name, platform_cmd)
+                                        .await;
+
+                                    let now_ms = util::now_ms();
+
+                                    let cmd_result = match result {
+                                        Ok(msg) => CommandResult {
+                                            request_id: cmd.request_id.clone(),
+                                            success: true,
+                                            message: msg.clone(),
+                                            output: msg,
+                                            responding_machine: cmd_queryable_machine_id.clone(),
+                                            timestamp_ms: now_ms,
+                                            ..Default::default()
+                                        },
+                                        Err(e) => CommandResult {
+                                            request_id: cmd.request_id.clone(),
+                                            success: false,
+                                            message: e.to_string(),
+                                            responding_machine: cmd_queryable_machine_id.clone(),
+                                            timestamp_ms: now_ms,
+                                            ..Default::default()
+                                        },
+                                    };
+
+                                    let mut buf = Vec::new();
+                                    if cmd_result.encode(&mut buf).is_ok() {
+                                        let _ = query.reply(&cmd_queryable_key, buf).await;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        _ = cmd_queryable_shutdown.changed() => break,
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[Gateway] Failed to register command queryable: {}", e);
+            }
+        }
+    });
+
+    // 4. Subscribe to command topic and dispatch (legacy JSON pub/sub for CLI clients).
+    //    The protobuf queryable above handles the dashboard's request/reply API.
+    //    Both coexist on the same topic; their payload formats are distinct.
     let cmd_topic = gateway::command_topic(&scope, &machine_id);
     let evt_topic = gateway::events_topic(&scope, &machine_id);
 

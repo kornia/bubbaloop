@@ -18,11 +18,11 @@ bubbaloop node add .
 bubbaloop node start my-sensor
 ```
 
-See the [Skillet Development Guide](skillet-development.md#node-sdk-recommended) for the full SDK reference.
+See the [Node Development Guide](node-development.md#node-sdk-recommended) for the full SDK reference.
 
 ### Manual Setup (Advanced)
 
-For full control over the Zenoh lifecycle, see the [Skillet Development Guide](skillet-development.md) which documents the raw Zenoh + argh + ctrlc pattern used by production nodes.
+For full control over the Zenoh lifecycle, see the [Node Development Guide](node-development.md) which documents the raw Zenoh + argh + ctrlc pattern used by production nodes.
 
 ---
 
@@ -75,13 +75,13 @@ prost-build = "0.14"
 
 ### Step 2: src/main.rs
 
-For the manual implementation pattern, see the [Skillet Development Guide](skillet-development.md#manual-implementation-raw-zenoh) which shows the complete pattern:
+For the manual implementation pattern, see the [Node Development Guide](node-development.md#manual-implementation-raw-zenoh) which shows the complete pattern:
 - Zenoh client session creation
 - argh CLI parsing
 - ctrlc signal handling
 - Publish/subscribe loops with proper shutdown
 
-The skillet guide includes working examples with health heartbeats, schema queryables, and protobuf encoding.
+The node development guide includes working examples with health heartbeats, schema queryables, and protobuf encoding.
 
 ---
 
@@ -262,7 +262,7 @@ python main.py -c config.yaml -e tcp/localhost:7447
 
 ## Common Patterns
 
-For common patterns including subscribing to topics, using protobuf messages, health heartbeats, and multiple publishers, see the [Skillet Development Guide](skillet-development.md#common-patterns) which documents:
+For common patterns including subscribing to topics, using protobuf messages, health heartbeats, and multiple publishers, see the [Node Development Guide](node-development.md#common-patterns) which documents:
 
 - **Subscribe to topics**: Raw Zenoh subscriber patterns with proper shutdown handling
 - **Protobuf encoding/decoding**: Using `bubbaloop-schemas` with prost

@@ -173,6 +173,13 @@ pub fn manifest_wildcard(scope: &str) -> String {
     format!("bubbaloop/{}/*/daemon/manifest", scope)
 }
 
+/// Build the daemon nodes topic (queryable — returns protobuf NodeList).
+///
+/// Format: `bubbaloop/{scope}/{machine}/daemon/nodes`
+pub fn nodes_topic(scope: &str, machine_id: &str) -> String {
+    format!("bubbaloop/{}/{}/daemon/nodes", scope, machine_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
