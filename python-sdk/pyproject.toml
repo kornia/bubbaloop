@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "bubbaloop-sdk"
+version = "0.1.0"
+description = "Bubbaloop Node SDK for Python"
+requires-python = ">=3.9"
+dependencies = [
+    "eclipse-zenoh>=1.7,<2",
+    "protobuf>=4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bubbaloop_sdk*"]
