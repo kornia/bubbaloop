@@ -73,7 +73,7 @@ impl Supervisor {
     pub fn is_installed(&self, node_name: &str) -> bool {
         match self {
             Supervisor::Systemd(_) => systemd::is_service_installed(node_name),
-            Supervisor::Native(_) => NativeSupervisor::is_installed(node_name),
+            Supervisor::Native(n) => n.is_installed(node_name),
         }
     }
 
@@ -128,7 +128,9 @@ impl Supervisor {
             Supervisor::Systemd(_) => {
                 systemd::install_service(node_path, node_name, node_type, command, depends_on).await
             }
-            Supervisor::Native(n) => n.install_service(node_path, node_name, node_type, command),
+            Supervisor::Native(n) => {
+                n.install_service(node_path, node_name, node_type, command, depends_on)
+            }
         }
     }
 
@@ -140,6 +142,14 @@ impl Supervisor {
     }
 
     // ── Signals ────────────────────────────────────────────────────────────
+
+    /// Start all native autostart units. No-op on systemd (handled by systemd itself).
+    pub async fn start_native_autostart(&self) -> usize {
+        match self {
+            Supervisor::Native(n) => n.start_autostart_units().await,
+            Supervisor::Systemd(_) => 0,
+        }
+    }
 
     /// Subscribe to lifecycle signals. Returns a receiver of `SystemdSignalEvent`.
     /// On systemd: real D-Bus signals. On native: mpsc events from process watcher tasks.
@@ -154,6 +164,7 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile;
 
     fn unique_name(prefix: &str) -> String {
         format!(
@@ -168,13 +179,15 @@ mod tests {
 
     #[test]
     fn native_variant_reports_is_native() {
-        let sup = Supervisor::Native(NativeSupervisor::new());
+        let dir = tempfile::tempdir().unwrap();
+        let sup = Supervisor::Native(NativeSupervisor::new_with_root(dir.path().to_path_buf()));
         assert!(sup.is_native());
     }
 
     #[tokio::test]
     async fn native_dispatcher_delegates_full_lifecycle() {
-        let sup = Supervisor::Native(NativeSupervisor::new());
+        let dir = tempfile::tempdir().unwrap();
+        let sup = Supervisor::Native(NativeSupervisor::new_with_root(dir.path().to_path_buf()));
         let name = unique_name("sup-dlg");
 
         // Install through the Supervisor dispatcher

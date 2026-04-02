@@ -209,6 +209,12 @@ impl NodeManager {
         // Initial load
         manager.refresh_all().await?;
 
+        // In native mode systemd does not handle autostart — do it ourselves.
+        let n = manager.supervisor.start_native_autostart().await;
+        if n > 0 {
+            log::info!("[NodeManager] Native autostart: started {n} node(s)");
+        }
+
         Ok(manager)
     }
 
@@ -217,12 +223,16 @@ impl NodeManager {
         self.event_tx.subscribe()
     }
 
-    /// Start listening to systemd D-Bus signals for real-time updates.
+    /// Start listening to supervisor lifecycle signals for real-time updates.
     ///
-    /// IMPORTANT: The signal handler must NOT make D-Bus calls (no `refresh_node`).
-    /// Doing so causes a deadlock: signal backpressure fills zbus internal buffers,
-    /// which blocks the D-Bus message router, which prevents method-call replies
-    /// from being dispatched, which hangs the D-Bus calls in the signal handler.
+    /// On the systemd backend these are real D-Bus signals; on the native backend
+    /// they are mpsc events emitted by the process-watcher tasks.
+    ///
+    /// IMPORTANT (systemd backend only): The signal handler must NOT make D-Bus
+    /// calls (no `refresh_node`). Doing so causes a deadlock: signal backpressure
+    /// fills zbus internal buffers, which blocks the D-Bus message router, which
+    /// prevents method-call replies from being dispatched, which hangs the D-Bus
+    /// calls in the signal handler.
     ///
     /// Instead, we collect dirty nodes and schedule a debounced refresh on a
     /// separate task that runs after a short delay, coalescing rapid signal bursts.
@@ -573,12 +583,13 @@ impl NodeManager {
         let _path = self.find_node_path(name).await?;
 
         if self.supervisor.is_native() {
-            return Ok(
+            let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+            return Ok(format!(
                 "Logs via journalctl are only available with the systemd backend. \
-Native supervisor is a development fallback for Docker/non-systemd environments. \
-Run the node directly or capture stdout/stderr from the foreground process."
-                    .to_string(),
-            );
+Native supervisor writes node output to log files instead. \
+Check stdout: {home}/.bubbaloop/procs/{name}.stdout — \
+check stderr: {home}/.bubbaloop/procs/{name}.stderr"
+            ));
         }
 
         let service_name = systemd::get_service_name(name);
