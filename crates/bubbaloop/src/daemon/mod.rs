@@ -464,13 +464,10 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         );
     }
 
-    // Start systemd signal listener for real-time state updates
-    log::info!("Starting systemd signal listener...");
+    // Start process signal listener for real-time state updates
+    log::info!("Starting signal listener...");
     if let Err(e) = node_manager.clone().start_signal_listener().await {
-        log::warn!(
-            "Failed to start signal listener (will rely on polling): {}",
-            e
-        );
+        log::warn!("Failed to start signal listener (will rely on polling): {}", e);
     }
 
     // Create shared Zenoh session

@@ -4,10 +4,10 @@
   "service": "dev",
   "workspaceFolder": "/workspace",
 
-  // Forward all relevant ports to the Mac host
+  // Forward service ports through VS Code so localhost-bound processes remain reachable.
   "forwardPorts": [
     7447,   // Zenoh router
-    10001,  // Zenoh WebSocket bridge (dashboard)
+    10001,  // Zenoh WebSocket bridge
     8088,   // Bubbaloop MCP server
     5173    // Vite dashboard dev server
   ],
