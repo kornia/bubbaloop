@@ -155,5 +155,5 @@ The `bubbaloop-schemas` crate provides these protobuf types:
 - The SDK handles health heartbeats automatically — no manual setup needed
 - Add custom protobuf messages in `protos/` and reference them in `run()`
 - Add node-specific config fields to your `Config` struct and `config.yaml`
-- See [Skillet Development Guide](../skillet-development.md) for the full SDK reference
+- See [Node Development Guide](../node-development.md) for the full SDK reference
 - See [Node Marketplace](node-marketplace.md) for publishing and discovery

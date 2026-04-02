@@ -110,16 +110,22 @@ export function NodesViewPanel({
 
         // Look up target node to route command to correct machine
         const targetNode = nodes.find((n) => n.name === nodeName);
-        const commandKey = targetNode?.machine_id
-          ? `bubbaloop/${targetNode.machine_id}/daemon/command`
-          : "bubbaloop/daemon/command";
+        if (!targetNode?.machine_id) {
+          setMessage({ text: "Cannot resolve machine for this node", type: "error" });
+          return;
+        }
+
+        // Use wildcard path: the dashboard doesn't know the Zenoh scope.
+        // Fan-out is safe because NodeCommand.target_machine is always set
+        // and each daemon skips commands not addressed to it.
+        const commandKey = "bubbaloop/**/daemon/command";
 
         const cmd = NodeCommandProto.create({
           command: commandMap[command] ?? CommandType.COMMAND_TYPE_START,
           nodeName: nodeName,
           nodePath: "",
           requestId: crypto.randomUUID(),
-          targetMachine: targetNode?.machine_id || "",
+          targetMachine: targetNode.machine_id,
         });
 
         const payload = NodeCommandProto.encode(cmd).finish();
@@ -206,16 +212,17 @@ export function NodesViewPanel({
 
       // Look up target node to route logs request to correct machine
       const targetNode = nodes.find((n) => n.name === nodeName);
-      const commandKey = targetNode?.machine_id
-        ? `bubbaloop/${targetNode.machine_id}/daemon/command`
-        : "bubbaloop/daemon/command";
+      if (!targetNode?.machine_id) {
+        throw new Error("Cannot resolve machine for this node");
+      }
+      const commandKey = "bubbaloop/**/daemon/command";
 
       const cmd = NodeCommandProto.create({
         command: CommandType.COMMAND_TYPE_GET_LOGS,
         nodeName: nodeName,
         nodePath: "",
         requestId: crypto.randomUUID(),
-        targetMachine: targetNode?.machine_id || "",
+        targetMachine: targetNode.machine_id,
       });
 
       const payload = NodeCommandProto.encode(cmd).finish();
