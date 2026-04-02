@@ -143,6 +143,116 @@ pub struct DaemonManifest {
     pub mcp_port: u16,
 }
 
+// ── JSON mirror types (for JSON queryable responses) ────────────
+
+/// JSON-serializable mirror of proto NodeState.
+///
+/// Used by the nodes queryable instead of prost-generated NodeState.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeStateJson {
+    pub name: String,
+    pub path: String,
+    pub status: i32,
+    pub installed: bool,
+    pub autostart_enabled: bool,
+    pub version: String,
+    pub description: String,
+    pub node_type: String,
+    pub is_built: bool,
+    pub last_updated_ms: i64,
+    pub build_output: Vec<String>,
+    pub health_status: i32,
+    pub last_health_check_ms: i64,
+    pub machine_id: String,
+    pub machine_hostname: String,
+    pub machine_ips: Vec<String>,
+    pub base_node: String,
+    pub config_override: String,
+}
+
+/// JSON-serializable mirror of proto NodeList.
+///
+/// Used by the nodes queryable instead of prost-generated NodeList.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeListJson {
+    pub nodes: Vec<NodeStateJson>,
+    pub timestamp_ms: i64,
+    pub machine_id: String,
+}
+
+impl NodeListJson {
+    /// Convert from prost-generated NodeList to JSON-serializable form.
+    pub fn from_proto(proto: &crate::schemas::daemon::v1::NodeList) -> Self {
+        Self {
+            nodes: proto
+                .nodes
+                .iter()
+                .map(|n| NodeStateJson {
+                    name: n.name.clone(),
+                    path: n.path.clone(),
+                    status: n.status,
+                    installed: n.installed,
+                    autostart_enabled: n.autostart_enabled,
+                    version: n.version.clone(),
+                    description: n.description.clone(),
+                    node_type: n.node_type.clone(),
+                    is_built: n.is_built,
+                    last_updated_ms: n.last_updated_ms,
+                    build_output: n.build_output.clone(),
+                    health_status: n.health_status,
+                    last_health_check_ms: n.last_health_check_ms,
+                    machine_id: n.machine_id.clone(),
+                    machine_hostname: n.machine_hostname.clone(),
+                    machine_ips: n.machine_ips.clone(),
+                    base_node: n.base_node.clone(),
+                    config_override: n.config_override.clone(),
+                })
+                .collect(),
+            timestamp_ms: proto.timestamp_ms,
+            machine_id: proto.machine_id.clone(),
+        }
+    }
+}
+
+/// JSON-serializable command sent to the command queryable.
+///
+/// Replaces prost-generated NodeCommand for JSON-only wire format.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodeCommandJson {
+    /// Type of command (e.g. "start", "stop", "get_logs").
+    pub command: String,
+    /// Target node name.
+    pub node_name: String,
+    /// Unique request ID for correlation.
+    #[serde(default)]
+    pub request_id: String,
+    /// Target machine ID (empty = respond regardless).
+    #[serde(default)]
+    pub target_machine: String,
+    /// Command issue time (milliseconds since epoch).
+    #[serde(default)]
+    pub timestamp_ms: i64,
+}
+
+/// JSON-serializable reply from the command queryable.
+///
+/// Replaces prost-generated CommandResult for JSON-only wire format.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommandResultJson {
+    /// Request ID from the command.
+    pub request_id: String,
+    /// Whether the command succeeded.
+    pub success: bool,
+    /// Human-readable message.
+    pub message: String,
+    /// Additional output (build output, logs, etc.).
+    pub output: String,
+    /// Which daemon responded.
+    pub responding_machine: String,
+    /// Response time (milliseconds since epoch).
+    pub timestamp_ms: i64,
+}
+
 // ── Topic builders ──────────────────────────────────────────────
 
 /// Build the daemon command topic (CLI → Daemon).
@@ -173,18 +283,11 @@ pub fn manifest_wildcard(scope: &str) -> String {
     format!("bubbaloop/{}/*/daemon/manifest", scope)
 }
 
-/// Build the daemon nodes topic (queryable — returns protobuf NodeList).
+/// Build the daemon nodes topic (queryable — returns JSON NodeListJson).
 ///
 /// Format: `bubbaloop/{scope}/{machine}/daemon/nodes`
 pub fn nodes_topic(scope: &str, machine_id: &str) -> String {
     format!("bubbaloop/{}/{}/daemon/nodes", scope, machine_id)
-}
-
-/// Build the daemon schemas topic (queryable — returns FileDescriptorSet bytes).
-///
-/// Format: `bubbaloop/{scope}/{machine}/daemon/api/schemas`
-pub fn schemas_topic(scope: &str, machine_id: &str) -> String {
-    format!("bubbaloop/{}/{}/daemon/api/schemas", scope, machine_id)
 }
 
 #[cfg(test)]

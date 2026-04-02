@@ -29,17 +29,25 @@
 mod config;
 mod context;
 mod health;
+pub mod publisher;
 mod schema;
+pub mod subscriber;
 mod shutdown;
 mod zenoh_session;
 
 pub use context::NodeContext;
+pub use publisher::{JsonPublisher, ProtoPublisher};
+pub use subscriber::{RawSubscriber, TypedSubscriber};
+
+// Re-export MessageTypeName so node authors don't need to depend on bubbaloop-schemas directly.
+pub use bubbaloop_schemas::MessageTypeName;
 
 // Re-exports for convenience (so nodes don't need to add these deps)
 pub use anyhow;
 pub use async_trait;
 pub use log;
 pub use prost;
+pub use serde_json;
 pub use tokio;
 pub use zenoh;
 
