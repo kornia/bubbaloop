@@ -1,4 +1,26 @@
-import { Session, Config, Subscriber, Sample, Encoding, EncodingPredefined } from '@eclipse-zenoh/zenoh-ts';
+import { Session, Config, Subscriber, Sample, Encoding } from '@eclipse-zenoh/zenoh-ts';
+
+/**
+ * Numeric encoding IDs matching Zenoh's predefined encodings.
+ * Defined locally because zenoh-ts does not export EncodingPredefined from its public API.
+ */
+export enum EncodingPredefined {
+  ZENOH_BYTES = 0,
+  ZENOH_STRING = 1,
+  ZENOH_SERIALIZED = 2,
+  APPLICATION_OCTET_STREAM = 3,
+  TEXT_PLAIN = 4,
+  APPLICATION_JSON = 5,
+  TEXT_JSON = 6,
+  APPLICATION_CDR = 7,
+  APPLICATION_CBOR = 8,
+  APPLICATION_YAML = 9,
+  TEXT_YAML = 10,
+  TEXT_JSON5 = 11,
+  APPLICATION_PYTHON_SERIALIZED_OBJECT = 12,
+  APPLICATION_PROTOBUF = 13,
+  APPLICATION_JAVA_SERIALIZED_OBJECT = 14,
+}
 import { useEffect, useRef, useState, useCallback } from 'react';
 
 export interface ZenohConfig {
@@ -188,8 +210,7 @@ export interface EncodingInfo {
   schema?: string;
 }
 
-// Re-export EncodingPredefined so callers don't need to import from zenoh-ts directly
-export { Encoding, EncodingPredefined };
+export { Encoding };
 
 /**
  * Extract encoding information from a Zenoh sample.
@@ -200,7 +221,7 @@ export function getEncodingInfo(sample: Sample): EncodingInfo {
   try {
     const encoding: Encoding = sample.encoding();
     const [id, schema] = encoding.toIdSchema();
-    return { id, schema };
+    return { id: id as number as EncodingPredefined, schema };
   } catch {
     // If encoding() throws for any reason, treat as no signal
     return { id: EncodingPredefined.ZENOH_BYTES };

@@ -361,7 +361,12 @@ export class H264Decoder {
    */
   private containsKeyframe(data: Uint8Array): boolean {
     const nalUnits = this.parseNalUnits(data);
-    return nalUnits.some(nal => nal.type === 5); // IDR slice
+    // IDR slice (type 5) is the standard keyframe indicator.
+    // Some cameras (e.g., Tapo) send SPS+PPS with non-IDR (type 1) — treat
+    // the presence of SPS (7) as a sync point since the decoder can initialize from it.
+    const hasSPS = nalUnits.some(nal => nal.type === 7);
+    const hasIDR = nalUnits.some(nal => nal.type === 5);
+    return hasIDR || hasSPS;
   }
 
   /**

@@ -11,8 +11,10 @@ import { Duration } from 'typed-duration';
 import { getSamplePayload, EncodingInfo, EncodingPredefined } from './zenoh';
 
 // Import the descriptor extension — adds fromDescriptor/toDescriptor to Root
-// and registers google.protobuf.FileDescriptorSet in protobuf.roots
 import 'protobufjs/ext/descriptor';
+
+// Bundled JSON schema for google.protobuf.FileDescriptorSet (works in browsers)
+import descriptorJson from 'protobufjs/google/protobuf/descriptor.json';
 
 /** Schema source metadata */
 export interface SchemaSource {
@@ -45,20 +47,28 @@ export function extractSchemaFromTopic(_topic: string): string | null {
  * Load a FileDescriptorSet from raw bytes into a protobufjs Root.
  * Uses the descriptor extension which adds Root.fromDescriptor() at runtime.
  */
+// Lazily loaded FileDescriptorSet type from protobufjs's bundled JSON schema.
+let _fileDescriptorSetType: protobuf.Type | null = null;
+
+function getFileDescriptorSetType(): protobuf.Type {
+  if (!_fileDescriptorSetType) {
+    const descriptorRoot = protobuf.Root.fromJSON(descriptorJson);
+    _fileDescriptorSetType = descriptorRoot.lookupType('google.protobuf.FileDescriptorSet');
+  }
+  return _fileDescriptorSetType;
+}
+
 function rootFromDescriptorBytes(bytes: Uint8Array): protobuf.Root {
-  // The descriptor extension adds fromDescriptor to Root.
-  // Access it via the any-cast since TypeScript types don't include it.
+  // The descriptor extension adds fromDescriptor to Root (not in TS types).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const RootAny = protobuf.Root as any;
 
-  // Look up FileDescriptorSet from the descriptor extension's registered root
-  const descriptorRoot = protobuf.roots['default'];
-  if (!descriptorRoot) {
-    throw new Error('protobufjs/ext/descriptor not loaded');
+  if (typeof RootAny.fromDescriptor !== 'function') {
+    throw new Error('protobufjs/ext/descriptor not loaded — Root.fromDescriptor missing');
   }
 
-  const FileDescriptorSet = descriptorRoot.lookupType('google.protobuf.FileDescriptorSet');
-  const decoded = FileDescriptorSet.decode(bytes);
+  const FDS = getFileDescriptorSetType();
+  const decoded = FDS.decode(bytes);
   const root: protobuf.Root = RootAny.fromDescriptor(decoded);
   root.resolveAll();
   return root;

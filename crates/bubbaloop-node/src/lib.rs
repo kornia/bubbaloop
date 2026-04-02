@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use bubbaloop_node_sdk::{Node, NodeContext};
+//! use bubbaloop_node::{Node, NodeContext};
 //!
 //! struct MySensor { /* ... */ }
 //!
@@ -22,7 +22,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     bubbaloop_node_sdk::run_node::<MySensor>().await
+//!     bubbaloop_node::run_node::<MySensor>().await
 //! }
 //! ```
 
@@ -31,6 +31,7 @@ mod context;
 mod health;
 pub mod publisher;
 mod schema;
+pub mod schemas;
 pub mod subscriber;
 mod shutdown;
 mod zenoh_session;
@@ -39,8 +40,10 @@ pub use context::NodeContext;
 pub use publisher::{JsonPublisher, ProtoPublisher};
 pub use subscriber::{RawSubscriber, TypedSubscriber};
 
-// Re-export MessageTypeName so node authors don't need to depend on bubbaloop-schemas directly.
-pub use bubbaloop_schemas::MessageTypeName;
+// Re-export schema types for convenience.
+// Nodes use `bubbaloop_node::schemas::Header` and `bubbaloop_node::MessageTypeName`.
+// For build.rs extern_path, use: `::bubbaloop_node::schemas::header::v1`
+pub use schemas::MessageTypeName;
 
 // Re-exports for convenience (so nodes don't need to add these deps)
 pub use anyhow;

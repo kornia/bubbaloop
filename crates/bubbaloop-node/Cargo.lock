@@ -254,18 +254,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "bubbaloop-node-sdk"
+name = "bubbaloop-node"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "argh",
  "async-trait",
- "bubbaloop-schemas",
  "ctrlc",
  "env_logger",
  "hostname",
  "log",
  "prost",
+ "prost-build",
+ "prost-types",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -273,17 +274,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "zenoh",
-]
-
-[[package]]
-name = "bubbaloop-schemas"
-version = "0.1.0"
-source = "git+https://github.com/kornia/bubbaloop.git?branch=main#1420fe0b72bc12b198d9a1d8200b2361f6da894d"
-dependencies = [
- "prost",
- "prost-build",
- "prost-types",
- "serde",
 ]
 
 [[package]]
