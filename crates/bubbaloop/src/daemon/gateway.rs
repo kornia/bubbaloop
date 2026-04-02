@@ -180,6 +180,13 @@ pub fn nodes_topic(scope: &str, machine_id: &str) -> String {
     format!("bubbaloop/{}/{}/daemon/nodes", scope, machine_id)
 }
 
+/// Build the daemon schemas topic (queryable — returns FileDescriptorSet bytes).
+///
+/// Format: `bubbaloop/{scope}/{machine}/daemon/api/schemas`
+pub fn schemas_topic(scope: &str, machine_id: &str) -> String {
+    format!("bubbaloop/{}/{}/daemon/api/schemas", scope, machine_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -206,7 +206,35 @@ async fn run_daemon_gateway(
         }
     });
 
-    // 3. Register command queryable (for dashboard / Zenoh GET clients)
+    // 3. Register schemas queryable (returns FileDescriptorSet for dashboard)
+    let schemas_key = gateway::schemas_topic(&scope, &machine_id);
+    let schemas_session = session.clone();
+    let mut schemas_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        match schemas_session.declare_queryable(&schemas_key).await {
+            Ok(queryable) => {
+                log::info!("[Gateway] Schemas queryable registered: {}", schemas_key);
+                loop {
+                    tokio::select! {
+                        result = queryable.recv_async() => {
+                            match result {
+                                Ok(query) => {
+                                    let _ = query.reply(&schemas_key, crate::DESCRIPTOR.to_vec()).await;
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        _ = schemas_shutdown.changed() => break,
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[Gateway] Failed to register schemas queryable: {}", e);
+            }
+        }
+    });
+
+    // 4. Register command queryable (for dashboard / Zenoh GET clients)
     //    Accepts protobuf NodeCommand, returns protobuf CommandResult.
     let cmd_queryable_key = gateway::command_topic(&scope, &machine_id);
     let cmd_queryable_session = session.clone();
@@ -378,10 +406,11 @@ async fn run_daemon_gateway(
             })?;
 
     log::info!(
-        "[Gateway] Daemon gateway started: cmd={}, events={}, manifest={}",
+        "[Gateway] Daemon gateway started: cmd={}, events={}, manifest={}, schemas={}",
         cmd_topic,
         evt_topic,
-        gateway::manifest_topic(&scope, &machine_id)
+        gateway::manifest_topic(&scope, &machine_id),
+        gateway::schemas_topic(&scope, &machine_id)
     );
 
     loop {
