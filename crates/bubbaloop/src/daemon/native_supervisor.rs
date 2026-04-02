@@ -60,7 +60,10 @@ impl NativeSupervisor {
     /// Useful for tests that need an isolated directory.
     pub fn new_with_root(procs_dir: PathBuf) -> Self {
         let (event_tx, _) = broadcast::channel(64);
-        Self { event_tx, procs_dir }
+        Self {
+            event_tx,
+            procs_dir,
+        }
     }
 
     // ── Filesystem helpers ─────────────────────────────────────────────────
@@ -312,15 +315,12 @@ impl NativeSupervisor {
     /// the OS and reassigned to an unrelated process. This is inherent to
     /// PID-file management and acceptable for a development-only supervisor.
     pub async fn stop_unit(&self, name: &str) -> Result<()> {
-        let pid = self
-            .read_pid(name)
-            .filter(|&pid| Self::is_pid_alive(pid));
+        let pid = self.read_pid(name).filter(|&pid| Self::is_pid_alive(pid));
 
         let Some(pid) = pid else {
             // No live PID — node is stopped or was never started.
             if self.is_installed(name) {
                 self.remove_pid(name);
-                self.emit(Self::job_removed_event(name, "done"));
                 log::info!("[NativeSupervisor] {name} already stopped");
                 return Ok(());
             }
@@ -414,9 +414,7 @@ impl NativeSupervisor {
 
     /// Returns the autostart flag from the config file.
     pub fn is_enabled(&self, name: &str) -> bool {
-        self.read_config(name)
-            .map(|c| c.autostart)
-            .unwrap_or(false)
+        self.read_config(name).map(|c| c.autostart).unwrap_or(false)
     }
 
     /// Enable autostart (persisted to config file).
@@ -539,7 +537,7 @@ mod tests {
         let (sup, _dir) = isolated_supervisor();
         let name = unique_name("native-cycle");
 
-        sup.install_service("/tmp", &name, "rust", Some("sleep 30"))
+        sup.install_service("/tmp", &name, "rust", Some("sleep 30"), &[])
             .unwrap();
         assert!(sup.is_installed(&name));
 
@@ -558,7 +556,7 @@ mod tests {
         let (sup, _dir) = isolated_supervisor();
         let name = unique_name("native-idempotent");
 
-        sup.install_service("/tmp", &name, "rust", Some("sleep 5"))
+        sup.install_service("/tmp", &name, "rust", Some("sleep 5"), &[])
             .unwrap();
 
         // Stop without ever starting — should be a no-op, not an error
@@ -574,7 +572,7 @@ mod tests {
         let (sup, _dir) = isolated_supervisor();
         let name = unique_name("native-autostart");
 
-        sup.install_service("/tmp", &name, "rust", Some("sleep 5"))
+        sup.install_service("/tmp", &name, "rust", Some("sleep 5"), &[])
             .unwrap();
 
         assert!(!sup.is_enabled(&name));
@@ -592,7 +590,7 @@ mod tests {
         let (sup, _dir) = isolated_supervisor();
         let name = unique_name("native-stale");
 
-        sup.install_service("/tmp", &name, "rust", Some("sleep 5"))
+        sup.install_service("/tmp", &name, "rust", Some("sleep 5"), &[])
             .unwrap();
 
         std::fs::write(sup.pid_path(&name), "4294967295").unwrap();
@@ -629,7 +627,7 @@ mod tests {
         }
 
         let empty_cmd_name = unique_name("native-emptycmd");
-        sup.install_service("/tmp", &empty_cmd_name, "rust", Some("   "))
+        sup.install_service("/tmp", &empty_cmd_name, "rust", Some("   "), &[])
             .unwrap();
         match sup.start_unit(&empty_cmd_name).await {
             Err(SystemdError::OperationFailed(msg)) => {
@@ -647,7 +645,7 @@ mod tests {
 
         let mut rx = sup.subscribe_to_signals();
 
-        sup.install_service("/tmp", &name, "rust", Some("sleep 5"))
+        sup.install_service("/tmp", &name, "rust", Some("sleep 5"), &[])
             .unwrap();
         let first = tokio::time::timeout(Duration::from_secs(2), rx.recv())
             .await
