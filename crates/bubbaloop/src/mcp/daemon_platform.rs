@@ -702,6 +702,13 @@ impl PlatformOperations for DaemonPlatform {
             .map_err(|e| PlatformError::Internal(e.to_string()))
     }
 
+    async fn publish_to_topic(&self, topic: &str, message: &str) -> PlatformResult<()> {
+        self.session
+            .put(topic, message)
+            .await
+            .map_err(|e| PlatformError::Internal(format!("Zenoh put failed: {}", e)))
+    }
+
     async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {
         let base = self
             .agent_db_path
