@@ -181,6 +181,19 @@ export function WeatherViewPanel({
       const payload = getSamplePayload(sample);
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
+      const encodingInfo = getEncodingInfo(sample);
+
+      if (hasExplicitEncoding(encodingInfo) && (
+        encodingInfo.id === EncodingPredefined.APPLICATION_JSON ||
+        encodingInfo.id === EncodingPredefined.TEXT_JSON
+      )) {
+        try {
+          const text = new TextDecoder().decode(payload);
+          const data = JSON.parse(text) as HourlyForecast;
+          setHourlyMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
+          return;
+        } catch { /* fall through */ }
+      }
 
       const result = registry.decode('bubbaloop.weather.v1.HourlyForecast', payload);
       if (result) {
@@ -204,6 +217,19 @@ export function WeatherViewPanel({
       const payload = getSamplePayload(sample);
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
+      const encodingInfo = getEncodingInfo(sample);
+
+      if (hasExplicitEncoding(encodingInfo) && (
+        encodingInfo.id === EncodingPredefined.APPLICATION_JSON ||
+        encodingInfo.id === EncodingPredefined.TEXT_JSON
+      )) {
+        try {
+          const text = new TextDecoder().decode(payload);
+          const data = JSON.parse(text) as DailyForecast;
+          setDailyMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
+          return;
+        } catch { /* fall through */ }
+      }
 
       const result = registry.decode('bubbaloop.weather.v1.DailyForecast', payload);
       if (result) {

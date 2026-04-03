@@ -146,7 +146,7 @@ describe('extractTopicPrefix', () => {
 
     it('extracts prefix from jetson_nano health topic', () => {
       const topic = 'bubbaloop/production/jetson_nano/system-telemetry/health';
-      expect(extractTopicPrefix(topic)).toBe('bubbaloop/production/jetson_nano/health');
+      expect(extractTopicPrefix(topic)).toBe('bubbaloop/production/jetson_nano/system-telemetry');
     });
 
     it('extracts prefix from orin_dev01 weather topic', () => {

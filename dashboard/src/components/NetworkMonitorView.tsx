@@ -116,10 +116,10 @@ function toHealthCheck(raw: Record<string, unknown>): HealthCheck {
   return {
     name: (raw.name as string) ?? '',
     type: typeof raw.type === 'number' ? raw.type : 0,
-    typeName: checkTypeToString(raw.type as string | number ?? 0),
+    typeName: typeof raw.typeName === 'string' ? raw.typeName : checkTypeToString(raw.type as string | number ?? 0),
     target: (raw.target as string) ?? '',
     status: typeof raw.status === 'number' ? raw.status : 0,
-    statusName: checkStatusToString(raw.status as string | number ?? 0),
+    statusName: typeof raw.statusName === 'string' ? raw.statusName : checkStatusToString(raw.status as string | number ?? 0),
     latencyMs: (raw.latencyMs as number) ?? 0,
     statusCode: (raw.statusCode as number) ?? 0,
     resolved: (raw.resolved as string) ?? '',
