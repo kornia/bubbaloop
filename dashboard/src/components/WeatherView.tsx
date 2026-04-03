@@ -1,6 +1,6 @@
 import { useCallback, useState, useEffect } from 'react';
 import { Sample, IntoZBytes } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload, extractMachineId, getEncodingInfo, hasExplicitEncoding, EncodingPredefined } from '../lib/zenoh';
+import { getSamplePayload, extractMachineId, getEncodingInfo, tryDecodeJsonPayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
@@ -56,6 +56,7 @@ interface DailyForecastEntry {
   weatherCode: number;
   windSpeed_10mMax: number;
   windGusts_10mMax: number;
+  windDirection_10mDominant?: number;
   sunrise: string;
   sunset: string;
 }
@@ -146,17 +147,12 @@ export function WeatherViewPanel({
       const machineId = extractMachineId(topic) ?? 'unknown';
       const encodingInfo = getEncodingInfo(sample);
 
-      // For JSON-encoded samples, try JSON decode first (new nodes with explicit encoding)
-      if (hasExplicitEncoding(encodingInfo) && (
-        encodingInfo.id === EncodingPredefined.APPLICATION_JSON ||
-        encodingInfo.id === EncodingPredefined.TEXT_JSON
-      )) {
-        try {
-          const text = new TextDecoder().decode(payload);
-          const data = JSON.parse(text) as CurrentWeather;
-          setCurrentMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
-          return;
-        } catch { /* fall through */ }
+      // JSON-encoded samples (new nodes with explicit encoding)
+      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
+      if (jsonData) {
+        const data = jsonData as CurrentWeather;
+        setCurrentMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
+        return;
       }
 
       const result = registry.decode('bubbaloop.weather.v1.CurrentWeather', payload);
@@ -183,16 +179,11 @@ export function WeatherViewPanel({
       const machineId = extractMachineId(topic) ?? 'unknown';
       const encodingInfo = getEncodingInfo(sample);
 
-      if (hasExplicitEncoding(encodingInfo) && (
-        encodingInfo.id === EncodingPredefined.APPLICATION_JSON ||
-        encodingInfo.id === EncodingPredefined.TEXT_JSON
-      )) {
-        try {
-          const text = new TextDecoder().decode(payload);
-          const data = JSON.parse(text) as HourlyForecast;
-          setHourlyMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
-          return;
-        } catch { /* fall through */ }
+      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
+      if (jsonData) {
+        const data = jsonData as HourlyForecast;
+        setHourlyMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
+        return;
       }
 
       const result = registry.decode('bubbaloop.weather.v1.HourlyForecast', payload);
@@ -219,16 +210,11 @@ export function WeatherViewPanel({
       const machineId = extractMachineId(topic) ?? 'unknown';
       const encodingInfo = getEncodingInfo(sample);
 
-      if (hasExplicitEncoding(encodingInfo) && (
-        encodingInfo.id === EncodingPredefined.APPLICATION_JSON ||
-        encodingInfo.id === EncodingPredefined.TEXT_JSON
-      )) {
-        try {
-          const text = new TextDecoder().decode(payload);
-          const data = JSON.parse(text) as DailyForecast;
-          setDailyMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
-          return;
-        } catch { /* fall through */ }
+      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
+      if (jsonData) {
+        const data = jsonData as DailyForecast;
+        setDailyMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
+        return;
       }
 
       const result = registry.decode('bubbaloop.weather.v1.DailyForecast', payload);

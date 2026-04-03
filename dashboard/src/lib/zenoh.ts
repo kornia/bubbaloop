@@ -1,4 +1,5 @@
 import { Session, Config, Subscriber, Sample, Encoding } from '@eclipse-zenoh/zenoh-ts';
+import { snakeToCamel } from './schema-registry';
 
 /**
  * Numeric encoding IDs matching Zenoh's predefined encodings.
@@ -257,6 +258,23 @@ export function getSamplePayload(sample: Sample): Uint8Array {
 
   console.warn('[Zenoh] Failed to extract payload from sample');
   return new Uint8Array(0);
+}
+
+/**
+ * Try to decode a JSON-encoded Zenoh payload with snakeToCamel key conversion.
+ * Returns the decoded object if the sample has explicit JSON encoding and parses
+ * successfully, or null otherwise (caller should fall through to protobuf path).
+ */
+export function tryDecodeJsonPayload(payload: Uint8Array, encodingInfo: EncodingInfo): unknown | null {
+  if (!hasExplicitEncoding(encodingInfo)) return null;
+  if (encodingInfo.id !== EncodingPredefined.APPLICATION_JSON &&
+      encodingInfo.id !== EncodingPredefined.TEXT_JSON) return null;
+  try {
+    const text = new TextDecoder().decode(payload);
+    return snakeToCamel(JSON.parse(text));
+  } catch {
+    return null;
+  }
 }
 
 /** A discovered topic entry */

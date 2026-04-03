@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload, extractMachineId, getEncodingInfo, hasExplicitEncoding, EncodingPredefined } from '../lib/zenoh';
+import { getSamplePayload, extractMachineId, getEncodingInfo, tryDecodeJsonPayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useFleetContext } from '../contexts/FleetContext';
@@ -127,18 +127,13 @@ export function SystemTelemetryViewPanel({
       const encodingInfo = getEncodingInfo(sample);
 
       // JSON-encoded samples (new nodes with explicit encoding)
-      if (hasExplicitEncoding(encodingInfo) && (
-        encodingInfo.id === EncodingPredefined.APPLICATION_JSON ||
-        encodingInfo.id === EncodingPredefined.TEXT_JSON
-      )) {
-        try {
-          const text = new TextDecoder().decode(payload);
-          const data = JSON.parse(text) as SystemMetrics;
-          const base = pendingRef.current ?? new Map(metricsMapRef.current);
-          base.set(machineId, { metrics: data, lastUpdate: Date.now() });
-          pendingRef.current = base;
-          return;
-        } catch { /* fall through to protobuf path */ }
+      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
+      if (jsonData) {
+        const data = jsonData as SystemMetrics;
+        const base = pendingRef.current ?? new Map(metricsMapRef.current);
+        base.set(machineId, { metrics: data, lastUpdate: Date.now() });
+        pendingRef.current = base;
+        return;
       }
 
       const result = registry.decode('bubbaloop.system_telemetry.v1.SystemMetrics', payload);

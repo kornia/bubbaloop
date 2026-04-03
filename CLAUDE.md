@@ -169,7 +169,7 @@ import { getEncodingInfo } from '../lib/zenoh';
 
 const handleSample = (sample: Sample) => {
   const encoding = getEncodingInfo(sample);
-  // APPLICATION_JSON (5) → JSON.parse()
+  // APPLICATION_JSON (5) → snakeToCamel(JSON.parse()) — nodes publish snake_case, dashboard normalizes
   // APPLICATION_PROTOBUF (13) → SchemaRegistry decode (with on-demand schema fetch)
   // ZENOH_BYTES (0) or unknown → sniff fallback
 };
