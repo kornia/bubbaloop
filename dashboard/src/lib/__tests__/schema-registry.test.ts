@@ -145,8 +145,8 @@ describe('extractTopicPrefix', () => {
     });
 
     it('extracts prefix from jetson_nano health topic', () => {
-      const topic = 'bubbaloop/production/jetson_nano/health/system-telemetry';
-      expect(extractTopicPrefix(topic)).toBe('bubbaloop/production/jetson_nano/health');
+      const topic = 'bubbaloop/production/jetson_nano/system-telemetry/health';
+      expect(extractTopicPrefix(topic)).toBe('bubbaloop/production/jetson_nano/system-telemetry');
     });
 
     it('extracts prefix from orin_dev01 weather topic', () => {
@@ -189,7 +189,7 @@ describe('extractTopicPrefix', () => {
 
 describe('extractMachineId', () => {
   it('extracts from scoped vanilla topic', () => {
-    const topic = 'bubbaloop/local/nvidia_orin00/health/system-telemetry';
+    const topic = 'bubbaloop/local/nvidia_orin00/system-telemetry/health';
     expect(extractMachineId(topic)).toBe('nvidia_orin00');
   });
 
@@ -219,7 +219,7 @@ describe('extractMachineId', () => {
   });
 
   it('handles health topics', () => {
-    const topic = 'bubbaloop/local/nvidia_orin00/health/system-telemetry';
+    const topic = 'bubbaloop/local/nvidia_orin00/system-telemetry/health';
     expect(extractMachineId(topic)).toBe('nvidia_orin00');
   });
 

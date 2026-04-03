@@ -1,0 +1,94 @@
+# Bubbaloop Node SDK
+
+Batteries-included framework for writing bubbaloop nodes. Reduces boilerplate from ~300 to ~50 lines.
+
+## Quick Start (Rust)
+
+```rust
+use bubbaloop_node_sdk::{Node, NodeContext};
+
+struct MySensor;
+
+#[async_trait::async_trait]
+impl Node for MySensor {
+    type Config = MyConfig;
+    fn name() -> &'static str { "my-sensor" }
+    fn descriptor() -> &'static [u8] { include_bytes!(concat!(env!("OUT_DIR"), "/descriptor.bin")) }
+
+    async fn init(ctx: &NodeContext, config: &MyConfig) -> anyhow::Result<Self> {
+        Ok(Self)
+    }
+
+    async fn run(self, ctx: NodeContext) -> anyhow::Result<()> {
+        // Declared publisher — encoding set once, reused for every put()
+        let pub_proto = ctx.publisher_proto::<MyMessage>("sensor/data").await?;
+        let pub_json = ctx.publisher_json("sensor/status").await?;
+
+        loop {
+            tokio::select! {
+                _ = ctx.shutdown_rx.changed() => break,
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                    pub_proto.put(&my_message).await?;
+                    pub_json.put(&serde_json::json!({"state": "running"})).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+```
+
+## Publish API
+
+All publishing uses declared publishers for efficiency. Encoding is set once at creation.
+
+| Method | Encoding | Use case |
+|--------|----------|----------|
+| `ctx.publisher_proto::<T>(suffix)` | `application/protobuf;{type_name}` | Realtime sensor data |
+| `ctx.publisher_json(suffix)` | `application/json` | Status, config, metadata |
+
+The protobuf publisher extracts the type name from `MessageTypeName::type_name()` and embeds it in the Zenoh encoding. The dashboard reads this to decode without schema discovery.
+
+## Subscribe API
+
+| Method | Decoding | Use case |
+|--------|----------|----------|
+| `ctx.subscriber::<T>(suffix)` | Auto-decode protobuf | Node-to-node typed streams |
+| `ctx.subscriber_raw(key_expr)` | Raw `Sample` access | Dashboard-style dynamic decode |
+
+## Python SDK
+
+A pure Python SDK with the same API is available at `python-sdk/`:
+
+```bash
+pip install git+https://github.com/kornia/bubbaloop.git#subdirectory=python-sdk
+```
+
+```python
+from bubbaloop_sdk import NodeContext
+
+async def main():
+    ctx = await NodeContext.connect()
+    pub = await ctx.publisher_proto("camera/front/compressed", CompressedImage)
+    await pub.put(msg)
+```
+
+## How It Works
+
+The SDK handles:
+- Zenoh client-mode session (routes through zenohd)
+- Schema queryable at `bubbaloop/{scope}/{machine_id}/{node_name}/schema`
+- Health heartbeat every 5s
+- YAML config loading
+- SIGINT/SIGTERM graceful shutdown
+- Encoding metadata on every publish (Zenoh `Encoding` field)
+
+Nodes implement the `Node` trait and call `run_node::<MyNode>().await`.
+
+## Zenoh Encoding
+
+Every publish sets the Zenoh `Encoding` field:
+- Protobuf: `Encoding::APPLICATION_PROTOBUF.with_schema("bubbaloop.camera.v1.CompressedImage")`
+- JSON: `Encoding::APPLICATION_JSON`
+
+The dashboard reads `sample.encoding()` to pick the right decoder instantly — no schema discovery race, no polling.

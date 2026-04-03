@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload, extractMachineId } from '../lib/zenoh';
+import { getSamplePayload, extractMachineId, getEncodingInfo, tryDecodeJsonPayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useFleetContext } from '../contexts/FleetContext';
@@ -124,6 +124,17 @@ export function SystemTelemetryViewPanel({
       const payload = getSamplePayload(sample);
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
+      const encodingInfo = getEncodingInfo(sample);
+
+      // JSON-encoded samples (new nodes with explicit encoding)
+      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
+      if (jsonData) {
+        const data = jsonData as SystemMetrics;
+        const base = pendingRef.current ?? new Map(metricsMapRef.current);
+        base.set(machineId, { metrics: data, lastUpdate: Date.now() });
+        pendingRef.current = base;
+        return;
+      }
 
       const result = registry.decode('bubbaloop.system_telemetry.v1.SystemMetrics', payload);
       if (result) {
@@ -139,7 +150,11 @@ export function SystemTelemetryViewPanel({
     }
   }, [registry, discoverForTopic]);
 
-  // Gate callback on schema readiness — samples are ignored until schemas load
+  // Subscribe to telemetry topic.
+  // For samples with explicit encoding, decoding works immediately. Legacy samples (no
+  // encoding) still need schemas loaded first. Gate on schemaReady for backward compat:
+  // when schemaReady is false, pass undefined so the subscription stays active for topic
+  // discovery but samples are not processed until schemas arrive.
   const { messageCount } = useZenohSubscription(telemetryTopic, schemaReady ? handleSample : undefined);
 
   // Filter metrics by selectedMachineId (null = show all)

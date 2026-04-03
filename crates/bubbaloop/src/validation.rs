@@ -217,7 +217,7 @@ mod tests {
     fn test_validate_query_key_expr_valid() {
         assert!(validate_query_key_expr("bubbaloop/local/jetson1/openmeteo/status").is_ok());
         assert!(validate_query_key_expr("bubbaloop/**/telemetry/status").is_ok());
-        assert!(validate_query_key_expr("bubbaloop/local/**/health/*").is_ok());
+        assert!(validate_query_key_expr("bubbaloop/local/**/health").is_ok());
     }
 
     #[test]

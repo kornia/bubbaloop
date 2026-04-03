@@ -13,7 +13,7 @@ describe('extractMachineId', () => {
     });
 
     it('extracts machine id from full-scoped path', () => {
-      expect(extractMachineId('bubbaloop/local/nvidia_orin00/health/system-telemetry')).toBe('nvidia_orin00');
+      expect(extractMachineId('bubbaloop/local/nvidia_orin00/system-telemetry/health')).toBe('nvidia_orin00');
     });
 
     it('extracts machine id from full-scoped camera path', () => {
@@ -73,9 +73,9 @@ describe('extractMachineId', () => {
 describe('normalizeKeyExpr', () => {
   describe('vanilla zenoh topics from different scopes', () => {
     it('normalizes topic with local scope', () => {
-      const key = 'bubbaloop/local/nvidia_orin00/health/system-telemetry';
+      const key = 'bubbaloop/local/nvidia_orin00/system-telemetry/health';
       const result = normalizeKeyExpr(key);
-      expect(result.display).toBe('local/nvidia_orin00/health/system-telemetry');
+      expect(result.display).toBe('local/nvidia_orin00/system-telemetry/health');
       expect(result.raw).toBe(key);
     });
 
@@ -213,7 +213,7 @@ describe('extractMachineId: production topology variants', () => {
   });
 
   it('extracts machine id from staging scope', () => {
-    expect(extractMachineId('bubbaloop/staging/test_device_01/health/metrics')).toBe('test_device_01');
+    expect(extractMachineId('bubbaloop/staging/test_device_01/metrics/health')).toBe('test_device_01');
   });
 
   it('extracts machine id from dev scope with weather topic', () => {

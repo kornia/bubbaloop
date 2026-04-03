@@ -1,0 +1,12 @@
+[package]
+name = "bubbaloop-node-build"
+version = "0.1.0"
+edition = "2021"
+description = "Build helper for bubbaloop nodes — wraps prost-build with header types pre-configured"
+license = "Apache-2.0"
+
+[dependencies]
+prost-build = "0.14"
+
+# Opt out of the parent bubbaloop workspace
+[workspace]

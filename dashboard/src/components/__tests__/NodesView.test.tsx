@@ -99,6 +99,8 @@ function makeNode(overrides: Partial<DiscoveredNode> = {}): DiscoveredNode {
     machine_hostname: 'nvidia-orin',
     machine_ips: ['192.168.1.100'],
     base_node: '',
+    config_path: '',
+    config: '',
     discoveredVia: 'daemon',
     stale: false,
     lastSeen: Date.now(),

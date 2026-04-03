@@ -1,4 +1,27 @@
-import { Session, Config, Subscriber, Sample } from '@eclipse-zenoh/zenoh-ts';
+import { Session, Config, Subscriber, Sample, Encoding } from '@eclipse-zenoh/zenoh-ts';
+import { snakeToCamel } from './schema-registry';
+
+/**
+ * Numeric encoding IDs matching Zenoh's predefined encodings.
+ * Defined locally because zenoh-ts does not export EncodingPredefined from its public API.
+ */
+export enum EncodingPredefined {
+  ZENOH_BYTES = 0,
+  ZENOH_STRING = 1,
+  ZENOH_SERIALIZED = 2,
+  APPLICATION_OCTET_STREAM = 3,
+  TEXT_PLAIN = 4,
+  APPLICATION_JSON = 5,
+  TEXT_JSON = 6,
+  APPLICATION_CDR = 7,
+  APPLICATION_CBOR = 8,
+  APPLICATION_YAML = 9,
+  TEXT_YAML = 10,
+  TEXT_JSON5 = 11,
+  APPLICATION_PYTHON_SERIALIZED_OBJECT = 12,
+  APPLICATION_PROTOBUF = 13,
+  APPLICATION_JAVA_SERIALIZED_OBJECT = 14,
+}
 import { useEffect, useRef, useState, useCallback } from 'react';
 
 export interface ZenohConfig {
@@ -178,6 +201,43 @@ export function useZenohSubscriber(
 }
 
 /**
+ * Encoding information extracted from a Zenoh sample.
+ * id=0 (ZENOH_BYTES) and id=1 (ZENOH_STRING) mean "no encoding signal" — use sniff fallback.
+ */
+export interface EncodingInfo {
+  /** EncodingPredefined numeric id */
+  id: EncodingPredefined;
+  /** Optional schema suffix (e.g. "bubbaloop.camera.v1.CompressedImage") */
+  schema?: string;
+}
+
+export { Encoding };
+
+/**
+ * Extract encoding information from a Zenoh sample.
+ * Returns the encoding id and optional schema suffix.
+ * ZENOH_BYTES (0) and ZENOH_STRING (1) are treated as "no encoding signal".
+ */
+export function getEncodingInfo(sample: Sample): EncodingInfo {
+  try {
+    const encoding: Encoding = sample.encoding();
+    const [id, schema] = encoding.toIdSchema();
+    return { id: id as number as EncodingPredefined, schema };
+  } catch {
+    // If encoding() throws for any reason, treat as no signal
+    return { id: EncodingPredefined.ZENOH_BYTES };
+  }
+}
+
+/**
+ * Returns true when the encoding id carries a meaningful format signal.
+ * ZENOH_BYTES (0) and ZENOH_STRING (1) are the "no encoding" defaults.
+ */
+export function hasExplicitEncoding(info: EncodingInfo): boolean {
+  return info.id !== EncodingPredefined.ZENOH_BYTES && info.id !== EncodingPredefined.ZENOH_STRING;
+}
+
+/**
  * Extract payload bytes from a Zenoh sample
  * In zenoh-ts, sample.payload() is a method that returns ZBytes,
  * and ZBytes.toBytes() returns the underlying Uint8Array
@@ -198,6 +258,23 @@ export function getSamplePayload(sample: Sample): Uint8Array {
 
   console.warn('[Zenoh] Failed to extract payload from sample');
   return new Uint8Array(0);
+}
+
+/**
+ * Try to decode a JSON-encoded Zenoh payload with snakeToCamel key conversion.
+ * Returns the decoded object if the sample has explicit JSON encoding and parses
+ * successfully, or null otherwise (caller should fall through to protobuf path).
+ */
+export function tryDecodeJsonPayload(payload: Uint8Array, encodingInfo: EncodingInfo): unknown | null {
+  if (!hasExplicitEncoding(encodingInfo)) return null;
+  if (encodingInfo.id !== EncodingPredefined.APPLICATION_JSON &&
+      encodingInfo.id !== EncodingPredefined.TEXT_JSON) return null;
+  try {
+    const text = new TextDecoder().decode(payload);
+    return snakeToCamel(JSON.parse(text));
+  } catch {
+    return null;
+  }
 }
 
 /** A discovered topic entry */
@@ -223,7 +300,7 @@ export interface UseTopicDiscoveryResult {
  * Examples:
  *   "bubbaloop/local/nvidia_orin00/camera/entrance/compressed" -> "local/nvidia_orin00/camera/entrance/compressed"
  *   "bubbaloop/nvidia-orin00/daemon/nodes"                     -> "nvidia-orin00/daemon/nodes"
- *   "bubbaloop/local/nvidia_orin00/health/system-telemetry"    -> "local/nvidia_orin00/health/system-telemetry"
+ *   "bubbaloop/local/nvidia_orin00/system-telemetry/health"    -> "local/nvidia_orin00/system-telemetry/health"
  *   "bubbaloop/daemon/nodes"                                   -> "daemon/nodes"
  */
 export function normalizeKeyExpr(keyExpr: string): { display: string; raw: string } {

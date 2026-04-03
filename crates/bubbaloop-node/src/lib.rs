@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use bubbaloop_node_sdk::{Node, NodeContext};
+//! use bubbaloop_node::{Node, NodeContext};
 //!
 //! struct MySensor { /* ... */ }
 //!
@@ -22,58 +22,58 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     bubbaloop_node_sdk::run_node::<MySensor>().await
+//!     bubbaloop_node::run_node::<MySensor>().await
 //! }
 //! ```
 
 mod config;
 mod context;
 mod health;
+pub mod publisher;
 mod schema;
+pub mod schemas;
+pub mod subscriber;
 mod shutdown;
 mod zenoh_session;
 
 pub use context::NodeContext;
+pub use publisher::{JsonPublisher, ProtoPublisher};
+pub use subscriber::{RawSubscriber, TypedSubscriber};
 
-// Re-exports for convenience (so nodes don't need to add these deps)
+pub use schemas::MessageTypeName;
+
+// Re-exports so nodes don't need to add these deps directly.
 pub use anyhow;
 pub use async_trait;
 pub use log;
 pub use prost;
+pub use serde_json;
 pub use tokio;
 pub use zenoh;
 
 use std::path::PathBuf;
 
 /// Trait that node authors implement to define their node's behavior.
-///
-/// The SDK handles everything else: Zenoh session, health heartbeat,
-/// schema registration, config loading, signal handling, logging.
 #[async_trait::async_trait]
 pub trait Node: Send + Sync + 'static {
     /// Node-specific configuration type (deserialized from YAML).
     type Config: serde::de::DeserializeOwned + Send + Sync + 'static;
 
-    /// Human-readable node name used for topic construction and health reporting.
-    /// Must match the `name` field in `node.yaml`.
+    /// Node name used for topic construction. Must match the `name` field in `node.yaml`.
     fn name() -> &'static str;
 
-    /// Protobuf FileDescriptorSet bytes for schema registration.
-    /// Typically: `include_bytes!(concat!(env!("OUT_DIR"), "/descriptor.bin"))`
+    /// Protobuf `FileDescriptorSet` bytes for schema registration.
     fn descriptor() -> &'static [u8];
 
-    /// Called once after Zenoh session is established and config is loaded.
-    /// Use this to create publishers, subscribers, and any node-specific state.
+    /// Called once after Zenoh session and config are ready.
     async fn init(ctx: &NodeContext, config: &Self::Config) -> anyhow::Result<Self>
     where
         Self: Sized;
 
-    /// Main loop. Called after init(). Must respect ctx.shutdown_rx for graceful exit.
-    /// When the shutdown signal fires, this method should return Ok(()).
+    /// Main loop. Must select on `ctx.shutdown_rx` for graceful exit.
     async fn run(self, ctx: NodeContext) -> anyhow::Result<()>;
 }
 
-/// Built-in CLI arguments handled by the SDK.
 #[derive(argh::FromArgs)]
 #[argh(description = "Bubbaloop node")]
 struct SdkArgs {
@@ -92,25 +92,23 @@ fn default_config_path() -> PathBuf {
 
 /// Run a node with the SDK runtime.
 ///
-/// This is the single entry point that node authors call from `main()`.
-/// It handles: logging init, CLI args, config load, scope/machine resolution,
-/// shutdown channel, Zenoh session, schema queryable, health heartbeat.
+/// Entry point for `main()`. Handles logging, CLI args, config, Zenoh session,
+/// schema queryable, health heartbeat, and shutdown.
 pub async fn run_node<N: Node>() -> anyhow::Result<()> {
-    // 1. Init logging
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    // 2. Parse CLI args
     let args: SdkArgs = argh::from_env();
 
-    // 3. Load config
+    let instance_name = config::extract_name(&args.config)
+        .unwrap_or_else(|| N::name().to_string());
     let node_config: N::Config = config::load_config(&args.config)?;
     log::info!(
-        "{}: config loaded from {}",
+        "{} (instance={}): config loaded from {}",
         N::name(),
+        instance_name,
         args.config.display()
     );
 
-    // 4. Resolve scope + machine_id
     let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = std::env::var("BUBBALOOP_MACHINE_ID")
         .unwrap_or_else(|_| {
@@ -121,40 +119,33 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
         .replace('-', "_");
     log::info!("Scope: {}, Machine ID: {}", scope, machine_id);
 
-    // 5. Setup shutdown channel
     let (shutdown_tx, _) = shutdown::setup_shutdown()?;
-
-    // 6. Open Zenoh session (client mode, enforced)
     let session = zenoh_session::open_zenoh_session(&args.endpoint).await?;
 
-    // 7. Declare schema queryable
     let _schema_queryable =
-        schema::declare_schema_queryable(&session, &scope, &machine_id, N::name(), N::descriptor())
+        schema::declare_schema_queryable(&session, &scope, &machine_id, &instance_name, N::descriptor())
             .await?;
 
-    // 8. Spawn health heartbeat task
     let _health_handle = health::spawn_health_heartbeat(
         session.clone(),
         &scope,
         &machine_id,
-        N::name(),
+        &instance_name,
         shutdown_tx.subscribe(),
     )
     .await?;
 
-    // 9. Build context
     let ctx = NodeContext {
         session: session.clone(),
         scope,
         machine_id,
+        instance_name,
         shutdown_rx: shutdown_tx.subscribe(),
     };
 
-    // 10. Init node
     let node = N::init(&ctx, &node_config).await?;
     log::info!("{} node initialized", N::name());
 
-    // 11. Run node (blocks until shutdown)
     node.run(ctx).await?;
 
     log::info!("{} node shut down", N::name());

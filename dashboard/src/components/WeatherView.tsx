@@ -1,6 +1,6 @@
 import { useCallback, useState, useEffect } from 'react';
 import { Sample, IntoZBytes } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload, extractMachineId } from '../lib/zenoh';
+import { getSamplePayload, extractMachineId, getEncodingInfo, tryDecodeJsonPayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
@@ -56,6 +56,7 @@ interface DailyForecastEntry {
   weatherCode: number;
   windSpeed_10mMax: number;
   windGusts_10mMax: number;
+  windDirection_10mDominant?: number;
   sunrise: string;
   sunset: string;
 }
@@ -144,6 +145,15 @@ export function WeatherViewPanel({
       const payload = getSamplePayload(sample);
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
+      const encodingInfo = getEncodingInfo(sample);
+
+      // JSON-encoded samples (new nodes with explicit encoding)
+      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
+      if (jsonData) {
+        const data = jsonData as CurrentWeather;
+        setCurrentMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
+        return;
+      }
 
       const result = registry.decode('bubbaloop.weather.v1.CurrentWeather', payload);
       if (result) {
@@ -167,6 +177,14 @@ export function WeatherViewPanel({
       const payload = getSamplePayload(sample);
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
+      const encodingInfo = getEncodingInfo(sample);
+
+      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
+      if (jsonData) {
+        const data = jsonData as HourlyForecast;
+        setHourlyMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
+        return;
+      }
 
       const result = registry.decode('bubbaloop.weather.v1.HourlyForecast', payload);
       if (result) {
@@ -190,6 +208,14 @@ export function WeatherViewPanel({
       const payload = getSamplePayload(sample);
       const topic = sample.keyexpr().toString();
       const machineId = extractMachineId(topic) ?? 'unknown';
+      const encodingInfo = getEncodingInfo(sample);
+
+      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
+      if (jsonData) {
+        const data = jsonData as DailyForecast;
+        setDailyMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
+        return;
+      }
 
       const result = registry.decode('bubbaloop.weather.v1.DailyForecast', payload);
       if (result) {
@@ -207,7 +233,11 @@ export function WeatherViewPanel({
     }
   }, [registry, discoverForTopic]);
 
-  // Subscribe to all three topics — gate callbacks on schema readiness
+  // Subscribe to all three topics.
+  // For samples with explicit encoding, decoding works immediately. Legacy samples (no
+  // encoding) still need schemas loaded first. Gate on schemaReady for backward compat:
+  // when schemaReady is false, pass undefined so the subscription stays active for topic
+  // discovery but samples are not processed until schemas arrive.
   const { messageCount: currentCount } = useZenohSubscription(currentTopic, schemaReady ? handleCurrentSample : undefined);
   const { messageCount: hourlyCount } = useZenohSubscription(hourlyTopic, schemaReady ? handleHourlySample : undefined);
   const { messageCount: dailyCount } = useZenohSubscription(dailyTopic, schemaReady ? handleDailySample : undefined);

@@ -9,6 +9,16 @@ pub fn load_config<C: serde::de::DeserializeOwned>(path: &Path) -> anyhow::Resul
     Ok(config)
 }
 
+/// Extract the `name` field from a YAML config file, if present.
+///
+/// Used by the SDK to allow multi-instance deployments where each instance
+/// uses a different config with a distinct `name` field.
+pub fn extract_name(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
+    value.get("name")?.as_str().map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -43,5 +53,26 @@ mod tests {
         std::fs::write(&path, "not: [valid: yaml: {{").unwrap();
         let result: anyhow::Result<TestConfig> = load_config(&path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_name_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(&path, "name: my_instance\nrate_hz: 5.0\n").unwrap();
+        assert_eq!(extract_name(&path), Some("my_instance".to_string()));
+    }
+
+    #[test]
+    fn test_extract_name_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(&path, "rate_hz: 5.0\n").unwrap();
+        assert_eq!(extract_name(&path), None);
+    }
+
+    #[test]
+    fn test_extract_name_missing_file() {
+        assert_eq!(extract_name(Path::new("/nonexistent.yaml")), None);
     }
 }
