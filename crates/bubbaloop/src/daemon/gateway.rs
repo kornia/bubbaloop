@@ -167,7 +167,10 @@ pub struct NodeStateJson {
     pub machine_hostname: String,
     pub machine_ips: Vec<String>,
     pub base_node: String,
-    pub config_override: String,
+    /// Relative path to the config file used by this node instance (e.g. "configs/terrace.yaml").
+    pub config_path: String,
+    /// Content of the config file. Empty if not applicable.
+    pub config: String,
 }
 
 /// JSON-serializable mirror of proto NodeList.
@@ -187,25 +190,35 @@ impl NodeListJson {
             nodes: proto
                 .nodes
                 .iter()
-                .map(|n| NodeStateJson {
-                    name: n.name.clone(),
-                    path: n.path.clone(),
-                    status: n.status,
-                    installed: n.installed,
-                    autostart_enabled: n.autostart_enabled,
-                    version: n.version.clone(),
-                    description: n.description.clone(),
-                    node_type: n.node_type.clone(),
-                    is_built: n.is_built,
-                    last_updated_ms: n.last_updated_ms,
-                    build_output: n.build_output.clone(),
-                    health_status: n.health_status,
-                    last_health_check_ms: n.last_health_check_ms,
-                    machine_id: n.machine_id.clone(),
-                    machine_hostname: n.machine_hostname.clone(),
-                    machine_ips: n.machine_ips.clone(),
-                    base_node: n.base_node.clone(),
-                    config_override: n.config_override.clone(),
+                .map(|n| {
+                    // Read config file content when both the node path and config path are set.
+                    let config = if !n.path.is_empty() && !n.config_override.is_empty() {
+                        let full = std::path::Path::new(&n.path).join(&n.config_override);
+                        std::fs::read_to_string(&full).unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    NodeStateJson {
+                        name: n.name.clone(),
+                        path: n.path.clone(),
+                        status: n.status,
+                        installed: n.installed,
+                        autostart_enabled: n.autostart_enabled,
+                        version: n.version.clone(),
+                        description: n.description.clone(),
+                        node_type: n.node_type.clone(),
+                        is_built: n.is_built,
+                        last_updated_ms: n.last_updated_ms,
+                        build_output: n.build_output.clone(),
+                        health_status: n.health_status,
+                        last_health_check_ms: n.last_health_check_ms,
+                        machine_id: n.machine_id.clone(),
+                        machine_hostname: n.machine_hostname.clone(),
+                        machine_ips: n.machine_ips.clone(),
+                        base_node: n.base_node.clone(),
+                        config_path: n.config_override.clone(),
+                        config,
+                    }
                 })
                 .collect(),
             timestamp_ms: proto.timestamp_ms,

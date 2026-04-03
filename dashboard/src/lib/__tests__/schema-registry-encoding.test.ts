@@ -11,7 +11,7 @@
  * - Unknown / other: sniff fallback
  */
 
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SchemaRegistry } from '../schema-registry';
 import { EncodingPredefined } from '../zenoh';
 import type { EncodingInfo } from '../zenoh';

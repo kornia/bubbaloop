@@ -85,6 +85,9 @@ export interface DiscoveredNode {
   machine_hostname: string;
   machine_ips: string[];
   base_node: string;
+  config_path: string;
+  /** Raw YAML content of the config file, served by the daemon. */
+  config: string;
 
   // Discovery metadata
   discoveredVia: "manifest" | "daemon" | "both";
@@ -150,6 +153,8 @@ function manifestOnlyNode(manifest: NodeManifest, now: number): DiscoveredNode {
     machine_hostname: "",
     machine_ips: [],
     base_node: "",
+    config_path: "",
+    config: "",
     discoveredVia: "manifest",
     stale: false,
     lastSeen: now,
@@ -184,6 +189,8 @@ function decodeNodeListFromPayload(data: Uint8Array): ReturnType<typeof decodeNo
         machineHostname: (n.machine_hostname as string) ?? (n.machineHostname as string) ?? '',
         machineIps: Array.isArray(n.machine_ips) ? (n.machine_ips as string[]) : Array.isArray(n.machineIps) ? (n.machineIps as string[]) : [],
         baseNode: (n.base_node as string) ?? (n.baseNode as string) ?? '',
+        configPath: (n.config_path as string) ?? (n.configPath as string) ?? (n.config_override as string) ?? '',
+        config: typeof n.config === 'string' ? n.config : '',
       }));
       return {
         nodes,
@@ -322,6 +329,8 @@ export function NodeDiscoveryProvider({
               machine_hostname: n.machineHostname,
               machine_ips: n.machineIps || [],
               base_node: n.baseNode || "",
+              config_path: ((n as unknown) as Record<string, unknown>).configPath as string ?? "",
+              config: (((n as unknown) as Record<string, unknown>).config as string) ?? "",
               discoveredVia: "daemon" as const,
               stale: false,
               lastSeen: Date.now(),

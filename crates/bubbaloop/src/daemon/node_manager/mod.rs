@@ -124,10 +124,18 @@ impl CachedNode {
     ) -> NodeState {
         let manifest = self.manifest.as_ref();
         let base_name = manifest.map(|m| m.name.clone()).unwrap_or_default();
+        // If health heartbeat says Healthy but systemd says Stopped,
+        // the node is running outside systemd (e.g. local dev). Show Running.
+        let effective_status =
+            if self.health_status == HealthStatus::Healthy && self.status == NodeStatus::Stopped {
+                NodeStatus::Running
+            } else {
+                self.status
+            };
         NodeState {
             name: self.effective_name(),
             path: self.path.clone(),
-            status: self.status as i32,
+            status: effective_status as i32,
             installed: self.installed,
             autostart_enabled: self.autostart_enabled,
             version: manifest
