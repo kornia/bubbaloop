@@ -1,101 +1,81 @@
-"""NodeContext — entry point for Bubbaloop nodes.
+"""NodeContext — entry point for Bubbaloop Python nodes.
 
-Mirrors the Rust NodeContext: Zenoh session, scope, machine_id, topic helper,
-and factory methods for declared publishers and subscribers.
+Synchronous API — no asyncio required. zenoh-python is blocking by design;
+this SDK wraps it without adding async complexity.
 
-Note on async: zenoh-python's open() and declare_* methods are synchronous.
-connect() runs session creation in a thread executor so callers can use
-`await NodeContext.connect()` without blocking the event loop.
+Usage::
+
+    ctx = NodeContext.connect()
+    pub = ctx.publisher_json("weather/current")
+    while not ctx.is_shutdown():
+        pub.put({"temperature": 22.5})
+        time.sleep(30)
+    ctx.close()
 """
 
-import asyncio
 import os
 import signal
 import socket
+import threading
 
 import zenoh
 
 
-def _get_hostname() -> str:
-    """Return the local hostname sanitized for use in Zenoh topic paths.
-
-    Hyphens are replaced with underscores to match the convention used
-    by the Rust daemon (machine_id sanitization).
-    """
+def _hostname() -> str:
     return socket.gethostname().replace("-", "_")
 
 
 class NodeContext:
-    """Context provided to nodes by the SDK runtime.
+    """Zenoh session + scope/machine_id + shutdown signal for a bubbaloop node.
 
-    Mirrors the Rust NodeContext: session, scope, machine_id, topic helper,
-    and declared publisher/subscriber factories.
-
-    Typical usage::
-
-        ctx = await NodeContext.connect()
-        pub = await ctx.publisher_proto("camera/front/compressed", CompressedImage)
-
-        while not ctx.is_shutdown():
-            await pub.put(frame_msg)
-
-        ctx.close()
+    Create with :meth:`connect`. Cleanup with :meth:`close` (or use as a
+    context manager).
     """
 
-    def __init__(self, session: zenoh.Session, scope: str, machine_id: str):
+    def __init__(self, session: zenoh.Session, scope: str, machine_id: str, instance_name: str):
         self.session = session
         self.scope = scope
         self.machine_id = machine_id
-        self._shutdown_event = asyncio.Event()
-
-        # Register SIGINT/SIGTERM to set the shutdown event.
-        # add_signal_handler requires the calling thread to own the event loop
-        # (i.e. must be called from the main thread).
-        loop = asyncio.get_event_loop()
+        self.instance_name = instance_name
+        self._shutdown = threading.Event()
         for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, self._shutdown_event.set)
-            except (NotImplementedError, RuntimeError):
-                # Windows or non-main-thread — fall back to signal.signal
-                signal.signal(sig, lambda s, f: self._shutdown_event.set())
-
-    # ------------------------------------------------------------------
-    # Construction
-    # ------------------------------------------------------------------
+            signal.signal(sig, lambda s, f: self._shutdown.set())
 
     @classmethod
-    async def connect(cls, endpoint: str | None = None) -> "NodeContext":
+    def connect(
+        cls,
+        endpoint: str | None = None,
+        instance_name: str | None = None,
+    ) -> "NodeContext":
         """Connect to a Zenoh router and return a ready NodeContext.
 
-        Endpoint resolution order:
-        1. ``endpoint`` parameter
-        2. ``BUBBALOOP_ZENOH_ENDPOINT`` environment variable
-        3. Default ``tcp/127.0.0.1:7447``
+        Endpoint resolution: ``endpoint`` arg → ``BUBBALOOP_ZENOH_ENDPOINT`` env
+        → ``tcp/127.0.0.1:7447``.
 
-        Scope and machine_id are read from ``BUBBALOOP_SCOPE`` and
-        ``BUBBALOOP_MACHINE_ID`` environment variables (defaulting to
-        ``"local"`` and the sanitized hostname).
+        ``instance_name`` is used for health and schema topics. Pass the ``name``
+        field from your config so multi-instance deployments don't collide.
+        Falls back to the hostname.
         """
         scope = os.environ.get("BUBBALOOP_SCOPE", "local")
-        machine_id = os.environ.get("BUBBALOOP_MACHINE_ID", _get_hostname())
-        ep = endpoint or os.environ.get(
-            "BUBBALOOP_ZENOH_ENDPOINT", "tcp/127.0.0.1:7447"
-        )
+        machine_id = os.environ.get("BUBBALOOP_MACHINE_ID", _hostname())
+        ep = endpoint or os.environ.get("BUBBALOOP_ZENOH_ENDPOINT", "tcp/127.0.0.1:7447")
+        name = instance_name or machine_id
 
-        # zenoh.open() is synchronous — run in executor to avoid blocking.
-        loop = asyncio.get_event_loop()
-        session = await loop.run_in_executor(None, lambda: _open_session(ep))
-        return cls(session, scope, machine_id)
+        conf = zenoh.Config()
+        conf.insert_json5("mode", '"client"')
+        conf.insert_json5("connect/endpoints", f'["{ep}"]')
+        conf.insert_json5("scouting/multicast/enabled", "false")
+        conf.insert_json5("scouting/gossip/enabled", "false")
+        session = zenoh.open(conf)
+
+        return cls(session, scope, machine_id, name)
 
     # ------------------------------------------------------------------
-    # Topic helpers
+    # Topic helper
     # ------------------------------------------------------------------
 
     def topic(self, suffix: str) -> str:
-        """Build a fully-qualified Zenoh topic for this node.
-
-        Pattern: ``bubbaloop/{scope}/{machine_id}/{suffix}``
-        """
+        """Return ``bubbaloop/{scope}/{machine_id}/{suffix}``."""
         return f"bubbaloop/{self.scope}/{self.machine_id}/{suffix}"
 
     # ------------------------------------------------------------------
@@ -103,79 +83,40 @@ class NodeContext:
     # ------------------------------------------------------------------
 
     def is_shutdown(self) -> bool:
-        """Return True if a shutdown signal has been received."""
-        return self._shutdown_event.is_set()
+        """True if SIGINT/SIGTERM has been received."""
+        return self._shutdown.is_set()
 
-    async def wait_shutdown(self) -> None:
-        """Suspend until SIGINT/SIGTERM is received."""
-        await self._shutdown_event.wait()
+    def wait_shutdown(self) -> None:
+        """Block until SIGINT/SIGTERM is received."""
+        self._shutdown.wait()
 
     # ------------------------------------------------------------------
-    # Publisher factories
+    # Publishers
     # ------------------------------------------------------------------
 
-    async def publisher_proto(
-        self, suffix: str, msg_class=None
-    ) -> "ProtoPublisher":
-        """Create a declared protobuf publisher.
-
-        Sets ``Encoding.APPLICATION_PROTOBUF`` (with the message type name
-        as schema suffix when ``msg_class`` is provided) on every sample so
-        the dashboard can decode without schema sniffing.
-
-        ``msg_class`` must be a generated protobuf message class (has a
-        ``DESCRIPTOR.full_name`` attribute).
-        """
-        from .publisher import ProtoPublisher
-
-        topic = self.topic(suffix)
-        type_name = (
-            msg_class.DESCRIPTOR.full_name
-            if msg_class is not None
-            else None
-        )
-        return ProtoPublisher.create(self.session, topic, type_name)
-
-    async def publisher_json(self, suffix: str) -> "JsonPublisher":
-        """Create a declared JSON publisher.
-
-        Sets ``Encoding.APPLICATION_JSON`` on every sample.
-        """
+    def publisher_json(self, suffix: str) -> "JsonPublisher":
+        """Declare a JSON publisher at ``topic(suffix)``."""
         from .publisher import JsonPublisher
+        return JsonPublisher._declare(self.session, self.topic(suffix))
 
-        topic = self.topic(suffix)
-        return JsonPublisher.create(self.session, topic)
+    def publisher_proto(self, suffix: str, msg_class=None) -> "ProtoPublisher":
+        """Declare a protobuf publisher at ``topic(suffix)``."""
+        from .publisher import ProtoPublisher
+        type_name = msg_class.DESCRIPTOR.full_name if msg_class is not None else None
+        return ProtoPublisher._declare(self.session, self.topic(suffix), type_name)
 
     # ------------------------------------------------------------------
-    # Subscriber factories
+    # Subscribers
     # ------------------------------------------------------------------
 
-    async def subscriber(
-        self, suffix: str, msg_class=None
-    ) -> "TypedSubscriber":
-        """Create a typed subscriber.
-
-        If ``msg_class`` is provided, each received payload is decoded as an
-        instance of that protobuf message class via ``FromString()``.
-        The subscriber supports async-for iteration (blocking recv runs in
-        a thread executor to avoid blocking the event loop).
-
-        ``suffix`` may contain wildcards (e.g. ``"weather/+/current"``).
-        """
+    def subscriber(self, suffix: str, msg_class=None) -> "TypedSubscriber":
+        """Declare a typed subscriber. Blocks on ``recv()``."""
         from .subscriber import TypedSubscriber
+        return TypedSubscriber(self.session, self.topic(suffix), msg_class)
 
-        topic = self.topic(suffix)
-        return TypedSubscriber(self.session, topic, msg_class)
-
-    async def subscriber_raw(self, key_expr: str) -> "RawSubscriber":
-        """Create a raw subscriber for the given key expression.
-
-        Exposes zenoh ``Sample`` objects directly — encoding, payload, and
-        all metadata are available on each sample.  The key expression is
-        used verbatim (no ``topic()`` prefix is applied).
-        """
+    def subscriber_raw(self, key_expr: str) -> "RawSubscriber":
+        """Declare a raw subscriber with a literal key expression."""
         from .subscriber import RawSubscriber
-
         return RawSubscriber(self.session, key_expr)
 
     # ------------------------------------------------------------------
@@ -186,19 +127,8 @@ class NodeContext:
         """Close the Zenoh session."""
         self.session.close()
 
+    def __enter__(self):
+        return self
 
-# ------------------------------------------------------------------
-# Internal helpers
-# ------------------------------------------------------------------
-
-
-def _open_session(endpoint: str) -> zenoh.Session:
-    """Open a client-mode Zenoh session connected to ``endpoint``."""
-    conf = zenoh.Config()
-    # MUST use client mode so messages route through the zenohd router.
-    conf.insert_json5("mode", '"client"')
-    conf.insert_json5("connect/endpoints", f'["{endpoint}"]')
-    # Disable scouting — connect only to the explicit endpoint.
-    conf.insert_json5("scouting/multicast/enabled", "false")
-    conf.insert_json5("scouting/gossip/enabled", "false")
-    return zenoh.open(conf)
+    def __exit__(self, *_):
+        self.close()
