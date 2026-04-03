@@ -1,6 +1,6 @@
 # Node Development Guide
 
-> A "node" is a self-describing sensor or actuator capability in bubbaloop. Historically called "skillets", nodes are the core building blocks of the platform.
+> A "node" is a self-describing sensor or actuator process in bubbaloop. Nodes are the core building blocks of the platform.
 
 ## Where Nodes Live
 
@@ -32,12 +32,12 @@ cd my-sensor
 # 2. Develop locally
 # Edit src/main.rs — implement Node trait
 pixi run build
-pixi run run   # test against local zenohd
+pixi run main   # test against local zenohd
 
-# 3. Register with local daemon
-bubbaloop node add .
-bubbaloop node build my-sensor
-bubbaloop node start my-sensor
+# 3. Register with local daemon (three required steps)
+bubbaloop node add . -n my-sensor -c config.yaml
+bubbaloop node install my-sensor   # writes systemd unit
+bubbaloop node start   my-sensor   # starts the service
 
 # 4. Publish to GitHub
 git init && git add -A && git commit -m "Initial commit"
@@ -511,7 +511,7 @@ prost-build = "0.14"
 pixi run build
 
 # Run (connects to local zenohd)
-pixi run run -c config.yaml
+pixi run main -c config.yaml
 
 # In another terminal: verify health heartbeat
 z_sub -k "bubbaloop/local/*/health/my-sensor"
@@ -864,7 +864,7 @@ author: Your Name
 build: pixi run build  # Rust: compiles binary; Python: compiles protos
 command: ./target/release/my_sensor_node  # Rust binary path
 # OR for Python:
-# command: pixi run run  # Runs main.py via pixi
+# command: pixi run main  # Runs main.py via pixi
 
 # Skill capabilities
 capabilities:
@@ -1110,7 +1110,7 @@ if not (0.01 <= rate_hz <= 1000.0):
 
 ## Node SDK (Recommended)
 
-The `bubbaloop-node-sdk` crate reduces Rust node boilerplate from ~300 lines to ~50 lines. It provides:
+Two SDKs are available — Rust (`bubbaloop-node`) and Python (`bubbaloop-sdk`) — both with the same API. They reduce node boilerplate from ~300 lines to ~50 lines and provide:
 
 - Automatic Zenoh session creation (client mode, enforced)
 - Automatic health heartbeat publishing (5s interval)
@@ -1123,7 +1123,7 @@ The `bubbaloop-node-sdk` crate reduces Rust node boilerplate from ~300 lines to 
 **With the SDK, a complete node will look like this:**
 
 ```rust
-use bubbaloop_node_sdk::{Node, NodeContext};
+use bubbaloop_node::{Node, NodeContext};
 use anyhow::Result;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1206,24 +1206,28 @@ bubbaloop node start my-sensor
 | Scope resolution | ~6 lines | BUBBALOOP_SCOPE + BUBBALOOP_MACHINE_ID |
 | **Total saved** | **~86 lines** | Per node, automatically correct |
 
-### Cargo.toml for SDK-Based Nodes
+### Cargo.toml for Rust SDK nodes
 
 ```toml
 [dependencies]
-bubbaloop-node-sdk = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
-bubbaloop-schemas = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
-prost = "0.14"
-serde = { version = "1.0", features = ["derive"] }
+bubbaloop-node = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
 
 [build-dependencies]
-prost-build = "0.14"
+bubbaloop-node-build = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
 
 [workspace]
 ```
 
-**Status:** Shipped. See `crates/bubbaloop-node-sdk/` in the bubbaloop repo.
+`bubbaloop-node-build` automatically embeds `header.proto`, maps the header namespace, and writes `descriptor.bin` — no need to list `bubbaloop-schemas`, `prost`, or `prost-build` separately.
 
-**Migration path:** Existing nodes continue to work unchanged. New Rust nodes should use the SDK. The SDK is a standalone crate (not in workspace), depended on via git, following the same pattern as `bubbaloop-schemas`.
+### pixi.toml for Python SDK nodes
+
+```toml
+[pypi-dependencies]
+bubbaloop-sdk = { git = "https://github.com/kornia/bubbaloop.git", branch = "main", subdirectory = "python-sdk" }
+```
+
+**JSON field naming:** Python nodes publish snake_case — the dashboard applies `snakeToCamel()` automatically on decode. Both protobuf and JSON paths normalize to camelCase for React components.
 
 ## Complete Node Checklist
 
