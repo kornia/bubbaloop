@@ -939,6 +939,11 @@ mod tests {
     #[test]
     fn prune_old_logs_removes_old_files() {
         let (log, dir) = test_episodic();
+        // Use today's date for the "recent" entry so it's never pruned by a 30-day window.
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let today_ts = format!("{}T10:00:00Z", today);
+        let today_file = format!("logs/daily_logs_{}.jsonl", today);
+
         // Use completely distinct words to avoid OR-search cross-matching
         log.append(&LogEntry {
             timestamp: "2025-01-01T10:00:00Z".to_string(),
@@ -948,7 +953,7 @@ mod tests {
         })
         .unwrap();
         log.append(&LogEntry {
-            timestamp: "2026-03-03T10:00:00Z".to_string(),
+            timestamp: today_ts,
             role: "user".to_string(),
             content: "recent important update".to_string(),
             ..Default::default()
@@ -956,13 +961,13 @@ mod tests {
         .unwrap();
 
         assert!(dir.path().join("logs/daily_logs_2025-01-01.jsonl").exists());
-        assert!(dir.path().join("logs/daily_logs_2026-03-03.jsonl").exists());
+        assert!(dir.path().join(&today_file).exists());
 
         // Prune with 30-day retention (the 2025 file is way older)
         let pruned = log.prune_old_logs(30).unwrap();
         assert_eq!(pruned, 1);
         assert!(!dir.path().join("logs/daily_logs_2025-01-01.jsonl").exists());
-        assert!(dir.path().join("logs/daily_logs_2026-03-03.jsonl").exists());
+        assert!(dir.path().join(&today_file).exists());
 
         // FTS5 should also be cleaned — old entry gone
         let results = log.search("ancient forgotten", 10).unwrap();

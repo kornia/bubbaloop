@@ -15,7 +15,7 @@ impl NodeManager {
     /// Start health monitoring via Zenoh heartbeats
     ///
     /// Subscribes to both legacy `bubbaloop/nodes/*/health` and scoped
-    /// `bubbaloop/*/*/health/*` topics, and marks nodes as unhealthy
+    /// `bubbaloop/*/*/*/health` topics, and marks nodes as unhealthy
     /// if no heartbeat is received within HEALTH_TIMEOUT_MS.
     pub async fn start_health_monitor(
         self: Arc<Self>,
@@ -30,13 +30,13 @@ impl NodeManager {
             .await
             .map_err(|e| NodeManagerError::BuildError(format!("Zenoh subscribe error: {}", e)))?;
 
-        // Subscribe to scoped health heartbeats: bubbaloop/{scope}/{machine}/health/{name}
+        // Subscribe to scoped health heartbeats: bubbaloop/{scope}/{machine}/{name}/health
         let scoped_subscriber = session
-            .declare_subscriber("bubbaloop/*/*/health/*")
+            .declare_subscriber("bubbaloop/*/*/*/health")
             .await
             .map_err(|e| NodeManagerError::BuildError(format!("Zenoh subscribe error: {}", e)))?;
 
-        log::info!("Started health monitor, subscribing to bubbaloop/nodes/*/health and bubbaloop/*/*/health/*");
+        log::info!("Started health monitor, subscribing to bubbaloop/nodes/*/health and bubbaloop/*/*/*/health");
 
         // Spawn heartbeat receiver task (merges both subscriber streams)
         let manager_heartbeat = manager.clone();
@@ -149,8 +149,8 @@ impl NodeManager {
 /// Extract node name from health topic key.
 ///
 /// Handles two formats:
-/// - Legacy:  `bubbaloop/nodes/{name}/health`         -> name at index 2
-/// - Scoped:  `bubbaloop/{scope}/{machine}/health/{name}` -> name at index 4
+/// - Legacy:  `bubbaloop/nodes/{name}/health`             -> name at index 2
+/// - Scoped:  `bubbaloop/{scope}/{machine}/{name}/health` -> name at index 3
 fn extract_health_node_name(key: &str) -> Option<String> {
     let parts: Vec<&str> = key.split('/').collect();
     if parts.is_empty() || parts[0] != "bubbaloop" {
@@ -158,13 +158,13 @@ fn extract_health_node_name(key: &str) -> Option<String> {
     }
 
     // Legacy format: bubbaloop/nodes/{name}/health
-    if parts.len() >= 4 && parts[1] == "nodes" && parts[3] == "health" {
+    if parts.len() == 4 && parts[1] == "nodes" && parts[3] == "health" {
         return Some(parts[2].to_string());
     }
 
-    // Scoped format: bubbaloop/{scope}/{machine}/health/{name}
-    if parts.len() >= 5 && parts[3] == "health" {
-        return Some(parts[4].to_string());
+    // Scoped format: bubbaloop/{scope}/{machine}/{name}/health
+    if parts.len() == 5 && parts[4] == "health" {
+        return Some(parts[3].to_string());
     }
 
     None
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn test_extract_health_node_name_scoped() {
         assert_eq!(
-            extract_health_node_name("bubbaloop/scope/machine1/health/my-node"),
+            extract_health_node_name("bubbaloop/scope/machine1/my-node/health"),
             Some("my-node".to_string())
         );
     }
@@ -195,5 +195,10 @@ mod tests {
         assert_eq!(extract_health_node_name("invalid/path"), None);
         assert_eq!(extract_health_node_name(""), None);
         assert_eq!(extract_health_node_name("other/nodes/x/health"), None);
+        // old format no longer recognized
+        assert_eq!(
+            extract_health_node_name("bubbaloop/scope/machine1/health/my-node"),
+            None
+        );
     }
 }

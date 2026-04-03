@@ -2,13 +2,12 @@ use std::sync::Arc;
 
 /// Context provided to nodes by the SDK runtime.
 pub struct NodeContext {
-    /// Shared Zenoh session (Arc-wrapped, safe to clone)
     pub session: Arc<zenoh::Session>,
-    /// Deployment scope (from BUBBALOOP_SCOPE env, default: "local")
     pub scope: String,
-    /// Machine identifier (from BUBBALOOP_MACHINE_ID env, default: hostname)
     pub machine_id: String,
-    /// Shutdown signal receiver — select! on this in your main loop
+    /// Per-instance name (from config `name` field, or the node type name).
+    /// Ensures multi-instance deployments don't collide on health/schema topics.
+    pub instance_name: String,
     pub shutdown_rx: tokio::sync::watch::Receiver<()>,
 }
 
@@ -18,17 +17,7 @@ impl NodeContext {
         format!("bubbaloop/{}/{}/{}", self.scope, self.machine_id, suffix)
     }
 
-    /// Create a declared publisher for protobuf messages.
-    ///
-    /// Sets `Encoding::APPLICATION_PROTOBUF` with the message type name as the schema suffix.
-    /// The encoding is declared once at publisher creation time and reused for every `put()`.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let pub = ctx.publisher_proto::<MyMessage>("sensor/data").await?;
-    /// pub.put(&my_msg).await?;
-    /// ```
+    /// Create a protobuf publisher with `APPLICATION_PROTOBUF` encoding and schema suffix.
     pub async fn publisher_proto<T>(
         &self,
         suffix: &str,
@@ -39,17 +28,7 @@ impl NodeContext {
         crate::publisher::ProtoPublisher::new(&self.session, &self.topic(suffix)).await
     }
 
-    /// Create a declared publisher for JSON messages.
-    ///
-    /// Sets `Encoding::APPLICATION_JSON`. The encoding is declared once at publisher
-    /// creation time and reused for every `put()`.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let pub = ctx.publisher_json("status/current").await?;
-    /// pub.put(&serde_json::json!({"state": "running"})).await?;
-    /// ```
+    /// Create a JSON publisher with `APPLICATION_JSON` encoding.
     pub async fn publisher_json(
         &self,
         suffix: &str,
@@ -57,19 +36,9 @@ impl NodeContext {
         crate::publisher::JsonPublisher::new(&self.session, &self.topic(suffix)).await
     }
 
-    /// Create a typed subscriber that decodes protobuf messages automatically.
+    /// Create a typed subscriber that auto-decodes protobuf messages.
     ///
-    /// `suffix` is appended to the scoped base topic. Use `+` and `**` wildcards
-    /// for cross-machine subscriptions where needed.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let sub = ctx.subscriber::<MyMessage>("sensor/data").await?;
-    /// while let Some(msg) = sub.recv().await {
-    ///     println!("received: {:?}", msg);
-    /// }
-    /// ```
+    /// `suffix` is appended to the scoped base topic.
     pub async fn subscriber<T>(
         &self,
         suffix: &str,
@@ -80,19 +49,7 @@ impl NodeContext {
         crate::subscriber::TypedSubscriber::new(&self.session, &self.topic(suffix)).await
     }
 
-    /// Create a raw (untyped) subscriber with a literal key expression.
-    ///
-    /// Unlike `subscriber()`, this does NOT prepend the scoped base topic.
-    /// Use it for dashboard-style dynamic decoding across many topics.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let sub = ctx.subscriber_raw("bubbaloop/**").await?;
-    /// while let Some(sample) = sub.recv().await {
-    ///     println!("encoding: {}", sample.encoding());
-    /// }
-    /// ```
+    /// Create a raw subscriber with a literal key expression (no scoped prefix).
     pub async fn subscriber_raw(
         &self,
         key_expr: &str,
@@ -103,8 +60,6 @@ impl NodeContext {
 
 #[cfg(test)]
 mod tests {
-    /// topic() formats the key as bubbaloop/{scope}/{machine_id}/{suffix}.
-    /// We test the format rule directly (no Zenoh session needed).
     #[test]
     fn topic_format() {
         let scope = "prod";

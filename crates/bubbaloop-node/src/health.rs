@@ -3,7 +3,7 @@ use tokio::sync::watch;
 
 /// Spawn a background task that publishes health heartbeats every 5 seconds.
 ///
-/// Publishes `"ok"` to `bubbaloop/{scope}/{machine_id}/health/{node_name}`.
+/// Publishes `"ok"` to `bubbaloop/{scope}/{machine_id}/{node_name}/health`.
 /// Stops when the shutdown signal fires.
 pub async fn spawn_health_heartbeat(
     session: Arc<zenoh::Session>,
@@ -12,7 +12,7 @@ pub async fn spawn_health_heartbeat(
     node_name: &str,
     mut shutdown_rx: watch::Receiver<()>,
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    let health_topic = format!("bubbaloop/{}/{}/health/{}", scope, machine_id, node_name);
+    let health_topic = format!("bubbaloop/{}/{}/{}/health", scope, machine_id, node_name);
     log::info!("Health heartbeat: {}", health_topic);
     let publisher = session
         .declare_publisher(health_topic)

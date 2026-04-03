@@ -69,20 +69,8 @@ impl JsonPublisher {
         Ok(Self { publisher })
     }
 
-    /// Serialize `value` as JSON bytes and publish it.
-    pub async fn put(&self, value: &serde_json::Value) -> anyhow::Result<()> {
-        let bytes =
-            serde_json::to_vec(value).map_err(|e| anyhow::anyhow!("JSON serialization failed: {}", e))?;
-        self.publisher
-            .put(bytes)
-            .await
-            .map_err(|e| anyhow::anyhow!("JsonPublisher put failed: {}", e))
-    }
-
-    /// Serialize any `serde::Serialize` value as JSON bytes and publish it.
-    ///
-    /// Convenience overload for types that implement `Serialize` directly.
-    pub async fn put_serializable<S: serde::Serialize>(&self, value: &S) -> anyhow::Result<()> {
+    /// Serialize any `Serialize` value as JSON bytes and publish it.
+    pub async fn put<S: serde::Serialize>(&self, value: &S) -> anyhow::Result<()> {
         let bytes =
             serde_json::to_vec(value).map_err(|e| anyhow::anyhow!("JSON serialization failed: {}", e))?;
         self.publisher

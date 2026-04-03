@@ -105,10 +105,7 @@ impl RawSubscriber {
 
     /// Try to receive a raw [`Sample`] without blocking.
     pub fn try_recv(&self) -> Option<Sample> {
-        match self.inner.handler().try_recv() {
-            Ok(Some(sample)) => Some(sample),
-            _ => None,
-        }
+        self.inner.handler().try_recv().ok().flatten()
     }
 }
 

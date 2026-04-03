@@ -11,10 +11,11 @@ Physical AI orchestration built on Zenoh. Single binary: CLI + daemon + MCP serv
 ## Structure
 
 ```
-crates/bubbaloop/          # Main binary (CLI + daemon + MCP server)
-crates/bubbaloop-node-sdk/ # Node SDK (standalone, NOT in workspace — batteries-included framework)
-crates/bubbaloop-schemas/  # Protobuf schemas (standalone, NOT in workspace — never add to workspace)
-dashboard/                 # React + Vite + TypeScript
+crates/bubbaloop/           # Main binary (CLI + daemon + MCP server)
+crates/bubbaloop-node/      # Node SDK (standalone, NOT in workspace — batteries-included framework)
+crates/bubbaloop-node-build/ # Build helper for nodes (wraps prost-build, standalone)
+crates/bubbaloop-schemas/   # Protobuf schemas (standalone, NOT in workspace — never add to workspace)
+dashboard/                  # React + Vite + TypeScript
 ```
 
 Key source files in `crates/bubbaloop/src/`:
@@ -46,21 +47,38 @@ Key source files in `crates/bubbaloop/src/`:
 - `mcp/mod.rs` — MCP tools, BubbaLoopMcpServer<P>, ServerHandler impl
 - `mcp/platform.rs` — PlatformOperations trait, DaemonPlatform, MockPlatform
 
-### Node SDK (`crates/bubbaloop-node-sdk/`)
+### Node SDK (`crates/bubbaloop-node/`)
 
 Batteries-included framework for writing nodes. Reduces boilerplate from ~300 to ~50 lines.
 - `lib.rs` — `Node` trait, `run_node()`, re-exports (zenoh, prost, tokio, anyhow, log, serde_json)
-- `context.rs` — `NodeContext` (session, scope, machine_id, shutdown_rx, `topic()`, `publisher_proto()`, `publisher_json()`, `subscriber()`, `subscriber_raw()`)
+- `context.rs` — `NodeContext` (session, scope, machine_id, **instance_name**, shutdown_rx, `topic()`, `publisher_proto()`, `publisher_json()`, `subscriber()`, `subscriber_raw()`)
 - `publisher.rs` — `ProtoPublisher<T>` (APPLICATION_PROTOBUF + schema suffix), `JsonPublisher` (APPLICATION_JSON)
 - `subscriber.rs` — `TypedSubscriber<T>` (auto-decode), `RawSubscriber` (raw Sample access)
-- `config.rs` — Generic YAML config loading
+- `config.rs` — YAML config loading; `extract_name()` reads `name` field for per-instance topics
 - `zenoh_session.rs` — Client-mode Zenoh session (scouting disabled)
-- `health.rs` — Background health heartbeat (5s interval)
-- `schema.rs` — Schema queryable (FileDescriptorSet serving, protobuf nodes only)
+- `health.rs` — Background health heartbeat (5s interval) to `{instance_name}/health`
+- `schema.rs` — Schema queryable at `{instance_name}/schema` (FileDescriptorSet serving)
 - `shutdown.rs` — SIGINT/SIGTERM signal handling via watch channel
 
-Standalone crate (NOT in workspace). Nodes depend via git:
-`bubbaloop-node-sdk = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }`
+Standalone crates (NOT in workspace). Nodes depend via git:
+```toml
+[dependencies]
+bubbaloop-node = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
+[build-dependencies]
+bubbaloop-node-build = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
+```
+
+**Multi-instance support:** SDK reads `name` from config YAML at startup. Health and schema topics use this name, so `tapo_entrance` and `tapo_terrace` instances of the same binary get separate topics: `bubbaloop/local/host/tapo_entrance/health` vs `bubbaloop/local/host/tapo_terrace/health`.
+
+### Node Build Helper (`crates/bubbaloop-node-build/`)
+
+Companion build crate (tonic-build pattern). Node `build.rs` is one line:
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    bubbaloop_node_build::compile_protos(&["protos/my_node.proto"])
+}
+```
+Automatically: embeds `header.proto` (no local copy needed), maps `.bubbaloop.header.v1` → `::bubbaloop_node::schemas::header::v1`, writes `descriptor.bin` for schema queryable registration.
 
 Python SDK: `python-sdk/` — pure Python wrapper over zenoh-python, same API. Install:
 `pip install git+https://github.com/kornia/bubbaloop.git#subdirectory=python-sdk`

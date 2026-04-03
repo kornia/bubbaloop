@@ -282,7 +282,7 @@ export interface UseTopicDiscoveryResult {
  * Examples:
  *   "bubbaloop/local/nvidia_orin00/camera/entrance/compressed" -> "local/nvidia_orin00/camera/entrance/compressed"
  *   "bubbaloop/nvidia-orin00/daemon/nodes"                     -> "nvidia-orin00/daemon/nodes"
- *   "bubbaloop/local/nvidia_orin00/health/system-telemetry"    -> "local/nvidia_orin00/health/system-telemetry"
+ *   "bubbaloop/local/nvidia_orin00/system-telemetry/health"    -> "local/nvidia_orin00/system-telemetry/health"
  *   "bubbaloop/daemon/nodes"                                   -> "daemon/nodes"
  */
 export function normalizeKeyExpr(keyExpr: string): { display: string; raw: string } {
