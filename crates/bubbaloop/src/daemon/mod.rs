@@ -18,9 +18,11 @@ pub mod context_provider;
 pub mod federated;
 pub mod gateway;
 pub mod mission;
+pub mod native_supervisor;
 pub mod node_manager;
 pub mod reactive;
 pub mod registry;
+pub mod supervisor;
 pub mod systemd;
 pub mod telemetry;
 pub mod util;
@@ -637,8 +639,8 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         );
     }
 
-    // Start systemd signal listener for real-time state updates
-    log::info!("Starting systemd signal listener...");
+    // Start process signal listener for real-time state updates
+    log::info!("Starting signal listener...");
     if let Err(e) = node_manager.clone().start_signal_listener().await {
         log::warn!(
             "Failed to start signal listener (will rely on polling): {}",

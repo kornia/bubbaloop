@@ -59,7 +59,9 @@ For contributors or building from source.
 |----------|--------|-------|
 | Ubuntu 22.04+ | Supported | Primary development platform |
 | NVIDIA Jetson | Supported | Tested on JetPack 5.x/6.x |
-| macOS | Experimental | GStreamer may require additional setup |
+| Raspberry Pi 5 | Supported | Tested on Raspberry Pi 5 (ARM64 Linux) |
+| Docker | Supported (development) | Tested in the project devcontainer (non-systemd fallback mode) |
+| macOS | Not supported | Future target; no supported install/runtime flow today |
 | Windows | Not tested | WSL2 may work |
 
 ### Hardware Requirements
@@ -124,6 +126,11 @@ pixi run daemon      # Start daemon
 pixi run dashboard   # Start web dashboard
 ```
 
+On Docker or other environments without systemd, the daemon may fall back to a
+native process supervisor for development. Treat that mode as development-only:
+it is useful for bringing the daemon up, but it does not offer full systemd
+behaviour or journalctl-backed logs.
+
 ## Service Management
 
 The install script sets up systemd user services:
@@ -143,6 +150,9 @@ journalctl --user -u bubbaloop-daemon -f
 # Stop all services
 systemctl --user stop bubbaloop-daemon zenoh-bridge zenohd
 ```
+
+These commands are Linux/systemd-specific. They are not the right model for the
+development fallback used in Docker or other non-systemd environments.
 
 ## Troubleshooting
 

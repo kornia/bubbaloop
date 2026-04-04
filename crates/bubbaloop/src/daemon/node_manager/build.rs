@@ -4,7 +4,7 @@
 //! command validation, and timeout management.
 
 use super::{NodeManager, NodeManagerError, Result};
-use crate::daemon::systemd::{self, ActiveState};
+use crate::daemon::systemd::ActiveState;
 use crate::schemas::daemon::v1::NodeStatus;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -45,11 +45,10 @@ impl NodeManager {
     /// Stop a node's service if it is currently running.
     /// Used before build/clean operations to avoid conflicts with the running binary.
     async fn stop_if_running(&self, name: &str) {
-        let service_name = systemd::get_service_name(name);
-        match self.systemd.get_active_state(&service_name).await {
+        match self.supervisor.get_active_state(name).await {
             Ok(ActiveState::Active | ActiveState::Activating) => {
                 log::info!("Stopping {} before build/clean", name);
-                let _ = self.systemd.stop_unit(&service_name).await;
+                let _ = self.supervisor.stop_unit(name).await;
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             Err(e) => {
