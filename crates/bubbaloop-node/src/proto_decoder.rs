@@ -37,7 +37,10 @@ pub struct ProtoDecoder {
 
 impl ProtoDecoder {
     pub fn new(session: Arc<zenoh::Session>) -> Self {
-        Self { session, cache: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            session,
+            cache: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     /// Decode a Zenoh sample whose encoding is `application/protobuf;<TypeName>`.
@@ -58,9 +61,11 @@ impl ProtoDecoder {
         let schema_key = schema_key_for(sample);
         let pool = self.get_or_fetch_pool(&type_name, &schema_key).await?;
 
-        let msg_desc = pool
-            .get_message_by_name(&type_name)
-            .ok_or_else(|| NodeError::GetSampleTimeout { topic: type_name.clone() })?;
+        let msg_desc =
+            pool.get_message_by_name(&type_name)
+                .ok_or_else(|| NodeError::GetSampleTimeout {
+                    topic: type_name.clone(),
+                })?;
 
         let payload = sample.payload().to_bytes();
         let msg = DynamicMessage::decode(msg_desc, payload.as_ref())
@@ -69,7 +74,8 @@ impl ProtoDecoder {
         let opts = SerializeOptions::new()
             .use_proto_field_name(true)
             .skip_default_fields(false);
-        let value = msg.serialize_with_options(serde_json::value::Serializer, &opts)
+        let value = msg
+            .serialize_with_options(serde_json::value::Serializer, &opts)
             .map_err(NodeError::Json)?;
         Ok(Some(value))
     }
@@ -130,14 +136,18 @@ impl ProtoDecoder {
             }
         }
 
-        Err(NodeError::GetSampleTimeout { topic: schema_key.to_string() })
+        Err(NodeError::GetSampleTimeout {
+            topic: schema_key.to_string(),
+        })
     }
 
     async fn store_pool(&self, pool: DescriptorPool) {
         let mut cache = self.cache.lock().await;
         for file in pool.files() {
             for msg in file.messages() {
-                cache.entry(msg.full_name().to_string()).or_insert_with(|| pool.clone());
+                cache
+                    .entry(msg.full_name().to_string())
+                    .or_insert_with(|| pool.clone());
             }
         }
     }
@@ -152,7 +162,11 @@ pub fn proto_type_from_encoding(encoding: &zenoh::bytes::Encoding) -> Option<Str
         return None;
     }
     let type_name = s.split_once(';')?.1.trim().to_string();
-    if type_name.is_empty() { None } else { Some(type_name) }
+    if type_name.is_empty() {
+        None
+    } else {
+        Some(type_name)
+    }
 }
 
 fn schema_key_for(sample: &zenoh::sample::Sample) -> String {
@@ -162,4 +176,3 @@ fn schema_key_for(sample: &zenoh::sample::Sample) -> String {
         None => format!("{}/schema", key),
     }
 }
-

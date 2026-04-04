@@ -19,15 +19,28 @@ impl<T: prost::Message + Default + crate::MessageTypeName> ProtoPublisher<T> {
             .declare_publisher(key_expr.to_string())
             .encoding(encoding)
             .await
-            .map_err(|e| NodeError::PublisherDeclare { topic: key_expr.to_string(), source: e })?;
+            .map_err(|e| NodeError::PublisherDeclare {
+                topic: key_expr.to_string(),
+                source: e,
+            })?;
 
-        log::debug!("ProtoPublisher declared on '{}' (type={})", key_expr, T::type_name());
-        Ok(Self { publisher, _marker: std::marker::PhantomData })
+        log::debug!(
+            "ProtoPublisher declared on '{}' (type={})",
+            key_expr,
+            T::type_name()
+        );
+        Ok(Self {
+            publisher,
+            _marker: std::marker::PhantomData,
+        })
     }
 
     /// Encode `msg` as protobuf bytes and publish it.
     pub async fn put(&self, msg: &T) -> Result<()> {
-        self.publisher.put(msg.encode_to_vec()).await.map_err(NodeError::Publish)
+        self.publisher
+            .put(msg.encode_to_vec())
+            .await
+            .map_err(NodeError::Publish)
     }
 }
 
@@ -45,7 +58,10 @@ impl JsonPublisher {
             .declare_publisher(key_expr.to_string())
             .encoding(Encoding::APPLICATION_JSON)
             .await
-            .map_err(|e| NodeError::PublisherDeclare { topic: key_expr.to_string(), source: e })?;
+            .map_err(|e| NodeError::PublisherDeclare {
+                topic: key_expr.to_string(),
+                source: e,
+            })?;
 
         log::debug!("JsonPublisher declared on '{}'", key_expr);
         Ok(Self { publisher })

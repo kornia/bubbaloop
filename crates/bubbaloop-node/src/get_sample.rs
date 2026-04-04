@@ -30,13 +30,20 @@ pub async fn get_sample(
         .declare_subscriber(key_expr.to_string())
         .with(FifoChannel::new(1))
         .await
-        .map_err(|e| NodeError::SubscriberDeclare { topic: key_expr.to_string(), source: e })?;
+        .map_err(|e| NodeError::SubscriberDeclare {
+            topic: key_expr.to_string(),
+            source: e,
+        })?;
 
     let result = tokio::time::timeout(timeout, subscriber.handler().recv_async()).await;
 
     match result {
         Ok(Ok(sample)) => Ok(sample),
-        Ok(Err(_)) => Err(NodeError::GetSampleTimeout { topic: key_expr.to_string() }),
-        Err(_elapsed) => Err(NodeError::GetSampleTimeout { topic: key_expr.to_string() }),
+        Ok(Err(_)) => Err(NodeError::GetSampleTimeout {
+            topic: key_expr.to_string(),
+        }),
+        Err(_elapsed) => Err(NodeError::GetSampleTimeout {
+            topic: key_expr.to_string(),
+        }),
     }
 }

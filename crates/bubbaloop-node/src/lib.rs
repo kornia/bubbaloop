@@ -26,20 +26,22 @@
 //! }
 //! ```
 
-pub mod error;
 mod config;
 mod context;
+pub mod discover;
+pub mod error;
 pub mod get_sample;
 mod health;
 pub mod proto_decoder;
 pub mod publisher;
 mod schema;
 pub mod schemas;
-pub mod subscriber;
 mod shutdown;
+pub mod subscriber;
 mod zenoh_session;
 
 pub use context::NodeContext;
+pub use discover::{discover_nodes, NodeInfo};
 pub use error::NodeError;
 pub use get_sample::get_sample;
 pub use proto_decoder::ProtoDecoder;
@@ -105,8 +107,7 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
 
     let args: SdkArgs = argh::from_env();
 
-    let instance_name = config::extract_name(&args.config)
-        .unwrap_or_else(|| N::name().to_string());
+    let instance_name = config::extract_name(&args.config).unwrap_or_else(|| N::name().to_string());
     let node_config: N::Config = config::load_config(&args.config)?;
     log::info!(
         "{} (instance={}): config loaded from {}",
@@ -128,9 +129,14 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
     let (shutdown_tx, _) = shutdown::setup_shutdown()?;
     let session = zenoh_session::open_zenoh_session(&args.endpoint).await?;
 
-    let _schema_queryable =
-        schema::declare_schema_queryable(&session, &scope, &machine_id, &instance_name, N::descriptor())
-            .await?;
+    let _schema_queryable = schema::declare_schema_queryable(
+        &session,
+        &scope,
+        &machine_id,
+        &instance_name,
+        N::descriptor(),
+    )
+    .await?;
 
     let _health_handle = health::spawn_health_heartbeat(
         session.clone(),

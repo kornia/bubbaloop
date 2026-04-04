@@ -20,7 +20,10 @@ impl NodeContext {
     }
 
     /// Create a protobuf publisher with `APPLICATION_PROTOBUF` encoding and schema suffix.
-    pub async fn publisher_proto<T>(&self, suffix: &str) -> Result<crate::publisher::ProtoPublisher<T>>
+    pub async fn publisher_proto<T>(
+        &self,
+        suffix: &str,
+    ) -> Result<crate::publisher::ProtoPublisher<T>>
     where
         T: prost::Message + Default + crate::MessageTypeName,
     {

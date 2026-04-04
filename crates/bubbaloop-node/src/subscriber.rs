@@ -1,6 +1,6 @@
 use std::sync::Arc;
-use zenoh::{pubsub::Subscriber, sample::Sample};
 use zenoh::handlers::FifoChannel;
+use zenoh::{pubsub::Subscriber, sample::Sample};
 
 use crate::error::{NodeError, Result};
 
@@ -20,10 +20,16 @@ impl<T: prost::Message + Default> TypedSubscriber<T> {
             .declare_subscriber(key_expr.to_string())
             .with(FifoChannel::new(256))
             .await
-            .map_err(|e| NodeError::SubscriberDeclare { topic: key_expr.to_string(), source: e })?;
+            .map_err(|e| NodeError::SubscriberDeclare {
+                topic: key_expr.to_string(),
+                source: e,
+            })?;
 
         log::debug!("TypedSubscriber declared on '{}'", key_expr);
-        Ok(Self { inner: subscriber, _marker: std::marker::PhantomData })
+        Ok(Self {
+            inner: subscriber,
+            _marker: std::marker::PhantomData,
+        })
     }
 
     /// Receive the next decoded message, or `None` if the subscriber was undeclared.
@@ -81,7 +87,10 @@ impl RawSubscriber {
             .declare_subscriber(key_expr.to_string())
             .with(FifoChannel::new(256))
             .await
-            .map_err(|e| NodeError::SubscriberDeclare { topic: key_expr.to_string(), source: e })?;
+            .map_err(|e| NodeError::SubscriberDeclare {
+                topic: key_expr.to_string(),
+                source: e,
+            })?;
 
         log::debug!("RawSubscriber declared on '{}'", key_expr);
         Ok(Self { inner: subscriber })

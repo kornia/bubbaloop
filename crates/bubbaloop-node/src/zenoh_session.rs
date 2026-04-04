@@ -22,20 +22,31 @@ pub async fn open_zenoh_session(endpoint: &Option<String>) -> Result<Arc<zenoh::
     // Client mode is mandatory — peer mode doesn't route through zenohd router
     config
         .insert_json5("mode", r#""client""#)
-        .map_err(|e| NodeError::ZenohConfig { key: "mode", source: e })?;
+        .map_err(|e| NodeError::ZenohConfig {
+            key: "mode",
+            source: e,
+        })?;
     config
         .insert_json5("connect/endpoints", &format!(r#"["{}"]"#, endpoint))
-        .map_err(|e| NodeError::ZenohConfig { key: "connect/endpoints", source: e })?;
+        .map_err(|e| NodeError::ZenohConfig {
+            key: "connect/endpoints",
+            source: e,
+        })?;
     // Disable scouting to prevent connecting to remote peers via Tailscale/VPN
     config
         .insert_json5("scouting/multicast/enabled", "false")
-        .map_err(|e| NodeError::ZenohConfig { key: "scouting/multicast/enabled", source: e })?;
+        .map_err(|e| NodeError::ZenohConfig {
+            key: "scouting/multicast/enabled",
+            source: e,
+        })?;
     config
         .insert_json5("scouting/gossip/enabled", "false")
-        .map_err(|e| NodeError::ZenohConfig { key: "scouting/gossip/enabled", source: e })?;
+        .map_err(|e| NodeError::ZenohConfig {
+            key: "scouting/gossip/enabled",
+            source: e,
+        })?;
 
-    let session =
-        zenoh::open(config).await.map_err(NodeError::ZenohSession)?;
+    let session = zenoh::open(config).await.map_err(NodeError::ZenohSession)?;
 
     log::info!("Connected to Zenoh");
     Ok(Arc::new(session))
