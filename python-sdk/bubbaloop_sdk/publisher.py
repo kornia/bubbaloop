@@ -53,9 +53,9 @@ class JsonPublisher:
             data = value.encode()
         else:
             data = json.dumps(value).encode()
+        self._pub.put(data)
         with self._lock:
             self._cache[0] = data
-        self._pub.put(data)
 
     def undeclare(self) -> None:
         self._pub.undeclare()
@@ -108,9 +108,9 @@ class ProtoPublisher:
             data = bytes(msg)
         else:
             raise TypeError(f"Expected protobuf message or bytes, got {type(msg).__name__}")
+        self._pub.put(data)
         with self._lock:
             self._cache[0] = data
-        self._pub.put(data)
 
     def undeclare(self) -> None:
         self._pub.undeclare()

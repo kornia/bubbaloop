@@ -41,8 +41,8 @@ impl<T: prost::Message + Default + crate::MessageTypeName> ProtoPublisher<T> {
         let queryable = session
             .declare_queryable(key_expr)
             .callback(move |query| {
-                let guard = buf.lock().unwrap();
-                if let Some(bytes) = guard.as_ref() {
+                let snapshot = buf.lock().unwrap().clone();
+                if let Some(bytes) = snapshot {
                     let key = query.key_expr().clone();
                     if let Err(e) = query.reply(key, bytes.as_slice()).wait() {
                         log::warn!("ProtoPublisher queryable reply failed: {}", e);
@@ -61,14 +61,15 @@ impl<T: prost::Message + Default + crate::MessageTypeName> ProtoPublisher<T> {
         })
     }
 
-    /// Encode `msg` as protobuf bytes, cache it, and publish it.
+    /// Encode `msg` as protobuf bytes, publish it, then cache it.
     pub async fn put(&self, msg: &T) -> anyhow::Result<()> {
         let bytes = msg.encode_to_vec();
-        *self.last_bytes.lock().unwrap() = Some(bytes.clone());
         self.publisher
-            .put(bytes)
+            .put(bytes.clone())
             .await
-            .map_err(|e| anyhow::anyhow!("ProtoPublisher put failed: {}", e))
+            .map_err(|e| anyhow::anyhow!("ProtoPublisher put failed: {}", e))?;
+        *self.last_bytes.lock().unwrap() = Some(bytes);
+        Ok(())
     }
 }
 
@@ -106,8 +107,8 @@ impl JsonPublisher {
         let queryable = session
             .declare_queryable(key_expr)
             .callback(move |query| {
-                let guard = buf.lock().unwrap();
-                if let Some(bytes) = guard.as_ref() {
+                let snapshot = buf.lock().unwrap().clone();
+                if let Some(bytes) = snapshot {
                     let key = query.key_expr().clone();
                     if let Err(e) = query.reply(key, bytes.as_slice()).wait() {
                         log::warn!("JsonPublisher queryable reply failed: {}", e);
@@ -121,15 +122,16 @@ impl JsonPublisher {
         Ok(Self { publisher, last_bytes, _queryable: queryable })
     }
 
-    /// Serialize any `Serialize` value as JSON bytes, cache it, and publish it.
+    /// Serialize any `Serialize` value as JSON bytes, publish it, then cache it.
     pub async fn put<S: serde::Serialize>(&self, value: &S) -> anyhow::Result<()> {
         let bytes =
             serde_json::to_vec(value).map_err(|e| anyhow::anyhow!("JSON serialization failed: {}", e))?;
-        *self.last_bytes.lock().unwrap() = Some(bytes.clone());
         self.publisher
-            .put(bytes)
+            .put(bytes.clone())
             .await
-            .map_err(|e| anyhow::anyhow!("JsonPublisher put failed: {}", e))
+            .map_err(|e| anyhow::anyhow!("JsonPublisher put failed: {}", e))?;
+        *self.last_bytes.lock().unwrap() = Some(bytes);
+        Ok(())
     }
 }
 
