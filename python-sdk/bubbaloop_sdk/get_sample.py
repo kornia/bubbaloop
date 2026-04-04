@@ -32,7 +32,7 @@ async def get_sample(
 
         sample = await get_sample(session, "bubbaloop/local/host/openmeteo/weather", timeout=5)
         import json
-        weather = json.loads(bytes(sample.payload()))
+        weather = json.loads(bytes(sample.payload))
     """
     loop = asyncio.get_event_loop()
     future: asyncio.Future[zenoh.Sample] = loop.create_future()
