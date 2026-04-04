@@ -2,6 +2,8 @@ use std::sync::Arc;
 use zenoh::{pubsub::Subscriber, sample::Sample};
 use zenoh::handlers::FifoChannel;
 
+use crate::error::{NodeError, Result};
+
 /// A typed protobuf subscriber that decodes incoming messages automatically.
 ///
 /// Created via [`NodeContext::subscriber`](crate::NodeContext::subscriber).
@@ -13,23 +15,15 @@ pub struct TypedSubscriber<T: prost::Message + Default> {
 }
 
 impl<T: prost::Message + Default> TypedSubscriber<T> {
-    pub(crate) async fn new(
-        session: &Arc<zenoh::Session>,
-        key_expr: &str,
-    ) -> anyhow::Result<Self> {
+    pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
         let subscriber = session
             .declare_subscriber(key_expr.to_string())
             .with(FifoChannel::new(256))
             .await
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to declare typed subscriber on '{}': {}", key_expr, e)
-            })?;
+            .map_err(|e| NodeError::SubscriberDeclare { topic: key_expr.to_string(), source: e })?;
 
         log::debug!("TypedSubscriber declared on '{}'", key_expr);
-        Ok(Self {
-            inner: subscriber,
-            _marker: std::marker::PhantomData,
-        })
+        Ok(Self { inner: subscriber, _marker: std::marker::PhantomData })
     }
 
     /// Receive the next decoded message, or `None` if the subscriber was undeclared.
@@ -82,17 +76,12 @@ pub struct RawSubscriber {
 }
 
 impl RawSubscriber {
-    pub(crate) async fn new(
-        session: &Arc<zenoh::Session>,
-        key_expr: &str,
-    ) -> anyhow::Result<Self> {
+    pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
         let subscriber = session
             .declare_subscriber(key_expr.to_string())
             .with(FifoChannel::new(256))
             .await
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to declare raw subscriber on '{}': {}", key_expr, e)
-            })?;
+            .map_err(|e| NodeError::SubscriberDeclare { topic: key_expr.to_string(), source: e })?;
 
         log::debug!("RawSubscriber declared on '{}'", key_expr);
         Ok(Self { inner: subscriber })

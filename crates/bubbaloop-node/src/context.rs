@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use crate::error::Result;
+
 /// Context provided to nodes by the SDK runtime.
 pub struct NodeContext {
     pub session: Arc<zenoh::Session>,
@@ -18,10 +20,7 @@ impl NodeContext {
     }
 
     /// Create a protobuf publisher with `APPLICATION_PROTOBUF` encoding and schema suffix.
-    pub async fn publisher_proto<T>(
-        &self,
-        suffix: &str,
-    ) -> anyhow::Result<crate::publisher::ProtoPublisher<T>>
+    pub async fn publisher_proto<T>(&self, suffix: &str) -> Result<crate::publisher::ProtoPublisher<T>>
     where
         T: prost::Message + Default + crate::MessageTypeName,
     {
@@ -29,20 +28,14 @@ impl NodeContext {
     }
 
     /// Create a JSON publisher with `APPLICATION_JSON` encoding.
-    pub async fn publisher_json(
-        &self,
-        suffix: &str,
-    ) -> anyhow::Result<crate::publisher::JsonPublisher> {
+    pub async fn publisher_json(&self, suffix: &str) -> Result<crate::publisher::JsonPublisher> {
         crate::publisher::JsonPublisher::new(&self.session, &self.topic(suffix)).await
     }
 
     /// Create a typed subscriber that auto-decodes protobuf messages.
     ///
     /// `suffix` is appended to the scoped base topic.
-    pub async fn subscriber<T>(
-        &self,
-        suffix: &str,
-    ) -> anyhow::Result<crate::subscriber::TypedSubscriber<T>>
+    pub async fn subscriber<T>(&self, suffix: &str) -> Result<crate::subscriber::TypedSubscriber<T>>
     where
         T: prost::Message + Default,
     {
@@ -50,10 +43,7 @@ impl NodeContext {
     }
 
     /// Create a raw subscriber with a literal key expression (no scoped prefix).
-    pub async fn subscriber_raw(
-        &self,
-        key_expr: &str,
-    ) -> anyhow::Result<crate::subscriber::RawSubscriber> {
+    pub async fn subscriber_raw(&self, key_expr: &str) -> Result<crate::subscriber::RawSubscriber> {
         crate::subscriber::RawSubscriber::new(&self.session, key_expr).await
     }
 }

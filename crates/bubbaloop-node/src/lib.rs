@@ -26,6 +26,7 @@
 //! }
 //! ```
 
+pub mod error;
 mod config;
 mod context;
 mod health;
@@ -37,6 +38,7 @@ mod shutdown;
 mod zenoh_session;
 
 pub use context::NodeContext;
+pub use error::NodeError;
 pub use publisher::{JsonPublisher, ProtoPublisher};
 pub use subscriber::{RawSubscriber, TypedSubscriber};
 

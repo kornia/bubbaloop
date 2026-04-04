@@ -1,9 +1,11 @@
 use tokio::sync::watch;
 
+use crate::error::Result;
+
 /// Set up a shutdown channel triggered by SIGINT/SIGTERM.
 ///
 /// Returns the sender (for the signal handler) and a receiver (for the node).
-pub fn setup_shutdown() -> anyhow::Result<(watch::Sender<()>, watch::Receiver<()>)> {
+pub fn setup_shutdown() -> Result<(watch::Sender<()>, watch::Receiver<()>)> {
     let (tx, rx) = watch::channel(());
     let shutdown_tx = tx.clone();
     ctrlc::set_handler(move || {
