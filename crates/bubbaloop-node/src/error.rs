@@ -13,13 +13,6 @@ pub enum NodeError {
         source: zenoh::Error,
     },
 
-    #[error("failed to declare queryable on '{topic}': {source}")]
-    QueryableDeclare {
-        topic: String,
-        #[source]
-        source: zenoh::Error,
-    },
-
     #[error("publish failed: {0}")]
     Publish(#[source] zenoh::Error),
 
@@ -59,6 +52,9 @@ pub enum NodeError {
 
     #[error("failed to declare schema queryable: {0}")]
     SchemaQueryable(#[source] zenoh::Error),
+
+    #[error("get_sample timed out waiting for a message on '{topic}'")]
+    GetSampleTimeout { topic: String },
 
     #[error("failed to create health publisher: {0}")]
     HealthPublisher(#[source] zenoh::Error),
