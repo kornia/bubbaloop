@@ -2,24 +2,27 @@
 
 **Date**: 2026-04-04
 **Status**: Proposal — not implemented
-**Scope**: Node SDK (Rust + Python), `node.yaml` schema, `rtsp-camera` node, agent dispatch tools
+**Scope**: Node SDK (Rust + Python), `node.yaml` schema
 
 ---
 
 ## Problem
 
-Agents cannot interact with running nodes in any structured way today. The existing tools are:
+Agents cannot read data from running nodes. The existing tools are:
 
-- `query_zenoh` — raw Zenoh `get` on queryables (admin-only, works only for nodes that expose a queryable like `schema` or `manifest`)
+- `query_zenoh` — Zenoh `get` on queryables only (`schema`, `manifest`, `command`). Does not work on pub/sub topics.
 - `get_stream_info` — returns topic metadata but no data
-- `send_command` — sends JSON to a node's `command` queryable (ad-hoc, no SDK standard)
-- Context providers — daemon background tasks that subscribe continuously and write to world state (good for ambient data, requires upfront configuration)
+- `send_command` — sends JSON to `{name}/command` (ad-hoc, no SDK standard)
+- Context providers — background subscribe → world state (good for ambient data, requires upfront config)
 
 There is no way for an agent to:
-1. Pull the latest sample from a node on demand
-2. Grab a frame from a camera for vision reasoning
-3. Discover what commands a node accepts
-4. Know what topics a node subscribes to (for pipeline wiring)
+1. Read the current value of a published topic on demand
+2. Discover what commands a node accepts
+3. Know what topics a node subscribes to (for pipeline wiring)
+
+### Root cause: pub/sub and queryable are separate Zenoh primitives
+
+A `put()` reaches subscribers. A `get()` reaches queryables. A regular published topic does not respond to `get`. The SDK currently registers queryables only for `health`, `schema`, and `manifest` — not for published data topics.
 
 ## Design Goals
 
@@ -31,18 +34,51 @@ There is no way for an agent to:
 
 ```
 User → agent: "What's the weather right now?"
-Agent → read_node("openmeteo") → latest weather JSON → answers user
-
-User → agent: "What does the entrance camera see?"
-Agent → grab_frame("tapo-entrance") → JPEG base64 → passes to vision model → answers user
+Agent → discover_capabilities          # finds: openmeteo publishes weather/current
+Agent → query_zenoh("bubbaloop/.../openmeteo/weather/current")  # existing tool
+SDK   → responds with last put() value
+Agent → answers user
 
 Future (not now):
   person-detector node publishes detections
   on: {topic: vision/detections, condition: "person AND confidence>0.85"}
-  → agent wakes, sends Telegram alert, logs to DB
+  → agent wakes, sends Telegram alert
 ```
 
-The two agent tools (`read_node`, `grab_frame`) are all that's needed now. The future system builds on the same SDK queryables.
+No new agent tools required — `query_zenoh` already exists. The SDK just needs to register a queryable mirror for each publisher so `get` returns the last value.
+
+---
+
+## SDK: Publisher Queryable Mirror
+
+For each publisher a node declares, the SDK automatically registers a queryable at the **same topic path**. On every `put()`, the SDK buffers the last payload. On `get()`, the queryable responds with that buffer.
+
+```
+node:    put("bubbaloop/local/jetson/openmeteo/weather/current", payload)
+                                    ↓ subscribers receive streaming data
+agent:   get("bubbaloop/local/jetson/openmeteo/weather/current")
+                                    ↓ queryable responds with last payload
+```
+
+Zenoh supports the same key being both a publisher and a queryable — this is exactly the Zenoh storage pattern, implemented locally inside the node without a storage plugin.
+
+### Per-publisher, not per-node
+
+Each publisher gets its own buffer. A node with three publishers (`weather/current`, `weather/hourly`, `weather/daily`) registers three independent queryables. The agent targets the exact topic it needs — not a node-level grab-bag.
+
+### SDK change surface
+
+- **Rust** (`bubbaloop-node`): `JsonPublisher` and `ProtoPublisher` each hold an `Arc<Mutex<Option<(ZBytes, Encoding)>>>`. `put()` updates the buffer. A `tokio::spawn` task declares the queryable and responds from the buffer.
+- **Python** (`bubbaloop-sdk`): `JsonPublisher.put()` updates a `threading.Lock`-protected buffer. The queryable runs on the same background thread as health heartbeats.
+
+Memory cost: one copy of the last payload per publisher. JSON nodes: negligible (<2KB). Camera frames: excluded — camera publishes protobuf H264, agent vision needs JPEG (separate concern, deferred).
+
+### Agent usage — no new tools
+
+`query_zenoh` already does Zenoh `get`. Once the SDK mirror is in place, the agent flow is:
+
+1. `discover_capabilities` → reads all `publishes:` from manifests → knows every available topic
+2. `query_zenoh("<full_topic_path>")` → reads last value from any topic
 
 ---
 
@@ -148,10 +184,8 @@ Once nodes declare `subscribes:` and `commands:`, the agent (via `discover_capab
 
 Intentionally deferred — these build on top of this contract but are separate concerns:
 
-- **SDK `latest` queryable** — last-value cache per publisher. Implementation detail, not the interface.
-- **SDK `command` queryable helper** — standardized node-side command handling. Implementation detail.
-- **`grab_frame` queryable** — camera-specific JPEG endpoint. Node-specific, not universal.
-- **Agent `read_node` / `grab_frame` tools** — bubbaloop-specific agent tools. Application-specific.
+- **SDK `command` queryable helper** — standardized node-side command registration. Implementation detail.
+- **`grab_frame` for camera** — camera-specific JPEG endpoint for agent vision. Node-specific.
 - **`on:` event handlers** — requires EventBridge, OnHandlerQueue, condition evaluation.
 - **Skill YAML `pipeline:` section** — node wiring automation.
 - **Built-in operators** (`log-to-sqlite`, `save-image`, `send-telegram`).
@@ -162,8 +196,10 @@ Intentionally deferred — these build on top of this contract but are separate 
 
 | Piece | Effort | Files |
 |---|---|---|
+| SDK publisher queryable mirror (Rust) | Small | `crates/bubbaloop-node/src/publisher.rs` |
+| SDK publisher queryable mirror (Python) | Small | `python-sdk/bubbaloop_sdk/publisher.py` |
 | Add `subscribes:` + `commands:` to existing nodes | Trivial | `node.yaml` in each node in `bubbaloop-nodes-official` |
-| Update `node.yaml` JSON schema / validation | Trivial | daemon registry parser |
-| Surface `commands:` in agent `discover_capabilities` | Small | `crates/bubbaloop/src/agent/dispatch.rs` |
+| Update `node.yaml` validation | Trivial | daemon registry parser |
+| Surface `commands:` in `discover_capabilities` | Small | `crates/bubbaloop/src/agent/dispatch.rs` |
 
-No SDK changes. No daemon changes. No breaking changes to existing nodes.
+No new agent tools. No daemon changes. No breaking changes to existing nodes or topics.
