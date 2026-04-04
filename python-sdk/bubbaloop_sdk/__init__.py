@@ -8,6 +8,7 @@ heartbeat, config loading, and shutdown handling.
 
 from .context import NodeContext
 from .decode_sample import ProtoDecoder
+from .discover import NodeInfo, discover_nodes
 from .get_sample import GetSampleTimeout, get_sample
 from .publisher import JsonPublisher, ProtoPublisher
 from .subscriber import RawSubscriber, TypedSubscriber
@@ -15,7 +16,9 @@ from .node import run_node
 
 __all__ = [
     "NodeContext",
+    "NodeInfo",
     "ProtoDecoder",
+    "discover_nodes",
     "get_sample",
     "GetSampleTimeout",
     "JsonPublisher",
