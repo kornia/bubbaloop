@@ -31,6 +31,7 @@ mod config;
 mod context;
 pub mod get_sample;
 mod health;
+pub mod proto_decoder;
 pub mod publisher;
 mod schema;
 pub mod schemas;
@@ -41,6 +42,7 @@ mod zenoh_session;
 pub use context::NodeContext;
 pub use error::NodeError;
 pub use get_sample::get_sample;
+pub use proto_decoder::ProtoDecoder;
 pub use publisher::{JsonPublisher, ProtoPublisher};
 pub use subscriber::{RawSubscriber, TypedSubscriber};
 

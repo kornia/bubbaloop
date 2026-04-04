@@ -33,7 +33,7 @@ except ImportError:
         return factory.GetPrototype(descriptor)
 
 
-from google.protobuf import descriptor_pb2, message_factory as _message_factory
+from google.protobuf import descriptor_pb2, descriptor_pool, message_factory as _message_factory
 from google.protobuf.json_format import MessageToDict
 
 
@@ -53,10 +53,12 @@ class ProtoDecoder:
     def __init__(self, session: zenoh.Session, schema_timeout: float = 3.0) -> None:
         self._session = session
         self._schema_timeout = schema_timeout
-        # topic → {type_name: message_class}
+        # type_name → message class
         self._class_cache: dict[str, Any] = {}
-        # MessageFactory shared across all schemas (pool accumulates all files)
-        self._factory = _message_factory.MessageFactory()
+        # Fresh pool (falls back to Default() for well-known types).
+        # Using MessageFactory().pool risks conflicts with the global default pool.
+        self._pool = descriptor_pool.DescriptorPool()
+        self._factory = _message_factory.MessageFactory(pool=self._pool)
 
     # ------------------------------------------------------------------
     # Public API
@@ -129,14 +131,14 @@ class ProtoDecoder:
 
         for file_proto in fds.file:
             try:
-                self._factory.pool.FindFileByName(file_proto.name)
+                self._pool.FindFileByName(file_proto.name)
             except KeyError:
                 # Not yet registered — safe to add.
-                self._factory.pool.Add(file_proto)
+                self._pool.Add(file_proto)
 
         # Cache message classes for all types in this descriptor set.
         for file_proto in fds.file:
-            file_desc = self._factory.pool.FindFileByName(file_proto.name)
+            file_desc = self._pool.FindFileByName(file_proto.name)
             for msg_desc in file_desc.message_types_by_name.values():
                 full_name = msg_desc.full_name
                 if full_name not in self._class_cache:
