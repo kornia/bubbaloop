@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
-use prost_reflect::{DescriptorPool, DynamicMessage};
+use prost_reflect::{DescriptorPool, DynamicMessage, SerializeOptions};
 
 use crate::error::{NodeError, Result};
 
@@ -64,9 +64,14 @@ impl ProtoDecoder {
 
         let payload = sample.payload().to_bytes();
         let msg = DynamicMessage::decode(msg_desc, payload.as_ref())
-            .map_err(|e| NodeError::Publish(zenoh::Error::from(e.to_string())))?;
+            .map_err(|e| NodeError::Decode(e.to_string()))?;
 
-        Ok(Some(serde_json::to_value(&msg).map_err(NodeError::Json)?))
+        let opts = SerializeOptions::new()
+            .use_proto_field_name(true)
+            .skip_default_fields(false);
+        let value = msg.serialize_with_options(serde_json::value::Serializer, &opts)
+            .map_err(NodeError::Json)?;
+        Ok(Some(value))
     }
 
     /// Eagerly fetch and cache all schemas matching `key_expr` (e.g. `"bubbaloop/**/schema"`).
@@ -157,3 +162,4 @@ fn schema_key_for(sample: &zenoh::sample::Sample) -> String {
         None => format!("{}/schema", key),
     }
 }
+
