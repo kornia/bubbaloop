@@ -51,34 +51,44 @@ No new agent tools required — `query_zenoh` already exists. The SDK just needs
 
 ## SDK: Publisher Queryable Mirror
 
-For each publisher a node declares, the SDK automatically registers a queryable at the **same topic path**. On every `put()`, the SDK buffers the last payload. On `get()`, the queryable responds with that buffer.
+### Why `get()` on a pub/sub topic returns nothing today
+
+Zenoh has two separate primitives: `put()` reaches **subscribers**; `get()` reaches **queryables**. A regular `Publisher` has no queryable attached. `session.get("weather/current")` returns empty even while the node is publishing to that topic continuously.
+
+Zenoh's own solution is the **storage plugin** — a daemon-side queryable that subscribes to a topic and caches values. But that requires configuring `zenohd`, not something a node controls.
+
+Zenoh 1.1+ also has `AdvancedPublisher` (zenoh-ext) with a built-in cache, but it serves `AdvancedSubscriber` late-joiner recovery via an internal suffix — a generic `session.get("topic")` does NOT reach it.
+
+The correct approach for our use case: **declare a queryable at the same key as each publisher, buffer the last `put()` payload, respond to `get()`**. This is exactly the pattern the SDK already uses for `schema` (a queryable at `{name}/schema` that responds with binary data). Same mechanism, applied to data topics.
+
+### How it works
 
 ```
 node:    put("bubbaloop/local/jetson/openmeteo/weather/current", payload)
-                                    ↓ subscribers receive streaming data
+                                    ↓ subscribers receive streaming data (unchanged)
 agent:   get("bubbaloop/local/jetson/openmeteo/weather/current")
-                                    ↓ queryable responds with last payload
+                                    ↓ SDK queryable responds with last payload
 ```
 
-Zenoh supports the same key being both a publisher and a queryable — this is exactly the Zenoh storage pattern, implemented locally inside the node without a storage plugin.
+Zenoh allows the same key expression to have both a publisher and a queryable — they serve different callers (subscribers vs. queriers) independently.
 
 ### Per-publisher, not per-node
 
-Each publisher gets its own buffer. A node with three publishers (`weather/current`, `weather/hourly`, `weather/daily`) registers three independent queryables. The agent targets the exact topic it needs — not a node-level grab-bag.
+Each publisher gets its own queryable and buffer. A node with three publishers (`weather/current`, `weather/hourly`, `weather/daily`) registers three independent queryables. The agent targets the exact topic it needs — not a node-level grab-bag.
 
 ### SDK change surface
 
-- **Rust** (`bubbaloop-node`): `JsonPublisher` and `ProtoPublisher` each hold an `Arc<Mutex<Option<(ZBytes, Encoding)>>>`. `put()` updates the buffer. A `tokio::spawn` task declares the queryable and responds from the buffer.
-- **Python** (`bubbaloop-sdk`): `JsonPublisher.put()` updates a `threading.Lock`-protected buffer. The queryable runs on the same background thread as health heartbeats.
+- **Rust** (`bubbaloop-node`): `JsonPublisher` and `ProtoPublisher` each hold an `Arc<Mutex<Option<(ZBytes, Encoding)>>>`. `put()` updates the buffer. A background `tokio::spawn` task declares the queryable and responds from the buffer on `get()`.
+- **Python** (`bubbaloop-sdk`): `JsonPublisher.put()` updates a `threading.Lock`-protected buffer. The queryable runs on the same background thread as the health heartbeat.
 
-Memory cost: one copy of the last payload per publisher. JSON nodes: negligible (<2KB). Camera frames: excluded — camera publishes protobuf H264, agent vision needs JPEG (separate concern, deferred).
+Memory cost: one copy of the last payload per publisher. JSON nodes: negligible (<2KB). Camera frames: excluded — camera publishes protobuf H264; agent vision needs JPEG (separate concern, deferred).
 
 ### Agent usage — no new tools
 
-`query_zenoh` already does Zenoh `get`. Once the SDK mirror is in place, the agent flow is:
+`query_zenoh` already does `session.get()` with a 3s timeout and `QueryTarget::BestMatching`. The SDK queryable is registered at node startup (before any agent call). The agent flow becomes:
 
-1. `discover_capabilities` → reads all `publishes:` from manifests → knows every available topic
-2. `query_zenoh("<full_topic_path>")` → reads last value from any topic
+1. `discover_capabilities` → reads all `publishes:` from manifests → knows every available topic path
+2. `query_zenoh("<full_topic_path>")` → SDK queryable responds with last value
 
 ---
 
