@@ -1,7 +1,7 @@
 # Agent–Node Interaction Foundation
 
 **Date**: 2026-04-04
-**Status**: Proposal — not implemented
+**Status**: Implemented
 **Scope**: Node SDK (Rust + Python), `node.yaml` schema
 
 ---

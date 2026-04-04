@@ -11,7 +11,6 @@ The schema cache is per ``ProtoDecoder`` instance so it can be shared across man
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import zenoh
