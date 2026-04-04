@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use zenoh::Wait as _;
 
+use crate::error::{NodeError, Result};
+
 /// Declare a Zenoh queryable that serves the node's protobuf FileDescriptorSet.
 ///
 /// Responds to queries on `bubbaloop/{scope}/{machine_id}/{node_name}/schema`.
@@ -12,7 +14,7 @@ pub async fn declare_schema_queryable(
     machine_id: &str,
     node_name: &str,
     descriptor: &'static [u8],
-) -> anyhow::Result<zenoh::query::Queryable<()>> {
+) -> Result<zenoh::query::Queryable<()>> {
     let schema_key = format!("bubbaloop/{}/{}/{}/schema", scope, machine_id, node_name);
 
     let queryable = session
@@ -28,7 +30,7 @@ pub async fn declare_schema_queryable(
             }
         })
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to create schema queryable: {}", e))?;
+        .map_err(NodeError::SchemaQueryable)?;
 
     log::info!("Schema queryable: {}", schema_key);
     Ok(queryable)

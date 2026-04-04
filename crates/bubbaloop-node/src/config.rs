@@ -1,11 +1,17 @@
 use std::path::Path;
 
+use crate::error::{NodeError, Result};
+
 /// Load and deserialize a YAML config file.
-pub fn load_config<C: serde::de::DeserializeOwned>(path: &Path) -> anyhow::Result<C> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("Failed to read config '{}': {}", path.display(), e))?;
-    let config: C = serde_yaml::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("Failed to parse config '{}': {}", path.display(), e))?;
+pub fn load_config<C: serde::de::DeserializeOwned>(path: &Path) -> Result<C> {
+    let content = std::fs::read_to_string(path).map_err(|e| NodeError::ConfigRead {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    let config: C = serde_yaml::from_str(&content).map_err(|e| NodeError::ConfigParse {
+        path: path.display().to_string(),
+        source: e,
+    })?;
     Ok(config)
 }
 
@@ -22,6 +28,7 @@ pub fn extract_name(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::NodeError;
     use serde::Deserialize;
 
     #[derive(Debug, Deserialize)]
@@ -42,8 +49,8 @@ mod tests {
 
     #[test]
     fn test_load_missing_file() {
-        let result: anyhow::Result<TestConfig> = load_config(Path::new("/nonexistent.yaml"));
-        assert!(result.is_err());
+        let result: Result<TestConfig> = load_config(Path::new("/nonexistent.yaml"));
+        assert!(matches!(result, Err(NodeError::ConfigRead { .. })));
     }
 
     #[test]
@@ -51,8 +58,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad.yaml");
         std::fs::write(&path, "not: [valid: yaml: {{").unwrap();
-        let result: anyhow::Result<TestConfig> = load_config(&path);
-        assert!(result.is_err());
+        let result: Result<TestConfig> = load_config(&path);
+        assert!(matches!(result, Err(NodeError::ConfigParse { .. })));
     }
 
     #[test]
