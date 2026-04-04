@@ -1,12 +1,19 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use zenoh::bytes::Encoding;
+use zenoh::Wait as _;
 
 /// A declared protobuf publisher that sets `Encoding::APPLICATION_PROTOBUF` automatically.
 ///
 /// Created via [`NodeContext::publisher_proto`](crate::NodeContext::publisher_proto).
 /// The encoding is declared once at construction and reused for every [`put`](ProtoPublisher::put).
+///
+/// Also registers a Zenoh queryable at the same key expression so that `session.get(topic)`
+/// returns the last published payload. This allows agents to pull the current value on demand
+/// without subscribing to the continuous stream.
 pub struct ProtoPublisher<T: prost::Message + Default> {
     publisher: zenoh::pubsub::Publisher<'static>,
+    last_bytes: Arc<Mutex<Option<Vec<u8>>>>,
+    _queryable: zenoh::query::Queryable<()>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -15,6 +22,8 @@ impl<T: prost::Message + Default + crate::MessageTypeName> ProtoPublisher<T> {
     ///
     /// Sets encoding to `application/protobuf;<type_name>` where `<type_name>` is the fully
     /// qualified protobuf type name provided by [`MessageTypeName::type_name`].
+    ///
+    /// Also declares a queryable at the same key so agents can `get()` the last value.
     pub(crate) async fn new(
         session: &Arc<zenoh::Session>,
         key_expr: &str,
@@ -26,18 +35,36 @@ impl<T: prost::Message + Default + crate::MessageTypeName> ProtoPublisher<T> {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to declare protobuf publisher on '{}': {}", key_expr, e))?;
 
+        let last_bytes: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+        let buf = last_bytes.clone();
+
+        let queryable = session
+            .declare_queryable(key_expr)
+            .callback(move |query| {
+                let guard = buf.lock().unwrap();
+                if let Some(bytes) = guard.as_ref() {
+                    let key = query.key_expr().clone();
+                    if let Err(e) = query.reply(key, bytes.as_slice()).wait() {
+                        log::warn!("ProtoPublisher queryable reply failed: {}", e);
+                    }
+                }
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to declare publisher queryable on '{}': {}", key_expr, e))?;
+
         log::debug!("ProtoPublisher declared on '{}' (type={})", key_expr, T::type_name());
         Ok(Self {
             publisher,
+            last_bytes,
+            _queryable: queryable,
             _marker: std::marker::PhantomData,
         })
     }
 
-    /// Encode `msg` as protobuf bytes and publish it.
-    ///
-    /// The encoding was set at publisher creation time; no per-call overhead beyond encoding.
+    /// Encode `msg` as protobuf bytes, cache it, and publish it.
     pub async fn put(&self, msg: &T) -> anyhow::Result<()> {
         let bytes = msg.encode_to_vec();
+        *self.last_bytes.lock().unwrap() = Some(bytes.clone());
         self.publisher
             .put(bytes)
             .await
@@ -49,12 +76,20 @@ impl<T: prost::Message + Default + crate::MessageTypeName> ProtoPublisher<T> {
 ///
 /// Created via [`NodeContext::publisher_json`](crate::NodeContext::publisher_json).
 /// The encoding is declared once at construction and reused for every [`put`](JsonPublisher::put).
+///
+/// Also registers a Zenoh queryable at the same key expression so that `session.get(topic)`
+/// returns the last published payload. This allows agents to pull the current value on demand
+/// without subscribing to the continuous stream.
 pub struct JsonPublisher {
     publisher: zenoh::pubsub::Publisher<'static>,
+    last_bytes: Arc<Mutex<Option<Vec<u8>>>>,
+    _queryable: zenoh::query::Queryable<()>,
 }
 
 impl JsonPublisher {
     /// Declare a new JSON publisher on `key_expr`.
+    ///
+    /// Also declares a queryable at the same key so agents can `get()` the last value.
     pub(crate) async fn new(
         session: &Arc<zenoh::Session>,
         key_expr: &str,
@@ -65,14 +100,32 @@ impl JsonPublisher {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to declare JSON publisher on '{}': {}", key_expr, e))?;
 
+        let last_bytes: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+        let buf = last_bytes.clone();
+
+        let queryable = session
+            .declare_queryable(key_expr)
+            .callback(move |query| {
+                let guard = buf.lock().unwrap();
+                if let Some(bytes) = guard.as_ref() {
+                    let key = query.key_expr().clone();
+                    if let Err(e) = query.reply(key, bytes.as_slice()).wait() {
+                        log::warn!("JsonPublisher queryable reply failed: {}", e);
+                    }
+                }
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to declare publisher queryable on '{}': {}", key_expr, e))?;
+
         log::debug!("JsonPublisher declared on '{}'", key_expr);
-        Ok(Self { publisher })
+        Ok(Self { publisher, last_bytes, _queryable: queryable })
     }
 
-    /// Serialize any `Serialize` value as JSON bytes and publish it.
+    /// Serialize any `Serialize` value as JSON bytes, cache it, and publish it.
     pub async fn put<S: serde::Serialize>(&self, value: &S) -> anyhow::Result<()> {
         let bytes =
             serde_json::to_vec(value).map_err(|e| anyhow::anyhow!("JSON serialization failed: {}", e))?;
+        *self.last_bytes.lock().unwrap() = Some(bytes.clone());
         self.publisher
             .put(bytes)
             .await
