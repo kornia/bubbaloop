@@ -43,7 +43,7 @@ async def get_sample(
 
     sub = session.declare_subscriber(key_expr, _handler)
     try:
-        return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        return await asyncio.wait_for(future, timeout=timeout)
     except asyncio.TimeoutError:
         raise GetSampleTimeout(key_expr, timeout)
     finally:

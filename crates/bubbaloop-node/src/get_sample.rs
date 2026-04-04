@@ -35,15 +35,11 @@ pub async fn get_sample(
             source: e,
         })?;
 
-    let result = tokio::time::timeout(timeout, subscriber.handler().recv_async()).await;
-
-    match result {
-        Ok(Ok(sample)) => Ok(sample),
-        Ok(Err(_)) => Err(NodeError::GetSampleTimeout {
+    tokio::time::timeout(timeout, subscriber.handler().recv_async())
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .ok_or_else(|| NodeError::GetSampleTimeout {
             topic: key_expr.to_string(),
-        }),
-        Err(_elapsed) => Err(NodeError::GetSampleTimeout {
-            topic: key_expr.to_string(),
-        }),
-    }
+        })
 }

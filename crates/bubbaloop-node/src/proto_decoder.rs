@@ -61,11 +61,9 @@ impl ProtoDecoder {
         let schema_key = schema_key_for(sample);
         let pool = self.get_or_fetch_pool(&type_name, &schema_key).await?;
 
-        let msg_desc =
-            pool.get_message_by_name(&type_name)
-                .ok_or_else(|| NodeError::GetSampleTimeout {
-                    topic: type_name.clone(),
-                })?;
+        let msg_desc = pool
+            .get_message_by_name(&type_name)
+            .ok_or_else(|| NodeError::Decode(format!("type '{}' not found in schema", type_name)))?;
 
         let payload = sample.payload().to_bytes();
         let msg = DynamicMessage::decode(msg_desc, payload.as_ref())
@@ -136,9 +134,10 @@ impl ProtoDecoder {
             }
         }
 
-        Err(NodeError::GetSampleTimeout {
-            topic: schema_key.to_string(),
-        })
+        Err(NodeError::Decode(format!(
+            "schema not found at '{}'",
+            schema_key
+        )))
     }
 
     async fn store_pool(&self, pool: DescriptorPool) {
