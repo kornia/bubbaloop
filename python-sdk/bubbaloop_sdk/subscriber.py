@@ -1,5 +1,6 @@
 """Zenoh subscribers — blocking and callback-based."""
 
+import concurrent.futures
 import queue
 
 import zenoh
@@ -176,7 +177,6 @@ class CallbackSubscriberAsync:
     """
 
     def __init__(self, session: zenoh.Session, topic: str, handler, msg_class=None, max_workers: int = 4):
-        import concurrent.futures
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
 
         def _wrap(sample: zenoh.Sample) -> None:
@@ -190,9 +190,9 @@ class CallbackSubscriberAsync:
         self._sub = session.declare_subscriber(topic, _wrap)
 
     def undeclare(self) -> None:
-        """Shutdown the thread pool and undeclare the subscriber."""
+        """Undeclare the subscriber and shutdown the thread pool."""
+        self._sub.undeclare()  # stop Zenoh callbacks first
         self._executor.shutdown(wait=False)
-        self._sub.undeclare()
 
 
 class RawCallbackSubscriberAsync:
@@ -205,7 +205,6 @@ class RawCallbackSubscriberAsync:
     """
 
     def __init__(self, session: zenoh.Session, key_expr: str, handler, max_workers: int = 4):
-        import concurrent.futures
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
 
         def _wrap(sample: zenoh.Sample) -> None:
@@ -214,6 +213,6 @@ class RawCallbackSubscriberAsync:
         self._sub = session.declare_subscriber(key_expr, _wrap)
 
     def undeclare(self) -> None:
-        """Shutdown the thread pool and undeclare the subscriber."""
+        """Undeclare the subscriber and shutdown the thread pool."""
+        self._sub.undeclare()  # stop Zenoh callbacks first
         self._executor.shutdown(wait=False)
-        self._sub.undeclare()
