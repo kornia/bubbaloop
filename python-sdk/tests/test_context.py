@@ -69,6 +69,25 @@ def test_import_subscribers():
     assert RawSubscriber is not None
 
 
+def test_import_callback_subscribers():
+    from bubbaloop_sdk import CallbackSubscriber, RawCallbackSubscriber
+    assert CallbackSubscriber is not None
+    assert RawCallbackSubscriber is not None
+
+
+def test_import_callback_subscribers_async():
+    from bubbaloop_sdk import (
+        CallbackSubscriberAsync, RawCallbackSubscriberAsync
+    )
+    assert CallbackSubscriberAsync is not None
+    assert RawCallbackSubscriberAsync is not None
+
+
+def test_import_async_queryable():
+    from bubbaloop_sdk import AsyncQueryable
+    assert AsyncQueryable is not None
+
+
 def test_import_run_node():
     from bubbaloop_sdk import run_node
     assert callable(run_node)
@@ -248,7 +267,9 @@ def test_callback_subscriber_calls_handler_with_bytes():
 
     mock_session.declare_subscriber.side_effect = fake_declare
     received = []
-    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: received.append(msg))
+    CallbackSubscriber(
+        mock_session, "test/topic", lambda msg: received.append(msg)
+    )
 
     fake_sample = MagicMock()
     fake_sample.payload.to_bytes.return_value = b"\xde\xad"
@@ -272,8 +293,10 @@ def test_callback_subscriber_decodes_proto():
     fake_msg_class = MagicMock()
     fake_msg_class.FromString.return_value = "decoded_proto"
     received = []
-    sub = CallbackSubscriber(mock_session, "test/topic",
-                              lambda msg: received.append(msg), msg_class=fake_msg_class)
+    CallbackSubscriber(
+        mock_session, "test/topic",
+        lambda msg: received.append(msg), msg_class=fake_msg_class
+    )
 
     fake_sample = MagicMock()
     fake_sample.payload.to_bytes.return_value = b"\x01"
@@ -310,7 +333,9 @@ def test_raw_callback_subscriber_passes_sample():
 
     mock_session.declare_subscriber.side_effect = fake_declare
     received = []
-    sub = RawCallbackSubscriber(mock_session, "test/**", lambda s: received.append(s))
+    RawCallbackSubscriber(
+        mock_session, "test/**", lambda s: received.append(s)
+    )
 
     fake_sample = MagicMock()
     captured_handler[0](fake_sample)
@@ -385,7 +410,9 @@ def test_callback_subscriber_async_decodes_proto():
         received.append(msg)
         event.set()
 
-    sub = CallbackSubscriberAsync(mock_session, "test/topic", handler, msg_class=fake_msg_class)
+    sub = CallbackSubscriberAsync(
+        mock_session, "test/topic", handler, msg_class=fake_msg_class
+    )
 
     fake_sample = MagicMock()
     fake_sample.payload.to_bytes.return_value = b"\x01"
@@ -426,7 +453,7 @@ def test_raw_callback_subscriber_async_passes_sample():
 
 
 def test_callback_subscriber_async_undeclare():
-    """undeclare() shuts down executor and undeclares underlying subscriber."""
+    """undeclare() shuts down executor and undeclares underlying sub."""
     from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
     mock_session = MagicMock()
     mock_sub = MagicMock()
@@ -437,7 +464,7 @@ def test_callback_subscriber_async_undeclare():
 
 
 def test_raw_callback_subscriber_async_undeclare():
-    """undeclare() shuts down executor and undeclares underlying subscriber."""
+    """undeclare() shuts down executor and undeclares underlying sub."""
     from bubbaloop_sdk.subscriber import RawCallbackSubscriberAsync
     mock_session = MagicMock()
     mock_sub = MagicMock()
@@ -454,7 +481,10 @@ def test_raw_callback_subscriber_async_undeclare():
 def test_queryable_uses_topic_prefix():
     """queryable() declares at bubbaloop/{scope}/{machine_id}/{suffix}."""
     ctx = _make_context("local", "bot")
-    handler = lambda q: None
+
+    def handler(q):
+        pass
+
     ctx.queryable("command", handler)
     ctx.session.declare_queryable.assert_called_once_with(
         "bubbaloop/local/bot/command", handler
@@ -464,7 +494,10 @@ def test_queryable_uses_topic_prefix():
 def test_queryable_raw_uses_literal_key_expr():
     """queryable_raw() declares at the literal key expression provided."""
     ctx = _make_context("local", "bot")
-    handler = lambda q: None
+
+    def handler(q):
+        pass
+
     ctx.queryable_raw("bubbaloop/**/schema", handler)
     ctx.session.declare_queryable.assert_called_once_with(
         "bubbaloop/**/schema", handler
@@ -485,16 +518,19 @@ def test_queryable_returns_zenoh_queryable():
 # ---------------------------------------------------------------------------
 
 def test_queryable_async_uses_topic_prefix():
-    """queryable_async() declares at bubbaloop/{scope}/{machine_id}/{suffix}."""
+    """queryable_async() declares at topic(suffix)."""
     ctx = _make_context("local", "bot")
-    handler = lambda q: None
+
+    def handler(q):
+        pass
+
     ctx.queryable_async("command", handler)
     called_topic = ctx.session.declare_queryable.call_args[0][0]
     assert called_topic == "bubbaloop/local/bot/command"
 
 
 def test_queryable_async_wraps_handler_in_executor():
-    """queryable_async() wraps handler so Zenoh thread is freed immediately."""
+    """queryable_async() wraps handler so Zenoh thread is freed."""
     import threading
     ctx = _make_context("local", "bot")
     captured_wrapper = []
@@ -522,7 +558,7 @@ def test_queryable_async_wraps_handler_in_executor():
 
 
 def test_queryable_async_returns_async_queryable():
-    """queryable_async() returns an AsyncQueryable (not a bare zenoh.Queryable)."""
+    """queryable_async() returns AsyncQueryable (not a bare zenoh.Queryable)."""
     from bubbaloop_sdk.subscriber import AsyncQueryable
     ctx = _make_context("local", "bot")
     qbl = ctx.queryable_async("command", lambda q: None)
@@ -530,7 +566,7 @@ def test_queryable_async_returns_async_queryable():
 
 
 def test_queryable_raw_async_uses_literal_key_expr():
-    """queryable_raw_async() declares at the literal key expression provided."""
+    """queryable_raw_async() declares at the literal key expression."""
     ctx = _make_context("local", "bot")
     ctx.queryable_raw_async("bubbaloop/**/schema", lambda q: None)
     called_topic = ctx.session.declare_queryable.call_args[0][0]
@@ -566,7 +602,7 @@ def test_queryable_raw_async_wraps_handler_in_executor():
 
 
 def test_async_queryable_undeclare():
-    """AsyncQueryable.undeclare() undeclares the queryable then shuts down executor."""
+    """AsyncQueryable.undeclare() undeclares queryable then shuts executor."""
     from bubbaloop_sdk.subscriber import AsyncQueryable
     mock_session = MagicMock()
     mock_qbl = MagicMock()
@@ -581,7 +617,7 @@ def test_async_queryable_undeclare():
 # ---------------------------------------------------------------------------
 
 def test_subscriber_callback_uses_topic_prefix():
-    """subscriber_callback() declares at bubbaloop/{scope}/{machine_id}/{suffix}."""
+    """subscriber_callback() declares at topic(suffix)."""
     ctx = _make_context("local", "bot")
     ctx.subscriber_callback("sensor/data", lambda msg: None)
     called_topic = ctx.session.declare_subscriber.call_args[0][0]
@@ -597,7 +633,7 @@ def test_subscriber_raw_callback_uses_literal_key_expr():
 
 
 def test_subscriber_callback_async_uses_topic_prefix():
-    """subscriber_callback_async() declares at bubbaloop/{scope}/{machine_id}/{suffix}."""
+    """subscriber_callback_async() declares at topic(suffix)."""
     ctx = _make_context("local", "bot")
     ctx.subscriber_callback_async("sensor/data", lambda msg: None)
     called_topic = ctx.session.declare_subscriber.call_args[0][0]
@@ -605,7 +641,7 @@ def test_subscriber_callback_async_uses_topic_prefix():
 
 
 def test_subscriber_raw_callback_async_uses_literal_key_expr():
-    """subscriber_raw_callback_async() declares at the literal key expression."""
+    """subscriber_raw_callback_async() declares at literal key expression."""
     ctx = _make_context("local", "bot")
     ctx.subscriber_raw_callback_async("bubbaloop/**/health", lambda s: None)
     called_topic = ctx.session.declare_subscriber.call_args[0][0]

@@ -11,16 +11,29 @@ from .decode_sample import ProtoDecoder
 from .discover import NodeInfo, discover_nodes
 from .get_sample import GetSampleTimeout, get_sample
 from .publisher import JsonPublisher, ProtoPublisher
-from .subscriber import RawSubscriber, TypedSubscriber
+from .subscriber import (
+    AsyncQueryable,
+    CallbackSubscriber,
+    CallbackSubscriberAsync,
+    RawCallbackSubscriber,
+    RawCallbackSubscriberAsync,
+    RawSubscriber,
+    TypedSubscriber,
+)
 from .node import run_node
 
 __all__ = [
+    "AsyncQueryable",
+    "CallbackSubscriber",
+    "CallbackSubscriberAsync",
     "GetSampleTimeout",
     "JsonPublisher",
     "NodeContext",
     "NodeInfo",
     "ProtoDecoder",
     "ProtoPublisher",
+    "RawCallbackSubscriber",
+    "RawCallbackSubscriberAsync",
     "RawSubscriber",
     "TypedSubscriber",
     "discover_nodes",
