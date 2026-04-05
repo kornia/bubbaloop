@@ -48,7 +48,6 @@ Line length: 120 characters.
 
 | File | Rule | Reason |
 |---|---|---|
-| `context.py` | F821 | Forward-reference string annotations with lazy imports — by design |
 | `*/__init__.py` | F401, F403 | Re-exports allowed |
 | `tests/*` | S101, D | Assert and missing docstrings allowed in tests |
 

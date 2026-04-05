@@ -17,8 +17,21 @@ import os
 import signal
 import socket
 import threading
+from typing import TYPE_CHECKING
 
 import zenoh
+
+if TYPE_CHECKING:
+    from .publisher import JsonPublisher, ProtoPublisher
+    from .subscriber import (
+        AsyncQueryable,
+        CallbackSubscriber,
+        CallbackSubscriberAsync,
+        RawCallbackSubscriber,
+        RawCallbackSubscriberAsync,
+        RawSubscriber,
+        TypedSubscriber,
+    )
 
 
 def _hostname() -> str:
@@ -94,12 +107,12 @@ class NodeContext:
     # Publishers
     # ------------------------------------------------------------------
 
-    def publisher_json(self, suffix: str) -> "JsonPublisher":
+    def publisher_json(self, suffix: str) -> JsonPublisher:
         """Declare a JSON publisher at ``topic(suffix)``."""
         from .publisher import JsonPublisher
         return JsonPublisher._declare(self.session, self.topic(suffix))
 
-    def publisher_proto(self, suffix: str, msg_class=None) -> "ProtoPublisher":
+    def publisher_proto(self, suffix: str, msg_class=None) -> ProtoPublisher:
         """Declare a protobuf publisher at ``topic(suffix)``."""
         from .publisher import ProtoPublisher
         type_name = msg_class.DESCRIPTOR.full_name if msg_class is not None else None
@@ -109,12 +122,12 @@ class NodeContext:
     # Subscribers
     # ------------------------------------------------------------------
 
-    def subscriber(self, suffix: str, msg_class=None) -> "TypedSubscriber":
+    def subscriber(self, suffix: str, msg_class=None) -> TypedSubscriber:
         """Declare a typed subscriber. Blocks on ``recv()``."""
         from .subscriber import TypedSubscriber
         return TypedSubscriber(self.session, self.topic(suffix), msg_class)
 
-    def subscriber_raw(self, key_expr: str) -> "RawSubscriber":
+    def subscriber_raw(self, key_expr: str) -> RawSubscriber:
         """Declare a raw subscriber with a literal key expression."""
         from .subscriber import RawSubscriber
         return RawSubscriber(self.session, key_expr)
@@ -123,7 +136,7 @@ class NodeContext:
     # Callback Subscribers
     # ------------------------------------------------------------------
 
-    def subscriber_callback(self, suffix: str, handler, msg_class=None) -> "CallbackSubscriber":
+    def subscriber_callback(self, suffix: str, handler, msg_class=None) -> CallbackSubscriber:
         """Callback subscriber at ``topic(suffix)``.
 
         ``handler`` is called from Zenoh's internal thread each time a sample
@@ -132,7 +145,7 @@ class NodeContext:
         from .subscriber import CallbackSubscriber
         return CallbackSubscriber(self.session, self.topic(suffix), handler, msg_class)
 
-    def subscriber_raw_callback(self, key_expr: str, handler) -> "RawCallbackSubscriber":
+    def subscriber_raw_callback(self, key_expr: str, handler) -> RawCallbackSubscriber:
         """Callback subscriber at a literal key expression.
 
         ``handler`` receives raw ``zenoh.Sample`` objects from Zenoh's internal thread.
@@ -142,7 +155,7 @@ class NodeContext:
 
     def subscriber_callback_async(
         self, suffix: str, handler, msg_class=None, max_workers: int = 4
-    ) -> "CallbackSubscriberAsync":
+    ) -> CallbackSubscriberAsync:
         """Callback subscriber at ``topic(suffix)`` with handler in a thread pool.
 
         Use when ``handler`` does slow work (database writes, hardware I/O, network
@@ -154,7 +167,7 @@ class NodeContext:
 
     def subscriber_raw_callback_async(
         self, key_expr: str, handler, max_workers: int = 4
-    ) -> "RawCallbackSubscriberAsync":
+    ) -> RawCallbackSubscriberAsync:
         """Raw callback subscriber at a literal key expression with handler in a thread pool."""
         from .subscriber import RawCallbackSubscriberAsync
         return RawCallbackSubscriberAsync(self.session, key_expr, handler, max_workers)
@@ -163,7 +176,7 @@ class NodeContext:
     # Queryables
     # ------------------------------------------------------------------
 
-    def queryable(self, suffix: str, handler) -> "zenoh.Queryable":
+    def queryable(self, suffix: str, handler) -> zenoh.Queryable:
         """Declare a queryable at ``topic(suffix)``.
 
         ``handler`` receives a ``zenoh.Query``. Use the standard zenoh API to reply::
@@ -183,7 +196,7 @@ class NodeContext:
         """
         return self.session.declare_queryable(self.topic(suffix), handler)
 
-    def queryable_raw(self, key_expr: str, handler) -> "zenoh.Queryable":
+    def queryable_raw(self, key_expr: str, handler) -> zenoh.Queryable:
         """Declare a queryable at a literal key expression (no topic prefix).
 
         Use for wildcard queryables or when the ``bubbaloop/{scope}/{machine_id}/``
@@ -193,7 +206,7 @@ class NodeContext:
         """
         return self.session.declare_queryable(key_expr, handler)
 
-    def queryable_async(self, suffix: str, handler, max_workers: int = 4) -> "AsyncQueryable":
+    def queryable_async(self, suffix: str, handler, max_workers: int = 4) -> AsyncQueryable:
         """Declare a queryable at ``topic(suffix)`` with handler in a thread pool.
 
         Use when the handler does slow work. Zenoh's internal thread is freed
@@ -212,7 +225,7 @@ class NodeContext:
         from .subscriber import AsyncQueryable
         return AsyncQueryable(self.session, self.topic(suffix), handler, max_workers)
 
-    def queryable_raw_async(self, key_expr: str, handler, max_workers: int = 4) -> "AsyncQueryable":
+    def queryable_raw_async(self, key_expr: str, handler, max_workers: int = 4) -> AsyncQueryable:
         """Declare a queryable at a literal key expression with handler in a thread pool.
 
         Same as ``queryable_async()`` but uses a literal key expression without the

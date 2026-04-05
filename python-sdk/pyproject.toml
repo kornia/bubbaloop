@@ -107,5 +107,3 @@ split-on-trailing-comma = true
 "*/__init__.py" = ["F401", "F403"]
 # tests don't need docstrings and use assert freely
 "tests/*" = ["S101", "D"]
-# forward-reference string annotations with lazy imports — by design
-"bubbaloop_sdk/context.py" = ["F821"]
