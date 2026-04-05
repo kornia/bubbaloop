@@ -1,0 +1,22 @@
+[workspace]
+name = "bubbaloop-sdk"
+version = "0.1.0"
+description = "Bubbaloop Node SDK for Python"
+channels = ["conda-forge"]
+platforms = ["linux-64", "linux-aarch64"]
+
+[dependencies]
+python = ">=3.9,<3.14"
+
+[pypi-dependencies]
+bubbaloop-sdk = { path = ".", extras = ["dev"] }
+
+[tasks]
+install     = "pip install -e '.[dev]'"
+test        = "pytest tests/ -v"
+test-cov    = "pytest tests/ -v --cov=bubbaloop_sdk --cov-report=term-missing"
+lint        = "ruff check bubbaloop_sdk/ tests/"
+lint-fix    = "ruff check --fix bubbaloop_sdk/ tests/"
+fmt         = "ruff format bubbaloop_sdk/ tests/"
+fmt-check   = "ruff format --check bubbaloop_sdk/ tests/"
+check       = { depends-on = ["fmt-check", "lint"] }

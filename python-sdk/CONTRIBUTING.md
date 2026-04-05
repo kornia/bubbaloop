@@ -1,67 +1,83 @@
 # Contributing to bubbaloop-sdk (Python)
 
-## Dev environment setup
+## Dev environment
+
+### With pixi (recommended)
+
+```bash
+cd python-sdk
+pixi install   # creates env, installs all deps including dev extras
+pixi run test
+pixi run lint
+pixi run fmt
+```
+
+Available tasks:
+
+| Task | Command |
+|---|---|
+| `pixi run test` | Run test suite |
+| `pixi run test-cov` | Run tests with coverage report |
+| `pixi run lint` | Check for lint errors (ruff) |
+| `pixi run lint-fix` | Auto-fix lint errors |
+| `pixi run fmt` | Format code |
+| `pixi run fmt-check` | Check formatting without changing files |
+| `pixi run check` | Run fmt-check + lint (CI equivalent) |
+
+### With plain venv
 
 ```bash
 cd python-sdk
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
-```
-
-Dev deps installed: `pytest`, `pytest-asyncio`, `ruff`.
-
-## Running tests
-
-```bash
-cd python-sdk
-.venv/bin/python -m pytest tests/ -v
+.venv/bin/pytest tests/ -v
+.venv/bin/ruff check bubbaloop_sdk/ tests/
 ```
 
 ## Linting (ruff)
 
-Config lives in `python-sdk/pyproject.toml` under `[tool.ruff]`. Same pattern as [Kornia](https://github.com/kornia/kornia).
+Config lives in `python-sdk/pyproject.toml` under `[tool.ruff]`.
+Follows the same pattern as [kornia/kornia](https://github.com/kornia/kornia).
 
-```bash
-cd python-sdk
-.venv/bin/python -m ruff check bubbaloop_sdk/ tests/   # check
-.venv/bin/python -m ruff check --fix bubbaloop_sdk/ tests/   # auto-fix
-.venv/bin/python -m ruff format bubbaloop_sdk/ tests/  # format
-```
+Rules enabled: E/W (pycodestyle), F (Pyflakes), I (isort), B (bugbear),
+UP (pyupgrade), C4 (comprehensions), RUF (ruff-specific).
 
-Key settings:
-- `line-length = 120`
-- Rules: E/W (pycodestyle), F (Pyflakes), I (isort), B (bugbear), UP (pyupgrade)
-- `F821` globally ignored — forward-reference string annotations in `context.py` use lazy imports by design
-- Per-file ignores for pre-existing issues in upstream files (`health.py`, `node.py`, `get_sample.py`)
+Line length: 120 characters.
 
-## Known pre-existing issues (upstream files, not touched)
+## Pre-existing lint suppressions
 
 | File | Rule | Reason |
 |------|------|--------|
-| `health.py` | F401 unused import (`time`) | Pre-existing upstream code |
-| `node.py` | F401 unused imports (`os`, `time`) | Pre-existing upstream code |
-| `get_sample.py` | B904 raise in except | Pre-existing upstream code |
+| `context.py` | F821 (globally) | Forward-reference string annotations with lazy imports — by design |
+| `get_sample.py` | B904 | `raise` without `from err` in upstream code |
+| `*/__init__.py` | F401, F403 | Re-exports allowed |
+| `tests/*` | S101, D | Assert and missing docstrings allowed in tests |
 
-## Testing notes
+## Testing
 
 Tests in `tests/test_context.py` do **not** open a real Zenoh session.
-`_make_context()` helper uses `object.__new__(NodeContext)` + `MagicMock()` session — no router needed.
+`_make_context()` uses `object.__new__(NodeContext)` + `MagicMock()` — no router needed.
 
-For async subscriber/queryable tests, `threading.Event` with a 2s timeout is used to verify the handler was dispatched to the thread pool.
+For async subscriber/queryable tests, `threading.Event` with a 2s timeout
+verifies that handlers are dispatched to the thread pool correctly.
 
 ## Project structure
 
 ```
-bubbaloop_sdk/
-  __init__.py          # Public API surface
-  context.py           # NodeContext — main entry point
-  subscriber.py        # TypedSubscriber, RawSubscriber, Callback*, Async*
-  publisher.py         # JsonPublisher, ProtoPublisher
-  node.py              # run_node() helper
-  health.py            # Health heartbeat (used internally by run_node)
-  discover.py          # discover_nodes()
-  get_sample.py        # get_sample() one-shot helper
-  decode_sample.py     # ProtoDecoder
-tests/
-  test_context.py      # 48 unit tests (no real Zenoh required)
+python-sdk/
+  pyproject.toml        # Build config, deps, ruff/pytest/coverage config
+  pixi.toml             # Pixi tasks (test, lint, fmt, check)
+  README.md             # User-facing API docs
+  bubbaloop_sdk/
+    __init__.py         # Public API surface
+    context.py          # NodeContext — main entry point
+    subscriber.py       # TypedSubscriber, RawSubscriber, Callback*, Async*
+    publisher.py        # JsonPublisher, ProtoPublisher
+    node.py             # run_node() helper
+    health.py           # Health heartbeat (used internally by run_node)
+    discover.py         # discover_nodes()
+    get_sample.py       # get_sample() one-shot helper
+    decode_sample.py    # ProtoDecoder
+  tests/
+    test_context.py     # 48 unit tests (no real Zenoh required)
 ```

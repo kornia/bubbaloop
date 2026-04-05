@@ -15,8 +15,6 @@ Usage::
 
 import argparse
 import logging
-import os
-import time
 
 import yaml
 

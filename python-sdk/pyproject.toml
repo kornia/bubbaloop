@@ -6,29 +6,84 @@ build-backend = "setuptools.build_meta"
 name = "bubbaloop-sdk"
 version = "0.1.0"
 description = "Bubbaloop Node SDK for Python"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Kornia Team", email = "edgar.riba@gmail.com" }]
 requires-python = ">=3.9"
+keywords = ["robotics", "physical-ai", "zenoh", "pub-sub"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Distributed Computing",
+]
 dependencies = [
     "eclipse-zenoh>=1.7,<2",
     "protobuf>=4.0",
 ]
 
+[project.urls]
+"Bug Tracker" = "https://github.com/kornia/bubbaloop/issues"
+"Source Code" = "https://github.com/kornia/bubbaloop"
+Homepage = "https://github.com/kornia/bubbaloop"
+
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "ruff"]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "ruff",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["bubbaloop_sdk*"]
 
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+
 [tool.pytest.ini_options]
+addopts = "--color=yes -v"
 testpaths = ["tests"]
 
 # ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+
+[tool.coverage.run]
+branch = true
+source = ["bubbaloop_sdk/"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "def __repr__",
+]
+
+# ---------------------------------------------------------------------------
 # Ruff — linter + formatter (replaces flake8, isort, pycodestyle)
+# Follows the same pattern as kornia/kornia
 # ---------------------------------------------------------------------------
 
 [tool.ruff]
 line-length = 120
 target-version = "py39"
+
+[tool.ruff.format]
+skip-magic-trailing-comma = false
 
 [tool.ruff.lint]
 select = [
@@ -38,14 +93,22 @@ select = [
     "I",   # isort
     "B",   # flake8-bugbear
     "UP",  # pyupgrade
+    "C4",  # flake8-comprehensions
+    "RUF", # Ruff-specific rules
 ]
 ignore = [
     # forward-reference string annotations with lazy imports (by design in context.py)
     "F821",
+    # pre-existing: raise without `from err` in get_sample.py (upstream code)
+    "B904",
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["bubbaloop_sdk"]
+split-on-trailing-comma = true
+
 [tool.ruff.lint.per-file-ignores]
-# pre-existing unused imports in upstream files (health.py, node.py)
-"bubbaloop_sdk/health.py" = ["F401"]
-"bubbaloop_sdk/node.py" = ["F401"]
-"bubbaloop_sdk/get_sample.py" = ["B904"]
+# __init__.py files may re-export names (star imports allowed)
+"*/__init__.py" = ["F401", "F403"]
+# tests don't need docstrings and use assert freely
+"tests/*" = ["S101", "D"]
