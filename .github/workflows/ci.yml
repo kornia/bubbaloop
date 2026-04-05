@@ -49,3 +49,14 @@ jobs:
 
       - name: Test
         run: pixi run cargo test --lib -p bubbaloop
+
+      - name: Python SDK — lint
+        run: |
+          cd python-sdk
+          pip install -e ".[dev]" -q
+          ruff check bubbaloop_sdk/ tests/
+
+      - name: Python SDK — test
+        run: |
+          cd python-sdk
+          pytest tests/ -v
