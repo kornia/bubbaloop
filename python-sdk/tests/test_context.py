@@ -739,9 +739,12 @@ def test_queryable_async_uses_topic_prefix():
     def handler(q):
         pass
 
-    ctx.queryable_async("command", handler)
-    called_topic = ctx.session.declare_queryable.call_args[0][0]
-    assert called_topic == "bubbaloop/local/bot/command"
+    qbl = ctx.queryable_async("command", handler)
+    try:
+        called_topic = ctx.session.declare_queryable.call_args[0][0]
+        assert called_topic == "bubbaloop/local/bot/command"
+    finally:
+        qbl.undeclare()
 
 
 def test_queryable_async_wraps_handler_in_executor():
@@ -764,13 +767,16 @@ def test_queryable_async_wraps_handler_in_executor():
         received.append(query)
         event.set()
 
-    ctx.queryable_async("command", slow_handler)
+    qbl = ctx.queryable_async("command", slow_handler)
 
-    fake_query = MagicMock()
-    captured_wrapper[0](fake_query)  # Zenoh calls the wrapper
+    try:
+        fake_query = MagicMock()
+        captured_wrapper[0](fake_query)  # Zenoh calls the wrapper
 
-    assert event.wait(timeout=2.0), "handler not called within 2s"
-    assert received == [fake_query]
+        assert event.wait(timeout=2.0), "handler not called within 2s"
+        assert received == [fake_query]
+    finally:
+        qbl.undeclare()
 
 
 def test_queryable_async_returns_async_queryable():
@@ -779,15 +785,21 @@ def test_queryable_async_returns_async_queryable():
 
     ctx = _make_context("local", "bot")
     qbl = ctx.queryable_async("command", lambda q: None)
-    assert isinstance(qbl, AsyncQueryable)
+    try:
+        assert isinstance(qbl, AsyncQueryable)
+    finally:
+        qbl.undeclare()
 
 
 def test_queryable_raw_async_uses_literal_key_expr():
     """queryable_raw_async() declares at the literal key expression."""
     ctx = _make_context("local", "bot")
-    ctx.queryable_raw_async("bubbaloop/**/schema", lambda q: None)
-    called_topic = ctx.session.declare_queryable.call_args[0][0]
-    assert called_topic == "bubbaloop/**/schema"
+    qbl = ctx.queryable_raw_async("bubbaloop/**/schema", lambda q: None)
+    try:
+        called_topic = ctx.session.declare_queryable.call_args[0][0]
+        assert called_topic == "bubbaloop/**/schema"
+    finally:
+        qbl.undeclare()
 
 
 def test_queryable_raw_async_wraps_handler_in_executor():
@@ -810,13 +822,16 @@ def test_queryable_raw_async_wraps_handler_in_executor():
         received.append(query)
         event.set()
 
-    ctx.queryable_raw_async("bubbaloop/**/schema", handler)
+    qbl = ctx.queryable_raw_async("bubbaloop/**/schema", handler)
 
-    fake_query = MagicMock()
-    captured_wrapper[0](fake_query)
+    try:
+        fake_query = MagicMock()
+        captured_wrapper[0](fake_query)
 
-    assert event.wait(timeout=2.0), "handler not called within 2s"
-    assert received == [fake_query]
+        assert event.wait(timeout=2.0), "handler not called within 2s"
+        assert received == [fake_query]
+    finally:
+        qbl.undeclare()
 
 
 def test_async_queryable_undeclare():
@@ -855,17 +870,23 @@ def test_subscriber_raw_callback_uses_literal_key_expr():
 def test_subscriber_callback_async_uses_topic_prefix():
     """subscriber_callback_async() declares at topic(suffix)."""
     ctx = _make_context("local", "bot")
-    ctx.subscriber_callback_async("sensor/data", lambda msg: None)
-    called_topic = ctx.session.declare_subscriber.call_args[0][0]
-    assert called_topic == "bubbaloop/local/bot/sensor/data"
+    sub = ctx.subscriber_callback_async("sensor/data", lambda msg: None)
+    try:
+        called_topic = ctx.session.declare_subscriber.call_args[0][0]
+        assert called_topic == "bubbaloop/local/bot/sensor/data"
+    finally:
+        sub.undeclare()
 
 
 def test_subscriber_raw_callback_async_uses_literal_key_expr():
     """subscriber_raw_callback_async() declares at literal key expression."""
     ctx = _make_context("local", "bot")
-    ctx.subscriber_raw_callback_async("bubbaloop/**/health", lambda s: None)
-    called_topic = ctx.session.declare_subscriber.call_args[0][0]
-    assert called_topic == "bubbaloop/**/health"
+    sub = ctx.subscriber_raw_callback_async("bubbaloop/**/health", lambda s: None)
+    try:
+        called_topic = ctx.session.declare_subscriber.call_args[0][0]
+        assert called_topic == "bubbaloop/**/health"
+    finally:
+        sub.undeclare()
 
 
 # ---------------------------------------------------------------------------
