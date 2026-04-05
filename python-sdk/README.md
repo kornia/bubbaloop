@@ -31,6 +31,7 @@ while not ctx.is_shutdown():
     pub.put({"temperature": 22.5, "humidity": 60})
     time.sleep(1.0)
 
+pub.undeclare()
 ctx.close()
 ```
 
@@ -48,6 +49,7 @@ while not ctx.is_shutdown():
     pub.put(SensorData(value=42.0))
     time.sleep(0.1)
 
+pub.undeclare()
 ctx.close()
 ```
 
@@ -65,6 +67,7 @@ while not ctx.is_shutdown():
     if msg is not None:
         print(f"value: {msg.value}")
 
+sub.undeclare()
 ctx.close()
 ```
 
@@ -106,6 +109,7 @@ def on_query(query):
 
 qbl = ctx.queryable("status", on_query)
 ctx.wait_shutdown()
+qbl.undeclare()
 ctx.close()
 ```
 
