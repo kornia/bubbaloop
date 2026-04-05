@@ -380,22 +380,24 @@ def test_callback_subscriber_async_drops_after_undeclare():
 
     mock_session.declare_subscriber.side_effect = fake_declare
     received = []
+    called = threading.Event()
 
     def handler(msg):
         received.append(msg)
+        called.set()
 
     sub = CallbackSubscriberAsync(mock_session, "test/topic", handler)
     sub.undeclare()
 
-    # Simulate a late-arriving Zenoh callback after undeclare
+    # Simulate a late-arriving Zenoh callback after undeclare.
+    # _closing is already set so _wrap returns early — handler is never submitted.
     fake_sample = MagicMock()
     fake_sample.payload.to_bytes.return_value = b"\xff"
     captured_handler[0](fake_sample)  # must not raise
 
-    import time
-
-    time.sleep(0.05)
-    assert received == [], "handler should not be called after undeclare()"
+    # Give the executor no chance to run (it's shut down); assert immediately.
+    assert not called.wait(timeout=0.1), "handler should not be called after undeclare()"
+    assert received == []
 
 
 def test_raw_callback_subscriber_async_drops_after_undeclare():
@@ -411,9 +413,11 @@ def test_raw_callback_subscriber_async_drops_after_undeclare():
 
     mock_session.declare_subscriber.side_effect = fake_declare
     received = []
+    called = threading.Event()
 
     def handler(sample):
         received.append(sample)
+        called.set()
 
     sub = RawCallbackSubscriberAsync(mock_session, "test/**", handler)
     sub.undeclare()
@@ -421,10 +425,8 @@ def test_raw_callback_subscriber_async_drops_after_undeclare():
     fake_sample = MagicMock()
     captured_handler[0](fake_sample)  # must not raise
 
-    import time
-
-    time.sleep(0.05)
-    assert received == [], "handler should not be called after undeclare()"
+    assert not called.wait(timeout=0.1), "handler should not be called after undeclare()"
+    assert received == []
 
 
 def test_async_queryable_drops_after_undeclare():
@@ -440,9 +442,11 @@ def test_async_queryable_drops_after_undeclare():
 
     mock_session.declare_queryable.side_effect = fake_declare
     received = []
+    called = threading.Event()
 
     def handler(query):
         received.append(query)
+        called.set()
 
     aq = AsyncQueryable(mock_session, "test/topic", handler)
     aq.undeclare()
@@ -450,10 +454,8 @@ def test_async_queryable_drops_after_undeclare():
     fake_query = MagicMock()
     captured_wrapper[0](fake_query)  # must not raise
 
-    import time
-
-    time.sleep(0.05)
-    assert received == [], "handler should not be called after undeclare()"
+    assert not called.wait(timeout=0.1), "handler should not be called after undeclare()"
+    assert received == []
 
 
 # ---------------------------------------------------------------------------

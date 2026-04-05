@@ -196,12 +196,15 @@ class CallbackSubscriberAsync:
             if self._closing.is_set():
                 return
             payload = bytes(sample.payload.to_bytes())
-            if msg_class is not None and hasattr(msg_class, "FromString"):
-                msg = msg_class.FromString(payload)
-            else:
-                msg = payload
+
+            def _decode_and_call():
+                if msg_class is not None and hasattr(msg_class, "FromString"):
+                    handler(msg_class.FromString(payload))
+                else:
+                    handler(payload)
+
             try:
-                self._executor.submit(handler, msg)
+                self._executor.submit(_decode_and_call)
             except RuntimeError:
                 pass  # executor already shut down — drop the message
 
