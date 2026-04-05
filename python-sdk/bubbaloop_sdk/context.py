@@ -120,6 +120,109 @@ class NodeContext:
         return RawSubscriber(self.session, key_expr)
 
     # ------------------------------------------------------------------
+    # Callback Subscribers
+    # ------------------------------------------------------------------
+
+    def subscriber_callback(self, suffix: str, handler, msg_class=None) -> "CallbackSubscriber":
+        """Callback subscriber at ``topic(suffix)``.
+
+        ``handler`` is called from Zenoh's internal thread each time a sample
+        arrives. For slow handlers (I/O, DB), use ``subscriber_callback_async()``.
+        """
+        from .subscriber import CallbackSubscriber
+        return CallbackSubscriber(self.session, self.topic(suffix), handler, msg_class)
+
+    def subscriber_raw_callback(self, key_expr: str, handler) -> "RawCallbackSubscriber":
+        """Callback subscriber at a literal key expression.
+
+        ``handler`` receives raw ``zenoh.Sample`` objects from Zenoh's internal thread.
+        """
+        from .subscriber import RawCallbackSubscriber
+        return RawCallbackSubscriber(self.session, key_expr, handler)
+
+    def subscriber_callback_async(self, suffix: str, handler, msg_class=None, max_workers: int = 4) -> "CallbackSubscriberAsync":
+        """Callback subscriber at ``topic(suffix)`` with handler in a thread pool.
+
+        Use when ``handler`` does slow work (database writes, hardware I/O, network
+        calls). Zenoh's internal thread is freed immediately; the handler runs in a
+        ``ThreadPoolExecutor`` with ``max_workers`` threads.
+        """
+        from .subscriber import CallbackSubscriberAsync
+        return CallbackSubscriberAsync(self.session, self.topic(suffix), handler, msg_class, max_workers)
+
+    def subscriber_raw_callback_async(self, key_expr: str, handler, max_workers: int = 4) -> "RawCallbackSubscriberAsync":
+        """Raw callback subscriber at a literal key expression with handler in a thread pool."""
+        from .subscriber import RawCallbackSubscriberAsync
+        return RawCallbackSubscriberAsync(self.session, key_expr, handler, max_workers)
+
+    # ------------------------------------------------------------------
+    # Queryables
+    # ------------------------------------------------------------------
+
+    def queryable(self, suffix: str, handler) -> "zenoh.Queryable":
+        """Declare a queryable at ``topic(suffix)``.
+
+        ``handler`` receives a ``zenoh.Query``. Use the standard zenoh API to reply::
+
+            def on_command(query: zenoh.Query) -> None:
+                result = process(query.payload.to_string())
+                query.reply(query.key_expr, json.dumps(result).encode())
+
+            qbl = ctx.queryable("command", on_command)
+
+        **Important:** do NOT pass ``complete=True`` — it blocks wildcard queries
+        like ``bubbaloop/**/schema`` used by the dashboard.
+
+        For slow handlers, use ``queryable_async()``.
+
+        Keep the returned object alive — garbage-collecting it undeclares the queryable.
+        """
+        return self.session.declare_queryable(self.topic(suffix), handler)
+
+    def queryable_raw(self, key_expr: str, handler) -> "zenoh.Queryable":
+        """Declare a queryable at a literal key expression (no topic prefix).
+
+        Use for wildcard queryables or when the ``bubbaloop/{scope}/{machine_id}/``
+        prefix does not apply (e.g. ``bubbaloop/**/schema`` for multi-schema serving).
+
+        Keep the returned object alive — garbage-collecting it undeclares the queryable.
+        """
+        return self.session.declare_queryable(key_expr, handler)
+
+    def queryable_async(self, suffix: str, handler, max_workers: int = 4) -> "zenoh.Queryable":
+        """Declare a queryable at ``topic(suffix)`` with handler in a thread pool.
+
+        Use when the handler does slow work. Zenoh's internal thread is freed
+        immediately; the handler runs in a ``ThreadPoolExecutor``::
+
+            def on_db_query(query: zenoh.Query) -> None:
+                rows = db.fetch(query.payload.to_string())  # slow
+                query.reply(query.key_expr, json.dumps(rows).encode())
+
+            qbl = ctx.queryable_async("device_data", on_db_query)
+
+        **Threading contract:** multiple invocations may run concurrently.
+        Protect shared state with locks.
+        """
+        import concurrent.futures
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+
+        def _wrap(query) -> None:
+            executor.submit(handler, query)
+
+        return self.session.declare_queryable(self.topic(suffix), _wrap)
+
+    def queryable_raw_async(self, key_expr: str, handler, max_workers: int = 4) -> "zenoh.Queryable":
+        """Declare a queryable at a literal key expression with handler in a thread pool."""
+        import concurrent.futures
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+
+        def _wrap(query) -> None:
+            executor.submit(handler, query)
+
+        return self.session.declare_queryable(key_expr, _wrap)
+
+    # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
 

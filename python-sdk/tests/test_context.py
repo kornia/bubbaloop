@@ -448,6 +448,116 @@ def test_raw_callback_subscriber_async_undeclare():
 
 
 # ---------------------------------------------------------------------------
+# NodeContext.queryable() and queryable_raw()
+# ---------------------------------------------------------------------------
+
+def test_queryable_uses_topic_prefix():
+    """queryable() declares at bubbaloop/{scope}/{machine_id}/{suffix}."""
+    ctx = _make_context("local", "bot")
+    handler = lambda q: None
+    ctx.queryable("command", handler)
+    ctx.session.declare_queryable.assert_called_once_with(
+        "bubbaloop/local/bot/command", handler
+    )
+
+
+def test_queryable_raw_uses_literal_key_expr():
+    """queryable_raw() declares at the literal key expression provided."""
+    ctx = _make_context("local", "bot")
+    handler = lambda q: None
+    ctx.queryable_raw("bubbaloop/**/schema", handler)
+    ctx.session.declare_queryable.assert_called_once_with(
+        "bubbaloop/**/schema", handler
+    )
+
+
+def test_queryable_returns_zenoh_queryable():
+    """queryable() returns whatever session.declare_queryable returns."""
+    ctx = _make_context("local", "bot")
+    mock_qbl = MagicMock()
+    ctx.session.declare_queryable.return_value = mock_qbl
+    result = ctx.queryable("command", lambda q: None)
+    assert result is mock_qbl
+
+
+# ---------------------------------------------------------------------------
+# NodeContext.queryable_async() and queryable_raw_async()
+# ---------------------------------------------------------------------------
+
+def test_queryable_async_uses_topic_prefix():
+    """queryable_async() declares at bubbaloop/{scope}/{machine_id}/{suffix}."""
+    ctx = _make_context("local", "bot")
+    handler = lambda q: None
+    ctx.queryable_async("command", handler)
+    called_topic = ctx.session.declare_queryable.call_args[0][0]
+    assert called_topic == "bubbaloop/local/bot/command"
+
+
+def test_queryable_async_wraps_handler_in_executor():
+    """queryable_async() wraps handler so Zenoh thread is freed immediately."""
+    import threading
+    ctx = _make_context("local", "bot")
+    captured_wrapper = []
+
+    def fake_declare(topic, wrapper):
+        captured_wrapper.append(wrapper)
+        return MagicMock()
+
+    ctx.session.declare_queryable.side_effect = fake_declare
+
+    received = []
+    event = threading.Event()
+
+    def slow_handler(query):
+        received.append(query)
+        event.set()
+
+    ctx.queryable_async("command", slow_handler)
+
+    fake_query = MagicMock()
+    captured_wrapper[0](fake_query)  # Zenoh calls the wrapper
+
+    assert event.wait(timeout=2.0), "handler not called within 2s"
+    assert received == [fake_query]
+
+
+# ---------------------------------------------------------------------------
+# NodeContext.subscriber_callback()
+# ---------------------------------------------------------------------------
+
+def test_subscriber_callback_uses_topic_prefix():
+    """subscriber_callback() declares at bubbaloop/{scope}/{machine_id}/{suffix}."""
+    ctx = _make_context("local", "bot")
+    ctx.subscriber_callback("sensor/data", lambda msg: None)
+    called_topic = ctx.session.declare_subscriber.call_args[0][0]
+    assert called_topic == "bubbaloop/local/bot/sensor/data"
+
+
+def test_subscriber_raw_callback_uses_literal_key_expr():
+    """subscriber_raw_callback() declares at the literal key expression."""
+    ctx = _make_context("local", "bot")
+    ctx.subscriber_raw_callback("bubbaloop/**/health", lambda s: None)
+    called_topic = ctx.session.declare_subscriber.call_args[0][0]
+    assert called_topic == "bubbaloop/**/health"
+
+
+def test_subscriber_callback_async_uses_topic_prefix():
+    """subscriber_callback_async() declares at bubbaloop/{scope}/{machine_id}/{suffix}."""
+    ctx = _make_context("local", "bot")
+    ctx.subscriber_callback_async("sensor/data", lambda msg: None)
+    called_topic = ctx.session.declare_subscriber.call_args[0][0]
+    assert called_topic == "bubbaloop/local/bot/sensor/data"
+
+
+def test_subscriber_raw_callback_async_uses_literal_key_expr():
+    """subscriber_raw_callback_async() declares at the literal key expression."""
+    ctx = _make_context("local", "bot")
+    ctx.subscriber_raw_callback_async("bubbaloop/**/health", lambda s: None)
+    called_topic = ctx.session.declare_subscriber.call_args[0][0]
+    assert called_topic == "bubbaloop/**/health"
+
+
+# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
