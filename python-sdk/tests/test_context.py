@@ -649,6 +649,177 @@ def test_subscriber_raw_callback_async_uses_literal_key_expr():
 
 
 # ---------------------------------------------------------------------------
+# NodeContext.publisher_json() / publisher_proto() via context
+# ---------------------------------------------------------------------------
+
+def test_publisher_json_uses_topic_prefix():
+    """publisher_json() declares at topic(suffix)."""
+    ctx = _make_context("local", "bot")
+    ctx.publisher_json("weather/current")
+    called_topic = ctx.session.declare_publisher.call_args[0][0]
+    assert called_topic == "bubbaloop/local/bot/weather/current"
+
+
+def test_publisher_proto_uses_topic_prefix():
+    """publisher_proto() declares at topic(suffix)."""
+    ctx = _make_context("local", "bot")
+    fake_class = MagicMock()
+    fake_class.DESCRIPTOR.full_name = "my.SensorData"
+    ctx.publisher_proto("sensor/data", fake_class)
+    called_topic = ctx.session.declare_publisher.call_args[0][0]
+    assert called_topic == "bubbaloop/local/bot/sensor/data"
+
+
+# ---------------------------------------------------------------------------
+# NodeContext.subscriber() / subscriber_raw() via context
+# ---------------------------------------------------------------------------
+
+def test_subscriber_uses_topic_prefix():
+    """subscriber() declares at topic(suffix)."""
+    ctx = _make_context("local", "bot")
+    ctx.subscriber("sensor/data")
+    called_topic = ctx.session.declare_subscriber.call_args[0][0]
+    assert called_topic == "bubbaloop/local/bot/sensor/data"
+
+
+def test_subscriber_raw_uses_literal_key_expr():
+    """subscriber_raw() declares at the literal key expression."""
+    ctx = _make_context("local", "bot")
+    ctx.subscriber_raw("bubbaloop/**/health")
+    called_topic = ctx.session.declare_subscriber.call_args[0][0]
+    assert called_topic == "bubbaloop/**/health"
+
+
+# ---------------------------------------------------------------------------
+# NodeContext.close() and context manager
+# ---------------------------------------------------------------------------
+
+def test_close_calls_session_close():
+    """close() calls session.close()."""
+    ctx = _make_context("local", "bot")
+    ctx.close()
+    ctx.session.close.assert_called_once()
+
+
+def test_context_manager_calls_close():
+    """__exit__ calls close() so the session is always cleaned up."""
+    ctx = _make_context("local", "bot")
+    with ctx:
+        pass
+    ctx.session.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# NodeContext.connect() — env var resolution
+# ---------------------------------------------------------------------------
+
+def test_connect_reads_scope_from_env(monkeypatch):
+    """BUBBALOOP_SCOPE env var sets ctx.scope."""
+    import zenoh
+    monkeypatch.setenv("BUBBALOOP_SCOPE", "prod")
+    monkeypatch.delenv("BUBBALOOP_MACHINE_ID", raising=False)
+    monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
+    monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
+    monkeypatch.setattr(zenoh, "Config", MagicMock)
+    from bubbaloop_sdk.context import NodeContext
+    ctx = NodeContext.connect()
+    assert ctx.scope == "prod"
+
+
+def test_connect_reads_machine_id_from_env(monkeypatch):
+    """BUBBALOOP_MACHINE_ID env var sets ctx.machine_id."""
+    import zenoh
+    monkeypatch.setenv("BUBBALOOP_MACHINE_ID", "jetson_orin")
+    monkeypatch.delenv("BUBBALOOP_SCOPE", raising=False)
+    monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
+    monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
+    monkeypatch.setattr(zenoh, "Config", MagicMock)
+    from bubbaloop_sdk.context import NodeContext
+    ctx = NodeContext.connect()
+    assert ctx.machine_id == "jetson_orin"
+
+
+def test_connect_defaults_scope_to_local(monkeypatch):
+    """scope defaults to 'local' when env var is absent."""
+    import zenoh
+    monkeypatch.delenv("BUBBALOOP_SCOPE", raising=False)
+    monkeypatch.delenv("BUBBALOOP_MACHINE_ID", raising=False)
+    monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
+    monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
+    monkeypatch.setattr(zenoh, "Config", MagicMock)
+    from bubbaloop_sdk.context import NodeContext
+    ctx = NodeContext.connect()
+    assert ctx.scope == "local"
+
+
+def test_connect_instance_name_override(monkeypatch):
+    """instance_name kwarg overrides hostname fallback."""
+    import zenoh
+    monkeypatch.delenv("BUBBALOOP_MACHINE_ID", raising=False)
+    monkeypatch.delenv("BUBBALOOP_SCOPE", raising=False)
+    monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
+    monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
+    monkeypatch.setattr(zenoh, "Config", MagicMock)
+    from bubbaloop_sdk.context import NodeContext
+    ctx = NodeContext.connect(instance_name="tapo_entrance")
+    assert ctx.instance_name == "tapo_entrance"
+
+
+# ---------------------------------------------------------------------------
+# TypedSubscriber / RawSubscriber — undeclare() and iteration
+# ---------------------------------------------------------------------------
+
+def test_typed_subscriber_undeclare():
+    """undeclare() calls undeclare on the underlying zenoh subscriber."""
+    from bubbaloop_sdk.subscriber import TypedSubscriber
+    mock_session = MagicMock()
+    mock_sub = MagicMock()
+    mock_session.declare_subscriber.return_value = mock_sub
+    sub = TypedSubscriber(mock_session, "test/topic")
+    sub.undeclare()
+    mock_sub.undeclare.assert_called_once()
+
+
+def test_raw_subscriber_undeclare():
+    """undeclare() calls undeclare on the underlying zenoh subscriber."""
+    from bubbaloop_sdk.subscriber import RawSubscriber
+    mock_session = MagicMock()
+    mock_sub = MagicMock()
+    mock_session.declare_subscriber.return_value = mock_sub
+    sub = RawSubscriber(mock_session, "test/topic")
+    sub.undeclare()
+    mock_sub.undeclare.assert_called_once()
+
+
+def test_typed_subscriber_iteration():
+    """Iterating over TypedSubscriber yields decoded messages."""
+    from bubbaloop_sdk.subscriber import TypedSubscriber
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(topic, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    sub = TypedSubscriber(mock_session, "test/topic")
+
+    # Feed two samples then stop iteration by checking queue empty
+    for payload in [b"\x01", b"\x02"]:
+        fake_sample = MagicMock()
+        fake_sample.payload.to_bytes.return_value = payload
+        captured_handler[0](fake_sample)
+
+    results = []
+    for msg in sub:
+        results.append(msg)
+        if len(results) == 2:
+            break
+
+    assert results == [b"\x01", b"\x02"]
+
+
+# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
