@@ -200,7 +200,7 @@ class NodeContext:
 
         For slow handlers, use ``queryable_async()``.
 
-        Keep the returned object alive — garbage-collecting it undeclares the queryable.
+        Call ``undeclare()`` on the returned queryable when done.
         """
         return self.session.declare_queryable(self.topic(suffix), handler)
 
@@ -210,7 +210,7 @@ class NodeContext:
         Use for wildcard queryables or when the ``bubbaloop/{scope}/{machine_id}/``
         prefix does not apply (e.g. ``bubbaloop/**/schema`` for multi-schema serving).
 
-        Keep the returned object alive — garbage-collecting it undeclares the queryable.
+        Call ``undeclare()`` on the returned queryable when done.
         """
         return self.session.declare_queryable(key_expr, handler)
 

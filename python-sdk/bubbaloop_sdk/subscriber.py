@@ -5,11 +5,15 @@ from __future__ import annotations
 import concurrent.futures
 import queue
 import threading
+import time
 
 import zenoh
 
 # Sentinel object pushed into a queue to unblock recv() on undeclare().
 _CLOSED = object()
+# Max time a blocked recv() waits before re-checking _closed. Keeps all
+# concurrent callers responsive to undeclare() within this many seconds.
+_POLL_INTERVAL = 0.05
 
 
 class TypedSubscriber:
@@ -41,19 +45,27 @@ class TypedSubscriber:
         self._sub = session.declare_subscriber(topic, _on_sample)
 
     def recv(self, timeout: float | None = None):
-        """Block until the next message arrives. Returns ``None`` on timeout or close."""
-        if self._closed.is_set():
-            return None
-        try:
-            payload = self._queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
-        if payload is _CLOSED:
-            self._closed.set()
-            return None
-        if self._msg_class is not None and hasattr(self._msg_class, "FromString"):
-            return self._msg_class.FromString(payload)
-        return payload
+        """Block until the next message arrives. Returns ``None`` on timeout or close.
+
+        Polls in ``_POLL_INTERVAL``-second slices so that all concurrent callers
+        observe ``_closed`` within that window after ``undeclare()`` is called.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not self._closed.is_set():
+            wait = _POLL_INTERVAL if deadline is None else min(_POLL_INTERVAL, deadline - time.monotonic())
+            if wait <= 0:
+                return None
+            try:
+                payload = self._queue.get(timeout=wait)
+            except queue.Empty:
+                continue
+            if payload is _CLOSED:
+                self._closed.set()
+                return None
+            if self._msg_class is not None and hasattr(self._msg_class, "FromString"):
+                return self._msg_class.FromString(payload)
+            return payload
+        return None
 
     def __iter__(self):
         return self
@@ -89,17 +101,25 @@ class RawSubscriber:
         self._sub = session.declare_subscriber(key_expr, _on_sample)
 
     def recv(self, timeout: float | None = None):
-        """Block until the next sample arrives. Returns ``None`` on timeout or close."""
-        if self._closed.is_set():
-            return None
-        try:
-            sample = self._queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
-        if sample is _CLOSED:
-            self._closed.set()
-            return None
-        return sample
+        """Block until the next sample arrives. Returns ``None`` on timeout or close.
+
+        Polls in ``_POLL_INTERVAL``-second slices so that all concurrent callers
+        observe ``_closed`` within that window after ``undeclare()`` is called.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not self._closed.is_set():
+            wait = _POLL_INTERVAL if deadline is None else min(_POLL_INTERVAL, deadline - time.monotonic())
+            if wait <= 0:
+                return None
+            try:
+                sample = self._queue.get(timeout=wait)
+            except queue.Empty:
+                continue
+            if sample is _CLOSED:
+                self._closed.set()
+                return None
+            return sample
+        return None
 
     def __iter__(self):
         return self
@@ -141,7 +161,7 @@ class CallbackSubscriber:
 
         sub = ctx.subscriber_callback("sensor/data", on_msg, SensorData)
 
-    Keep the returned object alive — garbage-collecting it undeclares the subscriber.
+    Call ``undeclare()`` when done to stop receiving samples.
     """
 
     def __init__(self, session: zenoh.Session, topic: str, handler, msg_class=None):
@@ -167,7 +187,7 @@ class RawCallbackSubscriber:
 
     For slow handlers, use ``ctx.subscriber_raw_callback_async()`` instead.
 
-    Keep the returned object alive — garbage-collecting it undeclares the subscriber.
+    Call ``undeclare()`` when done to stop receiving samples.
     """
 
     def __init__(self, session: zenoh.Session, key_expr: str, handler):
@@ -197,7 +217,7 @@ class CallbackSubscriberAsync:
     if messages arrive faster than the handler processes them. Protect shared state
     with locks.
 
-    Keep the returned object alive — garbage-collecting it undeclares the subscriber.
+    Call ``undeclare()`` when done to stop receiving samples.
     """
 
     def __init__(self, session: zenoh.Session, topic: str, handler, msg_class=None, max_workers: int = 4):
@@ -235,7 +255,7 @@ class RawCallbackSubscriberAsync:
     Same as ``CallbackSubscriberAsync`` but passes raw ``zenoh.Sample`` objects.
     Use when you need sample metadata AND your handler does slow work.
 
-    Keep the returned object alive — garbage-collecting it undeclares the subscriber.
+    Call ``undeclare()`` when done to stop receiving samples.
     """
 
     def __init__(self, session: zenoh.Session, key_expr: str, handler, max_workers: int = 4):
@@ -279,7 +299,7 @@ class AsyncQueryable:
     if queries arrive faster than the handler processes them. Protect shared state
     with locks.
 
-    Keep the returned object alive — garbage-collecting it undeclares the queryable.
+    Call ``undeclare()`` when done to stop receiving queries and release the thread pool.
     """
 
     def __init__(self, session: zenoh.Session, key_expr: str, handler, max_workers: int = 4):
