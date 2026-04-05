@@ -249,6 +249,178 @@ def test_raw_subscriber_recv_returns_sample():
 
 
 # ---------------------------------------------------------------------------
+# TypedSubscriber / RawSubscriber — undeclare unblocks recv()
+# ---------------------------------------------------------------------------
+
+def test_typed_subscriber_undeclare_unblocks_recv():
+    """undeclare() unblocks a thread waiting in recv(timeout=None)."""
+    from bubbaloop_sdk.subscriber import TypedSubscriber
+    mock_session = MagicMock()
+    mock_session.declare_subscriber.return_value = MagicMock()
+    sub = TypedSubscriber(mock_session, "test/topic")
+
+    result_holder = []
+
+    def blocking_recv():
+        result_holder.append(sub.recv(timeout=None))
+
+    t = threading.Thread(target=blocking_recv)
+    t.start()
+    sub.undeclare()
+    t.join(timeout=2.0)
+
+    assert not t.is_alive(), "recv() did not unblock after undeclare()"
+    assert result_holder == [None]
+
+
+def test_raw_subscriber_undeclare_unblocks_recv():
+    """undeclare() unblocks a thread waiting in recv(timeout=None)."""
+    from bubbaloop_sdk.subscriber import RawSubscriber
+    mock_session = MagicMock()
+    mock_session.declare_subscriber.return_value = MagicMock()
+    sub = RawSubscriber(mock_session, "test/topic")
+
+    result_holder = []
+
+    def blocking_recv():
+        result_holder.append(sub.recv(timeout=None))
+
+    t = threading.Thread(target=blocking_recv)
+    t.start()
+    sub.undeclare()
+    t.join(timeout=2.0)
+
+    assert not t.is_alive(), "recv() did not unblock after undeclare()"
+    assert result_holder == [None]
+
+
+def test_typed_subscriber_decode_happens_in_recv_not_callback():
+    """FromString is called in recv(), not inside the Zenoh callback."""
+    from bubbaloop_sdk.subscriber import TypedSubscriber
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(topic, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    decode_thread_ids = []
+    callback_thread_id = []
+
+    class FakeMsgClass:
+        @staticmethod
+        def FromString(data):
+            decode_thread_ids.append(threading.current_thread().ident)
+            return f"decoded:{data}"
+
+    sub = TypedSubscriber(mock_session, "test/topic", msg_class=FakeMsgClass)
+
+    def zenoh_callback():
+        callback_thread_id.append(threading.current_thread().ident)
+        fake_sample = MagicMock()
+        fake_sample.payload.to_bytes.return_value = b"\x01"
+        captured_handler[0](fake_sample)
+
+    t = threading.Thread(target=zenoh_callback)
+    t.start()
+    t.join()
+
+    result = sub.recv(timeout=1.0)
+
+    assert result == "decoded:b'\\x01'"
+    # Decode must NOT have happened on the Zenoh (callback) thread
+    assert decode_thread_ids[0] != callback_thread_id[0]
+
+
+# ---------------------------------------------------------------------------
+# CallbackSubscriberAsync / RawCallbackSubscriberAsync — _closing flag
+# ---------------------------------------------------------------------------
+
+def test_callback_subscriber_async_drops_after_undeclare():
+    """Callbacks arriving after undeclare() are silently dropped."""
+    from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(topic, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    received = []
+
+    def handler(msg):
+        received.append(msg)
+
+    sub = CallbackSubscriberAsync(mock_session, "test/topic", handler)
+    sub.undeclare()
+
+    # Simulate a late-arriving Zenoh callback after undeclare
+    fake_sample = MagicMock()
+    fake_sample.payload.to_bytes.return_value = b"\xff"
+    captured_handler[0](fake_sample)  # must not raise
+
+    import time
+    time.sleep(0.05)
+    assert received == [], "handler should not be called after undeclare()"
+
+
+def test_raw_callback_subscriber_async_drops_after_undeclare():
+    """Callbacks arriving after undeclare() are silently dropped."""
+    from bubbaloop_sdk.subscriber import RawCallbackSubscriberAsync
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(key_expr, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    received = []
+
+    def handler(sample):
+        received.append(sample)
+
+    sub = RawCallbackSubscriberAsync(mock_session, "test/**", handler)
+    sub.undeclare()
+
+    fake_sample = MagicMock()
+    captured_handler[0](fake_sample)  # must not raise
+
+    import time
+    time.sleep(0.05)
+    assert received == [], "handler should not be called after undeclare()"
+
+
+def test_async_queryable_drops_after_undeclare():
+    """Queries arriving after undeclare() are silently dropped."""
+    from bubbaloop_sdk.subscriber import AsyncQueryable
+    mock_session = MagicMock()
+    captured_wrapper = []
+
+    def fake_declare(key_expr, wrapper):
+        captured_wrapper.append(wrapper)
+        return MagicMock()
+
+    mock_session.declare_queryable.side_effect = fake_declare
+    received = []
+
+    def handler(query):
+        received.append(query)
+
+    aq = AsyncQueryable(mock_session, "test/topic", handler)
+    aq.undeclare()
+
+    fake_query = MagicMock()
+    captured_wrapper[0](fake_query)  # must not raise
+
+    import time
+    time.sleep(0.05)
+    assert received == [], "handler should not be called after undeclare()"
+
+
+# ---------------------------------------------------------------------------
 # CallbackSubscriber
 # ---------------------------------------------------------------------------
 
