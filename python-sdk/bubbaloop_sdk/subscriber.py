@@ -216,3 +216,40 @@ class RawCallbackSubscriberAsync:
         """Undeclare the subscriber and shutdown the thread pool."""
         self._sub.undeclare()  # stop Zenoh callbacks first
         self._executor.shutdown(wait=False)
+
+
+class AsyncQueryable:
+    """Wrapper around ``zenoh.Queryable`` that runs the handler in a ``ThreadPoolExecutor``.
+
+    **Use this (via ``ctx.queryable_async()``) when your queryable handler does slow work**
+    (database reads, hardware access, network calls). Zenoh uses a single internal thread
+    for all callbacks — a slow handler blocks ALL other subscribers and queryables on the
+    same session. ``AsyncQueryable`` fixes this by submitting the handler to a thread pool
+    immediately and returning, freeing Zenoh's thread::
+
+        def on_db_query(query: zenoh.Query) -> None:
+            rows = db.fetch(query.payload.to_string())   # slow
+            query.reply(query.key_expr, json.dumps(rows).encode())
+
+        qbl = ctx.queryable_async("device_data", on_db_query)
+        # qbl.undeclare() when done — shuts down Zenoh queryable AND thread pool
+
+    **Threading contract:** multiple invocations of ``handler`` may run concurrently
+    if queries arrive faster than the handler processes them. Protect shared state
+    with locks.
+
+    Keep the returned object alive — garbage-collecting it undeclares the queryable.
+    """
+
+    def __init__(self, session: zenoh.Session, key_expr: str, handler, max_workers: int = 4):
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+
+        def _wrap(query) -> None:
+            self._executor.submit(handler, query)
+
+        self._qbl = session.declare_queryable(key_expr, _wrap)
+
+    def undeclare(self) -> None:
+        """Undeclare the queryable and shutdown the thread pool."""
+        self._qbl.undeclare()  # stop Zenoh callbacks first
+        self._executor.shutdown(wait=False)

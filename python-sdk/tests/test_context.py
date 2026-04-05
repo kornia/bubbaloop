@@ -521,6 +521,61 @@ def test_queryable_async_wraps_handler_in_executor():
     assert received == [fake_query]
 
 
+def test_queryable_async_returns_async_queryable():
+    """queryable_async() returns an AsyncQueryable (not a bare zenoh.Queryable)."""
+    from bubbaloop_sdk.subscriber import AsyncQueryable
+    ctx = _make_context("local", "bot")
+    qbl = ctx.queryable_async("command", lambda q: None)
+    assert isinstance(qbl, AsyncQueryable)
+
+
+def test_queryable_raw_async_uses_literal_key_expr():
+    """queryable_raw_async() declares at the literal key expression provided."""
+    ctx = _make_context("local", "bot")
+    ctx.queryable_raw_async("bubbaloop/**/schema", lambda q: None)
+    called_topic = ctx.session.declare_queryable.call_args[0][0]
+    assert called_topic == "bubbaloop/**/schema"
+
+
+def test_queryable_raw_async_wraps_handler_in_executor():
+    """queryable_raw_async() wraps handler in thread pool."""
+    import threading
+    ctx = _make_context("local", "bot")
+    captured_wrapper = []
+
+    def fake_declare(key_expr, wrapper):
+        captured_wrapper.append(wrapper)
+        return MagicMock()
+
+    ctx.session.declare_queryable.side_effect = fake_declare
+
+    received = []
+    event = threading.Event()
+
+    def handler(query):
+        received.append(query)
+        event.set()
+
+    ctx.queryable_raw_async("bubbaloop/**/schema", handler)
+
+    fake_query = MagicMock()
+    captured_wrapper[0](fake_query)
+
+    assert event.wait(timeout=2.0), "handler not called within 2s"
+    assert received == [fake_query]
+
+
+def test_async_queryable_undeclare():
+    """AsyncQueryable.undeclare() undeclares the queryable then shuts down executor."""
+    from bubbaloop_sdk.subscriber import AsyncQueryable
+    mock_session = MagicMock()
+    mock_qbl = MagicMock()
+    mock_session.declare_queryable.return_value = mock_qbl
+    aq = AsyncQueryable(mock_session, "test/topic", lambda q: None)
+    aq.undeclare()
+    mock_qbl.undeclare.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # NodeContext.subscriber_callback()
 # ---------------------------------------------------------------------------

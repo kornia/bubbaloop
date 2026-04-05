@@ -189,7 +189,7 @@ class NodeContext:
         """
         return self.session.declare_queryable(key_expr, handler)
 
-    def queryable_async(self, suffix: str, handler, max_workers: int = 4) -> "zenoh.Queryable":
+    def queryable_async(self, suffix: str, handler, max_workers: int = 4) -> "AsyncQueryable":
         """Declare a queryable at ``topic(suffix)`` with handler in a thread pool.
 
         Use when the handler does slow work. Zenoh's internal thread is freed
@@ -200,27 +200,23 @@ class NodeContext:
                 query.reply(query.key_expr, json.dumps(rows).encode())
 
             qbl = ctx.queryable_async("device_data", on_db_query)
+            # call qbl.undeclare() when done to release threads
 
         **Threading contract:** multiple invocations may run concurrently.
         Protect shared state with locks.
         """
-        import concurrent.futures
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        from .subscriber import AsyncQueryable
+        return AsyncQueryable(self.session, self.topic(suffix), handler, max_workers)
 
-        def _wrap(query) -> None:
-            executor.submit(handler, query)
+    def queryable_raw_async(self, key_expr: str, handler, max_workers: int = 4) -> "AsyncQueryable":
+        """Declare a queryable at a literal key expression with handler in a thread pool.
 
-        return self.session.declare_queryable(self.topic(suffix), _wrap)
-
-    def queryable_raw_async(self, key_expr: str, handler, max_workers: int = 4) -> "zenoh.Queryable":
-        """Declare a queryable at a literal key expression with handler in a thread pool."""
-        import concurrent.futures
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-
-        def _wrap(query) -> None:
-            executor.submit(handler, query)
-
-        return self.session.declare_queryable(key_expr, _wrap)
+        Same as ``queryable_async()`` but uses a literal key expression without the
+        ``bubbaloop/{scope}/{machine_id}/`` prefix. Use for wildcard queryables.
+        Call ``undeclare()`` on the returned object when done to release threads.
+        """
+        from .subscriber import AsyncQueryable
+        return AsyncQueryable(self.session, key_expr, handler, max_workers)
 
     # ------------------------------------------------------------------
     # Cleanup
