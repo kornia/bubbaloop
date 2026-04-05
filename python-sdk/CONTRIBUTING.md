@@ -14,7 +14,7 @@ pixi run fmt
 
 Available tasks:
 
-| Task | Command |
+| Task | Description |
 |---|---|
 | `pixi run test` | Run test suite |
 | `pixi run test-cov` | Run tests with coverage report |
@@ -44,12 +44,11 @@ UP (pyupgrade), C4 (comprehensions), RUF (ruff-specific).
 
 Line length: 120 characters.
 
-## Pre-existing lint suppressions
+## Lint suppressions
 
 | File | Rule | Reason |
-|------|------|--------|
-| `context.py` | F821 (globally) | Forward-reference string annotations with lazy imports — by design |
-| `get_sample.py` | B904 | `raise` without `from err` in upstream code |
+|---|---|---|
+| `context.py` | F821 | Forward-reference string annotations with lazy imports — by design |
 | `*/__init__.py` | F401, F403 | Re-exports allowed |
 | `tests/*` | S101, D | Assert and missing docstrings allowed in tests |
 
@@ -63,7 +62,7 @@ verifies that handlers are dispatched to the thread pool correctly.
 
 ## Project structure
 
-```
+```text
 python-sdk/
   pyproject.toml        # Build config, deps, ruff/pytest/coverage config
   pixi.toml             # Pixi tasks (test, lint, fmt, check)

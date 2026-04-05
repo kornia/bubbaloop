@@ -118,80 +118,80 @@ qbl.undeclare()   # call when done to release the thread pool
 
 ## Configuration
 
-| Environment variable | Default | Description |
-|---|---|---|
-| `BUBBALOOP_ZENOH_ENDPOINT` | `tcp/127.0.0.1:7447` | Zenoh router endpoint |
-| `BUBBALOOP_SCOPE` | `local` | Topic scope |
-| `BUBBALOOP_MACHINE_ID` | hostname (sanitized) | Machine identifier |
+| Environment variable         | Default               | Description               |
+| ---------------------------- | --------------------- | ------------------------- |
+| `BUBBALOOP_ZENOH_ENDPOINT`   | `tcp/127.0.0.1:7447`  | Zenoh router endpoint     |
+| `BUBBALOOP_SCOPE`            | `local`               | Topic scope               |
+| `BUBBALOOP_MACHINE_ID`       | hostname (sanitized)  | Machine identifier        |
 
 ## API reference
 
 ### `NodeContext`
 
-| Method | Returns | Description |
-|---|---|---|
-| `NodeContext.connect(endpoint=None, instance_name=None)` | `NodeContext` | Connect to Zenoh router |
-| `ctx.topic(suffix)` | `str` | Build `bubbaloop/{scope}/{machine_id}/{suffix}` |
-| `ctx.is_shutdown()` | `bool` | True after SIGINT/SIGTERM |
-| `ctx.wait_shutdown()` | — | Block until SIGINT/SIGTERM |
-| `ctx.close()` | — | Close the Zenoh session |
+| Method                                              | Returns       | Description                                     |
+| --------------------------------------------------- | ------------- | ----------------------------------------------- |
+| `NodeContext.connect(endpoint=None, instance_name=None)` | `NodeContext` | Connect to Zenoh router                    |
+| `ctx.topic(suffix)`                                 | `str`         | Build `bubbaloop/{scope}/{machine_id}/{suffix}` |
+| `ctx.is_shutdown()`                                 | `bool`        | True after SIGINT/SIGTERM                       |
+| `ctx.wait_shutdown()`                               | —             | Block until SIGINT/SIGTERM                      |
+| `ctx.close()`                                       | —             | Close the Zenoh session                         |
 
 #### Publishers
 
-| Method | Returns | Description |
-|---|---|---|
-| `ctx.publisher_json(suffix)` | `JsonPublisher` | JSON publisher at `topic(suffix)` |
-| `ctx.publisher_proto(suffix, msg_class=None)` | `ProtoPublisher` | Protobuf publisher at `topic(suffix)` |
+| Method                                          | Returns         | Description                              |
+| ----------------------------------------------- | --------------- | ---------------------------------------- |
+| `ctx.publisher_json(suffix)`                    | `JsonPublisher` | JSON publisher at `topic(suffix)`        |
+| `ctx.publisher_proto(suffix, msg_class=None)`   | `ProtoPublisher`| Protobuf publisher at `topic(suffix)`    |
 
 #### Blocking subscribers (poll with `recv`)
 
-| Method | Returns | Description |
-|---|---|---|
-| `ctx.subscriber(suffix, msg_class=None)` | `TypedSubscriber` | Queue-backed subscriber; `recv(timeout)` returns `None` on timeout |
-| `ctx.subscriber_raw(key_expr)` | `RawSubscriber` | Same but yields raw `zenoh.Sample`; uses literal key expression |
+| Method                                    | Returns          | Description                                                  |
+| ----------------------------------------- | ---------------- | ------------------------------------------------------------ |
+| `ctx.subscriber(suffix, msg_class=None)`  | `TypedSubscriber`| Queue-backed; `recv(timeout)` returns `None` on timeout      |
+| `ctx.subscriber_raw(key_expr)`            | `RawSubscriber`  | Same but yields raw `zenoh.Sample`; literal key expression   |
 
 #### Callback subscribers (event-driven)
 
 Handler is called from Zenoh's internal thread. Keep handlers fast; use `_async`
 variants for slow work.
 
-| Method | Returns | Description |
-|---|---|---|
-| `ctx.subscriber_callback(suffix, handler, msg_class=None)` | `CallbackSubscriber` | Decoded message passed to handler |
-| `ctx.subscriber_raw_callback(key_expr, handler)` | `RawCallbackSubscriber` | Raw `zenoh.Sample` passed to handler; literal key expression |
-| `ctx.subscriber_callback_async(suffix, handler, msg_class=None, max_workers=4)` | `CallbackSubscriberAsync` | Handler runs in thread pool |
-| `ctx.subscriber_raw_callback_async(key_expr, handler, max_workers=4)` | `RawCallbackSubscriberAsync` | Raw sample; handler in thread pool |
+| Method                                                                        | Returns                   | Description                                    |
+| ----------------------------------------------------------------------------- | ------------------------- | ---------------------------------------------- |
+| `ctx.subscriber_callback(suffix, handler, msg_class=None)`                    | `CallbackSubscriber`      | Decoded message passed to handler              |
+| `ctx.subscriber_raw_callback(key_expr, handler)`                              | `RawCallbackSubscriber`   | Raw `zenoh.Sample` to handler; literal key     |
+| `ctx.subscriber_callback_async(suffix, handler, msg_class=None, max_workers=4)` | `CallbackSubscriberAsync` | Handler runs in thread pool                 |
+| `ctx.subscriber_raw_callback_async(key_expr, handler, max_workers=4)`         | `RawCallbackSubscriberAsync` | Raw sample; handler in thread pool          |
 
 #### Queryables
 
 Do **not** pass `complete=True` — it blocks wildcard queries used by the dashboard.
 
-| Method | Returns | Description |
-|---|---|---|
-| `ctx.queryable(suffix, handler)` | `zenoh.Queryable` | Handler at `topic(suffix)`; called from Zenoh thread |
-| `ctx.queryable_raw(key_expr, handler)` | `zenoh.Queryable` | Handler at literal key expression |
-| `ctx.queryable_async(suffix, handler, max_workers=4)` | `AsyncQueryable` | Handler in thread pool; call `undeclare()` to release |
-| `ctx.queryable_raw_async(key_expr, handler, max_workers=4)` | `AsyncQueryable` | Raw key; handler in thread pool |
+| Method                                              | Returns          | Description                                         |
+| --------------------------------------------------- | ---------------- | --------------------------------------------------- |
+| `ctx.queryable(suffix, handler)`                    | `zenoh.Queryable`| Handler at `topic(suffix)`; called from Zenoh thread|
+| `ctx.queryable_raw(key_expr, handler)`              | `zenoh.Queryable`| Handler at literal key expression                   |
+| `ctx.queryable_async(suffix, handler, max_workers=4)` | `AsyncQueryable` | Handler in thread pool; call `undeclare()` to release|
+| `ctx.queryable_raw_async(key_expr, handler, max_workers=4)` | `AsyncQueryable` | Raw key; handler in thread pool             |
 
 ### Publishers
 
-| Method | Description |
-|---|---|
-| `pub.put(msg)` | Publish a message (bytes, proto message, or dict for JSON) |
+| Method        | Description                                                    |
+| ------------- | -------------------------------------------------------------- |
+| `pub.put(msg)`| Publish a message (bytes, proto message, or dict for JSON)     |
 
 ### Blocking subscribers
 
-| Method | Description |
-|---|---|
-| `sub.recv(timeout=None)` | Return next message or `None` on timeout |
-| `sub.undeclare()` | Stop receiving samples |
-| `for msg in sub` | Iterate (blocks indefinitely) |
+| Method                  | Description                               |
+| ----------------------- | ----------------------------------------- |
+| `sub.recv(timeout=None)`| Return next message or `None` on timeout  |
+| `sub.undeclare()`       | Stop receiving samples                    |
+| `for msg in sub`        | Iterate (blocks indefinitely)             |
 
 ### Callback subscribers / AsyncQueryable
 
-| Method | Description |
-|---|---|
-| `sub.undeclare()` | Undeclare subscriber and shut down thread pool (async variants) |
+| Method           | Description                                                          |
+| ---------------- | -------------------------------------------------------------------- |
+| `sub.undeclare()`| Undeclare subscriber and shut down thread pool (async variants)      |
 
 ## Requirements
 
