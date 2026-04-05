@@ -233,6 +233,199 @@ def test_raw_subscriber_recv_returns_sample():
 
 
 # ---------------------------------------------------------------------------
+# CallbackSubscriber
+# ---------------------------------------------------------------------------
+
+def test_callback_subscriber_calls_handler_with_bytes():
+    """Handler receives raw bytes when no msg_class provided."""
+    from bubbaloop_sdk.subscriber import CallbackSubscriber
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(topic, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    received = []
+    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: received.append(msg))
+
+    fake_sample = MagicMock()
+    fake_sample.payload.to_bytes.return_value = b"\xde\xad"
+    captured_handler[0](fake_sample)
+
+    assert received == [b"\xde\xad"]
+
+
+def test_callback_subscriber_decodes_proto():
+    """Handler receives decoded proto when msg_class provided."""
+    from bubbaloop_sdk.subscriber import CallbackSubscriber
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(topic, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+
+    fake_msg_class = MagicMock()
+    fake_msg_class.FromString.return_value = "decoded_proto"
+    received = []
+    sub = CallbackSubscriber(mock_session, "test/topic",
+                              lambda msg: received.append(msg), msg_class=fake_msg_class)
+
+    fake_sample = MagicMock()
+    fake_sample.payload.to_bytes.return_value = b"\x01"
+    captured_handler[0](fake_sample)
+
+    assert received == ["decoded_proto"]
+    fake_msg_class.FromString.assert_called_once_with(b"\x01")
+
+
+def test_callback_subscriber_undeclare():
+    """undeclare() calls undeclare on the underlying zenoh subscriber."""
+    from bubbaloop_sdk.subscriber import CallbackSubscriber
+    mock_session = MagicMock()
+    mock_sub = MagicMock()
+    mock_session.declare_subscriber.return_value = mock_sub
+    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: None)
+    sub.undeclare()
+    mock_sub.undeclare.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# RawCallbackSubscriber
+# ---------------------------------------------------------------------------
+
+def test_raw_callback_subscriber_passes_sample():
+    """Handler receives the raw zenoh.Sample object."""
+    from bubbaloop_sdk.subscriber import RawCallbackSubscriber
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(key_expr, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    received = []
+    sub = RawCallbackSubscriber(mock_session, "test/**", lambda s: received.append(s))
+
+    fake_sample = MagicMock()
+    captured_handler[0](fake_sample)
+
+    assert received == [fake_sample]
+
+
+def test_raw_callback_subscriber_undeclare():
+    """undeclare() calls undeclare on the underlying zenoh subscriber."""
+    from bubbaloop_sdk.subscriber import RawCallbackSubscriber
+    mock_session = MagicMock()
+    mock_sub = MagicMock()
+    mock_session.declare_subscriber.return_value = mock_sub
+    sub = RawCallbackSubscriber(mock_session, "test/**", lambda s: None)
+    sub.undeclare()
+    mock_sub.undeclare.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# CallbackSubscriberAsync
+# ---------------------------------------------------------------------------
+
+def test_callback_subscriber_async_calls_handler_in_thread_pool():
+    """Handler is called asynchronously via thread pool."""
+    import threading
+    from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(topic, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    received = []
+    event = threading.Event()
+
+    def slow_handler(msg):
+        received.append(msg)
+        event.set()
+
+    sub = CallbackSubscriberAsync(mock_session, "test/topic", slow_handler)
+
+    fake_sample = MagicMock()
+    fake_sample.payload.to_bytes.return_value = b"\xca\xfe"
+    captured_handler[0](fake_sample)
+
+    assert event.wait(timeout=2.0), "handler was not called within 2s"
+    assert received == [b"\xca\xfe"]
+    sub.undeclare()
+
+
+def test_callback_subscriber_async_decodes_proto():
+    """Handler receives decoded proto when msg_class provided."""
+    import threading
+    from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(topic, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+
+    fake_msg_class = MagicMock()
+    fake_msg_class.FromString.return_value = "decoded"
+    received = []
+    event = threading.Event()
+
+    def handler(msg):
+        received.append(msg)
+        event.set()
+
+    sub = CallbackSubscriberAsync(mock_session, "test/topic", handler, msg_class=fake_msg_class)
+
+    fake_sample = MagicMock()
+    fake_sample.payload.to_bytes.return_value = b"\x01"
+    captured_handler[0](fake_sample)
+
+    assert event.wait(timeout=2.0)
+    assert received == ["decoded"]
+    sub.undeclare()
+
+
+def test_raw_callback_subscriber_async_passes_sample():
+    """RawCallbackSubscriberAsync handler receives raw zenoh.Sample."""
+    import threading
+    from bubbaloop_sdk.subscriber import RawCallbackSubscriberAsync
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(key_expr, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    received = []
+    event = threading.Event()
+
+    def handler(sample):
+        received.append(sample)
+        event.set()
+
+    sub = RawCallbackSubscriberAsync(mock_session, "test/**", handler)
+
+    fake_sample = MagicMock()
+    captured_handler[0](fake_sample)
+
+    assert event.wait(timeout=2.0)
+    assert received == [fake_sample]
+    sub.undeclare()
+
+
+# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
