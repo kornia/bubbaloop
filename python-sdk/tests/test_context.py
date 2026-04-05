@@ -425,6 +425,28 @@ def test_raw_callback_subscriber_async_passes_sample():
     sub.undeclare()
 
 
+def test_callback_subscriber_async_undeclare():
+    """undeclare() shuts down executor and undeclares underlying subscriber."""
+    from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+    mock_session = MagicMock()
+    mock_sub = MagicMock()
+    mock_session.declare_subscriber.return_value = mock_sub
+    sub = CallbackSubscriberAsync(mock_session, "test/topic", lambda msg: None)
+    sub.undeclare()
+    mock_sub.undeclare.assert_called_once()
+
+
+def test_raw_callback_subscriber_async_undeclare():
+    """undeclare() shuts down executor and undeclares underlying subscriber."""
+    from bubbaloop_sdk.subscriber import RawCallbackSubscriberAsync
+    mock_session = MagicMock()
+    mock_sub = MagicMock()
+    mock_session.declare_subscriber.return_value = mock_sub
+    sub = RawCallbackSubscriberAsync(mock_session, "test/**", lambda s: None)
+    sub.undeclare()
+    mock_sub.undeclare.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
