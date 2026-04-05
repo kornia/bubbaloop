@@ -142,6 +142,97 @@ def test_json_publisher_passthrough_str():
 
 
 # ---------------------------------------------------------------------------
+# TypedSubscriber — queue-backed with timeout
+# ---------------------------------------------------------------------------
+
+def test_typed_subscriber_recv_returns_none_on_timeout():
+    """recv(timeout) returns None when queue is empty within timeout."""
+    from bubbaloop_sdk.subscriber import TypedSubscriber
+    mock_session = MagicMock()
+    mock_session.declare_subscriber.return_value = MagicMock()
+    sub = TypedSubscriber(mock_session, "test/topic")
+    result = sub.recv(timeout=0.05)
+    assert result is None
+
+
+def test_typed_subscriber_recv_returns_message_when_available():
+    """recv() returns the message put into the queue by the callback."""
+    from bubbaloop_sdk.subscriber import TypedSubscriber
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(topic, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    sub = TypedSubscriber(mock_session, "test/topic")
+
+    # Simulate Zenoh delivering a sample
+    fake_sample = MagicMock()
+    fake_sample.payload.to_bytes.return_value = b"\x01\x02"
+    captured_handler[0](fake_sample)
+
+    result = sub.recv(timeout=1.0)
+    assert result == b"\x01\x02"
+
+
+def test_typed_subscriber_recv_decodes_proto():
+    """recv() decodes with FromString when msg_class provided."""
+    from bubbaloop_sdk.subscriber import TypedSubscriber
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(topic, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+
+    fake_msg_class = MagicMock()
+    fake_msg_class.FromString.return_value = "decoded"
+    sub = TypedSubscriber(mock_session, "test/topic", msg_class=fake_msg_class)
+
+    fake_sample = MagicMock()
+    fake_sample.payload.to_bytes.return_value = b"\x01"
+    captured_handler[0](fake_sample)
+
+    result = sub.recv(timeout=1.0)
+    assert result == "decoded"
+    fake_msg_class.FromString.assert_called_once_with(b"\x01")
+
+
+def test_raw_subscriber_recv_returns_none_on_timeout():
+    """RawSubscriber.recv(timeout) returns None when queue is empty."""
+    from bubbaloop_sdk.subscriber import RawSubscriber
+    mock_session = MagicMock()
+    mock_session.declare_subscriber.return_value = MagicMock()
+    sub = RawSubscriber(mock_session, "test/topic")
+    result = sub.recv(timeout=0.05)
+    assert result is None
+
+
+def test_raw_subscriber_recv_returns_sample():
+    """RawSubscriber.recv() returns the raw zenoh.Sample."""
+    from bubbaloop_sdk.subscriber import RawSubscriber
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(topic, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    sub = RawSubscriber(mock_session, "test/topic")
+
+    fake_sample = MagicMock()
+    captured_handler[0](fake_sample)
+
+    result = sub.recv(timeout=1.0)
+    assert result is fake_sample
+
+
+# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
