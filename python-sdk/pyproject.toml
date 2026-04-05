@@ -97,8 +97,6 @@ select = [
     "RUF", # Ruff-specific rules
 ]
 ignore = [
-    # forward-reference string annotations with lazy imports (by design in context.py)
-    "F821",
     # pre-existing: raise without `from err` in get_sample.py (upstream code)
     "B904",
 ]
@@ -112,3 +110,5 @@ split-on-trailing-comma = true
 "*/__init__.py" = ["F401", "F403"]
 # tests don't need docstrings and use assert freely
 "tests/*" = ["S101", "D"]
+# forward-reference string annotations with lazy imports — by design
+"bubbaloop_sdk/context.py" = ["F821"]
