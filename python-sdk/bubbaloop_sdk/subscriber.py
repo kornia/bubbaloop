@@ -1,17 +1,23 @@
 """Zenoh subscribers — blocking and callback-based."""
 
+from __future__ import annotations
+
 import concurrent.futures
 import queue
+import threading
 
 import zenoh
+
+# Sentinel object pushed into a queue to unblock recv() on undeclare().
+_CLOSED = object()
 
 
 class TypedSubscriber:
     """Blocking subscriber with optional timeout. Iterates with ``for msg in sub``.
 
-    Internally queue-backed: Zenoh delivers samples via a callback into a
-    ``queue.Queue``. ``recv()`` drains the queue with an optional timeout,
-    allowing clean shutdown integration::
+    Internally queue-backed: Zenoh delivers raw payload bytes via a callback into a
+    ``queue.Queue``. Decoding (``msg_class.FromString``) happens in ``recv()`` on the
+    consumer thread, not in Zenoh's internal thread::
 
         while not ctx.is_shutdown():
             msg = sub.recv(timeout=5.0)
@@ -19,7 +25,8 @@ class TypedSubscriber:
                 continue
             process(msg)
 
-    Without a timeout, ``recv()`` blocks indefinitely (backward-compatible).
+    Without a timeout, ``recv()`` blocks until a message arrives or ``undeclare()``
+    is called (which pushes a sentinel to unblock any waiting ``recv()``).
     """
 
     def __init__(self, session: zenoh.Session, topic: str, msg_class=None):
@@ -27,20 +34,21 @@ class TypedSubscriber:
         self._msg_class = msg_class
 
         def _on_sample(sample: zenoh.Sample) -> None:
-            payload = bytes(sample.payload.to_bytes())
-            if self._msg_class is not None and hasattr(self._msg_class, "FromString"):
-                self._queue.put(self._msg_class.FromString(payload))
-            else:
-                self._queue.put(payload)
+            self._queue.put(bytes(sample.payload.to_bytes()))
 
         self._sub = session.declare_subscriber(topic, _on_sample)
 
     def recv(self, timeout: float | None = None):
-        """Block until the next message arrives. Returns ``None`` on timeout."""
+        """Block until the next message arrives. Returns ``None`` on timeout or close."""
         try:
-            return self._queue.get(timeout=timeout)
+            payload = self._queue.get(timeout=timeout)
         except queue.Empty:
             return None
+        if payload is _CLOSED:
+            return None
+        if self._msg_class is not None and hasattr(self._msg_class, "FromString"):
+            return self._msg_class.FromString(payload)
+        return payload
 
     def __iter__(self):
         return self
@@ -52,15 +60,16 @@ class TypedSubscriber:
         return msg
 
     def undeclare(self) -> None:
-        """Undeclare the subscriber and stop receiving samples."""
+        """Undeclare the subscriber and unblock any waiting ``recv()``."""
         self._sub.undeclare()
+        self._queue.put(_CLOSED)
 
 
 class RawSubscriber:
     """Blocking subscriber that yields raw ``zenoh.Sample`` objects, with optional timeout.
 
     Internally queue-backed — same pattern as ``TypedSubscriber``.
-    ``recv()`` also exposes an optional timeout for shutdown-aware loops.
+    ``undeclare()`` pushes a sentinel to unblock any waiting ``recv()``.
     """
 
     def __init__(self, session: zenoh.Session, key_expr: str):
@@ -72,11 +81,14 @@ class RawSubscriber:
         self._sub = session.declare_subscriber(key_expr, _on_sample)
 
     def recv(self, timeout: float | None = None):
-        """Block until the next sample arrives. Returns ``None`` on timeout."""
+        """Block until the next sample arrives. Returns ``None`` on timeout or close."""
         try:
-            return self._queue.get(timeout=timeout)
+            sample = self._queue.get(timeout=timeout)
         except queue.Empty:
             return None
+        if sample is _CLOSED:
+            return None
+        return sample
 
     def __iter__(self):
         return self
@@ -88,21 +100,24 @@ class RawSubscriber:
         return sample
 
     def undeclare(self) -> None:
-        """Undeclare the subscriber and stop receiving samples."""
+        """Undeclare the subscriber and unblock any waiting ``recv()``."""
         self._sub.undeclare()
+        self._queue.put(_CLOSED)
 
 
 class CallbackSubscriber:
     """Callback-based subscriber — Zenoh calls ``handler`` from its internal thread.
 
-    No loop required from the caller. All declared ``CallbackSubscriber`` instances
-    on the same session receive concurrently and independently.
+    No loop required from the caller. Callbacks are invoked **serially** on Zenoh's
+    single internal thread per session — if your handler is slow it will delay every
+    other subscriber and queryable on the same session. Use ``subscriber_callback_async()``
+    for slow work.
 
     ``handler`` receives a decoded message (``msg_class.FromString(payload)``) if
     ``msg_class`` is provided, or raw ``bytes`` otherwise.
 
-    **Threading contract:** ``handler`` is called from Zenoh's internal thread.
-    If you share state with a main loop, protect it with a lock::
+    **Threading contract:** ``handler`` runs on Zenoh's internal thread.
+    Protect shared state with a lock if accessed from other threads::
 
         lock = threading.Lock()
         last_value = None
@@ -113,9 +128,6 @@ class CallbackSubscriber:
                 last_value = msg
 
         sub = ctx.subscriber_callback("sensor/data", on_msg, SensorData)
-
-    For slow handlers (database writes, hardware I/O), use
-    ``ctx.subscriber_callback_async()`` instead to avoid blocking Zenoh's thread.
 
     Keep the returned object alive — garbage-collecting it undeclares the subscriber.
     """
@@ -139,7 +151,7 @@ class RawCallbackSubscriber:
     """Callback-based subscriber that passes raw ``zenoh.Sample`` to the handler.
 
     Use when you need access to the full sample metadata (key_expr, encoding,
-    timestamp). Handler is called from Zenoh's internal thread.
+    timestamp). Handler is called **serially** on Zenoh's internal thread.
 
     For slow handlers, use ``ctx.subscriber_raw_callback_async()`` instead.
 
@@ -178,21 +190,28 @@ class CallbackSubscriberAsync:
 
     def __init__(self, session: zenoh.Session, topic: str, handler, msg_class=None, max_workers: int = 4):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        self._closing = threading.Event()
 
         def _wrap(sample: zenoh.Sample) -> None:
+            if self._closing.is_set():
+                return
             payload = bytes(sample.payload.to_bytes())
             if msg_class is not None and hasattr(msg_class, "FromString"):
                 msg = msg_class.FromString(payload)
             else:
                 msg = payload
-            self._executor.submit(handler, msg)
+            try:
+                self._executor.submit(handler, msg)
+            except RuntimeError:
+                pass  # executor already shut down — drop the message
 
         self._sub = session.declare_subscriber(topic, _wrap)
 
     def undeclare(self) -> None:
         """Undeclare the subscriber and shutdown the thread pool."""
+        self._closing.set()
         self._sub.undeclare()  # stop Zenoh callbacks first
-        self._executor.shutdown(wait=False)
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
 
 class RawCallbackSubscriberAsync:
@@ -206,16 +225,23 @@ class RawCallbackSubscriberAsync:
 
     def __init__(self, session: zenoh.Session, key_expr: str, handler, max_workers: int = 4):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        self._closing = threading.Event()
 
         def _wrap(sample: zenoh.Sample) -> None:
-            self._executor.submit(handler, sample)
+            if self._closing.is_set():
+                return
+            try:
+                self._executor.submit(handler, sample)
+            except RuntimeError:
+                pass  # executor already shut down — drop the message
 
         self._sub = session.declare_subscriber(key_expr, _wrap)
 
     def undeclare(self) -> None:
         """Undeclare the subscriber and shutdown the thread pool."""
+        self._closing.set()
         self._sub.undeclare()  # stop Zenoh callbacks first
-        self._executor.shutdown(wait=False)
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
 
 class AsyncQueryable:
@@ -243,13 +269,20 @@ class AsyncQueryable:
 
     def __init__(self, session: zenoh.Session, key_expr: str, handler, max_workers: int = 4):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        self._closing = threading.Event()
 
         def _wrap(query) -> None:
-            self._executor.submit(handler, query)
+            if self._closing.is_set():
+                return
+            try:
+                self._executor.submit(handler, query)
+            except RuntimeError:
+                pass  # executor already shut down — drop the query
 
         self._qbl = session.declare_queryable(key_expr, _wrap)
 
     def undeclare(self) -> None:
         """Undeclare the queryable and shutdown the thread pool."""
+        self._closing.set()
         self._qbl.undeclare()  # stop Zenoh callbacks first
-        self._executor.shutdown(wait=False)
+        self._executor.shutdown(wait=False, cancel_futures=True)

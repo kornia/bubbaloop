@@ -54,9 +54,9 @@ jobs:
         run: |
           cd python-sdk
           pip install -e ".[dev]" -q
-          ruff check bubbaloop_sdk/ tests/
+          python -m ruff check bubbaloop_sdk/ tests/
 
       - name: Python SDK — test
         run: |
           cd python-sdk
-          pytest tests/ -v
+          python -m pytest tests/ -v
