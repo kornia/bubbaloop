@@ -32,19 +32,24 @@ class TypedSubscriber:
     def __init__(self, session: zenoh.Session, topic: str, msg_class=None):
         self._queue: queue.Queue = queue.Queue()
         self._msg_class = msg_class
+        self._closed = threading.Event()
 
         def _on_sample(sample: zenoh.Sample) -> None:
-            self._queue.put(bytes(sample.payload.to_bytes()))
+            if not self._closed.is_set():
+                self._queue.put(bytes(sample.payload.to_bytes()))
 
         self._sub = session.declare_subscriber(topic, _on_sample)
 
     def recv(self, timeout: float | None = None):
         """Block until the next message arrives. Returns ``None`` on timeout or close."""
+        if self._closed.is_set():
+            return None
         try:
             payload = self._queue.get(timeout=timeout)
         except queue.Empty:
             return None
         if payload is _CLOSED:
+            self._closed.set()
             return None
         if self._msg_class is not None and hasattr(self._msg_class, "FromString"):
             return self._msg_class.FromString(payload)
@@ -61,6 +66,7 @@ class TypedSubscriber:
 
     def undeclare(self) -> None:
         """Undeclare the subscriber and unblock any waiting ``recv()``."""
+        self._closed.set()
         self._sub.undeclare()
         self._queue.put(_CLOSED)
 
@@ -74,19 +80,24 @@ class RawSubscriber:
 
     def __init__(self, session: zenoh.Session, key_expr: str):
         self._queue: queue.Queue = queue.Queue()
+        self._closed = threading.Event()
 
         def _on_sample(sample: zenoh.Sample) -> None:
-            self._queue.put(sample)
+            if not self._closed.is_set():
+                self._queue.put(sample)
 
         self._sub = session.declare_subscriber(key_expr, _on_sample)
 
     def recv(self, timeout: float | None = None):
         """Block until the next sample arrives. Returns ``None`` on timeout or close."""
+        if self._closed.is_set():
+            return None
         try:
             sample = self._queue.get(timeout=timeout)
         except queue.Empty:
             return None
         if sample is _CLOSED:
+            self._closed.set()
             return None
         return sample
 
@@ -101,6 +112,7 @@ class RawSubscriber:
 
     def undeclare(self) -> None:
         """Undeclare the subscriber and unblock any waiting ``recv()``."""
+        self._closed.set()
         self._sub.undeclare()
         self._queue.put(_CLOSED)
 

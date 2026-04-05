@@ -1076,6 +1076,74 @@ def test_typed_subscriber_iteration():
     assert results == [b"\x01", b"\x02"]
 
 
+def test_typed_subscriber_recv_returns_none_after_undeclare():
+    """recv() returns None immediately on all calls after undeclare()."""
+    from bubbaloop_sdk.subscriber import TypedSubscriber
+
+    mock_session = MagicMock()
+    mock_session.declare_subscriber.return_value = MagicMock()
+    sub = TypedSubscriber(mock_session, "test/topic")
+    sub.undeclare()
+    # First call consumes the sentinel; second must not block.
+    assert sub.recv(timeout=1.0) is None
+    assert sub.recv(timeout=1.0) is None
+
+
+def test_raw_subscriber_recv_returns_none_after_undeclare():
+    """recv() returns None immediately on all calls after undeclare()."""
+    from bubbaloop_sdk.subscriber import RawSubscriber
+
+    mock_session = MagicMock()
+    mock_session.declare_subscriber.return_value = MagicMock()
+    sub = RawSubscriber(mock_session, "test/topic")
+    sub.undeclare()
+    assert sub.recv(timeout=1.0) is None
+    assert sub.recv(timeout=1.0) is None
+
+
+def test_typed_subscriber_drops_samples_after_undeclare():
+    """Samples arriving after undeclare() are not enqueued."""
+    from bubbaloop_sdk.subscriber import TypedSubscriber
+
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(topic, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    sub = TypedSubscriber(mock_session, "test/topic")
+    sub.undeclare()
+
+    fake_sample = MagicMock()
+    fake_sample.payload.to_bytes.return_value = b"\xff"
+    captured_handler[0](fake_sample)  # arrives after undeclare
+
+    assert sub.recv(timeout=0.1) is None  # no message — only closed state
+
+
+def test_raw_subscriber_drops_samples_after_undeclare():
+    """Samples arriving after undeclare() are not enqueued."""
+    from bubbaloop_sdk.subscriber import RawSubscriber
+
+    mock_session = MagicMock()
+    captured_handler = []
+
+    def fake_declare(key_expr, handler):
+        captured_handler.append(handler)
+        return MagicMock()
+
+    mock_session.declare_subscriber.side_effect = fake_declare
+    sub = RawSubscriber(mock_session, "test/topic")
+    sub.undeclare()
+
+    fake_sample = MagicMock()
+    captured_handler[0](fake_sample)  # arrives after undeclare
+
+    assert sub.recv(timeout=0.1) is None
+
+
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
