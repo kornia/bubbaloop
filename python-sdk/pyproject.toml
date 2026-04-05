@@ -96,10 +96,7 @@ select = [
     "C4",  # flake8-comprehensions
     "RUF", # Ruff-specific rules
 ]
-ignore = [
-    # pre-existing: raise without `from err` in get_sample.py (upstream code)
-    "B904",
-]
+ignore = []
 
 [tool.ruff.lint.isort]
 known-first-party = ["bubbaloop_sdk"]
