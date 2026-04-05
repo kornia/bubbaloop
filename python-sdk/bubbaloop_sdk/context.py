@@ -112,11 +112,13 @@ class NodeContext:
     def publisher_json(self, suffix: str) -> JsonPublisher:
         """Declare a JSON publisher at ``topic(suffix)``."""
         from .publisher import JsonPublisher
+
         return JsonPublisher._declare(self.session, self.topic(suffix))
 
     def publisher_proto(self, suffix: str, msg_class=None) -> ProtoPublisher:
         """Declare a protobuf publisher at ``topic(suffix)``."""
         from .publisher import ProtoPublisher
+
         type_name = msg_class.DESCRIPTOR.full_name if msg_class is not None else None
         return ProtoPublisher._declare(self.session, self.topic(suffix), type_name)
 
@@ -127,11 +129,13 @@ class NodeContext:
     def subscriber(self, suffix: str, msg_class=None) -> TypedSubscriber:
         """Declare a typed subscriber. Blocks on ``recv()``."""
         from .subscriber import TypedSubscriber
+
         return TypedSubscriber(self.session, self.topic(suffix), msg_class)
 
     def subscriber_raw(self, key_expr: str) -> RawSubscriber:
         """Declare a raw subscriber with a literal key expression."""
         from .subscriber import RawSubscriber
+
         return RawSubscriber(self.session, key_expr)
 
     # ------------------------------------------------------------------
@@ -145,6 +149,7 @@ class NodeContext:
         arrives. For slow handlers (I/O, DB), use ``subscriber_callback_async()``.
         """
         from .subscriber import CallbackSubscriber
+
         return CallbackSubscriber(self.session, self.topic(suffix), handler, msg_class)
 
     def subscriber_raw_callback(self, key_expr: str, handler) -> RawCallbackSubscriber:
@@ -153,6 +158,7 @@ class NodeContext:
         ``handler`` receives raw ``zenoh.Sample`` objects from Zenoh's internal thread.
         """
         from .subscriber import RawCallbackSubscriber
+
         return RawCallbackSubscriber(self.session, key_expr, handler)
 
     def subscriber_callback_async(
@@ -165,13 +171,13 @@ class NodeContext:
         ``ThreadPoolExecutor`` with ``max_workers`` threads.
         """
         from .subscriber import CallbackSubscriberAsync
+
         return CallbackSubscriberAsync(self.session, self.topic(suffix), handler, msg_class, max_workers)
 
-    def subscriber_raw_callback_async(
-        self, key_expr: str, handler, max_workers: int = 4
-    ) -> RawCallbackSubscriberAsync:
+    def subscriber_raw_callback_async(self, key_expr: str, handler, max_workers: int = 4) -> RawCallbackSubscriberAsync:
         """Raw callback subscriber at a literal key expression with handler in a thread pool."""
         from .subscriber import RawCallbackSubscriberAsync
+
         return RawCallbackSubscriberAsync(self.session, key_expr, handler, max_workers)
 
     # ------------------------------------------------------------------
@@ -225,6 +231,7 @@ class NodeContext:
         Protect shared state with locks.
         """
         from .subscriber import AsyncQueryable
+
         return AsyncQueryable(self.session, self.topic(suffix), handler, max_workers)
 
     def queryable_raw_async(self, key_expr: str, handler, max_workers: int = 4) -> AsyncQueryable:
@@ -235,6 +242,7 @@ class NodeContext:
         Call ``undeclare()`` on the returned object when done to release threads.
         """
         from .subscriber import AsyncQueryable
+
         return AsyncQueryable(self.session, key_expr, handler, max_workers)
 
     # ------------------------------------------------------------------

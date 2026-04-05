@@ -14,11 +14,10 @@ import pytest
 # topic()
 # ---------------------------------------------------------------------------
 
+
 def test_topic_formatting():
     ctx = _make_context("staging", "jetson_orin")
-    assert ctx.topic("camera/front/compressed") == (
-        "bubbaloop/staging/jetson_orin/camera/front/compressed"
-    )
+    assert ctx.topic("camera/front/compressed") == ("bubbaloop/staging/jetson_orin/camera/front/compressed")
 
 
 def test_topic_default_scope():
@@ -35,14 +34,17 @@ def test_topic_wildcard_suffix():
 # _hostname() sanitization
 # ---------------------------------------------------------------------------
 
+
 def test_hostname_sanitization_hyphens(monkeypatch):
     from bubbaloop_sdk.context import _hostname
+
     monkeypatch.setattr(socket, "gethostname", lambda: "my-robot-01")
     assert _hostname() == "my_robot_01"
 
 
 def test_hostname_no_hyphens(monkeypatch):
     from bubbaloop_sdk.context import _hostname
+
     monkeypatch.setattr(socket, "gethostname", lambda: "myrobot")
     assert _hostname() == "myrobot"
 
@@ -51,48 +53,57 @@ def test_hostname_no_hyphens(monkeypatch):
 # Import surface
 # ---------------------------------------------------------------------------
 
+
 def test_import_node_context():
     from bubbaloop_sdk import NodeContext
+
     assert NodeContext is not None
 
 
 def test_import_publishers():
     from bubbaloop_sdk import JsonPublisher, ProtoPublisher
+
     assert ProtoPublisher is not None
     assert JsonPublisher is not None
 
 
 def test_import_subscribers():
     from bubbaloop_sdk import RawSubscriber, TypedSubscriber
+
     assert TypedSubscriber is not None
     assert RawSubscriber is not None
 
 
 def test_import_callback_subscribers():
     from bubbaloop_sdk import CallbackSubscriber, RawCallbackSubscriber
+
     assert CallbackSubscriber is not None
     assert RawCallbackSubscriber is not None
 
 
 def test_import_callback_subscribers_async():
     from bubbaloop_sdk import CallbackSubscriberAsync, RawCallbackSubscriberAsync
+
     assert CallbackSubscriberAsync is not None
     assert RawCallbackSubscriberAsync is not None
 
 
 def test_import_async_queryable():
     from bubbaloop_sdk import AsyncQueryable
+
     assert AsyncQueryable is not None
 
 
 def test_import_run_node():
     from bubbaloop_sdk import run_node
+
     assert callable(run_node)
 
 
 # ---------------------------------------------------------------------------
 # Shutdown
 # ---------------------------------------------------------------------------
+
 
 def test_shutdown_not_set_initially():
     ctx = _make_context("local", "bot")
@@ -109,8 +120,10 @@ def test_shutdown_set_manually():
 # ProtoPublisher.put()
 # ---------------------------------------------------------------------------
 
+
 def test_proto_publisher_rejects_invalid_type():
     from bubbaloop_sdk.publisher import ProtoPublisher
+
     pub = ProtoPublisher(MagicMock(), None)
     with pytest.raises(TypeError):
         pub.put(12345)
@@ -118,6 +131,7 @@ def test_proto_publisher_rejects_invalid_type():
 
 def test_proto_publisher_accepts_bytes():
     from bubbaloop_sdk.publisher import ProtoPublisher
+
     mock_pub = MagicMock()
     ProtoPublisher(mock_pub, None).put(b"\x01\x02\x03")
     mock_pub.put.assert_called_once_with(b"\x01\x02\x03")
@@ -125,6 +139,7 @@ def test_proto_publisher_accepts_bytes():
 
 def test_proto_publisher_calls_serialize():
     from bubbaloop_sdk.publisher import ProtoPublisher
+
     fake_msg = MagicMock()
     fake_msg.SerializeToString.return_value = b"\xde\xad\xbe\xef"
     mock_pub = MagicMock()
@@ -136,8 +151,10 @@ def test_proto_publisher_calls_serialize():
 # JsonPublisher.put()
 # ---------------------------------------------------------------------------
 
+
 def test_json_publisher_serializes_dict():
     from bubbaloop_sdk.publisher import JsonPublisher
+
     mock_pub = MagicMock()
     JsonPublisher(mock_pub).put({"temperature": 22.5})
     assert json.loads(mock_pub.put.call_args[0][0]) == {"temperature": 22.5}
@@ -145,6 +162,7 @@ def test_json_publisher_serializes_dict():
 
 def test_json_publisher_passthrough_bytes():
     from bubbaloop_sdk.publisher import JsonPublisher
+
     mock_pub = MagicMock()
     JsonPublisher(mock_pub).put(b"raw")
     mock_pub.put.assert_called_once_with(b"raw")
@@ -152,6 +170,7 @@ def test_json_publisher_passthrough_bytes():
 
 def test_json_publisher_passthrough_str():
     from bubbaloop_sdk.publisher import JsonPublisher
+
     mock_pub = MagicMock()
     JsonPublisher(mock_pub).put("hello")
     mock_pub.put.assert_called_once_with(b"hello")
@@ -161,9 +180,11 @@ def test_json_publisher_passthrough_str():
 # TypedSubscriber — queue-backed with timeout
 # ---------------------------------------------------------------------------
 
+
 def test_typed_subscriber_recv_returns_none_on_timeout():
     """recv(timeout) returns None when queue is empty within timeout."""
     from bubbaloop_sdk.subscriber import TypedSubscriber
+
     mock_session = MagicMock()
     mock_session.declare_subscriber.return_value = MagicMock()
     sub = TypedSubscriber(mock_session, "test/topic")
@@ -174,6 +195,7 @@ def test_typed_subscriber_recv_returns_none_on_timeout():
 def test_typed_subscriber_recv_returns_message_when_available():
     """recv() returns the message put into the queue by the callback."""
     from bubbaloop_sdk.subscriber import TypedSubscriber
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -196,6 +218,7 @@ def test_typed_subscriber_recv_returns_message_when_available():
 def test_typed_subscriber_recv_decodes_proto():
     """recv() decodes with FromString when msg_class provided."""
     from bubbaloop_sdk.subscriber import TypedSubscriber
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -221,6 +244,7 @@ def test_typed_subscriber_recv_decodes_proto():
 def test_raw_subscriber_recv_returns_none_on_timeout():
     """RawSubscriber.recv(timeout) returns None when queue is empty."""
     from bubbaloop_sdk.subscriber import RawSubscriber
+
     mock_session = MagicMock()
     mock_session.declare_subscriber.return_value = MagicMock()
     sub = RawSubscriber(mock_session, "test/topic")
@@ -231,6 +255,7 @@ def test_raw_subscriber_recv_returns_none_on_timeout():
 def test_raw_subscriber_recv_returns_sample():
     """RawSubscriber.recv() returns the raw zenoh.Sample."""
     from bubbaloop_sdk.subscriber import RawSubscriber
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -252,9 +277,11 @@ def test_raw_subscriber_recv_returns_sample():
 # TypedSubscriber / RawSubscriber — undeclare unblocks recv()
 # ---------------------------------------------------------------------------
 
+
 def test_typed_subscriber_undeclare_unblocks_recv():
     """undeclare() unblocks a thread waiting in recv(timeout=None)."""
     from bubbaloop_sdk.subscriber import TypedSubscriber
+
     mock_session = MagicMock()
     mock_session.declare_subscriber.return_value = MagicMock()
     sub = TypedSubscriber(mock_session, "test/topic")
@@ -276,6 +303,7 @@ def test_typed_subscriber_undeclare_unblocks_recv():
 def test_raw_subscriber_undeclare_unblocks_recv():
     """undeclare() unblocks a thread waiting in recv(timeout=None)."""
     from bubbaloop_sdk.subscriber import RawSubscriber
+
     mock_session = MagicMock()
     mock_session.declare_subscriber.return_value = MagicMock()
     sub = RawSubscriber(mock_session, "test/topic")
@@ -297,6 +325,7 @@ def test_raw_subscriber_undeclare_unblocks_recv():
 def test_typed_subscriber_decode_happens_in_recv_not_callback():
     """FromString is called in recv(), not inside the Zenoh callback."""
     from bubbaloop_sdk.subscriber import TypedSubscriber
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -337,9 +366,11 @@ def test_typed_subscriber_decode_happens_in_recv_not_callback():
 # CallbackSubscriberAsync / RawCallbackSubscriberAsync — _closing flag
 # ---------------------------------------------------------------------------
 
+
 def test_callback_subscriber_async_drops_after_undeclare():
     """Callbacks arriving after undeclare() are silently dropped."""
     from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -362,6 +393,7 @@ def test_callback_subscriber_async_drops_after_undeclare():
     captured_handler[0](fake_sample)  # must not raise
 
     import time
+
     time.sleep(0.05)
     assert received == [], "handler should not be called after undeclare()"
 
@@ -369,6 +401,7 @@ def test_callback_subscriber_async_drops_after_undeclare():
 def test_raw_callback_subscriber_async_drops_after_undeclare():
     """Callbacks arriving after undeclare() are silently dropped."""
     from bubbaloop_sdk.subscriber import RawCallbackSubscriberAsync
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -389,6 +422,7 @@ def test_raw_callback_subscriber_async_drops_after_undeclare():
     captured_handler[0](fake_sample)  # must not raise
 
     import time
+
     time.sleep(0.05)
     assert received == [], "handler should not be called after undeclare()"
 
@@ -396,6 +430,7 @@ def test_raw_callback_subscriber_async_drops_after_undeclare():
 def test_async_queryable_drops_after_undeclare():
     """Queries arriving after undeclare() are silently dropped."""
     from bubbaloop_sdk.subscriber import AsyncQueryable
+
     mock_session = MagicMock()
     captured_wrapper = []
 
@@ -416,6 +451,7 @@ def test_async_queryable_drops_after_undeclare():
     captured_wrapper[0](fake_query)  # must not raise
 
     import time
+
     time.sleep(0.05)
     assert received == [], "handler should not be called after undeclare()"
 
@@ -424,9 +460,11 @@ def test_async_queryable_drops_after_undeclare():
 # CallbackSubscriber
 # ---------------------------------------------------------------------------
 
+
 def test_callback_subscriber_calls_handler_with_bytes():
     """Handler receives raw bytes when no msg_class provided."""
     from bubbaloop_sdk.subscriber import CallbackSubscriber
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -436,20 +474,20 @@ def test_callback_subscriber_calls_handler_with_bytes():
 
     mock_session.declare_subscriber.side_effect = fake_declare
     received = []
-    CallbackSubscriber(
-        mock_session, "test/topic", lambda msg: received.append(msg)
-    )
+    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: received.append(msg))
 
     fake_sample = MagicMock()
     fake_sample.payload.to_bytes.return_value = b"\xde\xad"
     captured_handler[0](fake_sample)
 
     assert received == [b"\xde\xad"]
+    sub.undeclare()
 
 
 def test_callback_subscriber_decodes_proto():
     """Handler receives decoded proto when msg_class provided."""
     from bubbaloop_sdk.subscriber import CallbackSubscriber
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -462,10 +500,7 @@ def test_callback_subscriber_decodes_proto():
     fake_msg_class = MagicMock()
     fake_msg_class.FromString.return_value = "decoded_proto"
     received = []
-    CallbackSubscriber(
-        mock_session, "test/topic",
-        lambda msg: received.append(msg), msg_class=fake_msg_class
-    )
+    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: received.append(msg), msg_class=fake_msg_class)
 
     fake_sample = MagicMock()
     fake_sample.payload.to_bytes.return_value = b"\x01"
@@ -473,11 +508,13 @@ def test_callback_subscriber_decodes_proto():
 
     assert received == ["decoded_proto"]
     fake_msg_class.FromString.assert_called_once_with(b"\x01")
+    sub.undeclare()
 
 
 def test_callback_subscriber_undeclare():
     """undeclare() calls undeclare on the underlying zenoh subscriber."""
     from bubbaloop_sdk.subscriber import CallbackSubscriber
+
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
@@ -490,9 +527,11 @@ def test_callback_subscriber_undeclare():
 # RawCallbackSubscriber
 # ---------------------------------------------------------------------------
 
+
 def test_raw_callback_subscriber_passes_sample():
     """Handler receives the raw zenoh.Sample object."""
     from bubbaloop_sdk.subscriber import RawCallbackSubscriber
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -502,19 +541,19 @@ def test_raw_callback_subscriber_passes_sample():
 
     mock_session.declare_subscriber.side_effect = fake_declare
     received = []
-    RawCallbackSubscriber(
-        mock_session, "test/**", lambda s: received.append(s)
-    )
+    sub = RawCallbackSubscriber(mock_session, "test/**", lambda s: received.append(s))
 
     fake_sample = MagicMock()
     captured_handler[0](fake_sample)
 
     assert received == [fake_sample]
+    sub.undeclare()
 
 
 def test_raw_callback_subscriber_undeclare():
     """undeclare() calls undeclare on the underlying zenoh subscriber."""
     from bubbaloop_sdk.subscriber import RawCallbackSubscriber
+
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
@@ -527,11 +566,13 @@ def test_raw_callback_subscriber_undeclare():
 # CallbackSubscriberAsync
 # ---------------------------------------------------------------------------
 
+
 def test_callback_subscriber_async_calls_handler_in_thread_pool():
     """Handler is called asynchronously via thread pool."""
     import threading
 
     from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -563,6 +604,7 @@ def test_callback_subscriber_async_decodes_proto():
     import threading
 
     from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -581,9 +623,7 @@ def test_callback_subscriber_async_decodes_proto():
         received.append(msg)
         event.set()
 
-    sub = CallbackSubscriberAsync(
-        mock_session, "test/topic", handler, msg_class=fake_msg_class
-    )
+    sub = CallbackSubscriberAsync(mock_session, "test/topic", handler, msg_class=fake_msg_class)
 
     fake_sample = MagicMock()
     fake_sample.payload.to_bytes.return_value = b"\x01"
@@ -599,6 +639,7 @@ def test_raw_callback_subscriber_async_passes_sample():
     import threading
 
     from bubbaloop_sdk.subscriber import RawCallbackSubscriberAsync
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -627,6 +668,7 @@ def test_raw_callback_subscriber_async_passes_sample():
 def test_callback_subscriber_async_undeclare():
     """undeclare() shuts down executor and undeclares underlying sub."""
     from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
@@ -638,6 +680,7 @@ def test_callback_subscriber_async_undeclare():
 def test_raw_callback_subscriber_async_undeclare():
     """undeclare() shuts down executor and undeclares underlying sub."""
     from bubbaloop_sdk.subscriber import RawCallbackSubscriberAsync
+
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
@@ -650,6 +693,7 @@ def test_raw_callback_subscriber_async_undeclare():
 # NodeContext.queryable() and queryable_raw()
 # ---------------------------------------------------------------------------
 
+
 def test_queryable_uses_topic_prefix():
     """queryable() declares at bubbaloop/{scope}/{machine_id}/{suffix}."""
     ctx = _make_context("local", "bot")
@@ -658,9 +702,7 @@ def test_queryable_uses_topic_prefix():
         pass
 
     ctx.queryable("command", handler)
-    ctx.session.declare_queryable.assert_called_once_with(
-        "bubbaloop/local/bot/command", handler
-    )
+    ctx.session.declare_queryable.assert_called_once_with("bubbaloop/local/bot/command", handler)
 
 
 def test_queryable_raw_uses_literal_key_expr():
@@ -671,9 +713,7 @@ def test_queryable_raw_uses_literal_key_expr():
         pass
 
     ctx.queryable_raw("bubbaloop/**/schema", handler)
-    ctx.session.declare_queryable.assert_called_once_with(
-        "bubbaloop/**/schema", handler
-    )
+    ctx.session.declare_queryable.assert_called_once_with("bubbaloop/**/schema", handler)
 
 
 def test_queryable_returns_zenoh_queryable():
@@ -688,6 +728,7 @@ def test_queryable_returns_zenoh_queryable():
 # ---------------------------------------------------------------------------
 # NodeContext.queryable_async() and queryable_raw_async()
 # ---------------------------------------------------------------------------
+
 
 def test_queryable_async_uses_topic_prefix():
     """queryable_async() declares at topic(suffix)."""
@@ -704,6 +745,7 @@ def test_queryable_async_uses_topic_prefix():
 def test_queryable_async_wraps_handler_in_executor():
     """queryable_async() wraps handler so Zenoh thread is freed."""
     import threading
+
     ctx = _make_context("local", "bot")
     captured_wrapper = []
 
@@ -732,6 +774,7 @@ def test_queryable_async_wraps_handler_in_executor():
 def test_queryable_async_returns_async_queryable():
     """queryable_async() returns AsyncQueryable (not a bare zenoh.Queryable)."""
     from bubbaloop_sdk.subscriber import AsyncQueryable
+
     ctx = _make_context("local", "bot")
     qbl = ctx.queryable_async("command", lambda q: None)
     assert isinstance(qbl, AsyncQueryable)
@@ -748,6 +791,7 @@ def test_queryable_raw_async_uses_literal_key_expr():
 def test_queryable_raw_async_wraps_handler_in_executor():
     """queryable_raw_async() wraps handler in thread pool."""
     import threading
+
     ctx = _make_context("local", "bot")
     captured_wrapper = []
 
@@ -776,6 +820,7 @@ def test_queryable_raw_async_wraps_handler_in_executor():
 def test_async_queryable_undeclare():
     """AsyncQueryable.undeclare() undeclares queryable then shuts executor."""
     from bubbaloop_sdk.subscriber import AsyncQueryable
+
     mock_session = MagicMock()
     mock_qbl = MagicMock()
     mock_session.declare_queryable.return_value = mock_qbl
@@ -787,6 +832,7 @@ def test_async_queryable_undeclare():
 # ---------------------------------------------------------------------------
 # NodeContext.subscriber_callback()
 # ---------------------------------------------------------------------------
+
 
 def test_subscriber_callback_uses_topic_prefix():
     """subscriber_callback() declares at topic(suffix)."""
@@ -824,6 +870,7 @@ def test_subscriber_raw_callback_async_uses_literal_key_expr():
 # NodeContext.publisher_json() / publisher_proto() via context
 # ---------------------------------------------------------------------------
 
+
 def test_publisher_json_uses_topic_prefix():
     """publisher_json() declares at topic(suffix)."""
     ctx = _make_context("local", "bot")
@@ -846,6 +893,7 @@ def test_publisher_proto_uses_topic_prefix():
 # NodeContext.subscriber() / subscriber_raw() via context
 # ---------------------------------------------------------------------------
 
+
 def test_subscriber_uses_topic_prefix():
     """subscriber() declares at topic(suffix)."""
     ctx = _make_context("local", "bot")
@@ -866,6 +914,7 @@ def test_subscriber_raw_uses_literal_key_expr():
 # NodeContext.close() and context manager
 # ---------------------------------------------------------------------------
 
+
 def test_close_calls_session_close():
     """close() calls session.close()."""
     ctx = _make_context("local", "bot")
@@ -885,15 +934,18 @@ def test_context_manager_calls_close():
 # NodeContext.connect() — env var resolution
 # ---------------------------------------------------------------------------
 
+
 def test_connect_reads_scope_from_env(monkeypatch):
     """BUBBALOOP_SCOPE env var sets ctx.scope."""
     import zenoh
+
     monkeypatch.setenv("BUBBALOOP_SCOPE", "prod")
     monkeypatch.delenv("BUBBALOOP_MACHINE_ID", raising=False)
     monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
     monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
     monkeypatch.setattr(zenoh, "Config", MagicMock)
     from bubbaloop_sdk.context import NodeContext
+
     ctx = NodeContext.connect()
     assert ctx.scope == "prod"
 
@@ -901,12 +953,14 @@ def test_connect_reads_scope_from_env(monkeypatch):
 def test_connect_reads_machine_id_from_env(monkeypatch):
     """BUBBALOOP_MACHINE_ID env var sets ctx.machine_id."""
     import zenoh
+
     monkeypatch.setenv("BUBBALOOP_MACHINE_ID", "jetson_orin")
     monkeypatch.delenv("BUBBALOOP_SCOPE", raising=False)
     monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
     monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
     monkeypatch.setattr(zenoh, "Config", MagicMock)
     from bubbaloop_sdk.context import NodeContext
+
     ctx = NodeContext.connect()
     assert ctx.machine_id == "jetson_orin"
 
@@ -914,12 +968,14 @@ def test_connect_reads_machine_id_from_env(monkeypatch):
 def test_connect_defaults_scope_to_local(monkeypatch):
     """scope defaults to 'local' when env var is absent."""
     import zenoh
+
     monkeypatch.delenv("BUBBALOOP_SCOPE", raising=False)
     monkeypatch.delenv("BUBBALOOP_MACHINE_ID", raising=False)
     monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
     monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
     monkeypatch.setattr(zenoh, "Config", MagicMock)
     from bubbaloop_sdk.context import NodeContext
+
     ctx = NodeContext.connect()
     assert ctx.scope == "local"
 
@@ -927,12 +983,14 @@ def test_connect_defaults_scope_to_local(monkeypatch):
 def test_connect_instance_name_override(monkeypatch):
     """instance_name kwarg overrides hostname fallback."""
     import zenoh
+
     monkeypatch.delenv("BUBBALOOP_MACHINE_ID", raising=False)
     monkeypatch.delenv("BUBBALOOP_SCOPE", raising=False)
     monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
     monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
     monkeypatch.setattr(zenoh, "Config", MagicMock)
     from bubbaloop_sdk.context import NodeContext
+
     ctx = NodeContext.connect(instance_name="tapo_entrance")
     assert ctx.instance_name == "tapo_entrance"
 
@@ -941,9 +999,11 @@ def test_connect_instance_name_override(monkeypatch):
 # TypedSubscriber / RawSubscriber — undeclare() and iteration
 # ---------------------------------------------------------------------------
 
+
 def test_typed_subscriber_undeclare():
     """undeclare() calls undeclare on the underlying zenoh subscriber."""
     from bubbaloop_sdk.subscriber import TypedSubscriber
+
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
@@ -955,6 +1015,7 @@ def test_typed_subscriber_undeclare():
 def test_raw_subscriber_undeclare():
     """undeclare() calls undeclare on the underlying zenoh subscriber."""
     from bubbaloop_sdk.subscriber import RawSubscriber
+
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
@@ -966,6 +1027,7 @@ def test_raw_subscriber_undeclare():
 def test_typed_subscriber_iteration():
     """Iterating over TypedSubscriber yields decoded messages."""
     from bubbaloop_sdk.subscriber import TypedSubscriber
+
     mock_session = MagicMock()
     captured_handler = []
 
@@ -995,8 +1057,10 @@ def test_typed_subscriber_iteration():
 # Helper
 # ---------------------------------------------------------------------------
 
+
 def _make_context(scope: str, machine_id: str):
     from bubbaloop_sdk.context import NodeContext
+
     ctx = object.__new__(NodeContext)
     ctx.session = MagicMock()
     ctx.scope = scope

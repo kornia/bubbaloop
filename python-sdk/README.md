@@ -173,13 +173,13 @@ Do **not** pass `complete=True` — it blocks wildcard queries used by the dashb
 | `ctx.queryable_async(suffix, handler, max_workers=4)` | `AsyncQueryable` | Handler in thread pool; call `undeclare()` to release|
 | `ctx.queryable_raw_async(key_expr, handler, max_workers=4)` | `AsyncQueryable` | Raw key; handler in thread pool             |
 
-### Publishers
+### Publisher methods
 
 | Method        | Description                                                    |
 | ------------- | -------------------------------------------------------------- |
 | `pub.put(msg)`| Publish a message (bytes, proto message, or dict for JSON)     |
 
-### Blocking subscribers
+### Blocking subscriber methods
 
 | Method                  | Description                               |
 | ----------------------- | ----------------------------------------- |
@@ -187,7 +187,7 @@ Do **not** pass `complete=True` — it blocks wildcard queries used by the dashb
 | `sub.undeclare()`       | Stop receiving samples                    |
 | `for msg in sub`        | Iterate (blocks indefinitely)             |
 
-### Callback subscribers / AsyncQueryable
+### Callback subscriber / AsyncQueryable methods
 
 | Method           | Description                                                          |
 | ---------------- | -------------------------------------------------------------------- |
@@ -195,6 +195,6 @@ Do **not** pass `complete=True` — it blocks wildcard queries used by the dashb
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - `eclipse-zenoh >= 1.7, < 2`
 - `protobuf >= 4.0`
