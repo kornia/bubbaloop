@@ -13,6 +13,8 @@ Usage::
     ctx.close()
 """
 
+from __future__ import annotations
+
 import os
 import signal
 import socket
@@ -59,7 +61,7 @@ class NodeContext:
         cls,
         endpoint: str | None = None,
         instance_name: str | None = None,
-    ) -> "NodeContext":
+    ) -> NodeContext:
         """Connect to a Zenoh router and return a ready NodeContext.
 
         Endpoint resolution: ``endpoint`` arg → ``BUBBALOOP_ZENOH_ENDPOINT`` env
