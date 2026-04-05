@@ -1,5 +1,0 @@
-[flake8]
-max-line-length = 120
-per-file-ignores =
-    # forward-reference string annotations with lazy imports
-    python-sdk/bubbaloop_sdk/context.py: F821

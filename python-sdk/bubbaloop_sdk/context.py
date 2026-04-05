@@ -140,7 +140,9 @@ class NodeContext:
         from .subscriber import RawCallbackSubscriber
         return RawCallbackSubscriber(self.session, key_expr, handler)
 
-    def subscriber_callback_async(self, suffix: str, handler, msg_class=None, max_workers: int = 4) -> "CallbackSubscriberAsync":
+    def subscriber_callback_async(
+        self, suffix: str, handler, msg_class=None, max_workers: int = 4
+    ) -> "CallbackSubscriberAsync":
         """Callback subscriber at ``topic(suffix)`` with handler in a thread pool.
 
         Use when ``handler`` does slow work (database writes, hardware I/O, network
@@ -150,7 +152,9 @@ class NodeContext:
         from .subscriber import CallbackSubscriberAsync
         return CallbackSubscriberAsync(self.session, self.topic(suffix), handler, msg_class, max_workers)
 
-    def subscriber_raw_callback_async(self, key_expr: str, handler, max_workers: int = 4) -> "RawCallbackSubscriberAsync":
+    def subscriber_raw_callback_async(
+        self, key_expr: str, handler, max_workers: int = 4
+    ) -> "RawCallbackSubscriberAsync":
         """Raw callback subscriber at a literal key expression with handler in a thread pool."""
         from .subscriber import RawCallbackSubscriberAsync
         return RawCallbackSubscriberAsync(self.session, key_expr, handler, max_workers)

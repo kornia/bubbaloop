@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # topic()
 # ---------------------------------------------------------------------------
@@ -58,13 +57,13 @@ def test_import_node_context():
 
 
 def test_import_publishers():
-    from bubbaloop_sdk import ProtoPublisher, JsonPublisher
+    from bubbaloop_sdk import JsonPublisher, ProtoPublisher
     assert ProtoPublisher is not None
     assert JsonPublisher is not None
 
 
 def test_import_subscribers():
-    from bubbaloop_sdk import TypedSubscriber, RawSubscriber
+    from bubbaloop_sdk import RawSubscriber, TypedSubscriber
     assert TypedSubscriber is not None
     assert RawSubscriber is not None
 
@@ -76,9 +75,7 @@ def test_import_callback_subscribers():
 
 
 def test_import_callback_subscribers_async():
-    from bubbaloop_sdk import (
-        CallbackSubscriberAsync, RawCallbackSubscriberAsync
-    )
+    from bubbaloop_sdk import CallbackSubscriberAsync, RawCallbackSubscriberAsync
     assert CallbackSubscriberAsync is not None
     assert RawCallbackSubscriberAsync is not None
 
@@ -361,6 +358,7 @@ def test_raw_callback_subscriber_undeclare():
 def test_callback_subscriber_async_calls_handler_in_thread_pool():
     """Handler is called asynchronously via thread pool."""
     import threading
+
     from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
     mock_session = MagicMock()
     captured_handler = []
@@ -391,6 +389,7 @@ def test_callback_subscriber_async_calls_handler_in_thread_pool():
 def test_callback_subscriber_async_decodes_proto():
     """Handler receives decoded proto when msg_class provided."""
     import threading
+
     from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
     mock_session = MagicMock()
     captured_handler = []
@@ -426,6 +425,7 @@ def test_callback_subscriber_async_decodes_proto():
 def test_raw_callback_subscriber_async_passes_sample():
     """RawCallbackSubscriberAsync handler receives raw zenoh.Sample."""
     import threading
+
     from bubbaloop_sdk.subscriber import RawCallbackSubscriberAsync
     mock_session = MagicMock()
     captured_handler = []

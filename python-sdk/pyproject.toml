@@ -13,8 +13,39 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest", "pytest-asyncio", "ruff"]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["bubbaloop_sdk*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# ---------------------------------------------------------------------------
+# Ruff — linter + formatter (replaces flake8, isort, pycodestyle)
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    # forward-reference string annotations with lazy imports (by design in context.py)
+    "F821",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# pre-existing unused imports in upstream files (health.py, node.py)
+"bubbaloop_sdk/health.py" = ["F401"]
+"bubbaloop_sdk/node.py" = ["F401"]
+"bubbaloop_sdk/get_sample.py" = ["B904"]
