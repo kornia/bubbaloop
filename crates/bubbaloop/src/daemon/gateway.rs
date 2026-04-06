@@ -460,7 +460,7 @@ mod tests {
     fn command_topic_format() {
         assert_eq!(
             command_topic("local", "jetson01"),
-            "bubbaloop/local/jetson01/daemon/command"
+            "bubbaloop/global/jetson01/daemon/command"
         );
     }
 
@@ -468,7 +468,7 @@ mod tests {
     fn events_topic_format() {
         assert_eq!(
             events_topic("local", "jetson01"),
-            "bubbaloop/local/jetson01/daemon/events"
+            "bubbaloop/global/jetson01/daemon/events"
         );
     }
 
@@ -476,7 +476,7 @@ mod tests {
     fn manifest_topic_format() {
         assert_eq!(
             manifest_topic("local", "jetson01"),
-            "bubbaloop/local/jetson01/daemon/manifest"
+            "bubbaloop/global/jetson01/daemon/manifest"
         );
     }
 
@@ -484,7 +484,7 @@ mod tests {
     fn manifest_wildcard_format() {
         assert_eq!(
             manifest_wildcard("local"),
-            "bubbaloop/local/*/daemon/manifest"
+            "bubbaloop/global/*/daemon/manifest"
         );
     }
 }
