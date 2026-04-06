@@ -19,6 +19,14 @@ impl NodeContext {
         format!("bubbaloop/{}/{}/{}", self.scope, self.machine_id, suffix)
     }
 
+    /// Build a machine-local topic: `local/{machine_id}/{suffix}`
+    ///
+    /// Use this for data that must stay on the same machine (e.g. SHM raw frames).
+    /// These topics are NOT under `bubbaloop/**` and will never cross the WebSocket bridge.
+    pub fn local_topic(&self, suffix: &str) -> String {
+        format!("local/{}/{}", self.machine_id, suffix)
+    }
+
     /// Create a protobuf publisher with `APPLICATION_PROTOBUF` encoding and schema suffix.
     pub async fn publisher_proto<T>(
         &self,
@@ -43,6 +51,17 @@ impl NodeContext {
         crate::publisher::RawPublisher::new(&self.session, &self.topic(suffix)).await
     }
 
+    /// Create a raw publisher on a machine-local topic (`local/{machine_id}/{suffix}`).
+    ///
+    /// Identical to [`publisher_raw`](Self::publisher_raw) but uses [`local_topic`](Self::local_topic).
+    /// Use this for SHM frame data that must never cross the WebSocket bridge.
+    pub async fn publisher_raw_local(
+        &self,
+        suffix: &str,
+    ) -> Result<crate::publisher::RawPublisher> {
+        crate::publisher::RawPublisher::new(&self.session, &self.local_topic(suffix)).await
+    }
+
     /// Create a typed subscriber that auto-decodes protobuf messages.
     ///
     /// `suffix` is appended to the scoped base topic.
@@ -59,6 +78,16 @@ impl NodeContext {
     /// Uses a small FIFO (4 slots) — older frames are dropped when the consumer is slow.
     pub async fn subscriber_raw(&self, suffix: &str) -> Result<crate::subscriber::RawSubscriber> {
         crate::subscriber::RawSubscriber::new(&self.session, &self.topic(suffix)).await
+    }
+
+    /// Create a raw subscriber on a machine-local topic (`local/{machine_id}/{suffix}`).
+    ///
+    /// Counterpart to [`publisher_raw_local`](Self::publisher_raw_local).
+    pub async fn subscriber_raw_local(
+        &self,
+        suffix: &str,
+    ) -> Result<crate::subscriber::RawSubscriber> {
+        crate::subscriber::RawSubscriber::new(&self.session, &self.local_topic(suffix)).await
     }
 }
 

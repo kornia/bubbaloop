@@ -128,6 +128,14 @@ class NodeContext:
         """Return ``bubbaloop/{scope}/{machine_id}/{suffix}``."""
         return f"bubbaloop/{self.scope}/{self.machine_id}/{suffix}"
 
+    def local_topic(self, suffix: str) -> str:
+        """Return ``local/{machine_id}/{suffix}``.
+
+        Use this for data that must stay on the same machine (e.g. SHM raw frames).
+        These topics are NOT under ``bubbaloop/**`` and will never cross the WebSocket bridge.
+        """
+        return f"local/{self.machine_id}/{suffix}"
+
     # ------------------------------------------------------------------
     # Shutdown
     # ------------------------------------------------------------------
@@ -164,6 +172,15 @@ class NodeContext:
         from .publisher import RawPublisher
         return RawPublisher._declare(self.session, self.topic(suffix))
 
+    def publisher_raw_local(self, suffix: str) -> "RawPublisher":
+        """Declare a raw publisher at ``local_topic(suffix)``.
+
+        Identical to :meth:`publisher_raw` but uses :meth:`local_topic`.
+        Use this for SHM frame data that must never cross the WebSocket bridge.
+        """
+        from .publisher import RawPublisher
+        return RawPublisher._declare(self.session, self.local_topic(suffix))
+
     # ------------------------------------------------------------------
     # Subscribers
     # ------------------------------------------------------------------
@@ -181,6 +198,15 @@ class NodeContext:
         """
         from .subscriber import RawSubscriber
         return RawSubscriber(self.session, self.topic(suffix))
+
+    def subscriber_raw_local(self, suffix: str) -> "RawSubscriber":
+        """Declare a raw subscriber at ``local_topic(suffix)``.
+
+        Counterpart to :meth:`publisher_raw_local`. Use for SHM frame data
+        that never crosses the WebSocket bridge.
+        """
+        from .subscriber import RawSubscriber
+        return RawSubscriber(self.session, self.local_topic(suffix))
 
     # ------------------------------------------------------------------
     # Cleanup
