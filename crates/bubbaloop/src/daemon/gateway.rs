@@ -270,37 +270,37 @@ pub struct CommandResultJson {
 
 /// Build the daemon command topic (CLI → Daemon).
 ///
-/// Format: `bubbaloop/{scope}/{machine}/daemon/command`
-pub fn command_topic(scope: &str, machine_id: &str) -> String {
-    format!("bubbaloop/{}/{}/daemon/command", scope, machine_id)
+/// Format: `bubbaloop/global/{machine}/daemon/command`
+pub fn command_topic(_scope: &str, machine_id: &str) -> String {
+    format!("bubbaloop/global/{}/daemon/command", machine_id)
 }
 
 /// Build the daemon events topic (Daemon → CLI).
 ///
-/// Format: `bubbaloop/{scope}/{machine}/daemon/events`
-pub fn events_topic(scope: &str, machine_id: &str) -> String {
-    format!("bubbaloop/{}/{}/daemon/events", scope, machine_id)
+/// Format: `bubbaloop/global/{machine}/daemon/events`
+pub fn events_topic(_scope: &str, machine_id: &str) -> String {
+    format!("bubbaloop/global/{}/daemon/events", machine_id)
 }
 
 /// Build the daemon manifest topic (queryable).
 ///
-/// Format: `bubbaloop/{scope}/{machine}/daemon/manifest`
-pub fn manifest_topic(scope: &str, machine_id: &str) -> String {
-    format!("bubbaloop/{}/{}/daemon/manifest", scope, machine_id)
+/// Format: `bubbaloop/global/{machine}/daemon/manifest`
+pub fn manifest_topic(_scope: &str, machine_id: &str) -> String {
+    format!("bubbaloop/global/{}/daemon/manifest", machine_id)
 }
 
 /// Build a wildcard pattern for discovering daemon manifests on ALL machines.
 ///
-/// Format: `bubbaloop/{scope}/*/daemon/manifest`
-pub fn manifest_wildcard(scope: &str) -> String {
-    format!("bubbaloop/{}/*/daemon/manifest", scope)
+/// Format: `bubbaloop/global/*/daemon/manifest`
+pub fn manifest_wildcard(_scope: &str) -> String {
+    "bubbaloop/global/*/daemon/manifest".to_string()
 }
 
 /// Build the daemon nodes topic (queryable — returns JSON NodeListJson).
 ///
-/// Format: `bubbaloop/{scope}/{machine}/daemon/nodes`
-pub fn nodes_topic(scope: &str, machine_id: &str) -> String {
-    format!("bubbaloop/{}/{}/daemon/nodes", scope, machine_id)
+/// Format: `bubbaloop/global/{machine}/daemon/nodes`
+pub fn nodes_topic(_scope: &str, machine_id: &str) -> String {
+    format!("bubbaloop/global/{}/daemon/nodes", machine_id)
 }
 
 #[cfg(test)]
