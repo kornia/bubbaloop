@@ -128,7 +128,7 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
     log::info!("Scope: {}, Machine ID: {}", scope, machine_id);
 
     let (shutdown_tx, _) = shutdown::setup_shutdown()?;
-    let session = zenoh_session::open_zenoh_session(&args.endpoint).await?;
+    let session = zenoh_session::open_zenoh_session(&args.endpoint, true).await?;
 
     let _schema_queryable = schema::declare_schema_queryable(
         &session,

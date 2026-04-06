@@ -12,7 +12,7 @@ Usage::
         time.sleep(30)
     ctx.close()
 
-For nodes that need SHM transport, use the builder::
+For nodes that publish/subscribe via SHM, use the builder::
 
     ctx = NodeContext.builder().with_shm().connect(endpoint=ep, instance_name=name)
 """
@@ -37,12 +37,18 @@ class NodeContextBuilder:
         ctx = NodeContext.builder().with_shm().connect(endpoint=ep, instance_name=name)
     """
 
-    def with_shm(self) -> "NodeContextBuilder":
-        """Mark this node as requiring SHM transport.
+    def __init__(self) -> None:
+        self._shm = False
 
-        SHM is always enabled in the session — this method exists to document
-        intent at the call site and for forward compatibility.
+    def with_shm(self) -> "NodeContextBuilder":
+        """Enable Zenoh SHM transport for zero-copy same-machine delivery.
+
+        Required when using :meth:`~NodeContext.publisher_shm` or
+        :meth:`~NodeContext.subscriber_shm`. The session must have SHM enabled
+        for the SHM transport to be active; without it, SHM buffers will not
+        be allocated and the publishers/subscribers fall back to regular transport.
         """
+        self._shm = True
         return self
 
     def connect(
@@ -50,10 +56,11 @@ class NodeContextBuilder:
         endpoint: str | None = None,
         instance_name: str | None = None,
     ) -> "NodeContext":
-        """Build and connect the NodeContext."""
+        """Build and connect the NodeContext with the configured options."""
         return NodeContext.connect(
             endpoint=endpoint,
             instance_name=instance_name,
+            shm=self._shm,
         )
 
 
@@ -83,6 +90,7 @@ class NodeContext:
         cls,
         endpoint: str | None = None,
         instance_name: str | None = None,
+        shm: bool = False,
     ) -> "NodeContext":
         """Connect to a Zenoh router and return a ready NodeContext.
 
@@ -93,8 +101,9 @@ class NodeContext:
         field from your config so multi-instance deployments don't collide.
         Falls back to the hostname.
 
-        SHM transport is always enabled — Zenoh falls back gracefully when
-        the remote side doesn't support it.
+        Prefer :meth:`builder` when SHM transport is needed::
+
+            ctx = NodeContext.builder().with_shm().connect(...)
         """
         scope = os.environ.get("BUBBALOOP_SCOPE", "local")
         machine_id = os.environ.get("BUBBALOOP_MACHINE_ID", _hostname())
@@ -106,7 +115,8 @@ class NodeContext:
         conf.insert_json5("connect/endpoints", f'["{ep}"]')
         conf.insert_json5("scouting/multicast/enabled", "false")
         conf.insert_json5("scouting/gossip/enabled", "false")
-        conf.insert_json5("transport/shared_memory/enabled", "true")
+        if shm:
+            conf.insert_json5("transport/shared_memory/enabled", "true")
         session = zenoh.open(conf)
 
         return cls(session, scope, machine_id, name)
@@ -149,8 +159,8 @@ class NodeContext:
     def publisher_shm(self, suffix: str) -> "ShmPublisher":
         """Declare a SHM publisher at ``topic(suffix)`` for zero-copy same-machine delivery.
 
-        The session must have SHM enabled — use ``NodeContext.builder().with_shm()``
-        or set ``shm = True`` on the node class so ``run_node()`` enables it automatically.
+        Requires the session to have SHM enabled — use
+        ``NodeContext.builder().with_shm().connect()``.
         """
         from .publisher import ShmPublisher
         return ShmPublisher._declare(self.session, self.topic(suffix))
@@ -172,8 +182,8 @@ class NodeContext:
     def subscriber_shm(self, suffix: str) -> "ShmSubscriber":
         """Declare a SHM subscriber at ``topic(suffix)`` that yields raw ``bytes``.
 
-        Counterpart to :meth:`publisher_shm`. The session must have SHM enabled.
-        Each :meth:`~ShmSubscriber.recv` call blocks and returns the raw payload bytes.
+        Counterpart to :meth:`publisher_shm`. Requires SHM-enabled session —
+        use ``NodeContext.builder().with_shm().connect()``.
         """
         from .subscriber import ShmSubscriber
         return ShmSubscriber(self.session, self.topic(suffix))
