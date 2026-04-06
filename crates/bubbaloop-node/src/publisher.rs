@@ -74,6 +74,39 @@ impl JsonPublisher {
     }
 }
 
+/// A declared raw-bytes publisher with `ZENOH_BYTES` encoding.
+///
+/// Use this to publish pre-built [`ZBytes`] payloads — for example,
+/// Zenoh SHM buffers — without any additional serialization overhead.
+///
+/// Created via [`NodeContext::publisher_raw`](crate::NodeContext::publisher_raw).
+pub struct RawPublisher {
+    publisher: zenoh::pubsub::Publisher<'static>,
+}
+
+impl RawPublisher {
+    pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
+        let publisher = session
+            .declare_publisher(key_expr.to_string())
+            .await
+            .map_err(|e| NodeError::PublisherDeclare {
+                topic: key_expr.to_string(),
+                source: e,
+            })?;
+
+        log::debug!("RawPublisher declared on '{}'", key_expr);
+        Ok(Self { publisher })
+    }
+
+    /// Publish a raw [`ZBytes`] payload (e.g. a Zenoh SHM buffer).
+    pub async fn put(&self, payload: zenoh::bytes::ZBytes) -> Result<()> {
+        self.publisher
+            .put(payload)
+            .await
+            .map_err(NodeError::Publish)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

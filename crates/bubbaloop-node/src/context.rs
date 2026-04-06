@@ -35,6 +35,13 @@ impl NodeContext {
         crate::publisher::JsonPublisher::new(&self.session, &self.topic(suffix)).await
     }
 
+    /// Create a raw-bytes publisher (no encoding set).
+    ///
+    /// Use this with Zenoh SHM buffers: `raw_pub.put(ZBytes::from(sbuf)).await?`.
+    pub async fn publisher_raw(&self, suffix: &str) -> Result<crate::publisher::RawPublisher> {
+        crate::publisher::RawPublisher::new(&self.session, &self.topic(suffix)).await
+    }
+
     /// Create a typed subscriber that auto-decodes protobuf messages.
     ///
     /// `suffix` is appended to the scoped base topic.
