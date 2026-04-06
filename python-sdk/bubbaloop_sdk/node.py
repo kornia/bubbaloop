@@ -51,10 +51,7 @@ def run_node(node_class) -> None:
     log = logging.getLogger(instance_name)
     log.info("Starting (type=%s, config=%s)", node_class.name, args.config)
 
-    builder = NodeContext.builder()
-    if getattr(node_class, "shm", False):
-        builder = builder.with_shm()
-    ctx = builder.connect(endpoint=args.endpoint, instance_name=instance_name)
+    ctx = NodeContext.connect(endpoint=args.endpoint, instance_name=instance_name)
 
     start_health_heartbeat(
         ctx.session, ctx.scope, ctx.machine_id, instance_name, ctx._shutdown

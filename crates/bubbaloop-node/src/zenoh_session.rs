@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::error::{NodeError, Result};
 
-/// Open a Zenoh session in client mode.
+/// Open a Zenoh session in client mode with SHM transport always enabled.
 ///
 /// Resolution order for endpoint:
 /// 1. `ZENOH_ENDPOINT` env var (for compatibility with existing nodes)
@@ -10,8 +10,9 @@ use crate::error::{NodeError, Result};
 /// 3. Provided `endpoint` argument
 /// 4. Default: `tcp/127.0.0.1:7447`
 ///
-/// When `shm` is true, enables the SHM transport for zero-copy same-machine delivery.
-pub async fn open_zenoh_session(endpoint: &Option<String>, shm: bool) -> Result<Arc<zenoh::Session>> {
+/// SHM is always enabled — Zenoh falls back gracefully to normal transport
+/// when the remote side doesn't support it, so there is no penalty.
+pub async fn open_zenoh_session(endpoint: &Option<String>) -> Result<Arc<zenoh::Session>> {
     let endpoint = std::env::var("ZENOH_ENDPOINT")
         .or_else(|_| std::env::var("BUBBALOOP_ZENOH_ENDPOINT"))
         .ok()
@@ -47,15 +48,12 @@ pub async fn open_zenoh_session(endpoint: &Option<String>, shm: bool) -> Result<
             key: "scouting/gossip/enabled",
             source: e,
         })?;
-    if shm {
-        config
-            .insert_json5("transport/shared_memory/enabled", "true")
-            .map_err(|e| NodeError::ZenohConfig {
-                key: "transport/shared_memory/enabled",
-                source: e,
-            })?;
-        log::info!("Zenoh SHM transport enabled");
-    }
+    config
+        .insert_json5("transport/shared_memory/enabled", "true")
+        .map_err(|e| NodeError::ZenohConfig {
+            key: "transport/shared_memory/enabled",
+            source: e,
+        })?;
 
     let session = zenoh::open(config).await.map_err(NodeError::ZenohSession)?;
 

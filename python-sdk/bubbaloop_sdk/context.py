@@ -37,12 +37,12 @@ class NodeContextBuilder:
         ctx = NodeContext.builder().with_shm().connect(endpoint=ep, instance_name=name)
     """
 
-    def __init__(self) -> None:
-        self._shm = False
-
     def with_shm(self) -> "NodeContextBuilder":
-        """Enable Zenoh SHM transport for zero-copy same-machine delivery."""
-        self._shm = True
+        """Mark this node as requiring SHM transport.
+
+        SHM is always enabled in the session — this method exists to document
+        intent at the call site and for forward compatibility.
+        """
         return self
 
     def connect(
@@ -50,11 +50,10 @@ class NodeContextBuilder:
         endpoint: str | None = None,
         instance_name: str | None = None,
     ) -> "NodeContext":
-        """Build and connect the NodeContext with the configured options."""
+        """Build and connect the NodeContext."""
         return NodeContext.connect(
             endpoint=endpoint,
             instance_name=instance_name,
-            shm=self._shm,
         )
 
 
@@ -84,7 +83,6 @@ class NodeContext:
         cls,
         endpoint: str | None = None,
         instance_name: str | None = None,
-        shm: bool = False,
     ) -> "NodeContext":
         """Connect to a Zenoh router and return a ready NodeContext.
 
@@ -95,7 +93,8 @@ class NodeContext:
         field from your config so multi-instance deployments don't collide.
         Falls back to the hostname.
 
-        Prefer :meth:`builder` for nodes that need SHM or other transport options.
+        SHM transport is always enabled — Zenoh falls back gracefully when
+        the remote side doesn't support it.
         """
         scope = os.environ.get("BUBBALOOP_SCOPE", "local")
         machine_id = os.environ.get("BUBBALOOP_MACHINE_ID", _hostname())
@@ -107,8 +106,7 @@ class NodeContext:
         conf.insert_json5("connect/endpoints", f'["{ep}"]')
         conf.insert_json5("scouting/multicast/enabled", "false")
         conf.insert_json5("scouting/gossip/enabled", "false")
-        if shm:
-            conf.insert_json5("transport/shared_memory/enabled", "true")
+        conf.insert_json5("transport/shared_memory/enabled", "true")
         session = zenoh.open(conf)
 
         return cls(session, scope, machine_id, name)
