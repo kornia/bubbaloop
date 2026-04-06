@@ -46,6 +46,7 @@ class NodeContext:
         cls,
         endpoint: str | None = None,
         instance_name: str | None = None,
+        shm: bool = False,
     ) -> "NodeContext":
         """Connect to a Zenoh router and return a ready NodeContext.
 
@@ -55,6 +56,8 @@ class NodeContext:
         ``instance_name`` is used for health and schema topics. Pass the ``name``
         field from your config so multi-instance deployments don't collide.
         Falls back to the hostname.
+
+        When ``shm`` is True, enables the SHM transport for zero-copy same-machine delivery.
         """
         scope = os.environ.get("BUBBALOOP_SCOPE", "local")
         machine_id = os.environ.get("BUBBALOOP_MACHINE_ID", _hostname())
@@ -66,6 +69,8 @@ class NodeContext:
         conf.insert_json5("connect/endpoints", f'["{ep}"]')
         conf.insert_json5("scouting/multicast/enabled", "false")
         conf.insert_json5("scouting/gossip/enabled", "false")
+        if shm:
+            conf.insert_json5("transport/shared_memory/enabled", "true")
         session = zenoh.open(conf)
 
         return cls(session, scope, machine_id, name)
