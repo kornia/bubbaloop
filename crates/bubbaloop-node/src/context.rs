@@ -35,10 +35,10 @@ impl NodeContext {
         crate::publisher::JsonPublisher::new(&self.session, &self.topic(suffix)).await
     }
 
-    /// Create a raw publisher for zero-copy same-machine delivery via SHM.
+    /// Create a raw publisher that sends [`ZBytes`](zenoh::bytes::ZBytes) with no encoding.
     ///
-    /// Publishes pre-built [`ZBytes`](zenoh::bytes::ZBytes) payloads — typically
-    /// SHM buffers allocated via `ShmProvider`. Use `pub.put(ZBytes::from(sbuf)).await?`.
+    /// The caller owns the byte layout. SHM zero-copy is used automatically
+    /// when the session has it enabled and the subscriber is on the same machine.
     pub async fn publisher_raw(&self, suffix: &str) -> Result<crate::publisher::RawPublisher> {
         crate::publisher::RawPublisher::new(&self.session, &self.topic(suffix)).await
     }
@@ -53,9 +53,9 @@ impl NodeContext {
         crate::subscriber::TypedSubscriber::new(&self.session, &self.topic(suffix)).await
     }
 
-    /// Create a raw subscriber that yields [`ZBytes`](zenoh::bytes::ZBytes) payloads directly.
+    /// Create a raw subscriber that yields [`ZBytes`](zenoh::bytes::ZBytes) with no decoding.
     ///
-    /// Counterpart to [`publisher_raw`](Self::publisher_raw). The session must have SHM enabled.
+    /// Counterpart to [`publisher_raw`](Self::publisher_raw). The caller decodes the bytes.
     /// Uses a small FIFO (4 slots) — older frames are dropped when the consumer is slow.
     pub async fn subscriber_raw(&self, suffix: &str) -> Result<crate::subscriber::RawSubscriber> {
         crate::subscriber::RawSubscriber::new(&self.session, &self.topic(suffix)).await

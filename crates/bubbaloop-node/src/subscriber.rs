@@ -74,10 +74,11 @@ impl<T: prost::Message + Default> TypedSubscriber<T> {
 
 /// Subscriber for raw byte payloads, counterpart to [`RawPublisher`](crate::RawPublisher).
 ///
-/// Created via [`NodeContext::subscriber_raw`](crate::NodeContext::subscriber_raw).
-/// Receives payloads as [`ZBytes`](zenoh::bytes::ZBytes) with no decoding — ideal for
-/// SHM frames or any binary data where the caller handles the decode itself.
+/// Receives payloads as [`ZBytes`](zenoh::bytes::ZBytes) with no decoding — the caller
+/// owns the byte layout entirely. Works with any Zenoh transport; SHM zero-copy is used
+/// automatically when both sides have it enabled in their session config.
 ///
+/// Created via [`NodeContext::subscriber_raw`](crate::NodeContext::subscriber_raw).
 /// Uses a small FIFO (4 slots) — older frames are dropped when the consumer is slow.
 pub struct RawSubscriber {
     inner: Subscriber<zenoh::handlers::FifoChannelHandler<Sample>>,

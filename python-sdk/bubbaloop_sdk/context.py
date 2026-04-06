@@ -43,10 +43,9 @@ class NodeContextBuilder:
     def with_shm(self) -> "NodeContextBuilder":
         """Enable Zenoh SHM transport for zero-copy same-machine delivery.
 
-        Required when using :meth:`~NodeContext.publisher_raw` or
-        :meth:`~NodeContext.subscriber_raw`. The session must have SHM enabled
-        for the SHM transport to be active; without it, SHM buffers will not
-        be allocated and the publishers/subscribers fall back to regular transport.
+        When enabled, Zenoh automatically uses shared memory for any publisher/subscriber
+        pair running on the same machine — this applies to JSON, protobuf, and raw
+        publishers alike. Falls back to normal transport for cross-machine communication.
         """
         self._shm = True
         return self
@@ -157,10 +156,10 @@ class NodeContext:
         return ProtoPublisher._declare(self.session, self.topic(suffix), type_name)
 
     def publisher_raw(self, suffix: str) -> "RawPublisher":
-        """Declare a SHM publisher at ``topic(suffix)`` for zero-copy same-machine delivery.
+        """Declare a raw publisher at ``topic(suffix)`` that sends bytes with no encoding.
 
-        Requires the session to have SHM enabled — use
-        ``NodeContext.builder().with_shm().connect()``.
+        The caller owns the byte layout. SHM zero-copy is used automatically
+        when the session has it enabled and the subscriber is on the same machine.
         """
         from .publisher import RawPublisher
         return RawPublisher._declare(self.session, self.topic(suffix))
@@ -175,10 +174,10 @@ class NodeContext:
         return TypedSubscriber(self.session, self.topic(suffix), msg_class)
 
     def subscriber_raw(self, suffix: str) -> "RawSubscriber":
-        """Declare a raw subscriber at ``topic(suffix)`` that yields raw ``bytes``.
+        """Declare a raw subscriber at ``topic(suffix)`` that yields ``bytes`` with no decoding.
 
-        Counterpart to :meth:`publisher_raw`. Requires SHM-enabled session —
-        use ``NodeContext.builder().with_shm().connect()``.
+        Counterpart to :meth:`publisher_raw`. The caller decodes the bytes.
+        SHM zero-copy is used automatically when the session has it enabled.
         """
         from .subscriber import RawSubscriber
         return RawSubscriber(self.session, self.topic(suffix))

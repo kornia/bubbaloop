@@ -34,10 +34,10 @@ class TypedSubscriber:
 class RawSubscriber:
     """Blocking subscriber that yields raw ``bytes``, counterpart to :class:`RawPublisher`.
 
-    The session must have SHM enabled (use ``NodeContext.builder().with_shm().connect()``).
-
-    Each call to :meth:`recv` blocks until the next frame arrives and returns
-    the raw bytes directly — no encoding inspection, no protobuf decode.
+    No decoding is applied — the caller owns the byte layout entirely.
+    SHM zero-copy delivery is used automatically when both sides have the session
+    SHM transport enabled (``NodeContext.builder().with_shm().connect()``), but
+    the subscriber works over any Zenoh transport.
 
     Usage::
 

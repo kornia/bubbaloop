@@ -74,10 +74,12 @@ impl JsonPublisher {
     }
 }
 
-/// A declared raw-bytes publisher with `ZENOH_BYTES` encoding.
+/// A declared raw-bytes publisher with no encoding.
 ///
-/// Use this to publish pre-built [`ZBytes`] payloads — for example,
-/// Zenoh SHM buffers — without any additional serialization overhead.
+/// Publishes pre-built [`ZBytes`] payloads directly — no serialization, no encoding header.
+/// The caller controls the byte layout. Works with any Zenoh transport; if the session
+/// has SHM enabled (via [`NodeContextBuilder::with_shm`](crate::NodeContextBuilder::with_shm)),
+/// zero-copy delivery is used automatically when both sides run on the same machine.
 ///
 /// Created via [`NodeContext::publisher_raw`](crate::NodeContext::publisher_raw).
 pub struct RawPublisher {
@@ -98,7 +100,7 @@ impl RawPublisher {
         Ok(Self { publisher })
     }
 
-    /// Publish a raw [`ZBytes`] payload (e.g. a Zenoh SHM buffer).
+    /// Publish a raw [`ZBytes`] payload with no encoding.
     pub async fn put(&self, payload: zenoh::bytes::ZBytes) -> Result<()> {
         self.publisher
             .put(payload)
