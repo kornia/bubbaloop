@@ -52,3 +52,41 @@ class RawSubscriber:
 
     def undeclare(self) -> None:
         self._sub.undeclare()
+
+
+class ShmSubscriber:
+    """Blocking subscriber that yields raw ``bytes`` from Zenoh SHM payloads.
+
+    Counterpart to :class:`ShmPublisher`. The session must have SHM enabled
+    (use ``NodeContext.builder().with_shm()``).
+
+    Each call to :meth:`recv` blocks until the next frame arrives and returns
+    the raw bytes directly — no encoding inspection, no protobuf decode.
+
+    Usage::
+
+        ctx = NodeContext.builder().with_shm().connect()
+        sub = ctx.subscriber_shm("camera/raw")
+        for raw_bytes in sub:
+            frame = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(h, w, 4)
+    """
+
+    def __init__(self, session: zenoh.Session, topic: str):
+        self._sub = session.declare_subscriber(topic)
+
+    def recv(self) -> bytes:
+        """Block until the next SHM frame arrives and return the raw bytes."""
+        sample = self._sub.recv()
+        return bytes(sample.payload)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            return self.recv()
+        except Exception as exc:
+            raise StopIteration from exc
+
+    def undeclare(self) -> None:
+        self._sub.undeclare()

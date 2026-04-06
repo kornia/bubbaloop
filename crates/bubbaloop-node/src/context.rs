@@ -57,6 +57,14 @@ impl NodeContext {
     pub async fn subscriber_raw(&self, key_expr: &str) -> Result<crate::subscriber::RawSubscriber> {
         crate::subscriber::RawSubscriber::new(&self.session, key_expr).await
     }
+
+    /// Create a SHM subscriber at ``topic(suffix)`` that yields raw [`ZBytes`](zenoh::bytes::ZBytes).
+    ///
+    /// Counterpart to [`publisher_shm`](Self::publisher_shm). The session must have SHM enabled.
+    /// Uses a small FIFO (4 slots) — older frames are dropped when the consumer is slow.
+    pub async fn subscriber_shm(&self, suffix: &str) -> Result<crate::subscriber::ShmSubscriber> {
+        crate::subscriber::ShmSubscriber::new(&self.session, &self.topic(suffix)).await
+    }
 }
 
 #[cfg(test)]

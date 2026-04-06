@@ -171,6 +171,15 @@ class NodeContext:
         from .subscriber import RawSubscriber
         return RawSubscriber(self.session, key_expr)
 
+    def subscriber_shm(self, suffix: str) -> "ShmSubscriber":
+        """Declare a SHM subscriber at ``topic(suffix)`` that yields raw ``bytes``.
+
+        Counterpart to :meth:`publisher_shm`. The session must have SHM enabled.
+        Each :meth:`~ShmSubscriber.recv` call blocks and returns the raw payload bytes.
+        """
+        from .subscriber import ShmSubscriber
+        return ShmSubscriber(self.session, self.topic(suffix))
+
     # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------

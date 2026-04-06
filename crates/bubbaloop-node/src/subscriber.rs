@@ -72,6 +72,51 @@ impl<T: prost::Message + Default> TypedSubscriber<T> {
     }
 }
 
+/// A subscriber for Zenoh SHM payloads that yields [`ZBytes`](zenoh::bytes::ZBytes) directly.
+///
+/// Created via [`NodeContext::subscriber_shm`](crate::NodeContext::subscriber_shm).
+/// Use this when the publisher is a [`ShmPublisher`](crate::ShmPublisher) — the payload
+/// is raw bytes with no encoding wrapper, delivered zero-copy from shared memory.
+pub struct ShmSubscriber {
+    inner: Subscriber<zenoh::handlers::FifoChannelHandler<Sample>>,
+}
+
+impl ShmSubscriber {
+    pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
+        let subscriber = session
+            .declare_subscriber(key_expr.to_string())
+            .with(FifoChannel::new(4))
+            .await
+            .map_err(|e| NodeError::SubscriberDeclare {
+                topic: key_expr.to_string(),
+                source: e,
+            })?;
+
+        log::debug!("ShmSubscriber declared on '{}'", key_expr);
+        Ok(Self { inner: subscriber })
+    }
+
+    /// Receive the next SHM payload as [`ZBytes`](zenoh::bytes::ZBytes), or `None` if closed.
+    pub async fn recv(&self) -> Option<zenoh::bytes::ZBytes> {
+        self.inner
+            .handler()
+            .recv_async()
+            .await
+            .ok()
+            .map(|s| s.payload().clone())
+    }
+
+    /// Try to receive a payload without blocking.
+    pub fn try_recv(&self) -> Option<zenoh::bytes::ZBytes> {
+        self.inner
+            .handler()
+            .try_recv()
+            .ok()
+            .flatten()
+            .map(|s| s.payload().clone())
+    }
+}
+
 /// An untyped (raw) subscriber that exposes [`Sample`] values directly.
 ///
 /// Created via [`NodeContext::subscriber_raw`](crate::NodeContext::subscriber_raw).

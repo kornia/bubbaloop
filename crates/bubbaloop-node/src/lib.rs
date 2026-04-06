@@ -46,7 +46,7 @@ pub use error::NodeError;
 pub use get_sample::get_sample;
 pub use proto_decoder::ProtoDecoder;
 pub use publisher::{JsonPublisher, ProtoPublisher, ShmPublisher};
-pub use subscriber::{RawSubscriber, TypedSubscriber};
+pub use subscriber::{RawSubscriber, ShmSubscriber, TypedSubscriber};
 
 pub use schemas::MessageTypeName;
 
