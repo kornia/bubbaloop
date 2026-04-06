@@ -11,6 +11,10 @@ Usage::
         pub.put({"temperature": 22.5})
         time.sleep(30)
     ctx.close()
+
+For nodes that need SHM transport, use the builder::
+
+    ctx = NodeContext.builder().with_shm().connect(endpoint=ep, instance_name=name)
 """
 
 import os
@@ -25,11 +29,40 @@ def _hostname() -> str:
     return socket.gethostname().replace("-", "_")
 
 
+class NodeContextBuilder:
+    """Fluent builder for NodeContext.
+
+    Usage::
+
+        ctx = NodeContext.builder().with_shm().connect(endpoint=ep, instance_name=name)
+    """
+
+    def __init__(self) -> None:
+        self._shm = False
+
+    def with_shm(self) -> "NodeContextBuilder":
+        """Enable Zenoh SHM transport for zero-copy same-machine delivery."""
+        self._shm = True
+        return self
+
+    def connect(
+        self,
+        endpoint: str | None = None,
+        instance_name: str | None = None,
+    ) -> "NodeContext":
+        """Build and connect the NodeContext with the configured options."""
+        return NodeContext.connect(
+            endpoint=endpoint,
+            instance_name=instance_name,
+            shm=self._shm,
+        )
+
+
 class NodeContext:
     """Zenoh session + scope/machine_id + shutdown signal for a bubbaloop node.
 
-    Create with :meth:`connect`. Cleanup with :meth:`close` (or use as a
-    context manager).
+    Create with :meth:`connect` or :meth:`builder`. Cleanup with :meth:`close`
+    (or use as a context manager).
     """
 
     def __init__(self, session: zenoh.Session, scope: str, machine_id: str, instance_name: str):
@@ -40,6 +73,11 @@ class NodeContext:
         self._shutdown = threading.Event()
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda s, f: self._shutdown.set())
+
+    @classmethod
+    def builder(cls) -> NodeContextBuilder:
+        """Return a fluent builder for creating a NodeContext with custom options."""
+        return NodeContextBuilder()
 
     @classmethod
     def connect(
@@ -57,7 +95,7 @@ class NodeContext:
         field from your config so multi-instance deployments don't collide.
         Falls back to the hostname.
 
-        When ``shm`` is True, enables the SHM transport for zero-copy same-machine delivery.
+        Prefer :meth:`builder` for nodes that need SHM or other transport options.
         """
         scope = os.environ.get("BUBBALOOP_SCOPE", "local")
         machine_id = os.environ.get("BUBBALOOP_MACHINE_ID", _hostname())
