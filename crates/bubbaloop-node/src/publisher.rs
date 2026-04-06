@@ -79,12 +79,12 @@ impl JsonPublisher {
 /// Use this to publish pre-built [`ZBytes`] payloads — for example,
 /// Zenoh SHM buffers — without any additional serialization overhead.
 ///
-/// Created via [`NodeContext::publisher_shm`](crate::NodeContext::publisher_shm).
-pub struct ShmPublisher {
+/// Created via [`NodeContext::publisher_raw`](crate::NodeContext::publisher_raw).
+pub struct RawPublisher {
     publisher: zenoh::pubsub::Publisher<'static>,
 }
 
-impl ShmPublisher {
+impl RawPublisher {
     pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
         let publisher = session
             .declare_publisher(key_expr.to_string())
@@ -94,7 +94,7 @@ impl ShmPublisher {
                 source: e,
             })?;
 
-        log::debug!("ShmPublisher declared on '{}'", key_expr);
+        log::debug!("RawPublisher declared on '{}'", key_expr);
         Ok(Self { publisher })
     }
 

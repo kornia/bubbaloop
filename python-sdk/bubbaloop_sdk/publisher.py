@@ -59,7 +59,7 @@ class ProtoPublisher:
         self._pub.undeclare()
 
 
-class ShmPublisher:
+class RawPublisher:
     """Declared publisher for zero-copy same-machine delivery via Zenoh SHM.
 
     Publishes raw ``bytes`` or ``bytearray`` payloads with no encoding overhead.
@@ -68,7 +68,7 @@ class ShmPublisher:
     Usage::
 
         ctx = NodeContext.builder().with_shm().connect()
-        pub = ctx.publisher_shm("camera/raw")
+        pub = ctx.publisher_raw("camera/raw")
         pub.put(rgba_bytes)  # delivered zero-copy to same-machine subscribers
     """
 
@@ -76,7 +76,7 @@ class ShmPublisher:
         self._pub = declared_publisher
 
     @classmethod
-    def _declare(cls, session: zenoh.Session, topic: str) -> "ShmPublisher":
+    def _declare(cls, session: zenoh.Session, topic: str) -> "RawPublisher":
         pub = session.declare_publisher(topic)
         return cls(pub)
 

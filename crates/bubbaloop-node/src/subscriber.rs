@@ -72,16 +72,18 @@ impl<T: prost::Message + Default> TypedSubscriber<T> {
     }
 }
 
-/// A subscriber for Zenoh SHM payloads that yields [`ZBytes`](zenoh::bytes::ZBytes) directly.
+/// Subscriber for raw byte payloads, counterpart to [`RawPublisher`](crate::RawPublisher).
 ///
-/// Created via [`NodeContext::subscriber_shm`](crate::NodeContext::subscriber_shm).
-/// Use this when the publisher is a [`ShmPublisher`](crate::ShmPublisher) — the payload
-/// is raw bytes with no encoding wrapper, delivered zero-copy from shared memory.
-pub struct ShmSubscriber {
+/// Created via [`NodeContext::subscriber_raw`](crate::NodeContext::subscriber_raw).
+/// Receives payloads as [`ZBytes`](zenoh::bytes::ZBytes) with no decoding — ideal for
+/// SHM frames or any binary data where the caller handles the decode itself.
+///
+/// Uses a small FIFO (4 slots) — older frames are dropped when the consumer is slow.
+pub struct RawSubscriber {
     inner: Subscriber<zenoh::handlers::FifoChannelHandler<Sample>>,
 }
 
-impl ShmSubscriber {
+impl RawSubscriber {
     pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
         let subscriber = session
             .declare_subscriber(key_expr.to_string())
@@ -92,11 +94,11 @@ impl ShmSubscriber {
                 source: e,
             })?;
 
-        log::debug!("ShmSubscriber declared on '{}'", key_expr);
+        log::debug!("RawSubscriber declared on '{}'", key_expr);
         Ok(Self { inner: subscriber })
     }
 
-    /// Receive the next SHM payload as [`ZBytes`](zenoh::bytes::ZBytes), or `None` if closed.
+    /// Receive the next payload as [`ZBytes`](zenoh::bytes::ZBytes), or `None` if closed.
     pub async fn recv(&self) -> Option<zenoh::bytes::ZBytes> {
         self.inner
             .handler()
@@ -114,44 +116,6 @@ impl ShmSubscriber {
             .ok()
             .flatten()
             .map(|s| s.payload().clone())
-    }
-}
-
-/// Subscriber for a **literal** Zenoh key expression, exposing raw [`Sample`] values.
-///
-/// Unlike [`TypedSubscriber`] and [`ShmSubscriber`], the key expression is used as-is —
-/// the `bubbaloop/{scope}/{machine}/` prefix is NOT prepended. Useful for wildcard
-/// subscriptions across machines (e.g. `bubbaloop/**/health`) or dashboard-style dynamic
-/// decoding where the caller reads `sample.encoding()` to decide how to decode.
-///
-/// Created via [`NodeContext::subscriber_key`](crate::NodeContext::subscriber_key).
-pub struct KeySubscriber {
-    inner: Subscriber<zenoh::handlers::FifoChannelHandler<Sample>>,
-}
-
-impl KeySubscriber {
-    pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
-        let subscriber = session
-            .declare_subscriber(key_expr.to_string())
-            .with(FifoChannel::new(256))
-            .await
-            .map_err(|e| NodeError::SubscriberDeclare {
-                topic: key_expr.to_string(),
-                source: e,
-            })?;
-
-        log::debug!("KeySubscriber declared on '{}'", key_expr);
-        Ok(Self { inner: subscriber })
-    }
-
-    /// Receive the next raw [`Sample`], or `None` if the subscriber was undeclared.
-    pub async fn recv(&self) -> Option<Sample> {
-        self.inner.handler().recv_async().await.ok()
-    }
-
-    /// Try to receive a raw [`Sample`] without blocking.
-    pub fn try_recv(&self) -> Option<Sample> {
-        self.inner.handler().try_recv().ok().flatten()
     }
 }
 

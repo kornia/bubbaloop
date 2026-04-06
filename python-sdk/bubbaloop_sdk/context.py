@@ -43,8 +43,8 @@ class NodeContextBuilder:
     def with_shm(self) -> "NodeContextBuilder":
         """Enable Zenoh SHM transport for zero-copy same-machine delivery.
 
-        Required when using :meth:`~NodeContext.publisher_shm` or
-        :meth:`~NodeContext.subscriber_shm`. The session must have SHM enabled
+        Required when using :meth:`~NodeContext.publisher_raw` or
+        :meth:`~NodeContext.subscriber_raw`. The session must have SHM enabled
         for the SHM transport to be active; without it, SHM buffers will not
         be allocated and the publishers/subscribers fall back to regular transport.
         """
@@ -156,14 +156,14 @@ class NodeContext:
         type_name = msg_class.DESCRIPTOR.full_name if msg_class is not None else None
         return ProtoPublisher._declare(self.session, self.topic(suffix), type_name)
 
-    def publisher_shm(self, suffix: str) -> "ShmPublisher":
+    def publisher_raw(self, suffix: str) -> "RawPublisher":
         """Declare a SHM publisher at ``topic(suffix)`` for zero-copy same-machine delivery.
 
         Requires the session to have SHM enabled — use
         ``NodeContext.builder().with_shm().connect()``.
         """
-        from .publisher import ShmPublisher
-        return ShmPublisher._declare(self.session, self.topic(suffix))
+        from .publisher import RawPublisher
+        return RawPublisher._declare(self.session, self.topic(suffix))
 
     # ------------------------------------------------------------------
     # Subscribers
@@ -174,23 +174,14 @@ class NodeContext:
         from .subscriber import TypedSubscriber
         return TypedSubscriber(self.session, self.topic(suffix), msg_class)
 
-    def subscriber_key(self, key_expr: str) -> "KeySubscriber":
-        """Declare a subscriber with a literal key expression — no scoped prefix added.
+    def subscriber_raw(self, suffix: str) -> "RawSubscriber":
+        """Declare a raw subscriber at ``topic(suffix)`` that yields raw ``bytes``.
 
-        Use for wildcard subscriptions across machines (e.g. ``bubbaloop/**/health``)
-        or any case where the full key expression is known at the call site.
-        """
-        from .subscriber import KeySubscriber
-        return KeySubscriber(self.session, key_expr)
-
-    def subscriber_shm(self, suffix: str) -> "ShmSubscriber":
-        """Declare a SHM subscriber at ``topic(suffix)`` that yields raw ``bytes``.
-
-        Counterpart to :meth:`publisher_shm`. Requires SHM-enabled session —
+        Counterpart to :meth:`publisher_raw`. Requires SHM-enabled session —
         use ``NodeContext.builder().with_shm().connect()``.
         """
-        from .subscriber import ShmSubscriber
-        return ShmSubscriber(self.session, self.topic(suffix))
+        from .subscriber import RawSubscriber
+        return RawSubscriber(self.session, self.topic(suffix))
 
     # ------------------------------------------------------------------
     # Cleanup

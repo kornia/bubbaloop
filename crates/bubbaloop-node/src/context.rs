@@ -35,12 +35,12 @@ impl NodeContext {
         crate::publisher::JsonPublisher::new(&self.session, &self.topic(suffix)).await
     }
 
-    /// Create a Zenoh SHM publisher for zero-copy same-machine delivery.
+    /// Create a raw publisher for zero-copy same-machine delivery via SHM.
     ///
     /// Publishes pre-built [`ZBytes`](zenoh::bytes::ZBytes) payloads — typically
-    /// SHM buffers allocated via `ShmProvider`. Use `shm_pub.put(ZBytes::from(sbuf)).await?`.
-    pub async fn publisher_shm(&self, suffix: &str) -> Result<crate::publisher::ShmPublisher> {
-        crate::publisher::ShmPublisher::new(&self.session, &self.topic(suffix)).await
+    /// SHM buffers allocated via `ShmProvider`. Use `pub.put(ZBytes::from(sbuf)).await?`.
+    pub async fn publisher_raw(&self, suffix: &str) -> Result<crate::publisher::RawPublisher> {
+        crate::publisher::RawPublisher::new(&self.session, &self.topic(suffix)).await
     }
 
     /// Create a typed subscriber that auto-decodes protobuf messages.
@@ -53,20 +53,12 @@ impl NodeContext {
         crate::subscriber::TypedSubscriber::new(&self.session, &self.topic(suffix)).await
     }
 
-    /// Create a subscriber with a **literal** key expression — no scoped prefix added.
+    /// Create a raw subscriber that yields [`ZBytes`](zenoh::bytes::ZBytes) payloads directly.
     ///
-    /// Use for wildcard subscriptions across machines (e.g. `bubbaloop/**/health`)
-    /// or any case where the full key expression is known at the call site.
-    pub async fn subscriber_key(&self, key_expr: &str) -> Result<crate::subscriber::KeySubscriber> {
-        crate::subscriber::KeySubscriber::new(&self.session, key_expr).await
-    }
-
-    /// Create a SHM subscriber at ``topic(suffix)`` that yields raw [`ZBytes`](zenoh::bytes::ZBytes).
-    ///
-    /// Counterpart to [`publisher_shm`](Self::publisher_shm). The session must have SHM enabled.
+    /// Counterpart to [`publisher_raw`](Self::publisher_raw). The session must have SHM enabled.
     /// Uses a small FIFO (4 slots) — older frames are dropped when the consumer is slow.
-    pub async fn subscriber_shm(&self, suffix: &str) -> Result<crate::subscriber::ShmSubscriber> {
-        crate::subscriber::ShmSubscriber::new(&self.session, &self.topic(suffix)).await
+    pub async fn subscriber_raw(&self, suffix: &str) -> Result<crate::subscriber::RawSubscriber> {
+        crate::subscriber::RawSubscriber::new(&self.session, &self.topic(suffix)).await
     }
 }
 
