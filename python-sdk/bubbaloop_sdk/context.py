@@ -12,9 +12,12 @@ Usage::
         time.sleep(30)
     ctx.close()
 
-For nodes that publish/subscribe via SHM, use the builder::
-
-    ctx = NodeContext.builder().with_shm().connect(endpoint=ep, instance_name=name)
+SHM transport is always enabled — all publishers and subscribers on the
+session benefit from zero-copy delivery automatically when both sides are on
+the same machine. Use ``publisher_raw_local`` / ``subscriber_raw_local`` for
+data that must stay machine-local (e.g. raw RGBA frames from camera to
+detector) — these topics are outside ``bubbaloop/**`` and never cross the
+WebSocket bridge.
 """
 
 import os
@@ -29,45 +32,15 @@ def _hostname() -> str:
     return socket.gethostname().replace("-", "_")
 
 
-class NodeContextBuilder:
-    """Fluent builder for NodeContext.
-
-    Usage::
-
-        ctx = NodeContext.builder().with_shm().connect(endpoint=ep, instance_name=name)
-    """
-
-    def __init__(self) -> None:
-        self._shm = False
-
-    def with_shm(self) -> "NodeContextBuilder":
-        """Enable Zenoh SHM transport for zero-copy same-machine delivery.
-
-        When enabled, Zenoh automatically uses shared memory for any publisher/subscriber
-        pair running on the same machine — this applies to JSON, protobuf, and raw
-        publishers alike. Falls back to normal transport for cross-machine communication.
-        """
-        self._shm = True
-        return self
-
-    def connect(
-        self,
-        endpoint: str | None = None,
-        instance_name: str | None = None,
-    ) -> "NodeContext":
-        """Build and connect the NodeContext with the configured options."""
-        return NodeContext.connect(
-            endpoint=endpoint,
-            instance_name=instance_name,
-            shm=self._shm,
-        )
-
-
 class NodeContext:
     """Zenoh session + scope/machine_id + shutdown signal for a bubbaloop node.
 
-    Create with :meth:`connect` or :meth:`builder`. Cleanup with :meth:`close`
-    (or use as a context manager).
+    Create with :meth:`connect`. Cleanup with :meth:`close` (or use as a
+    context manager).
+
+    SHM transport is always enabled on the session. All publishers and
+    subscribers benefit from zero-copy delivery automatically when both
+    sides are on the same machine.
     """
 
     def __init__(self, session: zenoh.Session, scope: str, machine_id: str, instance_name: str):
@@ -80,16 +53,10 @@ class NodeContext:
             signal.signal(sig, lambda s, f: self._shutdown.set())
 
     @classmethod
-    def builder(cls) -> NodeContextBuilder:
-        """Return a fluent builder for creating a NodeContext with custom options."""
-        return NodeContextBuilder()
-
-    @classmethod
     def connect(
         cls,
         endpoint: str | None = None,
         instance_name: str | None = None,
-        shm: bool = False,
     ) -> "NodeContext":
         """Connect to a Zenoh router and return a ready NodeContext.
 
@@ -99,10 +66,6 @@ class NodeContext:
         ``instance_name`` is used for health and schema topics. Pass the ``name``
         field from your config so multi-instance deployments don't collide.
         Falls back to the hostname.
-
-        Prefer :meth:`builder` when SHM transport is needed::
-
-            ctx = NodeContext.builder().with_shm().connect(...)
         """
         scope = os.environ.get("BUBBALOOP_SCOPE", "local")
         machine_id = os.environ.get("BUBBALOOP_MACHINE_ID", _hostname())
@@ -114,14 +77,13 @@ class NodeContext:
         conf.insert_json5("connect/endpoints", f'["{ep}"]')
         conf.insert_json5("scouting/multicast/enabled", "false")
         conf.insert_json5("scouting/gossip/enabled", "false")
-        if shm:
-            conf.insert_json5("transport/shared_memory/enabled", "true")
+        conf.insert_json5("transport/shared_memory/enabled", "true")
         session = zenoh.open(conf)
 
         return cls(session, scope, machine_id, name)
 
     # ------------------------------------------------------------------
-    # Topic helper
+    # Topic helpers
     # ------------------------------------------------------------------
 
     def topic(self, suffix: str) -> str:
@@ -164,10 +126,10 @@ class NodeContext:
         return ProtoPublisher._declare(self.session, self.topic(suffix), type_name)
 
     def publisher_raw(self, suffix: str) -> "RawPublisher":
-        """Declare a raw publisher at ``topic(suffix)`` that sends bytes with no encoding.
+        """Declare a raw publisher at ``topic(suffix)`` with no encoding.
 
         The caller owns the byte layout. SHM zero-copy is used automatically
-        when the session has it enabled and the subscriber is on the same machine.
+        since the session always has it enabled.
         """
         from .publisher import RawPublisher
         return RawPublisher._declare(self.session, self.topic(suffix))
@@ -193,8 +155,7 @@ class NodeContext:
     def subscriber_raw(self, suffix: str) -> "RawSubscriber":
         """Declare a raw subscriber at ``topic(suffix)`` that yields ``bytes`` with no decoding.
 
-        Counterpart to :meth:`publisher_raw`. The caller decodes the bytes.
-        SHM zero-copy is used automatically when the session has it enabled.
+        Counterpart to :meth:`publisher_raw`. SHM zero-copy is used automatically.
         """
         from .subscriber import RawSubscriber
         return RawSubscriber(self.session, self.topic(suffix))
@@ -203,7 +164,7 @@ class NodeContext:
         """Declare a raw subscriber at ``local_topic(suffix)``.
 
         Counterpart to :meth:`publisher_raw_local`. Use for SHM frame data
-        that never crosses the WebSocket bridge.
+        that must never cross the WebSocket bridge.
         """
         from .subscriber import RawSubscriber
         return RawSubscriber(self.session, self.local_topic(suffix))
