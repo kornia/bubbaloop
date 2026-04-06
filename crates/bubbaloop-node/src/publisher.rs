@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use zenoh::bytes::Encoding;
+use zenoh::qos::CongestionControl;
 
 use crate::error::{NodeError, Result};
 
@@ -77,26 +78,38 @@ impl JsonPublisher {
 /// A declared raw-bytes publisher with no encoding.
 ///
 /// Publishes pre-built [`ZBytes`] payloads directly — no serialization, no encoding header.
-/// The caller controls the byte layout. Works with any Zenoh transport; if the session
-/// has SHM enabled (via [`NodeContextBuilder::with_shm`](crate::NodeContextBuilder::with_shm)),
-/// zero-copy delivery is used automatically when both sides run on the same machine.
+/// The caller controls the byte layout.
 ///
 /// Created via [`NodeContext::publisher_raw`](crate::NodeContext::publisher_raw).
+/// When `local = true`, the publisher targets a machine-local topic
+/// (`local/{machine_id}/suffix`) and uses `CongestionControl::Block` — required for
+/// SHM so the publisher waits for the subscriber to read the SHM buffer instead of
+/// silently dropping frames.
 pub struct RawPublisher {
     publisher: zenoh::pubsub::Publisher<'static>,
 }
 
 impl RawPublisher {
-    pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
-        let publisher = session
-            .declare_publisher(key_expr.to_string())
+    pub(crate) async fn new(
+        session: &Arc<zenoh::Session>,
+        key_expr: &str,
+        local: bool,
+    ) -> Result<Self> {
+        let mut builder = session.declare_publisher(key_expr.to_string());
+        if local {
+            // CongestionControl::Block is required for SHM publishers:
+            // the publisher must wait for the subscriber to release the SHM buffer
+            // rather than silently dropping messages when the subscriber is slow.
+            builder = builder.congestion_control(CongestionControl::Block);
+        }
+        let publisher = builder
             .await
             .map_err(|e| NodeError::PublisherDeclare {
                 topic: key_expr.to_string(),
                 source: e,
             })?;
 
-        log::debug!("RawPublisher declared on '{}'", key_expr);
+        log::debug!("RawPublisher declared on '{}' (local={})", key_expr, local);
         Ok(Self { publisher })
     }
 

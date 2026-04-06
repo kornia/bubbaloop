@@ -125,24 +125,18 @@ class NodeContext:
         type_name = msg_class.DESCRIPTOR.full_name if msg_class is not None else None
         return ProtoPublisher._declare(self.session, self.topic(suffix), type_name)
 
-    def publisher_raw(self, suffix: str) -> "RawPublisher":
-        """Declare a raw publisher at ``topic(suffix)`` with no encoding.
+    def publisher_raw(self, suffix: str, local: bool = False) -> "RawPublisher":
+        """Declare a raw publisher with no encoding.
 
-        The caller owns the byte layout. SHM zero-copy is used automatically
-        since the session always has it enabled.
+        When ``local=True``, publishes to ``local/{machine_id}/{suffix}`` with SHM-specific
+        settings: ``congestion_control=Block`` so the publisher waits for the subscriber to
+        release the SHM buffer instead of silently dropping frames. Never crosses the bridge.
+
+        When ``local=False`` (default), publishes to ``bubbaloop/{scope}/{machine_id}/{suffix}``.
         """
         from .publisher import RawPublisher
-        return RawPublisher._declare(self.session, self.topic(suffix))
-
-    def publisher_local(self, suffix: str) -> "RawPublisher":
-        """Declare a local SHM publisher at ``local_topic(suffix)``.
-
-        Publishes raw bytes to ``local/{machine_id}/{suffix}`` with SHM zero-copy.
-        Payload never leaves the machine — never crosses the WebSocket bridge.
-        Counterpart: :meth:`subscriber_local`.
-        """
-        from .publisher import RawPublisher
-        return RawPublisher._declare(self.session, self.local_topic(suffix))
+        key = self.local_topic(suffix) if local else self.topic(suffix)
+        return RawPublisher._declare(self.session, key, local=local)
 
     # ------------------------------------------------------------------
     # Subscribers
@@ -153,22 +147,17 @@ class NodeContext:
         from .subscriber import TypedSubscriber
         return TypedSubscriber(self.session, self.topic(suffix), msg_class)
 
-    def subscriber_raw(self, suffix: str) -> "RawSubscriber":
-        """Declare a raw subscriber at ``topic(suffix)`` that yields ``bytes`` with no decoding.
+    def subscriber_raw(self, suffix: str, local: bool = False) -> "RawSubscriber":
+        """Declare a raw subscriber that yields ``bytes`` with no decoding.
 
-        Counterpart to :meth:`publisher_raw`. SHM zero-copy is used automatically.
+        When ``local=True``, subscribes to ``local/{machine_id}/{suffix}`` — SHM zero-copy,
+        machine-local only. Counterpart to ``publisher_raw(suffix, local=True)``.
+
+        When ``local=False`` (default), subscribes to ``bubbaloop/{scope}/{machine_id}/{suffix}``.
         """
         from .subscriber import RawSubscriber
-        return RawSubscriber(self.session, self.topic(suffix))
-
-    def subscriber_local(self, suffix: str) -> "RawSubscriber":
-        """Declare a local SHM subscriber at ``local_topic(suffix)``.
-
-        Receives raw bytes from ``local/{machine_id}/{suffix}`` with SHM zero-copy.
-        Counterpart: :meth:`publisher_local`.
-        """
-        from .subscriber import RawSubscriber
-        return RawSubscriber(self.session, self.local_topic(suffix))
+        key = self.local_topic(suffix) if local else self.topic(suffix)
+        return RawSubscriber(self.session, key)
 
     # ------------------------------------------------------------------
     # Cleanup

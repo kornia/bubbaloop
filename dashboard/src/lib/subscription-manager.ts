@@ -579,20 +579,13 @@ export class ZenohSubscriptionManager {
    * Handle a sample from the monitor wildcard subscription.
    * Aggregates stats by topic key expression.
    */
-  // Topics whose payloads should never be buffered by the monitor (raw binary frames).
-  private static readonly MONITOR_SKIP_SUFFIXES = ['/raw'];
-
   private handleMonitorSample(sample: Sample, endpointId: string): void {
     const endpoint = this.endpoints.get(endpointId);
     if (!endpoint) return;
 
+    // Monitor subscribes to 'bubbaloop/**' only — local SHM topics (local/{machine_id}/...)
+    // are outside this key space and never arrive here.
     const keyExpr = sample.keyexpr().toString();
-
-    // Skip raw binary frame topics — they are SHM-local and their payloads
-    // (1–8 MB each) must not flow through the WebSocket bridge.
-    if (ZenohSubscriptionManager.MONITOR_SKIP_SUFFIXES.some(s => keyExpr.endsWith(s))) {
-      return;
-    }
     const now = Date.now();
 
     // Get or create monitored topic stats (use key expression directly)
