@@ -117,16 +117,19 @@ impl ShmSubscriber {
     }
 }
 
-/// An untyped (raw) subscriber that exposes [`Sample`] values directly.
+/// Subscriber for a **literal** Zenoh key expression, exposing raw [`Sample`] values.
 ///
-/// Created via [`NodeContext::subscriber_raw`](crate::NodeContext::subscriber_raw).
-/// Useful for dashboard-style dynamic decoding where the type is not known at compile time.
-/// The caller reads `sample.encoding()` to decide how to decode the payload.
-pub struct RawSubscriber {
+/// Unlike [`TypedSubscriber`] and [`ShmSubscriber`], the key expression is used as-is —
+/// the `bubbaloop/{scope}/{machine}/` prefix is NOT prepended. Useful for wildcard
+/// subscriptions across machines (e.g. `bubbaloop/**/health`) or dashboard-style dynamic
+/// decoding where the caller reads `sample.encoding()` to decide how to decode.
+///
+/// Created via [`NodeContext::subscriber_key`](crate::NodeContext::subscriber_key).
+pub struct KeySubscriber {
     inner: Subscriber<zenoh::handlers::FifoChannelHandler<Sample>>,
 }
 
-impl RawSubscriber {
+impl KeySubscriber {
     pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
         let subscriber = session
             .declare_subscriber(key_expr.to_string())
@@ -137,7 +140,7 @@ impl RawSubscriber {
                 source: e,
             })?;
 
-        log::debug!("RawSubscriber declared on '{}'", key_expr);
+        log::debug!("KeySubscriber declared on '{}'", key_expr);
         Ok(Self { inner: subscriber })
     }
 

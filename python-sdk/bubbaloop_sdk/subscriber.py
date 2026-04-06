@@ -31,8 +31,17 @@ class TypedSubscriber:
         self._sub.undeclare()
 
 
-class RawSubscriber:
-    """Blocking subscriber that yields raw zenoh ``Sample`` objects."""
+class KeySubscriber:
+    """Blocking subscriber for a literal Zenoh key expression, yielding raw ``Sample`` objects.
+
+    Unlike :class:`TypedSubscriber` and :class:`ShmSubscriber`, this subscriber
+    takes a **literal key expression** — the ``bubbaloop/{scope}/{machine}/`` prefix
+    is NOT prepended. Use this for wildcard subscriptions across machines or topics::
+
+        sub = ctx.subscriber_key("bubbaloop/**/health")
+        for sample in sub:
+            print(sample.key_expr, bytes(sample.payload))
+    """
 
     def __init__(self, session: zenoh.Session, key_expr: str):
         self._sub = session.declare_subscriber(key_expr)

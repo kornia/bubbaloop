@@ -11,7 +11,7 @@ from .decode_sample import ProtoDecoder
 from .discover import NodeInfo, discover_nodes
 from .get_sample import GetSampleTimeout, get_sample
 from .publisher import JsonPublisher, ProtoPublisher, ShmPublisher
-from .subscriber import RawSubscriber, ShmSubscriber, TypedSubscriber
+from .subscriber import KeySubscriber, ShmSubscriber, TypedSubscriber
 from .node import run_node
 
 __all__ = [
@@ -23,7 +23,7 @@ __all__ = [
     "ProtoPublisher",
     "ShmPublisher",
     "ShmSubscriber",
-    "RawSubscriber",
+    "KeySubscriber",
     "TypedSubscriber",
     "discover_nodes",
     "get_sample",

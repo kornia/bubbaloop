@@ -53,9 +53,12 @@ impl NodeContext {
         crate::subscriber::TypedSubscriber::new(&self.session, &self.topic(suffix)).await
     }
 
-    /// Create a raw subscriber with a literal key expression (no scoped prefix).
-    pub async fn subscriber_raw(&self, key_expr: &str) -> Result<crate::subscriber::RawSubscriber> {
-        crate::subscriber::RawSubscriber::new(&self.session, key_expr).await
+    /// Create a subscriber with a **literal** key expression — no scoped prefix added.
+    ///
+    /// Use for wildcard subscriptions across machines (e.g. `bubbaloop/**/health`)
+    /// or any case where the full key expression is known at the call site.
+    pub async fn subscriber_key(&self, key_expr: &str) -> Result<crate::subscriber::KeySubscriber> {
+        crate::subscriber::KeySubscriber::new(&self.session, key_expr).await
     }
 
     /// Create a SHM subscriber at ``topic(suffix)`` that yields raw [`ZBytes`](zenoh::bytes::ZBytes).

@@ -174,10 +174,14 @@ class NodeContext:
         from .subscriber import TypedSubscriber
         return TypedSubscriber(self.session, self.topic(suffix), msg_class)
 
-    def subscriber_raw(self, key_expr: str) -> "RawSubscriber":
-        """Declare a raw subscriber with a literal key expression."""
-        from .subscriber import RawSubscriber
-        return RawSubscriber(self.session, key_expr)
+    def subscriber_key(self, key_expr: str) -> "KeySubscriber":
+        """Declare a subscriber with a literal key expression — no scoped prefix added.
+
+        Use for wildcard subscriptions across machines (e.g. ``bubbaloop/**/health``)
+        or any case where the full key expression is known at the call site.
+        """
+        from .subscriber import KeySubscriber
+        return KeySubscriber(self.session, key_expr)
 
     def subscriber_shm(self, suffix: str) -> "ShmSubscriber":
         """Declare a SHM subscriber at ``topic(suffix)`` that yields raw ``bytes``.
