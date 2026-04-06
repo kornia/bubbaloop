@@ -134,11 +134,12 @@ class NodeContext:
         from .publisher import RawPublisher
         return RawPublisher._declare(self.session, self.topic(suffix))
 
-    def publisher_raw_local(self, suffix: str) -> "RawPublisher":
-        """Declare a raw publisher at ``local_topic(suffix)``.
+    def publisher_local(self, suffix: str) -> "RawPublisher":
+        """Declare a local SHM publisher at ``local_topic(suffix)``.
 
-        Identical to :meth:`publisher_raw` but uses :meth:`local_topic`.
-        Use this for SHM frame data that must never cross the WebSocket bridge.
+        Publishes raw bytes to ``local/{machine_id}/{suffix}`` with SHM zero-copy.
+        Payload never leaves the machine — never crosses the WebSocket bridge.
+        Counterpart: :meth:`subscriber_local`.
         """
         from .publisher import RawPublisher
         return RawPublisher._declare(self.session, self.local_topic(suffix))
@@ -160,11 +161,11 @@ class NodeContext:
         from .subscriber import RawSubscriber
         return RawSubscriber(self.session, self.topic(suffix))
 
-    def subscriber_raw_local(self, suffix: str) -> "RawSubscriber":
-        """Declare a raw subscriber at ``local_topic(suffix)``.
+    def subscriber_local(self, suffix: str) -> "RawSubscriber":
+        """Declare a local SHM subscriber at ``local_topic(suffix)``.
 
-        Counterpart to :meth:`publisher_raw_local`. Use for SHM frame data
-        that must never cross the WebSocket bridge.
+        Receives raw bytes from ``local/{machine_id}/{suffix}`` with SHM zero-copy.
+        Counterpart: :meth:`publisher_local`.
         """
         from .subscriber import RawSubscriber
         return RawSubscriber(self.session, self.local_topic(suffix))

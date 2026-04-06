@@ -14,20 +14,25 @@ pub struct NodeContext {
 }
 
 impl NodeContext {
-    /// Build a fully-qualified scoped topic: `bubbaloop/{scope}/{machine_id}/{suffix}`
+    /// Build a global scoped topic: `bubbaloop/{scope}/{machine_id}/{suffix}`
+    ///
+    /// Use for data that is visible network-wide (dashboards, other machines).
     pub fn topic(&self, suffix: &str) -> String {
         format!("bubbaloop/{}/{}/{}", self.scope, self.machine_id, suffix)
     }
 
     /// Build a machine-local topic: `local/{machine_id}/{suffix}`
     ///
-    /// Use this for data that must stay on the same machine (e.g. SHM raw frames).
-    /// These topics are NOT under `bubbaloop/**` and will never cross the WebSocket bridge.
+    /// Use for data that must stay on this machine — e.g. raw RGBA frames passed
+    /// from a camera node to a detector via SHM. These topics are outside
+    /// `bubbaloop/**` and never cross the WebSocket bridge.
     pub fn local_topic(&self, suffix: &str) -> String {
         format!("local/{}/{}", self.machine_id, suffix)
     }
 
-    /// Create a protobuf publisher with `APPLICATION_PROTOBUF` encoding and schema suffix.
+    // ── Global publishers (network-visible, bubbaloop/** key space) ──────────
+
+    /// Create a protobuf publisher with `APPLICATION_PROTOBUF` encoding.
     pub async fn publisher_proto<T>(
         &self,
         suffix: &str,
@@ -43,28 +48,28 @@ impl NodeContext {
         crate::publisher::JsonPublisher::new(&self.session, &self.topic(suffix)).await
     }
 
-    /// Create a raw publisher that sends [`ZBytes`](zenoh::bytes::ZBytes) with no encoding.
-    ///
-    /// The caller owns the byte layout. SHM zero-copy is used automatically
-    /// when the session has it enabled and the subscriber is on the same machine.
-    pub async fn publisher_raw(&self, suffix: &str) -> Result<crate::publisher::RawPublisher> {
-        crate::publisher::RawPublisher::new(&self.session, &self.topic(suffix)).await
-    }
+    // ── Local publisher/subscriber (SHM, machine-local key space) ───────────
 
-    /// Create a raw publisher on a machine-local topic (`local/{machine_id}/{suffix}`).
+    /// Create a local publisher that sends raw [`ZBytes`](zenoh::bytes::ZBytes) to
+    /// `local/{machine_id}/{suffix}` with SHM zero-copy.
     ///
-    /// Identical to [`publisher_raw`](Self::publisher_raw) but uses [`local_topic`](Self::local_topic).
-    /// Use this for SHM frame data that must never cross the WebSocket bridge.
-    pub async fn publisher_raw_local(
-        &self,
-        suffix: &str,
-    ) -> Result<crate::publisher::RawPublisher> {
+    /// Payload never leaves the machine. Counterpart: [`subscriber_local`](Self::subscriber_local).
+    pub async fn publisher_local(&self, suffix: &str) -> Result<crate::publisher::RawPublisher> {
         crate::publisher::RawPublisher::new(&self.session, &self.local_topic(suffix)).await
     }
 
-    /// Create a typed subscriber that auto-decodes protobuf messages.
+    /// Create a local subscriber that receives raw [`ZBytes`](zenoh::bytes::ZBytes) from
+    /// `local/{machine_id}/{suffix}` with SHM zero-copy.
     ///
-    /// `suffix` is appended to the scoped base topic.
+    /// Uses a small FIFO (4 slots) — older frames are dropped when the consumer is slow.
+    /// Counterpart: [`publisher_local`](Self::publisher_local).
+    pub async fn subscriber_local(&self, suffix: &str) -> Result<crate::subscriber::RawSubscriber> {
+        crate::subscriber::RawSubscriber::new(&self.session, &self.local_topic(suffix)).await
+    }
+
+    // ── Global subscribers (network-visible, bubbaloop/** key space) ─────────
+
+    /// Create a typed subscriber that auto-decodes protobuf messages.
     pub async fn subscriber<T>(&self, suffix: &str) -> Result<crate::subscriber::TypedSubscriber<T>>
     where
         T: prost::Message + Default,
@@ -74,37 +79,32 @@ impl NodeContext {
 
     /// Create a raw subscriber that yields [`ZBytes`](zenoh::bytes::ZBytes) with no decoding.
     ///
-    /// Counterpart to [`publisher_raw`](Self::publisher_raw). The caller decodes the bytes.
     /// Uses a small FIFO (4 slots) — older frames are dropped when the consumer is slow.
     pub async fn subscriber_raw(&self, suffix: &str) -> Result<crate::subscriber::RawSubscriber> {
         crate::subscriber::RawSubscriber::new(&self.session, &self.topic(suffix)).await
-    }
-
-    /// Create a raw subscriber on a machine-local topic (`local/{machine_id}/{suffix}`).
-    ///
-    /// Counterpart to [`publisher_raw_local`](Self::publisher_raw_local).
-    pub async fn subscriber_raw_local(
-        &self,
-        suffix: &str,
-    ) -> Result<crate::subscriber::RawSubscriber> {
-        crate::subscriber::RawSubscriber::new(&self.session, &self.local_topic(suffix)).await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn topic_format() {
-        let scope = "prod";
-        let machine_id = "jetson_01";
-        let suffix = "camera/front/compressed";
-        let result = format!("bubbaloop/{}/{}/{}", scope, machine_id, suffix);
-        assert_eq!(result, "bubbaloop/prod/jetson_01/camera/front/compressed");
+    use super::*;
+
+    fn make_ctx(scope: &str, machine_id: &str) -> String {
+        format!("bubbaloop/{}/{}/sensor/data", scope, machine_id)
     }
 
     #[test]
-    fn topic_format_local_scope() {
-        let result = format!("bubbaloop/{}/{}/{}", "local", "my_host", "sensor/data");
-        assert_eq!(result, "bubbaloop/local/my_host/sensor/data");
+    fn topic_format() {
+        assert_eq!(
+            make_ctx("prod", "jetson_01"),
+            "bubbaloop/prod/jetson_01/sensor/data"
+        );
+    }
+
+    #[test]
+    fn local_topic_format() {
+        let machine_id = "jetson_01";
+        let result = format!("local/{}/tapo_terrace/raw", machine_id);
+        assert_eq!(result, "local/jetson_01/tapo_terrace/raw");
     }
 }
