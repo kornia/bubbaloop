@@ -50,16 +50,17 @@ def run_node(node_class) -> None:
     log.info("Starting (type=%s, config=%s)", node_class.name, args.config)
 
     ctx = NodeContext.connect(endpoint=args.endpoint, instance_name=instance_name)
-
-    start_health_heartbeat(ctx.session, ctx.scope, ctx.machine_id, instance_name, ctx._shutdown)
     log.info("Health heartbeat: bubbaloop/%s/%s/%s/health", ctx.scope, ctx.machine_id, instance_name)
 
     node = node_class(ctx, config)
     log.info("Initialized. Running…")
+    heartbeat = start_health_heartbeat(ctx.session, ctx.scope, ctx.machine_id, instance_name, ctx._shutdown)
     try:
         node.run()
     except KeyboardInterrupt:
         pass
     finally:
+        ctx._shutdown.set()  # stop heartbeat before closing session
+        heartbeat.join(timeout=1.0)
         ctx.close()
         log.info("Shutdown complete")
