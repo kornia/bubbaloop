@@ -165,7 +165,7 @@ describe('CameraView', () => {
     expect(liveBadge).toBeInTheDocument();
   });
 
-  it('renders topic dropdown with camera topics filtered by camera and compressed', () => {
+  it('renders topic dropdown with topics ending in /compressed', () => {
     const cameraTopics = [
       { display: 'bubbaloop/m1/camera/entrance/compressed', raw: '0/camera%entrance%compressed/type/hash' },
       { display: 'bubbaloop/m1/camera/parking/compressed', raw: '0/camera%parking%compressed/type/hash' },
@@ -181,7 +181,7 @@ describe('CameraView', () => {
 
     const select = document.querySelector('select.topic-select') as HTMLSelectElement;
     expect(select).toBeInTheDocument();
-    // Only camera topics with 'camera' and 'compressed' in display should appear
+    // Only topics whose display ends with '/compressed' should appear
     const options = select.querySelectorAll('option');
     const optionTexts = Array.from(options).map(o => o.textContent);
     expect(optionTexts).toContain('bubbaloop/m1/camera/entrance/compressed');
