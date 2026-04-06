@@ -81,3 +81,4 @@ crates/bubbaloop-nodes/
 
 # Git worktrees
 .worktrees/
+.claude/worktrees/
