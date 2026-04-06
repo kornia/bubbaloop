@@ -43,9 +43,8 @@ class NodeContext:
     sides are on the same machine.
     """
 
-    def __init__(self, session: zenoh.Session, scope: str, machine_id: str, instance_name: str):
+    def __init__(self, session: zenoh.Session, machine_id: str, instance_name: str):
         self.session = session
-        self.scope = scope
         self.machine_id = machine_id
         self.instance_name = instance_name
         self._shutdown = threading.Event()
@@ -67,7 +66,6 @@ class NodeContext:
         field from your config so multi-instance deployments don't collide.
         Falls back to the hostname.
         """
-        scope = os.environ.get("BUBBALOOP_SCOPE", "local")
         machine_id = os.environ.get("BUBBALOOP_MACHINE_ID", _hostname())
         ep = endpoint or os.environ.get("BUBBALOOP_ZENOH_ENDPOINT", "tcp/127.0.0.1:7447")
         name = instance_name or machine_id
@@ -80,23 +78,23 @@ class NodeContext:
         conf.insert_json5("transport/shared_memory/enabled", "true")
         session = zenoh.open(conf)
 
-        return cls(session, scope, machine_id, name)
+        return cls(session, machine_id, name)
 
     # ------------------------------------------------------------------
     # Topic helpers
     # ------------------------------------------------------------------
 
     def topic(self, suffix: str) -> str:
-        """Return ``bubbaloop/{scope}/{machine_id}/{suffix}``."""
-        return f"bubbaloop/{self.scope}/{self.machine_id}/{suffix}"
+        """Return ``bubbaloop/global/{machine_id}/{suffix}``."""
+        return f"bubbaloop/global/{self.machine_id}/{suffix}"
 
     def local_topic(self, suffix: str) -> str:
-        """Return ``local/{machine_id}/{suffix}``.
+        """Return ``bubbaloop/local/{machine_id}/{suffix}``.
 
-        Use this for data that must stay on the same machine (e.g. SHM raw frames).
-        These topics are NOT under ``bubbaloop/**`` and will never cross the WebSocket bridge.
+        SHM-only — never crosses the WebSocket bridge. Use for large binary payloads
+        consumed only by processes on the same machine (e.g. raw RGBA camera frames).
         """
-        return f"local/{self.machine_id}/{suffix}"
+        return f"bubbaloop/local/{self.machine_id}/{suffix}"
 
     # ------------------------------------------------------------------
     # Shutdown

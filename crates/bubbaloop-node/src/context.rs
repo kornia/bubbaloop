@@ -5,7 +5,6 @@ use crate::error::Result;
 /// Context provided to nodes by the SDK runtime.
 pub struct NodeContext {
     pub session: Arc<zenoh::Session>,
-    pub scope: String,
     pub machine_id: String,
     /// Per-instance name (from config `name` field, or the node type name).
     /// Ensures multi-instance deployments don't collide on health/schema topics.
@@ -14,17 +13,19 @@ pub struct NodeContext {
 }
 
 impl NodeContext {
-    /// Build a global scoped topic: `bubbaloop/{scope}/{machine_id}/{suffix}`
+    /// Build a global topic: `bubbaloop/global/{machine_id}/{suffix}`
+    ///
+    /// Visible across the network — subscribed to by the dashboard and other machines.
     pub fn topic(&self, suffix: &str) -> String {
-        format!("bubbaloop/{}/{}/{}", self.scope, self.machine_id, suffix)
+        format!("bubbaloop/global/{}/{}", self.machine_id, suffix)
     }
 
-    /// Build a machine-local topic: `local/{machine_id}/{suffix}`
+    /// Build a machine-local topic: `bubbaloop/local/{machine_id}/{suffix}`
     ///
-    /// Local topics never cross the WebSocket bridge — use for SHM-only data
-    /// (e.g. raw RGBA frames from a camera node to a detector on the same machine).
+    /// SHM-only, never crosses the WebSocket bridge. Use for large binary payloads
+    /// (e.g. raw RGBA frames) consumed only by processes on the same machine.
     pub fn local_topic(&self, suffix: &str) -> String {
-        format!("local/{}/{}", self.machine_id, suffix)
+        format!("bubbaloop/local/{}/{}", self.machine_id, suffix)
     }
 
     fn resolve_topic(&self, suffix: &str, local: bool) -> String {
@@ -101,18 +102,17 @@ impl NodeContext {
 mod tests {
     #[test]
     fn topic_format() {
-        let (scope, machine_id, suffix) = ("prod", "jetson_01", "camera/front/compressed");
         assert_eq!(
-            format!("bubbaloop/{}/{}/{}", scope, machine_id, suffix),
-            "bubbaloop/prod/jetson_01/camera/front/compressed"
+            format!("bubbaloop/global/{}/{}", "jetson_01", "camera/front/compressed"),
+            "bubbaloop/global/jetson_01/camera/front/compressed"
         );
     }
 
     #[test]
     fn local_topic_format() {
         assert_eq!(
-            format!("local/{}/{}", "jetson_01", "tapo_terrace/raw"),
-            "local/jetson_01/tapo_terrace/raw"
+            format!("bubbaloop/local/{}/{}", "jetson_01", "tapo_terrace/raw"),
+            "bubbaloop/local/jetson_01/tapo_terrace/raw"
         );
     }
 }

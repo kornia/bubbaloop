@@ -117,7 +117,6 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
         args.config.display()
     );
 
-    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = std::env::var("BUBBALOOP_MACHINE_ID")
         .unwrap_or_else(|_| {
             hostname::get()
@@ -125,14 +124,13 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "unknown".to_string())
         })
         .replace('-', "_");
-    log::info!("Scope: {}, Machine ID: {}", scope, machine_id);
+    log::info!("Machine ID: {}", machine_id);
 
     let (shutdown_tx, _) = shutdown::setup_shutdown()?;
     let session = zenoh_session::open_zenoh_session(&args.endpoint).await?;
 
     let _schema_queryable = schema::declare_schema_queryable(
         &session,
-        &scope,
         &machine_id,
         &instance_name,
         N::descriptor(),
@@ -141,7 +139,6 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
 
     let _health_handle = health::spawn_health_heartbeat(
         session.clone(),
-        &scope,
         &machine_id,
         &instance_name,
         shutdown_tx.subscribe(),
@@ -150,7 +147,6 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
 
     let ctx = NodeContext {
         session: session.clone(),
-        scope,
         machine_id,
         instance_name,
         shutdown_rx: shutdown_tx.subscribe(),

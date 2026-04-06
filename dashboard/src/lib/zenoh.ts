@@ -294,19 +294,22 @@ export interface UseTopicDiscoveryResult {
 /**
  * Normalize a raw Zenoh key expression to a human-readable form.
  *
- * Vanilla Zenoh format: strips the leading "bubbaloop/" prefix only.
- * Does NOT strip machine/scope segments -- they're needed to distinguish topics.
+ * Strips the leading "bubbaloop/global/" prefix so the display shows the
+ * machine-id and resource only.
  *
  * Examples:
- *   "bubbaloop/local/nvidia_orin00/camera/entrance/compressed" -> "local/nvidia_orin00/camera/entrance/compressed"
- *   "bubbaloop/nvidia-orin00/daemon/nodes"                     -> "nvidia-orin00/daemon/nodes"
- *   "bubbaloop/local/nvidia_orin00/system-telemetry/health"    -> "local/nvidia_orin00/system-telemetry/health"
- *   "bubbaloop/daemon/nodes"                                   -> "daemon/nodes"
+ *   "bubbaloop/global/nvidia_orin00/camera/entrance/compressed" -> "nvidia_orin00/camera/entrance/compressed"
+ *   "bubbaloop/global/nvidia_orin00/system-telemetry/health"    -> "nvidia_orin00/system-telemetry/health"
  */
 export function normalizeKeyExpr(keyExpr: string): { display: string; raw: string } {
   const parts = keyExpr.split('/');
 
-  // Vanilla zenoh: strip "bubbaloop/" prefix only
+  // New format: "bubbaloop/global/{machine_id}/..." → strip "bubbaloop/global/"
+  if (parts[0] === 'bubbaloop' && parts[1] === 'global' && parts.length >= 3) {
+    return { display: parts.slice(2).join('/'), raw: keyExpr };
+  }
+
+  // Fallback: strip only the "bubbaloop/" prefix
   if (parts[0] === 'bubbaloop' && parts.length >= 2) {
     return { display: parts.slice(1).join('/'), raw: keyExpr };
   }
@@ -317,30 +320,22 @@ export function normalizeKeyExpr(keyExpr: string): { display: string; raw: strin
 /**
  * Extract machine ID from a Zenoh key expression.
  *
- * Vanilla Zenoh format:
- * - "bubbaloop/{machine}/daemon/..."  -> machine (machine-scoped daemon)
- * - "bubbaloop/{scope}/{machine}/..." -> machine (full-scoped, 4+ segments)
+ * New format: "bubbaloop/global/{machine_id}/..." -> machine_id (parts[2])
+ * Local SHM: "bubbaloop/local/{machine_id}/..." -> null (not network-visible)
  *
- * Returns null for legacy paths like "bubbaloop/daemon/nodes" or "bubbaloop/fleet/..."
+ * Returns null for local or unrecognized paths.
  */
 export function extractMachineId(keyExpr: string): string | null {
   const parts = keyExpr.split('/');
 
-  // Vanilla zenoh: "bubbaloop/..."
   if (parts[0] === 'bubbaloop') {
-    // Legacy paths: "bubbaloop/daemon/..." or "bubbaloop/fleet/..."
-    const knownNamespaces = ['daemon', 'fleet'];
-    if (parts.length >= 2 && knownNamespaces.includes(parts[1])) {
+    // Local SHM topics — not network-visible
+    if (parts[1] === 'local') {
       return null;
     }
 
-    // Machine-scoped daemon: "bubbaloop/{machine}/daemon/..." -> return parts[1]
-    if (parts.length >= 3 && parts[2] === 'daemon') {
-      return parts[1];
-    }
-
-    // Full-scoped: "bubbaloop/{scope}/{machine}/{resource}/..." -> return parts[2]
-    if (parts.length >= 4) {
+    // New global format: "bubbaloop/global/{machine_id}/..."
+    if (parts[1] === 'global' && parts.length >= 3) {
       return parts[2];
     }
   }

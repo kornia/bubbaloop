@@ -230,7 +230,7 @@ export class SchemaRegistry {
   async discoverAllNodeSchemas(session: Session, _machineIds?: string[]): Promise<number> {
     // Always use broad wildcard to avoid machine ID format mismatches
     // (e.g., nvidia_orin00 vs nvidia-orin00)
-    const pattern = 'bubbaloop/**/schema';
+    const pattern = 'bubbaloop/global/**/schema';
 
     let discovered = 0;
     try {

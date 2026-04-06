@@ -534,7 +534,7 @@ export class ZenohSubscriptionManager {
     }
 
     try {
-      const subscriber = await endpoint.session.declareSubscriber('bubbaloop/**', {
+      const subscriber = await endpoint.session.declareSubscriber('bubbaloop/global/**', {
         handler: (sample) => {
           this.handleMonitorSample(sample, endpointId);
         },
