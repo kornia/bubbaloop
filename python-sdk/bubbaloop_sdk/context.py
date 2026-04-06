@@ -148,6 +148,15 @@ class NodeContext:
         type_name = msg_class.DESCRIPTOR.full_name if msg_class is not None else None
         return ProtoPublisher._declare(self.session, self.topic(suffix), type_name)
 
+    def publisher_shm(self, suffix: str) -> "ShmPublisher":
+        """Declare a SHM publisher at ``topic(suffix)`` for zero-copy same-machine delivery.
+
+        The session must have SHM enabled — use ``NodeContext.builder().with_shm()``
+        or set ``shm = True`` on the node class so ``run_node()`` enables it automatically.
+        """
+        from .publisher import ShmPublisher
+        return ShmPublisher._declare(self.session, self.topic(suffix))
+
     # ------------------------------------------------------------------
     # Subscribers
     # ------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Declared publishers for JSON and protobuf messages."""
+"""Declared publishers for JSON, protobuf, and SHM messages."""
 
 import json
 
@@ -54,6 +54,35 @@ class ProtoPublisher:
         else:
             raise TypeError(f"Expected protobuf message or bytes, got {type(msg).__name__}")
         self._pub.put(data)
+
+    def undeclare(self) -> None:
+        self._pub.undeclare()
+
+
+class ShmPublisher:
+    """Declared publisher for zero-copy same-machine delivery via Zenoh SHM.
+
+    Publishes raw ``bytes`` or ``bytearray`` payloads with no encoding overhead.
+    The session must have SHM enabled (use ``NodeContext.builder().with_shm()``).
+
+    Usage::
+
+        ctx = NodeContext.builder().with_shm().connect()
+        pub = ctx.publisher_shm("camera/raw")
+        pub.put(rgba_bytes)  # delivered zero-copy to same-machine subscribers
+    """
+
+    def __init__(self, declared_publisher: zenoh.Publisher):
+        self._pub = declared_publisher
+
+    @classmethod
+    def _declare(cls, session: zenoh.Session, topic: str) -> "ShmPublisher":
+        pub = session.declare_publisher(topic)
+        return cls(pub)
+
+    def put(self, data: bytes | bytearray) -> None:
+        """Publish raw bytes over Zenoh SHM."""
+        self._pub.put(bytes(data))
 
     def undeclare(self) -> None:
         self._pub.undeclare()
