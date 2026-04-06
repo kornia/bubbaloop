@@ -5,17 +5,16 @@ use crate::error::{NodeError, Result};
 
 /// Declare a Zenoh queryable that serves the node's protobuf FileDescriptorSet.
 ///
-/// Responds to queries on `bubbaloop/{scope}/{machine_id}/{node_name}/schema`.
+/// Responds to queries on `bubbaloop/global/{machine_id}/{node_name}/schema`.
 /// Does NOT use `.complete(true)` — that would block wildcard queries
-/// like `bubbaloop/**/schema` used by the dashboard for discovery.
+/// like `bubbaloop/global/**/schema` used by the dashboard for discovery.
 pub async fn declare_schema_queryable(
     session: &Arc<zenoh::Session>,
-    scope: &str,
     machine_id: &str,
     node_name: &str,
     descriptor: &'static [u8],
 ) -> Result<zenoh::query::Queryable<()>> {
-    let schema_key = format!("bubbaloop/{}/{}/{}/schema", scope, machine_id, node_name);
+    let schema_key = format!("bubbaloop/global/{}/{}/schema", machine_id, node_name);
 
     let queryable = session
         .declare_queryable(&schema_key)

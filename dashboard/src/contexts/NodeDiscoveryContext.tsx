@@ -1,9 +1,9 @@
 // NodeDiscoveryContext — Hybrid node discovery via daemon API + direct manifest queries.
 //
 // Two independent discovery loops:
-// 1. Manifest discovery: queries `bubbaloop/**/manifest` (every 10s, backs off to 30s)
+// 1. Manifest discovery: queries `bubbaloop/global/**/manifest` (every 10s, backs off to 30s)
 //    Each running node responds with its JSON manifest.
-// 2. Daemon polling: queries `bubbaloop/**/daemon/nodes` (every 3s) for protobuf NodeList.
+// 2. Daemon polling: queries `bubbaloop/global/**/daemon/nodes` (every 3s) for protobuf NodeList.
 //
 // Results are merged: manifest provides rich metadata, daemon provides runtime state.
 // When daemon is down, nodes discovered via manifest still appear (status = 'unknown').
@@ -290,7 +290,7 @@ export function NodeDiscoveryProvider({
     if (!currentSession) return [];
 
     try {
-      const receiver = await currentSession.get("bubbaloop/**/daemon/nodes", {
+      const receiver = await currentSession.get("bubbaloop/global/**/daemon/nodes", {
         timeout: Duration.milliseconds.of(5000),
       });
 
@@ -403,7 +403,7 @@ export function NodeDiscoveryProvider({
     try {
       setManifestDiscoveryActive(true);
 
-      const receiver = await currentSession.get("bubbaloop/**/manifest", {
+      const receiver = await currentSession.get("bubbaloop/global/**/manifest", {
         timeout: Duration.milliseconds.of(5000),
       });
 

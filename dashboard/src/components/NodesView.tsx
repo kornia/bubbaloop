@@ -97,7 +97,7 @@ export function NodesViewPanel({
         }),
       );
 
-      const receiver = await session.get("bubbaloop/**/daemon/command", {
+      const receiver = await session.get("bubbaloop/global/**/daemon/command", {
         payload,
         timeout: Duration.milliseconds.of(10000),
       });
@@ -175,7 +175,7 @@ export function NodesViewPanel({
 
       const result = await sendDaemonCommand(nodeName, "get_logs", targetNode.machine_id);
       if (result.success) {
-        return result.output || "No logs available";
+        return result.output || result.message || "No logs available";
       }
       throw new Error(result.message || "Failed to fetch logs");
     },

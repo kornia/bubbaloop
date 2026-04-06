@@ -5,7 +5,6 @@ use crate::error::Result;
 /// Context provided to nodes by the SDK runtime.
 pub struct NodeContext {
     pub session: Arc<zenoh::Session>,
-    pub scope: String,
     pub machine_id: String,
     /// Per-instance name (from config `name` field, or the node type name).
     /// Ensures multi-instance deployments don't collide on health/schema topics.
@@ -14,12 +13,32 @@ pub struct NodeContext {
 }
 
 impl NodeContext {
-    /// Build a fully-qualified scoped topic: `bubbaloop/{scope}/{machine_id}/{suffix}`
+    /// Build a global topic: `bubbaloop/global/{machine_id}/{suffix}`
+    ///
+    /// Visible across the network — subscribed to by the dashboard and other machines.
     pub fn topic(&self, suffix: &str) -> String {
-        format!("bubbaloop/{}/{}/{}", self.scope, self.machine_id, suffix)
+        format!("bubbaloop/global/{}/{}", self.machine_id, suffix)
     }
 
-    /// Create a protobuf publisher with `APPLICATION_PROTOBUF` encoding and schema suffix.
+    /// Build a machine-local topic: `bubbaloop/local/{machine_id}/{suffix}`
+    ///
+    /// SHM-only, never crosses the WebSocket bridge. Use for large binary payloads
+    /// (e.g. raw RGBA frames) consumed only by processes on the same machine.
+    pub fn local_topic(&self, suffix: &str) -> String {
+        format!("bubbaloop/local/{}/{}", self.machine_id, suffix)
+    }
+
+    fn resolve_topic(&self, suffix: &str, local: bool) -> String {
+        if local {
+            self.local_topic(suffix)
+        } else {
+            self.topic(suffix)
+        }
+    }
+
+    // ── Publishers ───────────────────────────────────────────────────────────
+
+    /// Create a protobuf publisher with `APPLICATION_PROTOBUF` encoding.
     pub async fn publisher_proto<T>(
         &self,
         suffix: &str,
@@ -37,15 +56,23 @@ impl NodeContext {
 
     /// Create a raw publisher that sends [`ZBytes`](zenoh::bytes::ZBytes) with no encoding.
     ///
-    /// The caller owns the byte layout. SHM zero-copy is used automatically
-    /// when the session has it enabled and the subscriber is on the same machine.
-    pub async fn publisher_raw(&self, suffix: &str) -> Result<crate::publisher::RawPublisher> {
-        crate::publisher::RawPublisher::new(&self.session, &self.topic(suffix)).await
+    /// When `local = true`, publishes to `local/{machine_id}/{suffix}` — SHM zero-copy,
+    /// never crosses the WebSocket bridge. Use this for large binary payloads (e.g. RGBA
+    /// frames) that only need to reach a consumer on the same machine.
+    ///
+    /// When `local = false` (default), publishes to `bubbaloop/{scope}/{machine_id}/{suffix}`.
+    pub async fn publisher_raw(
+        &self,
+        suffix: &str,
+        local: bool,
+    ) -> Result<crate::publisher::RawPublisher> {
+        crate::publisher::RawPublisher::new(&self.session, &self.resolve_topic(suffix, local), local)
+            .await
     }
 
+    // ── Subscribers ──────────────────────────────────────────────────────────
+
     /// Create a typed subscriber that auto-decodes protobuf messages.
-    ///
-    /// `suffix` is appended to the scoped base topic.
     pub async fn subscriber<T>(&self, suffix: &str) -> Result<crate::subscriber::TypedSubscriber<T>>
     where
         T: prost::Message + Default,
@@ -55,10 +82,19 @@ impl NodeContext {
 
     /// Create a raw subscriber that yields [`ZBytes`](zenoh::bytes::ZBytes) with no decoding.
     ///
-    /// Counterpart to [`publisher_raw`](Self::publisher_raw). The caller decodes the bytes.
+    /// When `local = true`, subscribes to `local/{machine_id}/{suffix}` — SHM zero-copy,
+    /// machine-local only. Counterpart to `publisher_raw(suffix, true)`.
+    ///
+    /// When `local = false` (default), subscribes to `bubbaloop/{scope}/{machine_id}/{suffix}`.
+    ///
     /// Uses a small FIFO (4 slots) — older frames are dropped when the consumer is slow.
-    pub async fn subscriber_raw(&self, suffix: &str) -> Result<crate::subscriber::RawSubscriber> {
-        crate::subscriber::RawSubscriber::new(&self.session, &self.topic(suffix)).await
+    pub async fn subscriber_raw(
+        &self,
+        suffix: &str,
+        local: bool,
+    ) -> Result<crate::subscriber::RawSubscriber> {
+        crate::subscriber::RawSubscriber::new(&self.session, &self.resolve_topic(suffix, local))
+            .await
     }
 }
 
@@ -66,16 +102,17 @@ impl NodeContext {
 mod tests {
     #[test]
     fn topic_format() {
-        let scope = "prod";
-        let machine_id = "jetson_01";
-        let suffix = "camera/front/compressed";
-        let result = format!("bubbaloop/{}/{}/{}", scope, machine_id, suffix);
-        assert_eq!(result, "bubbaloop/prod/jetson_01/camera/front/compressed");
+        assert_eq!(
+            format!("bubbaloop/global/{}/{}", "jetson_01", "camera/front/compressed"),
+            "bubbaloop/global/jetson_01/camera/front/compressed"
+        );
     }
 
     #[test]
-    fn topic_format_local_scope() {
-        let result = format!("bubbaloop/{}/{}/{}", "local", "my_host", "sensor/data");
-        assert_eq!(result, "bubbaloop/local/my_host/sensor/data");
+    fn local_topic_format() {
+        assert_eq!(
+            format!("bubbaloop/local/{}/{}", "jetson_01", "tapo_terrace/raw"),
+            "bubbaloop/local/jetson_01/tapo_terrace/raw"
+        );
     }
 }

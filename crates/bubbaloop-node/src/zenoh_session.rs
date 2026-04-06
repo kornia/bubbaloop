@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::error::{NodeError, Result};
 
-/// Open a Zenoh session in client mode.
+/// Open a Zenoh session in client mode with SHM transport always enabled.
 ///
 /// Resolution order for endpoint:
 /// 1. `ZENOH_ENDPOINT` env var (for compatibility with existing nodes)
@@ -10,11 +10,11 @@ use crate::error::{NodeError, Result};
 /// 3. Provided `endpoint` argument
 /// 4. Default: `tcp/127.0.0.1:7447`
 ///
-/// When `shm` is true, enables the SHM transport for zero-copy same-machine delivery.
-/// [`run_node`](crate::run_node) always enables SHM so nodes using
-/// [`publisher_shm`](crate::context::NodeContext::publisher_shm) or
-/// [`subscriber_shm`](crate::context::NodeContext::subscriber_shm) work out of the box.
-pub async fn open_zenoh_session(endpoint: &Option<String>, shm: bool) -> Result<Arc<zenoh::Session>> {
+/// SHM is always enabled — all publishers and subscribers on the session
+/// benefit from zero-copy delivery automatically when both sides are on the
+/// same machine. Use [`local_topic`](crate::context::NodeContext::local_topic)
+/// for data that must stay machine-local (e.g. raw RGBA frames).
+pub async fn open_zenoh_session(endpoint: &Option<String>) -> Result<Arc<zenoh::Session>> {
     let endpoint = std::env::var("ZENOH_ENDPOINT")
         .or_else(|_| std::env::var("BUBBALOOP_ZENOH_ENDPOINT"))
         .ok()
@@ -50,15 +50,13 @@ pub async fn open_zenoh_session(endpoint: &Option<String>, shm: bool) -> Result<
             key: "scouting/gossip/enabled",
             source: e,
         })?;
-    if shm {
-        config
-            .insert_json5("transport/shared_memory/enabled", "true")
-            .map_err(|e| NodeError::ZenohConfig {
-                key: "transport/shared_memory/enabled",
-                source: e,
-            })?;
-        log::info!("Zenoh SHM transport enabled");
-    }
+    config
+        .insert_json5("transport/shared_memory/enabled", "true")
+        .map_err(|e| NodeError::ZenohConfig {
+            key: "transport/shared_memory/enabled",
+            source: e,
+        })?;
+    log::info!("Zenoh SHM transport enabled");
 
     let session = zenoh::open(config).await.map_err(NodeError::ZenohSession)?;
 

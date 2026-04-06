@@ -534,7 +534,7 @@ export class ZenohSubscriptionManager {
     }
 
     try {
-      const subscriber = await endpoint.session.declareSubscriber('**', {
+      const subscriber = await endpoint.session.declareSubscriber('bubbaloop/global/**', {
         handler: (sample) => {
           this.handleMonitorSample(sample, endpointId);
         },
@@ -583,6 +583,8 @@ export class ZenohSubscriptionManager {
     const endpoint = this.endpoints.get(endpointId);
     if (!endpoint) return;
 
+    // Monitor subscribes to 'bubbaloop/**' only — local SHM topics (local/{machine_id}/...)
+    // are outside this key space and never arrive here.
     const keyExpr = sample.keyexpr().toString();
     const now = Date.now();
 

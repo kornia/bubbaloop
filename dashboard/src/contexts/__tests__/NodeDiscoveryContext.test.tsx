@@ -235,7 +235,7 @@ describe('NodeDiscoveryContext', () => {
           await vi.advanceTimersByTimeAsync(100);
         });
 
-        expect(mockGet).toHaveBeenCalledWith('bubbaloop/**/daemon/nodes', { timeout: 5000 });
+        expect(mockGet).toHaveBeenCalledWith('bubbaloop/global/**/daemon/nodes', { timeout: 5000 });
       });
 
       it('sets daemonConnected=true after receiving daemon data', async () => {
@@ -268,7 +268,7 @@ describe('NodeDiscoveryContext', () => {
 
         const sample = createMockSample('bubbaloop/daemon/nodes', nodeListData);
         const reply = createMockReply(sample);
-        const responses = new Map([['bubbaloop/**/daemon/nodes', [reply]]]);
+        const responses = new Map([['bubbaloop/global/**/daemon/nodes', [reply]]]);
         const session = createMockSession(responses);
         const wrapper = makeWrapper(session);
 
@@ -343,7 +343,7 @@ describe('NodeDiscoveryContext', () => {
 
         const sample = createMockSample('bubbaloop/daemon/nodes', nodeListData);
         const reply = createMockReply(sample);
-        const responses = new Map([['bubbaloop/**/daemon/nodes', [reply]]]);
+        const responses = new Map([['bubbaloop/global/**/daemon/nodes', [reply]]]);
         const session = createMockSession(responses);
         const wrapper = makeWrapper(session);
 
@@ -371,7 +371,7 @@ describe('NodeDiscoveryContext', () => {
 
         const sample = createMockSample('bubbaloop/daemon/nodes', nodeListData);
         const reply = createMockReply(sample);
-        const responses = new Map([['bubbaloop/**/daemon/nodes', [reply]]]);
+        const responses = new Map([['bubbaloop/global/**/daemon/nodes', [reply]]]);
         const session = createMockSession(responses);
         const wrapper = makeWrapper(session);
 
@@ -424,7 +424,7 @@ describe('NodeDiscoveryContext', () => {
           await vi.advanceTimersByTimeAsync(2100);
         });
 
-        expect(mockGet).toHaveBeenCalledWith('bubbaloop/**/manifest', { timeout: 5000 });
+        expect(mockGet).toHaveBeenCalledWith('bubbaloop/global/**/manifest', { timeout: 5000 });
       });
 
       it('parses manifest JSON from zenoh replies', async () => {
@@ -465,7 +465,7 @@ describe('NodeDiscoveryContext', () => {
 
         mockGetSamplePayload.mockReturnValue(manifestData);
 
-        const responses = new Map([['bubbaloop/**/manifest', [reply]]]);
+        const responses = new Map([['bubbaloop/global/**/manifest', [reply]]]);
         const session = createMockSession(responses);
         const wrapper = makeWrapper(session);
 
@@ -490,7 +490,7 @@ describe('NodeDiscoveryContext', () => {
 
         mockGetSamplePayload.mockReturnValue(invalidData);
 
-        const responses = new Map([['bubbaloop/**/manifest', [reply]]]);
+        const responses = new Map([['bubbaloop/global/**/manifest', [reply]]]);
         const session = createMockSession(responses);
         const wrapper = makeWrapper(session);
 
@@ -538,7 +538,7 @@ describe('NodeDiscoveryContext', () => {
 
         const sample = createMockSample('bubbaloop/daemon/nodes', nodeListData);
         const reply = createMockReply(sample);
-        const responses = new Map([['bubbaloop/**/daemon/nodes', [reply]]]);
+        const responses = new Map([['bubbaloop/global/**/daemon/nodes', [reply]]]);
         const session = createMockSession(responses);
         const wrapper = makeWrapper(session);
 
@@ -577,7 +577,7 @@ describe('NodeDiscoveryContext', () => {
 
         mockGetSamplePayload.mockReturnValue(manifestData);
 
-        const responses = new Map([['bubbaloop/**/manifest', [reply]]]);
+        const responses = new Map([['bubbaloop/global/**/manifest', [reply]]]);
         const session = createMockSession(responses);
         const wrapper = makeWrapper(session);
 
@@ -653,8 +653,8 @@ describe('NodeDiscoveryContext', () => {
         const manifestReply = createMockReply(manifestSample);
 
         const responses = new Map([
-          ['bubbaloop/**/daemon/nodes', [daemonReply]],
-          ['bubbaloop/**/manifest', [manifestReply]],
+          ['bubbaloop/global/**/daemon/nodes', [daemonReply]],
+          ['bubbaloop/global/**/manifest', [manifestReply]],
         ]);
 
         const session = createMockSession(responses);
@@ -725,7 +725,7 @@ describe('NodeDiscoveryContext', () => {
 
         const sample = createMockSample('bubbaloop/daemon/nodes', nodeListData);
         const reply = createMockReply(sample);
-        const responses = new Map([['bubbaloop/**/daemon/nodes', [reply]]]);
+        const responses = new Map([['bubbaloop/global/**/daemon/nodes', [reply]]]);
         const session = createMockSession(responses);
         const wrapper = makeWrapper(session);
 
@@ -786,7 +786,7 @@ describe('NodeDiscoveryContext', () => {
 
         const sample = createMockSample('bubbaloop/daemon/nodes', nodeListData);
         const reply = createMockReply(sample);
-        const responses = new Map([['bubbaloop/**/daemon/nodes', [reply]]]);
+        const responses = new Map([['bubbaloop/global/**/daemon/nodes', [reply]]]);
         const session = createMockSession(responses);
         const wrapper = makeWrapper(session);
 

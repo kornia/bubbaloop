@@ -60,28 +60,29 @@ class ProtoPublisher:
 
 
 class RawPublisher:
-    """Declared publisher for zero-copy same-machine delivery via Zenoh SHM.
+    """Declared publisher for raw byte payloads with no encoding overhead.
 
-    Publishes raw ``bytes`` or ``bytearray`` payloads with no encoding overhead.
-    The session must have SHM enabled (use ``NodeContext.builder().with_shm()``).
+    When ``local=True``, uses ``congestion_control=Block`` — the publisher waits for
+    the subscriber to release the SHM buffer instead of silently dropping frames.
+    Topic is ``local/{machine_id}/suffix`` (never crosses the WebSocket bridge).
 
-    Usage::
-
-        ctx = NodeContext.builder().with_shm().connect()
-        pub = ctx.publisher_raw("camera/raw")
-        pub.put(rgba_bytes)  # delivered zero-copy to same-machine subscribers
+    When ``local=False`` (default), uses standard drop-on-congestion and publishes
+    to the global ``bubbaloop/**`` topic space.
     """
 
     def __init__(self, declared_publisher: zenoh.Publisher):
         self._pub = declared_publisher
 
     @classmethod
-    def _declare(cls, session: zenoh.Session, topic: str) -> "RawPublisher":
-        pub = session.declare_publisher(topic)
+    def _declare(cls, session: zenoh.Session, topic: str, local: bool = False) -> "RawPublisher":
+        kwargs = {}
+        if local:
+            kwargs["congestion_control"] = zenoh.CongestionControl.BLOCK
+        pub = session.declare_publisher(topic, **kwargs)
         return cls(pub)
 
     def put(self, data: bytes | bytearray) -> None:
-        """Publish raw bytes over Zenoh SHM."""
+        """Publish raw bytes."""
         self._pub.put(bytes(data))
 
     def undeclare(self) -> None:
