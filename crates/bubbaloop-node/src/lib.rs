@@ -80,6 +80,12 @@ pub trait Node: Send + Sync + 'static {
 
     /// Main loop. Must select on `ctx.shutdown_rx` for graceful exit.
     async fn run(self, ctx: NodeContext) -> anyhow::Result<()>;
+
+    /// Return true if this node requires a Zenoh SHM-enabled session.
+    /// Default: false. Override to true for nodes that publish/subscribe over SHM.
+    fn shm() -> bool {
+        false
+    }
 }
 
 #[derive(argh::FromArgs)]
@@ -127,7 +133,7 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
     log::info!("Scope: {}, Machine ID: {}", scope, machine_id);
 
     let (shutdown_tx, _) = shutdown::setup_shutdown()?;
-    let session = zenoh_session::open_zenoh_session(&args.endpoint).await?;
+    let session = zenoh_session::open_zenoh_session(&args.endpoint, N::shm()).await?;
 
     let _schema_queryable = schema::declare_schema_queryable(
         &session,
