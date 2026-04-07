@@ -140,45 +140,28 @@ class NodeContext:
     # Subscribers
     # ------------------------------------------------------------------
 
-    def subscriber_auto(self, suffix: str, local: bool = False) -> "AutoProtoSubscriber":
-        """Declare a subscriber that decodes protobuf automatically from the encoding header.
+    def subscriber_proto(self, suffix: str, local: bool = False) -> "ProtoSubscriber":
+        """Declare a protobuf subscriber that decodes messages automatically from the encoding header.
 
-        No ``_pb2`` imports needed. The registry fetches ``FileDescriptorSet`` from
-        ``bubbaloop/**/schema`` on first encounter of an unknown type and builds the
-        message class dynamically.
+        No ``_pb2`` imports needed. The shared :class:`SchemaRegistry` fetches
+        ``FileDescriptorSet`` from ``bubbaloop/**/schema`` on first encounter of
+        an unknown type and builds the message class dynamically.
 
         Falls back to raw ``bytes`` if the encoding is not protobuf or the schema
         cannot be resolved within the timeout (default 2s).
 
         Usage::
 
-            sub = ctx.subscriber_auto("tapo_terrace/raw", local=True)
-            for msg in sub:   # msg is a decoded RawImage
+            sub = ctx.subscriber_proto("tapo_terrace/raw", local=True)
+            for msg in sub:   # decoded RawImage — no _pb2 imports needed
                 tensor = torch.frombuffer(msg.data, dtype=torch.uint8)
         """
         from .schema_registry import SchemaRegistry
-        from .subscriber import AutoProtoSubscriber
+        from .subscriber import ProtoSubscriber
         if not hasattr(self, '_schema_registry'):
             self._schema_registry = SchemaRegistry(self.session)
         key = self.local_topic(suffix) if local else self.topic(suffix)
-        return AutoProtoSubscriber(self.session, key, self._schema_registry)
-
-    def subscriber_proto(self, suffix: str, msg_class, local: bool = False) -> "ProtoSubscriber":
-        """Declare a protobuf subscriber that deserializes each message automatically.
-
-        When ``local=True``, subscribes to the SHM-only local topic — use this to
-        receive ``RawImage`` frames published by the camera node over shared memory.
-
-        Usage::
-
-            from camera_pb2 import RawImage
-            sub = ctx.subscriber_proto("tapo_terrace/raw", RawImage, local=True)
-            for msg in sub:   # msg is a decoded RawImage
-                tensor = torch.frombuffer(msg.data, dtype=torch.uint8)
-        """
-        from .subscriber import ProtoSubscriber
-        key = self.local_topic(suffix) if local else self.topic(suffix)
-        return ProtoSubscriber(self.session, key, msg_class)
+        return ProtoSubscriber(self.session, key, self._schema_registry)
 
     def subscriber(self, suffix: str, msg_class=None) -> "TypedSubscriber":
         """Declare a typed subscriber. Blocks on ``recv()``."""
