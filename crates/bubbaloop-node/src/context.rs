@@ -70,6 +70,31 @@ impl NodeContext {
             .await
     }
 
+    /// Create a raw SHM publisher that tags payloads with `APPLICATION_PROTOBUF` encoding.
+    ///
+    /// Like [`publisher_raw`](Self::publisher_raw) but sets the protobuf encoding header
+    /// so subscribers can auto-decode the payload by type name. Use this when you manually
+    /// serialize a proto into an SHM buffer and want schema-aware subscribers to decode it.
+    ///
+    /// Always local (`local/{machine_id}/{suffix}`) with `CongestionControl::Block`.
+    pub async fn publisher_raw_proto<T>(
+        &self,
+        suffix: &str,
+    ) -> Result<crate::publisher::RawPublisher>
+    where
+        T: prost::Message + Default + crate::MessageTypeName,
+    {
+        let encoding =
+            zenoh::bytes::Encoding::APPLICATION_PROTOBUF.with_schema(T::type_name());
+        crate::publisher::RawPublisher::with_encoding(
+            &self.session,
+            &self.local_topic(suffix),
+            true,
+            Some(encoding),
+        )
+        .await
+    }
+
     // ── Subscribers ──────────────────────────────────────────────────────────
 
     /// Create a typed subscriber that auto-decodes protobuf messages.

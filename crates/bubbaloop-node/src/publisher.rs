@@ -75,16 +75,17 @@ impl JsonPublisher {
     }
 }
 
-/// A declared raw-bytes publisher with no encoding.
-///
-/// Publishes pre-built [`ZBytes`] payloads directly — no serialization, no encoding header.
-/// The caller controls the byte layout.
+/// A declared raw-bytes publisher for pre-built [`ZBytes`] payloads (e.g. SHM buffers).
 ///
 /// Created via [`NodeContext::publisher_raw`](crate::NodeContext::publisher_raw).
+///
 /// When `local = true`, the publisher targets a machine-local topic
 /// (`local/{machine_id}/suffix`) and uses `CongestionControl::Block` — required for
 /// SHM so the publisher waits for the subscriber to read the SHM buffer instead of
 /// silently dropping frames.
+///
+/// An optional encoding can be set so subscribers can auto-decode the payload
+/// (e.g. `APPLICATION_PROTOBUF;TypeName` for proto-serialized SHM buffers).
 pub struct RawPublisher {
     publisher: zenoh::pubsub::Publisher<'static>,
 }
@@ -95,25 +96,32 @@ impl RawPublisher {
         key_expr: &str,
         local: bool,
     ) -> Result<Self> {
+        Self::with_encoding(session, key_expr, local, None).await
+    }
+
+    pub(crate) async fn with_encoding(
+        session: &Arc<zenoh::Session>,
+        key_expr: &str,
+        local: bool,
+        encoding: Option<Encoding>,
+    ) -> Result<Self> {
         let mut builder = session.declare_publisher(key_expr.to_string());
         if local {
-            // CongestionControl::Block is required for SHM publishers:
-            // the publisher must wait for the subscriber to release the SHM buffer
-            // rather than silently dropping messages when the subscriber is slow.
             builder = builder.congestion_control(CongestionControl::Block);
         }
-        let publisher = builder
-            .await
-            .map_err(|e| NodeError::PublisherDeclare {
-                topic: key_expr.to_string(),
-                source: e,
-            })?;
+        if let Some(enc) = encoding {
+            builder = builder.encoding(enc);
+        }
+        let publisher = builder.await.map_err(|e| NodeError::PublisherDeclare {
+            topic: key_expr.to_string(),
+            source: e,
+        })?;
 
         log::debug!("RawPublisher declared on '{}' (local={})", key_expr, local);
         Ok(Self { publisher })
     }
 
-    /// Publish a raw [`ZBytes`] payload with no encoding.
+    /// Publish a raw [`ZBytes`] payload.
     pub async fn put(&self, payload: zenoh::bytes::ZBytes) -> Result<()> {
         self.publisher
             .put(payload)
