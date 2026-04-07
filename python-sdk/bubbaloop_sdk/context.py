@@ -160,6 +160,18 @@ class NodeContext:
         key = self.local_topic(suffix) if local else self.topic(suffix)
         return ProtoSubscriber(self.session, key, self._schema_registry)
 
+    def subscribe_raw(self, suffix: str, local: bool = False) -> "RawSubscriber":
+        """Declare a subscriber that yields raw ``bytes`` with no decoding.
+
+        Use when you need direct access to the payload — e.g. to pass to
+        ``torch.frombuffer`` without an intermediate proto decode.
+
+        When ``local=True``, subscribes to the SHM-only local topic.
+        """
+        from .subscriber import RawSubscriber
+        key = self.local_topic(suffix) if local else self.topic(suffix)
+        return RawSubscriber(self.session, key)
+
     # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
