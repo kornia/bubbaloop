@@ -140,6 +140,23 @@ class NodeContext:
     # Subscribers
     # ------------------------------------------------------------------
 
+    def subscriber_proto(self, suffix: str, msg_class, local: bool = False) -> "ProtoSubscriber":
+        """Declare a protobuf subscriber that deserializes each message automatically.
+
+        When ``local=True``, subscribes to the SHM-only local topic — use this to
+        receive ``RawImage`` frames published by the camera node over shared memory.
+
+        Usage::
+
+            from camera_pb2 import RawImage
+            sub = ctx.subscriber_proto("tapo_terrace/raw", RawImage, local=True)
+            for msg in sub:   # msg is a decoded RawImage
+                tensor = torch.frombuffer(msg.data, dtype=torch.uint8)
+        """
+        from .subscriber import ProtoSubscriber
+        key = self.local_topic(suffix) if local else self.topic(suffix)
+        return ProtoSubscriber(self.session, key, msg_class)
+
     def subscriber(self, suffix: str, msg_class=None) -> "TypedSubscriber":
         """Declare a typed subscriber. Blocks on ``recv()``."""
         from .subscriber import TypedSubscriber
