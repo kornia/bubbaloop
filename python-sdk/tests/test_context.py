@@ -16,18 +16,18 @@ import pytest
 
 
 def test_topic_formatting():
-    ctx = _make_context("staging", "jetson_orin")
-    assert ctx.topic("camera/front/compressed") == ("bubbaloop/staging/jetson_orin/camera/front/compressed")
+    ctx = _make_context("jetson_orin")
+    assert ctx.topic("camera/front/compressed") == "bubbaloop/global/jetson_orin/camera/front/compressed"
 
 
-def test_topic_default_scope():
-    ctx = _make_context("local", "my_robot")
-    assert ctx.topic("sensor/imu") == "bubbaloop/local/my_robot/sensor/imu"
+def test_topic_uses_global_prefix():
+    ctx = _make_context("my_robot")
+    assert ctx.topic("sensor/imu") == "bubbaloop/global/my_robot/sensor/imu"
 
 
 def test_topic_wildcard_suffix():
-    ctx = _make_context("prod", "edge_01")
-    assert ctx.topic("**") == "bubbaloop/prod/edge_01/**"
+    ctx = _make_context("edge_01")
+    assert ctx.topic("**") == "bubbaloop/global/edge_01/**"
 
 
 # ---------------------------------------------------------------------------
@@ -106,12 +106,12 @@ def test_import_run_node():
 
 
 def test_shutdown_not_set_initially():
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     assert not ctx.is_shutdown()
 
 
 def test_shutdown_set_manually():
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     ctx._shutdown.set()
     assert ctx.is_shutdown()
 
@@ -267,10 +267,11 @@ def test_raw_subscriber_recv_returns_sample():
     sub = RawSubscriber(mock_session, "test/topic")
 
     fake_sample = MagicMock()
+    fake_sample.payload = b"\xde\xad\xbe\xef"
     captured_handler[0](fake_sample)
 
     result = sub.recv(timeout=1.0)
-    assert result is fake_sample
+    assert result == b"\xde\xad\xbe\xef"
 
 
 # ---------------------------------------------------------------------------
@@ -697,19 +698,19 @@ def test_raw_callback_subscriber_async_undeclare():
 
 
 def test_queryable_uses_topic_prefix():
-    """queryable() declares at bubbaloop/{scope}/{machine_id}/{suffix}."""
-    ctx = _make_context("local", "bot")
+    """queryable() declares at bubbaloop/global/{machine_id}/{suffix}."""
+    ctx = _make_context("bot")
 
     def handler(q):
         pass
 
     ctx.queryable("command", handler)
-    ctx.session.declare_queryable.assert_called_once_with("bubbaloop/local/bot/command", handler)
+    ctx.session.declare_queryable.assert_called_once_with("bubbaloop/global/bot/command", handler)
 
 
 def test_queryable_raw_uses_literal_key_expr():
     """queryable_raw() declares at the literal key expression provided."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
 
     def handler(q):
         pass
@@ -720,7 +721,7 @@ def test_queryable_raw_uses_literal_key_expr():
 
 def test_queryable_returns_zenoh_queryable():
     """queryable() returns whatever session.declare_queryable returns."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     mock_qbl = MagicMock()
     ctx.session.declare_queryable.return_value = mock_qbl
     result = ctx.queryable("command", lambda q: None)
@@ -734,7 +735,7 @@ def test_queryable_returns_zenoh_queryable():
 
 def test_queryable_async_uses_topic_prefix():
     """queryable_async() declares at topic(suffix)."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
 
     def handler(q):
         pass
@@ -742,7 +743,7 @@ def test_queryable_async_uses_topic_prefix():
     qbl = ctx.queryable_async("command", handler)
     try:
         called_topic = ctx.session.declare_queryable.call_args[0][0]
-        assert called_topic == "bubbaloop/local/bot/command"
+        assert called_topic == "bubbaloop/global/bot/command"
     finally:
         qbl.undeclare()
 
@@ -751,7 +752,7 @@ def test_queryable_async_wraps_handler_in_executor():
     """queryable_async() wraps handler so Zenoh thread is freed."""
     import threading
 
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     captured_wrapper = []
 
     def fake_declare(topic, wrapper):
@@ -783,7 +784,7 @@ def test_queryable_async_returns_async_queryable():
     """queryable_async() returns AsyncQueryable (not a bare zenoh.Queryable)."""
     from bubbaloop_sdk.subscriber import AsyncQueryable
 
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     qbl = ctx.queryable_async("command", lambda q: None)
     try:
         assert isinstance(qbl, AsyncQueryable)
@@ -793,7 +794,7 @@ def test_queryable_async_returns_async_queryable():
 
 def test_queryable_raw_async_uses_literal_key_expr():
     """queryable_raw_async() declares at the literal key expression."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     qbl = ctx.queryable_raw_async("bubbaloop/**/schema", lambda q: None)
     try:
         called_topic = ctx.session.declare_queryable.call_args[0][0]
@@ -806,7 +807,7 @@ def test_queryable_raw_async_wraps_handler_in_executor():
     """queryable_raw_async() wraps handler in thread pool."""
     import threading
 
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     captured_wrapper = []
 
     def fake_declare(key_expr, wrapper):
@@ -853,15 +854,15 @@ def test_async_queryable_undeclare():
 
 def test_subscriber_callback_uses_topic_prefix():
     """subscriber_callback() declares at topic(suffix)."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     ctx.subscriber_callback("sensor/data", lambda msg: None)
     called_topic = ctx.session.declare_subscriber.call_args[0][0]
-    assert called_topic == "bubbaloop/local/bot/sensor/data"
+    assert called_topic == "bubbaloop/global/bot/sensor/data"
 
 
 def test_subscriber_raw_callback_uses_literal_key_expr():
     """subscriber_raw_callback() declares at the literal key expression."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     ctx.subscriber_raw_callback("bubbaloop/**/health", lambda s: None)
     called_topic = ctx.session.declare_subscriber.call_args[0][0]
     assert called_topic == "bubbaloop/**/health"
@@ -869,18 +870,18 @@ def test_subscriber_raw_callback_uses_literal_key_expr():
 
 def test_subscriber_callback_async_uses_topic_prefix():
     """subscriber_callback_async() declares at topic(suffix)."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     sub = ctx.subscriber_callback_async("sensor/data", lambda msg: None)
     try:
         called_topic = ctx.session.declare_subscriber.call_args[0][0]
-        assert called_topic == "bubbaloop/local/bot/sensor/data"
+        assert called_topic == "bubbaloop/global/bot/sensor/data"
     finally:
         sub.undeclare()
 
 
 def test_subscriber_raw_callback_async_uses_literal_key_expr():
     """subscriber_raw_callback_async() declares at literal key expression."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     sub = ctx.subscriber_raw_callback_async("bubbaloop/**/health", lambda s: None)
     try:
         called_topic = ctx.session.declare_subscriber.call_args[0][0]
@@ -896,20 +897,20 @@ def test_subscriber_raw_callback_async_uses_literal_key_expr():
 
 def test_publisher_json_uses_topic_prefix():
     """publisher_json() declares at topic(suffix)."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     ctx.publisher_json("weather/current")
     called_topic = ctx.session.declare_publisher.call_args[0][0]
-    assert called_topic == "bubbaloop/local/bot/weather/current"
+    assert called_topic == "bubbaloop/global/bot/weather/current"
 
 
 def test_publisher_proto_uses_topic_prefix():
     """publisher_proto() declares at topic(suffix)."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     fake_class = MagicMock()
     fake_class.DESCRIPTOR.full_name = "my.SensorData"
     ctx.publisher_proto("sensor/data", fake_class)
     called_topic = ctx.session.declare_publisher.call_args[0][0]
-    assert called_topic == "bubbaloop/local/bot/sensor/data"
+    assert called_topic == "bubbaloop/global/bot/sensor/data"
 
 
 # ---------------------------------------------------------------------------
@@ -919,15 +920,15 @@ def test_publisher_proto_uses_topic_prefix():
 
 def test_subscriber_uses_topic_prefix():
     """subscriber() declares at topic(suffix)."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     ctx.subscriber("sensor/data")
     called_topic = ctx.session.declare_subscriber.call_args[0][0]
-    assert called_topic == "bubbaloop/local/bot/sensor/data"
+    assert called_topic == "bubbaloop/global/bot/sensor/data"
 
 
 def test_subscriber_raw_uses_literal_key_expr():
     """subscriber_raw() declares at the literal key expression."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     ctx.subscriber_raw("bubbaloop/**/health")
     called_topic = ctx.session.declare_subscriber.call_args[0][0]
     assert called_topic == "bubbaloop/**/health"
@@ -940,14 +941,14 @@ def test_subscriber_raw_uses_literal_key_expr():
 
 def test_close_calls_session_close():
     """close() calls session.close()."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     ctx.close()
     ctx.session.close.assert_called_once()
 
 
 def test_context_manager_calls_close():
     """__exit__ calls close() so the session is always cleaned up."""
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     with ctx:
         pass
     ctx.session.close.assert_called_once()
@@ -958,27 +959,12 @@ def test_context_manager_calls_close():
 # ---------------------------------------------------------------------------
 
 
-def test_connect_reads_scope_from_env(monkeypatch):
-    """BUBBALOOP_SCOPE env var sets ctx.scope."""
-    import zenoh
-
-    monkeypatch.setenv("BUBBALOOP_SCOPE", "prod")
-    monkeypatch.delenv("BUBBALOOP_MACHINE_ID", raising=False)
-    monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
-    monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
-    monkeypatch.setattr(zenoh, "Config", MagicMock)
-    from bubbaloop_sdk.context import NodeContext
-
-    ctx = NodeContext.connect()
-    assert ctx.scope == "prod"
-
-
 def test_connect_reads_machine_id_from_env(monkeypatch):
     """BUBBALOOP_MACHINE_ID env var sets ctx.machine_id."""
     import zenoh
 
     monkeypatch.setenv("BUBBALOOP_MACHINE_ID", "jetson_orin")
-    monkeypatch.delenv("BUBBALOOP_SCOPE", raising=False)
+
     monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
     monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
     monkeypatch.setattr(zenoh, "Config", MagicMock)
@@ -988,27 +974,12 @@ def test_connect_reads_machine_id_from_env(monkeypatch):
     assert ctx.machine_id == "jetson_orin"
 
 
-def test_connect_defaults_scope_to_local(monkeypatch):
-    """scope defaults to 'local' when env var is absent."""
-    import zenoh
-
-    monkeypatch.delenv("BUBBALOOP_SCOPE", raising=False)
-    monkeypatch.delenv("BUBBALOOP_MACHINE_ID", raising=False)
-    monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
-    monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
-    monkeypatch.setattr(zenoh, "Config", MagicMock)
-    from bubbaloop_sdk.context import NodeContext
-
-    ctx = NodeContext.connect()
-    assert ctx.scope == "local"
-
-
 def test_connect_instance_name_override(monkeypatch):
     """instance_name kwarg overrides hostname fallback."""
     import zenoh
 
     monkeypatch.delenv("BUBBALOOP_MACHINE_ID", raising=False)
-    monkeypatch.delenv("BUBBALOOP_SCOPE", raising=False)
+
     monkeypatch.delenv("BUBBALOOP_ZENOH_ENDPOINT", raising=False)
     monkeypatch.setattr(zenoh, "open", lambda cfg: MagicMock())
     monkeypatch.setattr(zenoh, "Config", MagicMock)
@@ -1149,12 +1120,11 @@ def test_raw_subscriber_drops_samples_after_undeclare():
 # ---------------------------------------------------------------------------
 
 
-def _make_context(scope: str, machine_id: str):
+def _make_context(machine_id: str):
     from bubbaloop_sdk.context import NodeContext
 
     ctx = object.__new__(NodeContext)
     ctx.session = MagicMock()
-    ctx.scope = scope
     ctx.machine_id = machine_id
     ctx.instance_name = machine_id
     ctx._shutdown = threading.Event()
