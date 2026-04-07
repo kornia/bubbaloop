@@ -54,7 +54,7 @@ class SchemaRegistry:
         if not encoding.startswith(_PROTO_PREFIX):
             return payload
 
-        type_name = encoding[len(_PROTO_PREFIX):]
+        type_name = encoding[len(_PROTO_PREFIX) :]
         msg_class = self._resolve(type_name)
         if msg_class is None:
             log.debug("SchemaRegistry: no class for %s, returning raw bytes", type_name)
