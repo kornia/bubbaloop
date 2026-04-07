@@ -534,14 +534,16 @@ export class ZenohSubscriptionManager {
     }
 
     try {
-      const subscriber = await endpoint.session.declareSubscriber('bubbaloop/**', {
+      // Subscribe to global topics only — excludes local/** (SHM raw frames)
+      // which are machine-local and would overwhelm the WebSocket bridge.
+      const subscriber = await endpoint.session.declareSubscriber('bubbaloop/global/**', {
         handler: (sample) => {
           this.handleMonitorSample(sample, endpointId);
         },
       });
 
       endpoint.monitorSubscriber = subscriber;
-      console.log(`[SubscriptionManager] Started monitoring all topics on ${endpointId}`);
+      console.log(`[SubscriptionManager] Started monitoring global topics on ${endpointId}`);
     } catch (e) {
       console.error(`[SubscriptionManager] Failed to start monitoring:`, e);
     }
