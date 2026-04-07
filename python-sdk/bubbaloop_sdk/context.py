@@ -140,6 +140,29 @@ class NodeContext:
     # Subscribers
     # ------------------------------------------------------------------
 
+    def subscriber_auto(self, suffix: str, local: bool = False) -> "AutoProtoSubscriber":
+        """Declare a subscriber that decodes protobuf automatically from the encoding header.
+
+        No ``_pb2`` imports needed. The registry fetches ``FileDescriptorSet`` from
+        ``bubbaloop/**/schema`` on first encounter of an unknown type and builds the
+        message class dynamically.
+
+        Falls back to raw ``bytes`` if the encoding is not protobuf or the schema
+        cannot be resolved within the timeout (default 2s).
+
+        Usage::
+
+            sub = ctx.subscriber_auto("tapo_terrace/raw", local=True)
+            for msg in sub:   # msg is a decoded RawImage
+                tensor = torch.frombuffer(msg.data, dtype=torch.uint8)
+        """
+        from .schema_registry import SchemaRegistry
+        from .subscriber import AutoProtoSubscriber
+        if not hasattr(self, '_schema_registry'):
+            self._schema_registry = SchemaRegistry(self.session)
+        key = self.local_topic(suffix) if local else self.topic(suffix)
+        return AutoProtoSubscriber(self.session, key, self._schema_registry)
+
     def subscriber_proto(self, suffix: str, msg_class, local: bool = False) -> "ProtoSubscriber":
         """Declare a protobuf subscriber that deserializes each message automatically.
 

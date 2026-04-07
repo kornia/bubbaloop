@@ -3,6 +3,47 @@
 import zenoh
 
 
+class AutoProtoSubscriber:
+    """Blocking subscriber that decodes protobuf automatically from the encoding header.
+
+    Requires no imported ``_pb2`` files. On each message the encoding string
+    (``application/protobuf;<TypeName>``) is used to look up the message class
+    in the shared :class:`~bubbaloop_sdk.schema_registry.SchemaRegistry`, which
+    fetches the ``FileDescriptorSet`` from the publishing node's ``/schema``
+    queryable on first encounter.
+
+    Falls back to raw ``bytes`` if the encoding is not protobuf or the schema
+    cannot be resolved.
+
+    Usage::
+
+        sub = ctx.subscriber_auto("tapo_terrace/raw", local=True)
+        for msg in sub:          # msg is a decoded RawImage (or bytes on fallback)
+            tensor = torch.frombuffer(msg.data, dtype=torch.uint8)
+    """
+
+    def __init__(self, session: zenoh.Session, topic: str, registry):
+        self._sub = session.declare_subscriber(topic)
+        self._registry = registry
+
+    def recv(self):
+        """Block until next message and return the auto-decoded result."""
+        sample = self._sub.recv()
+        return self._registry.decode(sample)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            return self.recv()
+        except Exception as exc:
+            raise StopIteration from exc
+
+    def undeclare(self) -> None:
+        self._sub.undeclare()
+
+
 class ProtoSubscriber:
     """Blocking subscriber that deserializes protobuf messages.
 
