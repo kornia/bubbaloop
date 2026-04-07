@@ -49,3 +49,20 @@ jobs:
 
       - name: Test
         run: pixi run cargo test --lib -p bubbaloop
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python SDK — lint
+        run: |
+          cd python-sdk
+          pip install -e ".[dev]" -q
+          python -m ruff format --check bubbaloop_sdk/ tests/
+          python -m ruff check bubbaloop_sdk/ tests/
+
+      - name: Python SDK — test
+        run: |
+          cd python-sdk
+          python -m pytest tests/ -v

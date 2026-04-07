@@ -15,8 +15,6 @@ Usage::
 
 import argparse
 import logging
-import os
-import time
 
 import yaml
 
@@ -56,12 +54,17 @@ def run_node(node_class) -> None:
     start_health_heartbeat(ctx.session, ctx.machine_id, instance_name, ctx._shutdown)
     log.info("Health heartbeat: bubbaloop/global/%s/%s/health", ctx.machine_id, instance_name)
 
-    node = node_class(ctx, config)
-    log.info("Initialized. Running…")
+    heartbeat = None
     try:
+        node = node_class(ctx, config)
+        log.info("Initialized. Running…")
+        heartbeat = start_health_heartbeat(ctx.session, ctx.scope, ctx.machine_id, instance_name, ctx._shutdown)
         node.run()
     except KeyboardInterrupt:
         pass
     finally:
+        ctx._shutdown.set()  # stop heartbeat before closing session
+        if heartbeat is not None:
+            heartbeat.join(timeout=1.0)
         ctx.close()
         log.info("Shutdown complete")
