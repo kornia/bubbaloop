@@ -67,6 +67,21 @@ class TypedSubscriber:
             return payload
         return None
 
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        msg = self.recv()
+        if msg is None:
+            raise StopIteration
+        return msg
+
+    def undeclare(self) -> None:
+        """Undeclare the subscriber and unblock any waiting ``recv()``."""
+        self._closed.set()
+        self._sub.undeclare()
+        self._queue.put(_CLOSED)
+
 
 class ProtoSubscriber:
     """Blocking subscriber that decodes protobuf automatically from the encoding header.
@@ -101,16 +116,14 @@ class ProtoSubscriber:
         return self
 
     def __next__(self):
-        msg = self.recv()
-        if msg is None:
-            raise StopIteration
-        return msg
+        try:
+            return self.recv()
+        except Exception as exc:
+            raise StopIteration from exc
 
     def undeclare(self) -> None:
-        """Undeclare the subscriber and unblock any waiting ``recv()``."""
-        self._closed.set()
+        """Undeclare the subscriber."""
         self._sub.undeclare()
-        self._queue.put(_CLOSED)
 
 
 class RawSubscriber:
