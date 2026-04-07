@@ -11,6 +11,7 @@ Usage::
     msg = registry.decode(sample)   # returns decoded proto or raw bytes
 """
 
+import json
 import logging
 import threading
 
@@ -20,6 +21,7 @@ from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 log = logging.getLogger(__name__)
 
 _PROTO_PREFIX = "application/protobuf;"
+_JSON_ENCODING = "application/json"
 
 
 class SchemaRegistry:
@@ -37,14 +39,17 @@ class SchemaRegistry:
         self._lock = threading.Lock()
 
     def decode(self, sample: zenoh.Sample) -> object:
-        """Decode a sample by its encoding. Returns a proto message or raw bytes.
+        """Decode a sample by its encoding.
 
-        If the encoding is ``application/protobuf;<TypeName>`` and the schema is
-        known (or can be fetched), returns a decoded proto message. Falls back to
-        ``bytes`` for any other encoding or on decode failure.
+        - ``application/protobuf;<TypeName>`` → decoded proto message
+        - ``application/json``               → parsed dict
+        - anything else                      → raw ``bytes``
         """
         encoding = str(sample.encoding)
         payload = bytes(sample.payload)
+
+        if encoding == _JSON_ENCODING:
+            return json.loads(payload)
 
         if not encoding.startswith(_PROTO_PREFIX):
             return payload
