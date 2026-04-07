@@ -18,9 +18,11 @@ pub mod context_provider;
 pub mod federated;
 pub mod gateway;
 pub mod mission;
+pub mod native_supervisor;
 pub mod node_manager;
 pub mod reactive;
 pub mod registry;
+pub mod supervisor;
 pub mod systemd;
 pub mod telemetry;
 pub mod util;
@@ -43,9 +45,9 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>, zeno
     // Configure Zenoh session
     let mut config = zenoh::Config::default();
 
-    // Peer mode — allows direct connections from co-located nodes
+    // Client mode — routes through zenohd so queryables are reachable
     config
-        .insert_json5("mode", "\"peer\"")
+        .insert_json5("mode", "\"client\"")
         .expect("Failed to set Zenoh mode");
 
     // Resolve endpoint: parameter > env var > default
@@ -177,7 +179,10 @@ async fn run_daemon_gateway(
                                     mcp_port: manifest_port,
                                 };
                                 let payload = serde_json::to_vec(&manifest).unwrap_or_default();
-                                let _ = query.reply(&manifest_key, payload).await;
+                                let _ = query
+                                    .reply(&manifest_key, payload)
+                                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                                    .await;
                             }
                             Err(_) => break,
                         }
@@ -200,7 +205,179 @@ async fn run_daemon_gateway(
         }
     };
 
-    // 2. Subscribe to command topic and dispatch
+    // 2. Register nodes queryable (returns JSON NodeList for dashboard)
+    let nodes_key = gateway::nodes_topic(&scope, &machine_id);
+    let nodes_session = session.clone();
+    let nodes_nm = node_manager.clone();
+    let mut nodes_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        match nodes_session.declare_queryable(&nodes_key).await {
+            Ok(queryable) => {
+                log::info!("[Gateway] Nodes queryable registered: {}", nodes_key);
+                loop {
+                    tokio::select! {
+                        result = queryable.recv_async() => {
+                            match result {
+                                Ok(query) => {
+                                    let node_list = nodes_nm.get_node_list().await;
+                                    let json_list = gateway::NodeListJson::from_proto(&node_list);
+                                    if let Ok(buf) = serde_json::to_vec(&json_list) {
+                                        let _ = query
+                                            .reply(&nodes_key, buf)
+                                            .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                                            .await;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        _ = nodes_shutdown.changed() => break,
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[Gateway] Failed to register nodes queryable: {}", e);
+            }
+        }
+    });
+
+    // 3. Register command queryable (for dashboard / Zenoh GET clients)
+    //    Accepts JSON NodeCommandJson, returns JSON CommandResultJson.
+    let cmd_queryable_key = gateway::command_topic(&scope, &machine_id);
+    let cmd_queryable_session = session.clone();
+    let cmd_queryable_platform = platform.clone();
+    let cmd_queryable_machine_id = machine_id.clone();
+    let mut cmd_queryable_shutdown = shutdown_rx.clone();
+    tokio::spawn(async move {
+        match cmd_queryable_session
+            .declare_queryable(&cmd_queryable_key)
+            .await
+        {
+            Ok(queryable) => {
+                log::info!(
+                    "[Gateway] Command queryable registered: {}",
+                    cmd_queryable_key
+                );
+                loop {
+                    tokio::select! {
+                        result = queryable.recv_async() => {
+                            match result {
+                                Ok(query) => {
+                                    let payload = query.payload()
+                                        .map(|p| p.to_bytes().to_vec())
+                                        .unwrap_or_default();
+
+                                    // Helper: send a JSON error reply and continue
+                                    macro_rules! reply_err {
+                                        ($request_id:expr, $msg:expr) => {{
+                                            let err = gateway::CommandResultJson {
+                                                request_id: $request_id,
+                                                success: false,
+                                                message: $msg,
+                                                output: String::new(),
+                                                responding_machine: cmd_queryable_machine_id.clone(),
+                                                timestamp_ms: util::now_ms(),
+                                            };
+                                            if let Ok(buf) = serde_json::to_vec(&err) {
+                                                let _ = query
+                                                    .reply(&cmd_queryable_key, buf)
+                                                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                                                    .await;
+                                            }
+                                            continue;
+                                        }};
+                                    }
+
+                                    let cmd = match serde_json::from_slice::<gateway::NodeCommandJson>(&payload) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            log::warn!("[Gateway] Invalid NodeCommandJson: {}", e);
+                                            reply_err!(String::new(), format!("Invalid command payload: {}", e));
+                                        }
+                                    };
+
+                                    // If target_machine is set, only respond if it matches our
+                                    // machine_id. This prevents fan-out on the wildcard query path.
+                                    if !cmd.target_machine.is_empty()
+                                        && cmd.target_machine != cmd_queryable_machine_id
+                                    {
+                                        log::debug!(
+                                            "[Gateway] Command for '{}', skipping (local='{}')",
+                                            cmd.target_machine, cmd_queryable_machine_id
+                                        );
+                                        continue;
+                                    }
+                                    log::info!("[Gateway] Command query: {} for {}", cmd.command, cmd.node_name);
+
+                                    use crate::mcp::platform::{NodeCommand as PlatformCmd, PlatformOperations};
+
+                                    let platform_cmd = match cmd.command.as_str() {
+                                        "start" => PlatformCmd::Start,
+                                        "stop" => PlatformCmd::Stop,
+                                        "restart" => PlatformCmd::Restart,
+                                        "install" => PlatformCmd::Install,
+                                        "uninstall" => PlatformCmd::Uninstall,
+                                        "build" => PlatformCmd::Build,
+                                        "clean" => PlatformCmd::Clean,
+                                        "enable_autostart" => PlatformCmd::EnableAutostart,
+                                        "disable_autostart" => PlatformCmd::DisableAutostart,
+                                        "get_logs" => PlatformCmd::GetLogs,
+                                        other => {
+                                            log::warn!("[Gateway] Unknown command type: {}", other);
+                                            reply_err!(
+                                                cmd.request_id.clone(),
+                                                format!("Unknown command type: {}", other)
+                                            );
+                                        }
+                                    };
+
+                                    let result = cmd_queryable_platform
+                                        .execute_command(&cmd.node_name, platform_cmd)
+                                        .await;
+
+                                    let now_ms = util::now_ms();
+
+                                    let cmd_result = match result {
+                                        Ok(msg) => gateway::CommandResultJson {
+                                            request_id: cmd.request_id.clone(),
+                                            success: true,
+                                            message: msg.clone(),
+                                            output: msg,
+                                            responding_machine: cmd_queryable_machine_id.clone(),
+                                            timestamp_ms: now_ms,
+                                        },
+                                        Err(e) => gateway::CommandResultJson {
+                                            request_id: cmd.request_id.clone(),
+                                            success: false,
+                                            message: e.to_string(),
+                                            output: String::new(),
+                                            responding_machine: cmd_queryable_machine_id.clone(),
+                                            timestamp_ms: now_ms,
+                                        },
+                                    };
+
+                                    if let Ok(buf) = serde_json::to_vec(&cmd_result) {
+                                        let _ = query
+                                            .reply(&cmd_queryable_key, buf)
+                                            .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                                            .await;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        _ = cmd_queryable_shutdown.changed() => break,
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[Gateway] Failed to register command queryable: {}", e);
+            }
+        }
+    });
+
+    // 4. Subscribe to command topic and dispatch (legacy JSON pub/sub for CLI clients).
+    //    The JSON queryable above handles the dashboard's request/reply API.
     let cmd_topic = gateway::command_topic(&scope, &machine_id);
     let evt_topic = gateway::events_topic(&scope, &machine_id);
 
@@ -210,19 +387,19 @@ async fn run_daemon_gateway(
         },
     )?;
 
-    let publisher =
-        session
-            .declare_publisher(&evt_topic)
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error> {
-                format!("Failed to declare events publisher: {}", e).into()
-            })?;
+    let publisher = session
+        .declare_publisher(&evt_topic)
+        .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error> {
+            format!("Failed to declare events publisher: {}", e).into()
+        })?;
 
     log::info!(
         "[Gateway] Daemon gateway started: cmd={}, events={}, manifest={}",
         cmd_topic,
         evt_topic,
-        gateway::manifest_topic(&scope, &machine_id)
+        gateway::manifest_topic(&scope, &machine_id),
     );
 
     loop {
@@ -513,8 +690,8 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         );
     }
 
-    // Start systemd signal listener for real-time state updates
-    log::info!("Starting systemd signal listener...");
+    // Start process signal listener for real-time state updates
+    log::info!("Starting signal listener...");
     if let Err(e) = node_manager.clone().start_signal_listener().await {
         log::warn!(
             "Failed to start signal listener (will rely on polling): {}",

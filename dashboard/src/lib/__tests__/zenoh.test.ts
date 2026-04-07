@@ -3,38 +3,48 @@ import { extractMachineId, getSamplePayload, normalizeKeyExpr } from '../zenoh';
 import type { Sample } from '@eclipse-zenoh/zenoh-ts';
 
 describe('extractMachineId', () => {
-  describe('vanilla zenoh format', () => {
-    it('extracts machine id from machine-scoped daemon path', () => {
-      expect(extractMachineId('bubbaloop/nvidia-orin00/daemon/nodes')).toBe('nvidia-orin00');
+  describe('global format (bubbaloop/global/{machine}/...)', () => {
+    it('extracts machine id from global daemon path', () => {
+      expect(extractMachineId('bubbaloop/global/nvidia-orin00/daemon/nodes')).toBe('nvidia-orin00');
     });
 
-    it('extracts machine id from machine-scoped daemon API path', () => {
-      expect(extractMachineId('bubbaloop/jetson-nano/daemon/api/health')).toBe('jetson-nano');
+    it('extracts machine id from global daemon API path', () => {
+      expect(extractMachineId('bubbaloop/global/jetson-nano/daemon/api/health')).toBe('jetson-nano');
     });
 
-    it('extracts machine id from full-scoped path', () => {
-      expect(extractMachineId('bubbaloop/local/nvidia_orin00/health/system-telemetry')).toBe('nvidia_orin00');
+    it('extracts machine id from global system-telemetry path', () => {
+      expect(extractMachineId('bubbaloop/global/nvidia_orin00/system-telemetry/health')).toBe('nvidia_orin00');
     });
 
-    it('extracts machine id from full-scoped camera path', () => {
-      expect(extractMachineId('bubbaloop/production/orin_02/camera/entrance/compressed')).toBe('orin_02');
+    it('extracts machine id from global camera path', () => {
+      expect(extractMachineId('bubbaloop/global/orin_02/camera/entrance/compressed')).toBe('orin_02');
     });
 
     it('handles machine id with special characters', () => {
-      expect(extractMachineId('bubbaloop/jetson-nano_01/daemon/api')).toBe('jetson-nano_01');
+      expect(extractMachineId('bubbaloop/global/jetson-nano_01/daemon/api')).toBe('jetson-nano_01');
     });
 
     it('handles machine id with underscores', () => {
-      expect(extractMachineId('bubbaloop/local/nvidia_orin_00/weather/current')).toBe('nvidia_orin_00');
+      expect(extractMachineId('bubbaloop/global/nvidia_orin_00/weather/current')).toBe('nvidia_orin_00');
     });
   });
 
-  describe('legacy format (returns null)', () => {
-    it('returns null for legacy daemon path', () => {
+  describe('local format (bubbaloop/local/{machine}/...) — not network-visible', () => {
+    it('returns null for local SHM topic', () => {
+      expect(extractMachineId('bubbaloop/local/nvidia_orin00/tapo_entrance/raw')).toBeNull();
+    });
+
+    it('returns null for local health topic', () => {
+      expect(extractMachineId('bubbaloop/local/nvidia_orin00/system-telemetry/health')).toBeNull();
+    });
+  });
+
+  describe('unrecognized/legacy format (returns null)', () => {
+    it('returns null for old 2-segment daemon path', () => {
       expect(extractMachineId('bubbaloop/daemon/nodes')).toBeNull();
     });
 
-    it('returns null for legacy daemon API path', () => {
+    it('returns null for old 2-segment daemon API path', () => {
       expect(extractMachineId('bubbaloop/daemon/api/health')).toBeNull();
     });
 
@@ -44,6 +54,10 @@ describe('extractMachineId', () => {
 
     it('returns null for fleet with deeper path', () => {
       expect(extractMachineId('bubbaloop/fleet/nodes/list')).toBeNull();
+    });
+
+    it('returns null for old scope-prefixed path without global/local', () => {
+      expect(extractMachineId('bubbaloop/production/orin_02/camera/compressed')).toBeNull();
     });
   });
 
@@ -73,9 +87,9 @@ describe('extractMachineId', () => {
 describe('normalizeKeyExpr', () => {
   describe('vanilla zenoh topics from different scopes', () => {
     it('normalizes topic with local scope', () => {
-      const key = 'bubbaloop/local/nvidia_orin00/health/system-telemetry';
+      const key = 'bubbaloop/local/nvidia_orin00/system-telemetry/health';
       const result = normalizeKeyExpr(key);
-      expect(result.display).toBe('local/nvidia_orin00/health/system-telemetry');
+      expect(result.display).toBe('local/nvidia_orin00/system-telemetry/health');
       expect(result.raw).toBe(key);
     });
 
@@ -207,36 +221,36 @@ describe('getSamplePayload', () => {
   });
 });
 
-describe('extractMachineId: production topology variants', () => {
-  it('extracts machine id from production scope with camera topic', () => {
-    expect(extractMachineId('bubbaloop/production/factory_cam01/camera/entrance/compressed')).toBe('factory_cam01');
+describe('extractMachineId: global topology variants', () => {
+  it('extracts machine id from global camera topic', () => {
+    expect(extractMachineId('bubbaloop/global/factory_cam01/camera/entrance/compressed')).toBe('factory_cam01');
   });
 
-  it('extracts machine id from staging scope', () => {
-    expect(extractMachineId('bubbaloop/staging/test_device_01/health/metrics')).toBe('test_device_01');
+  it('extracts machine id from global health topic', () => {
+    expect(extractMachineId('bubbaloop/global/test_device_01/metrics/health')).toBe('test_device_01');
   });
 
-  it('extracts machine id from dev scope with weather topic', () => {
-    expect(extractMachineId('bubbaloop/dev/orin_dev01/weather/current')).toBe('orin_dev01');
+  it('extracts machine id from global weather topic', () => {
+    expect(extractMachineId('bubbaloop/global/orin_dev01/weather/current')).toBe('orin_dev01');
   });
 
-  it('extracts machine id from deeply nested data path', () => {
-    expect(extractMachineId('bubbaloop/local/nvidia_orin00/camera/entrance/side/compressed')).toBe('nvidia_orin00');
+  it('extracts machine id from global deeply nested data path', () => {
+    expect(extractMachineId('bubbaloop/global/nvidia_orin00/camera/entrance/side/compressed')).toBe('nvidia_orin00');
   });
 
   it('extracts machine id with numeric-only machine name', () => {
-    expect(extractMachineId('bubbaloop/local/42/sensor/temperature')).toBe('42');
+    expect(extractMachineId('bubbaloop/global/42/sensor/temperature')).toBe('42');
   });
 
-  it('returns null for bubbaloop with only scope (two segments)', () => {
-    expect(extractMachineId('bubbaloop/production')).toBeNull();
+  it('returns null for bubbaloop/global with only two segments', () => {
+    expect(extractMachineId('bubbaloop/global')).toBeNull();
   });
 
-  it('handles machine-scoped daemon with deep API path', () => {
-    expect(extractMachineId('bubbaloop/jetson-nano-02/daemon/api/schemas')).toBe('jetson-nano-02');
+  it('handles global daemon with deep API path', () => {
+    expect(extractMachineId('bubbaloop/global/jetson-nano-02/daemon/api/schemas')).toBe('jetson-nano-02');
   });
 
-  it('returns null for fleet with machine-like second segment', () => {
+  it('returns null for old scope-based path (not global/local)', () => {
     expect(extractMachineId('bubbaloop/fleet/nvidia_orin00')).toBeNull();
   });
 });

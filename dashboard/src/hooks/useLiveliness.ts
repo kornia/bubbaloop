@@ -53,7 +53,7 @@ export function useLiveliness(
         }
 
         const subscriber = await livelinessApi.declare_subscriber(
-          "bubbaloop/**",
+          "bubbaloop/global/**",
           {
             callback: (sample: any) => {
               const keyExpr =

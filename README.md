@@ -213,6 +213,11 @@ pixi run daemon    # Run daemon
 pixi run dashboard # Run web dashboard
 ```
 
+Development note: Linux + systemd is the supported production path. In Docker or
+other environments without D-Bus/systemd, the daemon falls back to a native
+process supervisor intended for development only. That fallback does not provide
+journalctl-backed logs or full systemd parity.
+
 ## Service Management
 
 ```bash
@@ -225,6 +230,9 @@ systemctl --user restart bubbaloop-daemon
 # View logs
 journalctl --user -u bubbaloop-daemon -f
 ```
+
+These service-management commands apply to the systemd backend on Linux. They do
+not apply to the development fallback used in Docker/non-systemd environments.
 
 ## Troubleshooting
 

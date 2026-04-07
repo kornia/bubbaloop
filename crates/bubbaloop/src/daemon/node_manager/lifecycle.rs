@@ -4,35 +4,31 @@
 
 use super::{NodeManager, NodeManagerError, Result};
 use crate::daemon::registry;
-use crate::daemon::systemd;
 use std::sync::Arc;
 
 impl NodeManager {
     /// Start a node
     pub(crate) async fn start_node(self: &Arc<Self>, name: &str) -> Result<String> {
-        let service_name = systemd::get_service_name(name);
-        self.systemd.start_unit(&service_name).await?;
+        self.supervisor.start_unit(name).await?;
         self.spawn_refresh_and_emit("started", name);
         Ok(format!("Started {}", name))
     }
 
     /// Stop a node
     pub(crate) async fn stop_node(self: &Arc<Self>, name: &str) -> Result<String> {
-        let service_name = systemd::get_service_name(name);
-        self.systemd.stop_unit(&service_name).await?;
+        self.supervisor.stop_unit(name).await?;
         self.spawn_refresh_and_emit("stopped", name);
         Ok(format!("Stopped {}", name))
     }
 
     /// Restart a node
     pub(crate) async fn restart_node(self: &Arc<Self>, name: &str) -> Result<String> {
-        let service_name = systemd::get_service_name(name);
-        self.systemd.restart_unit(&service_name).await?;
+        self.supervisor.restart_unit(name).await?;
         self.spawn_refresh_and_emit("restarted", name);
         Ok(format!("Restarted {}", name))
     }
 
-    /// Install a node's systemd service
+    /// Install a node's service
     pub(crate) async fn install_node(self: &Arc<Self>, name: &str) -> Result<String> {
         // Look up by effective name (the HashMap key)
         let nodes = self.nodes.read().await;
@@ -57,14 +53,15 @@ impl NodeManager {
             manifest.command.clone()
         };
 
-        systemd::install_service(
-            &path,
-            name,
-            &manifest.node_type,
-            command.as_deref(),
-            &manifest.depends_on,
-        )
-        .await?;
+        self.supervisor
+            .install_service(
+                &path,
+                name,
+                &manifest.node_type,
+                command.as_deref(),
+                &manifest.depends_on,
+            )
+            .await?;
 
         drop(nodes);
 
@@ -72,17 +69,16 @@ impl NodeManager {
         Ok(format!("Installed {}", name))
     }
 
-    /// Uninstall a node's systemd service
+    /// Uninstall a node's service
     pub(crate) async fn uninstall_node(self: &Arc<Self>, name: &str) -> Result<String> {
-        systemd::uninstall_service(name).await?;
+        self.supervisor.uninstall_service(name).await?;
         self.spawn_refresh_and_emit("uninstalled", name);
         Ok(format!("Uninstalled {}", name))
     }
 
     /// Enable autostart for a node
     pub(crate) async fn enable_autostart(&self, name: &str) -> Result<String> {
-        let service_name = systemd::get_service_name(name);
-        self.systemd.enable_unit(&service_name).await?;
+        self.supervisor.enable_unit(name).await?;
 
         self.refresh_all().await?;
         self.emit_event("autostart_enabled", name).await;
@@ -92,8 +88,7 @@ impl NodeManager {
 
     /// Disable autostart for a node
     pub(crate) async fn disable_autostart(&self, name: &str) -> Result<String> {
-        let service_name = systemd::get_service_name(name);
-        self.systemd.disable_unit(&service_name).await?;
+        self.supervisor.disable_unit(name).await?;
 
         self.refresh_all().await?;
         self.emit_event("autostart_disabled", name).await;
@@ -122,9 +117,9 @@ impl NodeManager {
         let _path = self.find_node_path(name).await?;
 
         // Uninstall service if installed before removing from registry
-        if systemd::is_service_installed(name) {
+        if self.supervisor.is_installed(name) {
             log::info!("Uninstalling service {} before removal", name);
-            let _ = systemd::uninstall_service(name).await;
+            let _ = self.supervisor.uninstall_service(name).await;
         }
 
         // Unregister by effective name (handles multi-instance correctly)

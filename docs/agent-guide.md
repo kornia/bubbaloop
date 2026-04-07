@@ -264,11 +264,11 @@ Because the gateway is a Zenoh convention (not hardcoded to the CLI), you can bu
 
 ## Quick Start Workflow
 
-1. `list_nodes` → see all skillets with status
-2. `get_node_health` → get details for a specific skillet
+1. `list_nodes` → see all nodes with status
+2. `get_node_health` → get details for a specific node
 3. `get_node_schema` → understand its data format
 4. `get_stream_info` → get Zenoh topic for live data
-5. `send_command` → trigger actions on the skillet
+5. `send_command` → trigger actions on the node
 6. `schedule_task` → automate recurring agent jobs
 
 ## Architecture: Dual-Plane Model
@@ -889,9 +889,9 @@ defence-in-depth security to prevent damage to existing platforms.
 
 ---
 
-## Skillets (Nodes)
+## Nodes
 
-A "skillet" is a self-describing sensor/actuator capability. Each skillet:
+A node is a self-describing sensor/actuator capability. Each node:
 
 - **Has a manifest** (JSON) describing its capabilities, published topics, commands, hardware requirements
 - **Publishes data** on Zenoh topics (protobuf-encoded for efficiency)
@@ -899,14 +899,14 @@ A "skillet" is a self-describing sensor/actuator capability. Each skillet:
 - **Reports health** via periodic heartbeats on `bubbaloop/{scope}/{machine_id}/{node_name}/heartbeat`
 - **Serves its schema** for runtime introspection on `bubbaloop/{scope}/{machine_id}/{node_name}/schema`
 
-### Skillet Lifecycle States
+### Node Lifecycle States
 
 1. **Installed:** Source code cloned to `~/.bubbaloop/nodes/{node_name}/`
 2. **Built:** Binary compiled to `~/.bubbaloop/nodes/{node_name}/target/release/{node_name}`
 3. **Running:** systemd service active, publishing to Zenoh
 4. **Healthy:** Receiving heartbeats within expected interval
 
-### Skillet Discovery Pattern
+### Node Discovery Pattern
 
 ```
 1. list_nodes                    # Get names and status
@@ -1025,7 +1025,7 @@ bubbaloop/{scope}/{machine_id}/{node_name}/{topic}
 
 - `scope`: Deployment environment (default: "local")
 - `machine_id`: Unique machine identifier (hostname-based)
-- `node_name`: Skillet instance name
+- `node_name`: Node instance name
 - `topic`: Published topic (manifest, status, schema, command, etc.)
 
 ### Protobuf Decoding

@@ -5,9 +5,9 @@
  * Usage: node serve.mjs [--port 8080] [--bridge-port 10001]
  */
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
-import net from 'node:net';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -57,12 +57,24 @@ function serveFile(res, filePath) {
   });
 }
 
-const server = http.createServer((req, res) => {
+// Use HTTPS if certs exist and --no-tls is not set, otherwise plain HTTP
+const certsDir = path.join(__dirname, 'certs');
+const certPath = path.join(certsDir, 'cert.pem');
+const keyPath = path.join(certsDir, 'key.pem');
+const noTls = args.includes('--no-tls');
+const useHttps = !noTls && fs.existsSync(certPath) && fs.existsSync(keyPath);
+
+const handler = (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  const proto = useHttps ? 'https' : 'http';
+  const url = new URL(req.url, `${proto}://${req.headers.host}`);
   const filePath = path.join(DIST, url.pathname === '/' ? 'index.html' : url.pathname);
   serveFile(res, filePath);
-});
+};
+
+const server = useHttps
+  ? https.createServer({ key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }, handler)
+  : http.createServer(handler);
 
 // WebSocket proxy: upgrade /zenoh to the Zenoh bridge
 server.on('upgrade', (req, clientSocket, head) => {
@@ -71,33 +83,49 @@ server.on('upgrade', (req, clientSocket, head) => {
     return;
   }
 
-  const bridgeSocket = net.createConnection(BRIDGE_PORT, BRIDGE_HOST, () => {
-    const upgradeReq =
-      `${req.method} / HTTP/${req.httpVersion}\r\n` +
-      Object.entries(req.headers)
-        .filter(([k]) => k !== 'host')
-        .map(([k, v]) => `${k}: ${v}`)
-        .join('\r\n') +
-      `\r\nHost: ${BRIDGE_HOST}:${BRIDGE_PORT}\r\n\r\n`;
-
-    bridgeSocket.write(upgradeReq);
-    if (head.length > 0) bridgeSocket.write(head);
-
-    bridgeSocket.pipe(clientSocket);
-    clientSocket.pipe(bridgeSocket);
+  // Use http.request to perform a proper HTTP upgrade to the bridge
+  const proxyReq = http.request({
+    hostname: BRIDGE_HOST,
+    port: BRIDGE_PORT,
+    path: '/',
+    method: req.method,
+    headers: {
+      ...req.headers,
+      host: `${BRIDGE_HOST}:${BRIDGE_PORT}`,
+    },
   });
 
-  bridgeSocket.on('error', () => clientSocket.destroy());
-  clientSocket.on('error', () => bridgeSocket.destroy());
+  proxyReq.on('upgrade', (proxyRes, bridgeSocket, bridgeHead) => {
+    // Send the 101 response back to the client
+    const resHeaders = [`HTTP/1.1 ${proxyRes.statusCode} ${proxyRes.statusMessage}`];
+    for (const [k, v] of Object.entries(proxyRes.headers)) {
+      resHeaders.push(`${k}: ${v}`);
+    }
+    clientSocket.write(resHeaders.join('\r\n') + '\r\n\r\n');
+    if (bridgeHead.length > 0) clientSocket.write(bridgeHead);
+
+    // Bi-directional pipe
+    bridgeSocket.pipe(clientSocket);
+    clientSocket.pipe(bridgeSocket);
+
+    bridgeSocket.on('error', () => clientSocket.destroy());
+    clientSocket.on('error', () => bridgeSocket.destroy());
+  });
+
+  proxyReq.on('error', () => clientSocket.destroy());
+
+  if (head.length > 0) proxyReq.write(head);
+  proxyReq.end();
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n  Bubbaloop Dashboard Server\n`);
-  console.log(`  Local:   http://localhost:${PORT}/`);
+server.listen(PORT, '127.0.0.1', () => {
+  const proto = useHttps ? 'https' : 'http';
+  console.log(`\n  Bubbaloop Dashboard Server ${useHttps ? '(HTTPS)' : '(HTTP)'}\n`);
+  console.log(`  Local:   ${proto}://localhost:${PORT}/`);
   for (const addrs of Object.values(os.networkInterfaces())) {
     for (const addr of addrs) {
       if (addr.family === 'IPv4' && !addr.internal) {
-        console.log(`  Network: http://${addr.address}:${PORT}/`);
+        console.log(`  Network: ${proto}://${addr.address}:${PORT}/`);
       }
     }
   }

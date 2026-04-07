@@ -8,11 +8,13 @@
 import * as protobuf from 'protobufjs';
 import { Session, Reply, ReplyError, Sample } from '@eclipse-zenoh/zenoh-ts';
 import { Duration } from 'typed-duration';
-import { getSamplePayload } from './zenoh';
+import { getSamplePayload, EncodingInfo, EncodingPredefined } from './zenoh';
 
 // Import the descriptor extension — adds fromDescriptor/toDescriptor to Root
-// and registers google.protobuf.FileDescriptorSet in protobuf.roots
 import 'protobufjs/ext/descriptor';
+
+// Bundled JSON schema for google.protobuf.FileDescriptorSet (works in browsers)
+import descriptorJson from 'protobufjs/google/protobuf/descriptor.json';
 
 /** Schema source metadata */
 export interface SchemaSource {
@@ -45,20 +47,28 @@ export function extractSchemaFromTopic(_topic: string): string | null {
  * Load a FileDescriptorSet from raw bytes into a protobufjs Root.
  * Uses the descriptor extension which adds Root.fromDescriptor() at runtime.
  */
+// Lazily loaded FileDescriptorSet type from protobufjs's bundled JSON schema.
+let _fileDescriptorSetType: protobuf.Type | null = null;
+
+function getFileDescriptorSetType(): protobuf.Type {
+  if (!_fileDescriptorSetType) {
+    const descriptorRoot = protobuf.Root.fromJSON(descriptorJson);
+    _fileDescriptorSetType = descriptorRoot.lookupType('google.protobuf.FileDescriptorSet');
+  }
+  return _fileDescriptorSetType;
+}
+
 function rootFromDescriptorBytes(bytes: Uint8Array): protobuf.Root {
-  // The descriptor extension adds fromDescriptor to Root.
-  // Access it via the any-cast since TypeScript types don't include it.
+  // The descriptor extension adds fromDescriptor to Root (not in TS types).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const RootAny = protobuf.Root as any;
 
-  // Look up FileDescriptorSet from the descriptor extension's registered root
-  const descriptorRoot = protobuf.roots['default'];
-  if (!descriptorRoot) {
-    throw new Error('protobufjs/ext/descriptor not loaded');
+  if (typeof RootAny.fromDescriptor !== 'function') {
+    throw new Error('protobufjs/ext/descriptor not loaded — Root.fromDescriptor missing');
   }
 
-  const FileDescriptorSet = descriptorRoot.lookupType('google.protobuf.FileDescriptorSet');
-  const decoded = FileDescriptorSet.decode(bytes);
+  const FDS = getFileDescriptorSetType();
+  const decoded = FDS.decode(bytes);
   const root: protobuf.Root = RootAny.fromDescriptor(decoded);
   root.resolveAll();
   return root;
@@ -220,7 +230,7 @@ export class SchemaRegistry {
   async discoverAllNodeSchemas(session: Session, _machineIds?: string[]): Promise<number> {
     // Always use broad wildcard to avoid machine ID format mismatches
     // (e.g., nvidia_orin00 vs nvidia-orin00)
-    const pattern = 'bubbaloop/**/schema';
+    const pattern = 'bubbaloop/global/**/schema';
 
     let discovered = 0;
     try {
@@ -229,13 +239,19 @@ export class SchemaRegistry {
       });
 
       if (receiver) {
+        let replyCount = 0;
         for await (const replyItem of receiver) {
           if (replyItem instanceof Reply) {
+            replyCount++;
             const replyResult = replyItem.result();
-            if (replyResult instanceof ReplyError) continue;
+            if (replyResult instanceof ReplyError) {
+              console.warn(`[SchemaRegistry] discoverAll: reply ${replyCount} is ReplyError`);
+              continue;
+            }
             const payload = getSamplePayload(replyResult as Sample);
+            const keyExpr = (replyResult as Sample).keyexpr().toString();
+            console.log(`[SchemaRegistry] discoverAll: reply ${replyCount} key="${keyExpr}" payload=${payload.length} bytes`);
             if (payload.length > 0) {
-              const keyExpr = (replyResult as Sample).keyexpr().toString();
               // Skip core daemon schemas (already loaded by fetchCoreSchemas)
               if (keyExpr.includes('/daemon/api/schemas')) continue;
               // Extract node name from key expression (last segment before /schema)
@@ -244,6 +260,7 @@ export class SchemaRegistry {
               const nodeName = schemaIdx > 0 ? segments[schemaIdx - 1] : keyExpr;
               // Store prefix (without /schema) to match discoverSchemaForTopic's key format
               const prefix = segments.slice(0, schemaIdx).join('/');
+              console.log(`[SchemaRegistry] discoverAll: nodeName="${nodeName}" prefix="${prefix}" alreadySucceeded=${this.succeededPrefixes.has(prefix)}`);
               // Only skip if already succeeded — failed prefixes should be retried
               if (!this.succeededPrefixes.has(prefix) && this.loadDescriptorSet(payload, `node:${prefix}`, nodeName)) {
                 this.succeededPrefixes.add(prefix);
@@ -253,6 +270,9 @@ export class SchemaRegistry {
             }
           }
         }
+        console.log(`[SchemaRegistry] discoverAll: ${replyCount} replies, ${discovered} new schemas`);
+      } else {
+        console.warn(`[SchemaRegistry] discoverAll: receiver is null/undefined`);
       }
     } catch (e) {
       console.error(`[SchemaRegistry] Failed to discover node schemas with pattern ${pattern}:`, e);
@@ -393,6 +413,63 @@ export class SchemaRegistry {
   }
 
   /**
+   * Primary decode method that uses Zenoh encoding metadata as the first signal.
+   *
+   * Flow:
+   * - APPLICATION_JSON (5): JSON.parse(), done — no schema needed
+   * - APPLICATION_PROTOBUF (13) + schema suffix: look up in cache; on miss, trigger
+   *   on-demand schema fetch for the node, then retry
+   * - ZENOH_BYTES (0), ZENOH_STRING (1), or unknown: sniff fallback via tryDecodeForTopic
+   *
+   * @param payload   Raw bytes from the Zenoh sample
+   * @param encoding  EncodingInfo from getEncodingInfo(sample)
+   * @param topic     Full Zenoh topic key expression (for fallback + schema discovery)
+   * @param session   Active Zenoh session (needed for on-demand schema fetch)
+   * @returns DecodeResult or null
+   */
+  async decodeWithEncoding(
+    payload: Uint8Array,
+    encoding: EncodingInfo,
+    topic: string,
+    session: Session,
+  ): Promise<DecodeResult | null> {
+    const { id, schema } = encoding;
+
+    // APPLICATION_JSON — decode directly, no schema needed
+    if (
+      id === EncodingPredefined.APPLICATION_JSON ||
+      id === EncodingPredefined.TEXT_JSON ||
+      id === EncodingPredefined.TEXT_JSON5
+    ) {
+      try {
+        const text = new TextDecoder().decode(payload);
+        const data = JSON.parse(text) as Record<string, unknown>;
+        return { data, typeName: 'json', source: 'encoding' };
+      } catch {
+        return null;
+      }
+    }
+
+    // APPLICATION_PROTOBUF — use schema suffix to find type, fetch if needed
+    if (id === EncodingPredefined.APPLICATION_PROTOBUF) {
+      if (schema) {
+        // Try cached type first
+        const cached = this.decode(schema, payload);
+        if (cached) return cached;
+
+        // Not cached — trigger on-demand schema fetch for this node
+        await this.discoverSchemaForTopic(session, topic);
+        return this.decode(schema, payload);
+      }
+      // No schema suffix — fall through to brute-force sniff
+    }
+
+    // ZENOH_BYTES (0), ZENOH_STRING (1), APPLICATION_OCTET_STREAM, or unknown —
+    // use sniff fallback (JSON -> topic guess -> brute force)
+    return this.tryDecodeForTopic(topic, payload);
+  }
+
+  /**
    * Get all known type names across all loaded schemas.
    */
   getTypeNames(): string[] {
@@ -410,14 +487,18 @@ export class SchemaRegistry {
    * Useful when callers need direct access (e.g., for raw byte fields or encoding).
    */
   lookupType(typeName: string): protobuf.Type | null {
-    for (const [, schema] of this.schemas) {
+    for (const [key, schema] of this.schemas) {
       try {
         const t = schema.root.lookupType(typeName);
-        if (t) return t;
+        if (t) {
+          console.log(`[SchemaRegistry] lookupType("${typeName}") found in schema "${key}"`);
+          return t;
+        }
       } catch {
         continue;
       }
     }
+    console.warn(`[SchemaRegistry] lookupType("${typeName}") NOT found. Available schemas: [${Array.from(this.schemas.keys()).join(', ')}]`);
     return null;
   }
 

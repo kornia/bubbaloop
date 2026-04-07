@@ -1,0 +1,160 @@
+use std::sync::Arc;
+use zenoh::bytes::Encoding;
+use zenoh::qos::CongestionControl;
+
+use crate::error::{NodeError, Result};
+
+/// A declared protobuf publisher that sets `Encoding::APPLICATION_PROTOBUF` automatically.
+///
+/// Created via [`NodeContext::publisher_proto`](crate::NodeContext::publisher_proto).
+/// The encoding is declared once at construction and reused for every [`put`](ProtoPublisher::put).
+pub struct ProtoPublisher<T: prost::Message + Default> {
+    publisher: zenoh::pubsub::Publisher<'static>,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T: prost::Message + Default + crate::MessageTypeName> ProtoPublisher<T> {
+    pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
+        let encoding = Encoding::APPLICATION_PROTOBUF.with_schema(T::type_name());
+        let publisher = session
+            .declare_publisher(key_expr.to_string())
+            .encoding(encoding)
+            .await
+            .map_err(|e| NodeError::PublisherDeclare {
+                topic: key_expr.to_string(),
+                source: e,
+            })?;
+
+        log::debug!(
+            "ProtoPublisher declared on '{}' (type={})",
+            key_expr,
+            T::type_name()
+        );
+        Ok(Self {
+            publisher,
+            _marker: std::marker::PhantomData,
+        })
+    }
+
+    /// Encode `msg` as protobuf bytes and publish it.
+    pub async fn put(&self, msg: &T) -> Result<()> {
+        self.publisher
+            .put(msg.encode_to_vec())
+            .await
+            .map_err(NodeError::Publish)
+    }
+}
+
+/// A declared JSON publisher that sets `Encoding::APPLICATION_JSON` automatically.
+///
+/// Created via [`NodeContext::publisher_json`](crate::NodeContext::publisher_json).
+/// The encoding is declared once at construction and reused for every [`put`](JsonPublisher::put).
+pub struct JsonPublisher {
+    publisher: zenoh::pubsub::Publisher<'static>,
+}
+
+impl JsonPublisher {
+    pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
+        let publisher = session
+            .declare_publisher(key_expr.to_string())
+            .encoding(Encoding::APPLICATION_JSON)
+            .await
+            .map_err(|e| NodeError::PublisherDeclare {
+                topic: key_expr.to_string(),
+                source: e,
+            })?;
+
+        log::debug!("JsonPublisher declared on '{}'", key_expr);
+        Ok(Self { publisher })
+    }
+
+    /// Serialize any `Serialize` value as JSON bytes and publish it.
+    pub async fn put<S: serde::Serialize>(&self, value: &S) -> Result<()> {
+        let bytes = serde_json::to_vec(value)?;
+        self.publisher.put(bytes).await.map_err(NodeError::Publish)
+    }
+}
+
+/// A declared raw-bytes publisher for pre-built [`ZBytes`] payloads (e.g. SHM buffers).
+///
+/// Created via [`NodeContext::publisher_raw`](crate::NodeContext::publisher_raw).
+///
+/// When `local = true`, the publisher targets a machine-local topic
+/// (`local/{machine_id}/suffix`) and uses `CongestionControl::Block` — required for
+/// SHM so the publisher waits for the subscriber to read the SHM buffer instead of
+/// silently dropping frames.
+///
+/// An optional encoding can be set so subscribers can auto-decode the payload
+/// (e.g. `APPLICATION_PROTOBUF;TypeName` for proto-serialized SHM buffers).
+pub struct RawPublisher {
+    publisher: zenoh::pubsub::Publisher<'static>,
+}
+
+impl RawPublisher {
+    pub(crate) async fn new(
+        session: &Arc<zenoh::Session>,
+        key_expr: &str,
+        local: bool,
+    ) -> Result<Self> {
+        Self::with_encoding(session, key_expr, local, None).await
+    }
+
+    pub(crate) async fn with_encoding(
+        session: &Arc<zenoh::Session>,
+        key_expr: &str,
+        local: bool,
+        encoding: Option<Encoding>,
+    ) -> Result<Self> {
+        let mut builder = session.declare_publisher(key_expr.to_string());
+        if local {
+            builder = builder.congestion_control(CongestionControl::Block);
+        }
+        if let Some(enc) = encoding {
+            builder = builder.encoding(enc);
+        }
+        let publisher = builder.await.map_err(|e| NodeError::PublisherDeclare {
+            topic: key_expr.to_string(),
+            source: e,
+        })?;
+
+        log::debug!("RawPublisher declared on '{}' (local={})", key_expr, local);
+        Ok(Self { publisher })
+    }
+
+    /// Publish a raw [`ZBytes`] payload.
+    pub async fn put(&self, payload: zenoh::bytes::ZBytes) -> Result<()> {
+        self.publisher
+            .put(payload)
+            .await
+            .map_err(NodeError::Publish)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proto_encoding_string() {
+        let encoding =
+            Encoding::APPLICATION_PROTOBUF.with_schema("bubbaloop.camera.v1.CompressedImage");
+        assert_eq!(
+            encoding.to_string(),
+            "application/protobuf;bubbaloop.camera.v1.CompressedImage"
+        );
+    }
+
+    #[test]
+    fn json_encoding_string() {
+        let encoding = Encoding::APPLICATION_JSON;
+        assert_eq!(encoding.to_string(), "application/json");
+    }
+
+    #[test]
+    fn json_serialization() {
+        let value = serde_json::json!({"temperature": 22.5, "unit": "celsius"});
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let back: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(back["temperature"], 22.5);
+    }
+}

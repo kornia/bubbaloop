@@ -37,6 +37,16 @@ pub fn sanitize_log_msg(msg: &str) -> String {
         .collect()
 }
 
+/// Get current time in milliseconds since Unix epoch.
+///
+/// Returns 0 if unable to determine current time.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// Open a SQLite connection with WAL mode and busy timeout configured.
 ///
 /// All daemon SQLite stores should use this instead of duplicating the pragma setup.

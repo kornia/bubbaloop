@@ -230,7 +230,7 @@ function BrowserCheck() {
 export default function App() {
   const zenohConfig = useMemo(() => ({ endpoint: ZENOH_ENDPOINT }), []);
   const { session, status, error, reconnect } = useZenohSession(zenohConfig);
-  const { topics: availableTopics } = useZenohTopicDiscovery(session, "**");
+  const { topics: availableTopics } = useZenohTopicDiscovery(session, "bubbaloop/global/**");
   const [currentView, setCurrentView] = useState<AppView>("dashboard");
 
   return (

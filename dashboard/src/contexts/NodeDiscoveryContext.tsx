@@ -1,14 +1,12 @@
-/**
- * NodeDiscoveryContext — Hybrid node discovery via daemon API + direct manifest queries.
- *
- * Two independent discovery loops:
- * 1. Manifest discovery: queries `bubbaloop/** /manifest` (every 10s, backs off to 30s)
- *    Each running node responds with its JSON manifest.
- * 2. Daemon polling: queries `bubbaloop/daemon/nodes` (every 3s) for protobuf NodeList.
- *
- * Results are merged: manifest provides rich metadata, daemon provides runtime state.
- * When daemon is down, nodes discovered via manifest still appear (status = 'unknown').
- */
+// NodeDiscoveryContext — Hybrid node discovery via daemon API + direct manifest queries.
+//
+// Two independent discovery loops:
+// 1. Manifest discovery: queries `bubbaloop/global/**/manifest` (every 10s, backs off to 30s)
+//    Each running node responds with its JSON manifest.
+// 2. Daemon polling: queries `bubbaloop/global/**/daemon/nodes` (every 3s) for protobuf NodeList.
+//
+// Results are merged: manifest provides rich metadata, daemon provides runtime state.
+// When daemon is down, nodes discovered via manifest still appear (status = 'unknown').
 
 import {
   createContext,
@@ -87,6 +85,9 @@ export interface DiscoveredNode {
   machine_hostname: string;
   machine_ips: string[];
   base_node: string;
+  config_path: string;
+  /** Raw YAML content of the config file, served by the daemon. */
+  config: string;
 
   // Discovery metadata
   discoveredVia: "manifest" | "daemon" | "both";
@@ -152,10 +153,57 @@ function manifestOnlyNode(manifest: NodeManifest, now: number): DiscoveredNode {
     machine_hostname: "",
     machine_ips: [],
     base_node: "",
+    config_path: "",
+    config: "",
     discoveredVia: "manifest",
     stale: false,
     lastSeen: now,
   };
+}
+
+/**
+ * Decode a NodeList from a Zenoh reply payload.
+ * Tries JSON first (new daemon), falls back to protobuf (old daemon for backward compat).
+ */
+function decodeNodeListFromPayload(data: Uint8Array): ReturnType<typeof decodeNodeList> {
+  // Try JSON first — new daemon sends APPLICATION_JSON
+  try {
+    const text = new TextDecoder().decode(data);
+    const obj = JSON.parse(text);
+    if (obj && typeof obj === 'object' && Array.isArray(obj.nodes)) {
+      // Shape matches NodeList JSON representation
+      const nodes = (obj.nodes as Record<string, unknown>[]).map((n) => ({
+        name: (n.name as string) ?? '',
+        path: (n.path as string) ?? '',
+        status: typeof n.status === 'number' ? n.status : 0,
+        statusName: '',
+        installed: (n.installed as boolean) ?? false,
+        autostartEnabled: (n.autostart_enabled as boolean) ?? (n.autostartEnabled as boolean) ?? false,
+        version: (n.version as string) ?? '',
+        description: (n.description as string) ?? '',
+        nodeType: (n.node_type as string) ?? (n.nodeType as string) ?? '',
+        isBuilt: (n.is_built as boolean) ?? (n.isBuilt as boolean) ?? false,
+        lastUpdatedMs: 0n,
+        buildOutput: Array.isArray(n.build_output) ? (n.build_output as string[]) : Array.isArray(n.buildOutput) ? (n.buildOutput as string[]) : [],
+        machineId: (n.machine_id as string) ?? (n.machineId as string) ?? '',
+        machineHostname: (n.machine_hostname as string) ?? (n.machineHostname as string) ?? '',
+        machineIps: Array.isArray(n.machine_ips) ? (n.machine_ips as string[]) : Array.isArray(n.machineIps) ? (n.machineIps as string[]) : [],
+        baseNode: (n.base_node as string) ?? (n.baseNode as string) ?? '',
+        configPath: (n.config_path as string) ?? (n.configPath as string) ?? (n.config_override as string) ?? '',
+        config: typeof n.config === 'string' ? n.config : '',
+      }));
+      return {
+        nodes,
+        timestampMs: 0n,
+        machineId: (obj.machine_id as string) ?? (obj.machineId as string) ?? '',
+      };
+    }
+  } catch {
+    // Not JSON, fall through to protobuf
+  }
+
+  // Fallback: try protobuf (old daemon)
+  return decodeNodeList(data);
 }
 
 /** Parse a JSON payload into a NodeManifest, returning null on failure. */
@@ -242,7 +290,7 @@ export function NodeDiscoveryProvider({
     if (!currentSession) return [];
 
     try {
-      const receiver = await currentSession.get("bubbaloop/daemon/nodes", {
+      const receiver = await currentSession.get("bubbaloop/global/**/daemon/nodes", {
         timeout: Duration.milliseconds.of(5000),
       });
 
@@ -261,7 +309,8 @@ export function NodeDiscoveryProvider({
             }
 
             const payload = getSamplePayload(sample);
-            const nodeList = decodeNodeList(payload);
+            // Try JSON first (new daemon sends JSON); fall back to protobuf (old daemon)
+            const nodeList = decodeNodeListFromPayload(payload);
             if (!nodeList || nodeList.nodes.length === 0) continue;
 
             const listMachineId = nodeList.machineId || "";
@@ -280,6 +329,8 @@ export function NodeDiscoveryProvider({
               machine_hostname: n.machineHostname,
               machine_ips: n.machineIps || [],
               base_node: n.baseNode || "",
+              config_path: ((n as unknown) as Record<string, unknown>).configPath as string ?? "",
+              config: (((n as unknown) as Record<string, unknown>).config as string) ?? "",
               discoveredVia: "daemon" as const,
               stale: false,
               lastSeen: Date.now(),
@@ -352,7 +403,7 @@ export function NodeDiscoveryProvider({
     try {
       setManifestDiscoveryActive(true);
 
-      const receiver = await currentSession.get("bubbaloop/**/manifest", {
+      const receiver = await currentSession.get("bubbaloop/global/**/manifest", {
         timeout: Duration.milliseconds.of(5000),
       });
 

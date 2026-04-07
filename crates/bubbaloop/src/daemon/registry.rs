@@ -444,23 +444,71 @@ pub fn list_nodes() -> Result<Vec<(NodeEntry, Option<NodeManifest>)>> {
     Ok(nodes)
 }
 
-/// Check if a node's binary/script is built
+/// Check if a node's binary/script is built.
+///
+/// Detection order:
+/// 1. Rust nodes: binary in `target/release/<name>` or `target/debug/<name>`.
+///    Fallback: first relative token in `command` (for non-standard binary locations).
+/// 2. No `command`: check for `main.py` in the node directory
+/// 3. Command with `-m module.path`: check `module/path.py` in node dir
+///    e.g. `pixi run python -m smartpower.nodes.runner` → `smartpower/nodes/runner.py`
+/// 4. Command with a `*.py` token: check that file in node dir
+///    e.g. `pixi run python sensor.py` → `sensor.py`
+///    e.g. `python3 main.py` → `main.py`
+/// 5. Anything else (external binary, pixi task, etc.): assume built (`true`)
 pub fn check_is_built(node_path: &str, manifest: &NodeManifest) -> bool {
     let path = Path::new(node_path);
 
-    if let Some(ref command) = manifest.command {
-        let binary_path = path.join(command);
-        binary_path.exists()
-    } else if manifest.node_type == "rust" {
-        // Check for target/release or target/debug binary
+    if manifest.node_type == "rust" {
+        // Standard cargo output locations
         let release_path = path.join("target/release").join(&manifest.name);
         let debug_path = path.join("target/debug").join(&manifest.name);
-        release_path.exists() || debug_path.exists()
-    } else {
-        // Python - check for main.py and venv
-        let main_py = path.join("main.py");
-        main_py.exists()
+        if release_path.exists() || debug_path.exists() {
+            return true;
+        }
+        // Fallback: command may point to a non-standard relative binary path
+        // (e.g. `command: "target/aarch64-unknown-linux-gnu/release/my-node"`).
+        // Absolute paths and flags are ignored — they don't live in the node dir.
+        if let Some(ref command) = manifest.command {
+            if let Some(token) = command
+                .split_whitespace()
+                .find(|t| !t.starts_with('-') && !std::path::Path::new(t).is_absolute())
+            {
+                return path.join(token).exists();
+            }
+        }
+        return false;
     }
+
+    let Some(ref command) = manifest.command else {
+        // No command — default Python entrypoint
+        return path.join("main.py").exists();
+    };
+
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+
+    // Empty or whitespace-only command cannot be resolved — not built
+    if tokens.is_empty() {
+        return false;
+    }
+
+    // Check `-m module.path` → module/path.py
+    if let Some(pos) = tokens.iter().position(|t| *t == "-m") {
+        let Some(module) = tokens.get(pos + 1) else {
+            // `-m` with no following token is malformed — not built
+            return false;
+        };
+        let module_file = module.replace('.', "/") + ".py";
+        return path.join(&module_file).exists();
+    }
+
+    // Find first *.py token and check it exists in node dir
+    if let Some(script) = tokens.iter().find(|t| t.ends_with(".py")) {
+        return path.join(script).exists();
+    }
+
+    // External binary, pixi task, or other launcher — assume built
+    true
 }
 
 /// Validate a config_override path to prevent systemd specifier injection and path traversal.
@@ -811,5 +859,145 @@ mod tests {
     #[test]
     fn test_validate_config_override_rejects_empty() {
         assert!(validate_config_override("").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // check_is_built tests
+    // -----------------------------------------------------------------------
+
+    fn manifest_with(node_type: &str, command: Option<&str>) -> NodeManifest {
+        NodeManifest {
+            name: "test-node".to_string(),
+            version: "1.0.0".to_string(),
+            node_type: node_type.to_string(),
+            description: "Test".to_string(),
+            command: command.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_is_built_empty_command_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = manifest_with("python", Some(""));
+        assert!(!check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_m_without_module_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = manifest_with("python", Some("pixi run python -m"));
+        assert!(!check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_rust_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let release_dir = dir.path().join("target/release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        std::fs::write(release_dir.join("test-node"), b"").unwrap();
+        assert!(check_is_built(
+            dir.path().to_str().unwrap(),
+            &manifest_with("rust", None)
+        ));
+    }
+
+    #[test]
+    fn test_is_built_rust_debug() {
+        let dir = tempfile::tempdir().unwrap();
+        let debug_dir = dir.path().join("target/debug");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        std::fs::write(debug_dir.join("test-node"), b"").unwrap();
+        assert!(check_is_built(
+            dir.path().to_str().unwrap(),
+            &manifest_with("rust", None)
+        ));
+    }
+
+    #[test]
+    fn test_is_built_rust_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!check_is_built(
+            dir.path().to_str().unwrap(),
+            &manifest_with("rust", None)
+        ));
+    }
+
+    #[test]
+    fn test_is_built_rust_non_standard_command() {
+        let dir = tempfile::tempdir().unwrap();
+        // Non-standard cross-compilation target path
+        let cross_dir = dir.path().join("target/aarch64-unknown-linux-gnu/release");
+        std::fs::create_dir_all(&cross_dir).unwrap();
+        std::fs::write(cross_dir.join("test-node"), b"").unwrap();
+        let m = manifest_with(
+            "rust",
+            Some("target/aarch64-unknown-linux-gnu/release/test-node"),
+        );
+        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_no_command_finds_main_py() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.py"), b"").unwrap();
+        assert!(check_is_built(
+            dir.path().to_str().unwrap(),
+            &manifest_with("python", None)
+        ));
+    }
+
+    #[test]
+    fn test_is_built_no_command_missing_main_py() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!check_is_built(
+            dir.path().to_str().unwrap(),
+            &manifest_with("python", None)
+        ));
+    }
+
+    #[test]
+    fn test_is_built_module_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("smartpower/nodes")).unwrap();
+        std::fs::write(dir.path().join("smartpower/nodes/runner.py"), b"").unwrap();
+        let m = manifest_with(
+            "python",
+            Some("pixi run python -m smartpower.nodes.runner config.yaml"),
+        );
+        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_absolute_interpreter_no_false_positive() {
+        let dir = tempfile::tempdir().unwrap();
+        // /usr/bin/python3 exists on the system but main.py is missing
+        let m = manifest_with("python", Some("/usr/bin/python3 main.py"));
+        assert!(!check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_absolute_interpreter_with_script() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.py"), b"").unwrap();
+        let m = manifest_with("python", Some("/usr/bin/python3 main.py"));
+        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_non_default_script() {
+        // "pixi run python sensor.py" — script is not main.py
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("sensor.py"), b"").unwrap();
+        let m = manifest_with("python", Some("pixi run python sensor.py"));
+        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
+    }
+
+    #[test]
+    fn test_is_built_pixi_task_no_py_returns_true() {
+        // "pixi run run" — no .py token, external launcher, assume built
+        let dir = tempfile::tempdir().unwrap();
+        let m = manifest_with("python", Some("pixi run run"));
+        assert!(check_is_built(dir.path().to_str().unwrap(), &m));
     }
 }

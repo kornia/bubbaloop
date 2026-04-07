@@ -381,7 +381,7 @@ pub async fn run_daemon_stop(
     Ok(())
 }
 
-/// Run the daemon logs command: journalctl follow.
+/// Run the daemon logs command: journalctl follow (systemd backend only).
 pub fn run_daemon_logs() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let status = std::process::Command::new("journalctl")
         .args([
@@ -394,7 +394,9 @@ pub fn run_daemon_logs() -> std::result::Result<(), Box<dyn std::error::Error>> 
         .status()?;
 
     if !status.success() {
-        eprintln!("journalctl failed. Is the daemon installed as a systemd service?");
+        eprintln!(
+            "journalctl failed. This command only works when the daemon is installed as a systemd service."
+        );
     }
 
     Ok(())

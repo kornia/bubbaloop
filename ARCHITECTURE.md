@@ -100,9 +100,18 @@ bubbaloop/{scope}/{machine_id}/{node_name}/command     → JSON command interfac
 Standard node publishers:
 
 ```
-bubbaloop/{scope}/{machine_id}/{publish_topic}          → Protobuf sensor data
+bubbaloop/{scope}/{machine_id}/{publish_topic}          → Data (protobuf or JSON)
 bubbaloop/{scope}/{machine_id}/health/{node_name}       → Periodic heartbeat
 ```
+
+### Zenoh Encoding (Required)
+
+Every publish MUST set the Zenoh `Encoding` field:
+- Protobuf: `Encoding::APPLICATION_PROTOBUF.with_schema("fully.qualified.TypeName")`
+- JSON: `Encoding::APPLICATION_JSON`
+
+The dashboard reads `sample.encoding()` to pick the decoder instantly — no schema discovery race.
+Use the SDK's `publisher_proto()` / `publisher_json()` which set encoding automatically.
 
 ### Manifest Fields (Required)
 
@@ -118,14 +127,18 @@ See node templates in `bubbaloop-nodes-official` for full examples.
 
 ### Schema Contract
 
-Every node that publishes protobuf messages MUST serve its FileDescriptorSet via `{node-name}/schema` queryable. This enables runtime schema discovery for dashboards and AI agents.
+Nodes that publish **protobuf** messages MUST serve their FileDescriptorSet via `{node-name}/schema` queryable. JSON-only nodes do not need a schema queryable.
 
 **Key rules:**
-- Compile descriptor.bin via `build.rs` (Rust) or protoc (Python)
+- Compile descriptor.bin via `build.rs` (Rust) or use `msg.DESCRIPTOR.file.serialized_pb` (Python)
 - Include all .proto files (including `header.proto` from bubbaloop-schemas)
 - NEVER use `.complete(true)` (Rust) or `complete=True` (Python) — blocks wildcard queries
 - Reply with raw FileDescriptorSet bytes, not JSON
 - Python: `query.key_expr` is a property, not a method
+
+### Daemon Wire Format
+
+The daemon gateway uses **JSON for all messages** (manifest, node list, commands, events). No protobuf on the daemon side. The dashboard decodes daemon messages with `JSON.parse()` — no schema needed.
 
 ### Command Contract
 

@@ -5,11 +5,6 @@ import {
   useNodeDiscovery,
   type DiscoveredNode,
 } from "../contexts/NodeDiscoveryContext";
-import {
-  NodeCommandProto,
-  CommandResultProto,
-  CommandType,
-} from "../proto/daemon";
 import { Duration } from "typed-duration";
 import { Reply, ReplyError } from "@eclipse-zenoh/zenoh-ts";
 
@@ -82,106 +77,82 @@ export function NodesViewPanel({
   } | null>(null);
 
   // Execute command via Zenoh query
-  const executeCommand = useCallback(
-    async (nodeName: string, command: string) => {
+  // Helper: send a JSON command to the daemon and return the parsed result.
+  const sendDaemonCommand = useCallback(
+    async (
+      nodeName: string,
+      command: string,
+      targetMachineId: string,
+    ): Promise<{ success: boolean; message: string; output: string }> => {
       const session = getSession();
-      if (!session) {
-        setMessage({ text: "Not connected to Zenoh", type: "error" });
-        return;
+      if (!session) throw new Error("Not connected to Zenoh");
+
+      const payload = new TextEncoder().encode(
+        JSON.stringify({
+          command,
+          node_name: nodeName,
+          request_id: crypto.randomUUID(),
+          target_machine: targetMachineId,
+          timestamp_ms: Date.now(),
+        }),
+      );
+
+      const receiver = await session.get("bubbaloop/global/**/daemon/command", {
+        payload,
+        timeout: Duration.milliseconds.of(10000),
+      });
+
+      if (receiver) {
+        for await (const replyItem of receiver) {
+          let sample: unknown;
+          if (replyItem instanceof Reply) {
+            const replyResult = replyItem.result();
+            if (replyResult instanceof ReplyError) throw new Error("Reply error from daemon");
+            sample = replyResult;
+          } else {
+            sample = replyItem;
+          }
+
+          const bytes = (sample as { payload: () => { toBytes: () => Uint8Array } })
+            ?.payload?.()?.toBytes?.();
+          if (bytes) {
+            try {
+              const obj = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+              return {
+                success: (obj.success as boolean) ?? false,
+                message: (obj.message as string) ?? "",
+                output: (obj.output as string) ?? "",
+              };
+            } catch {
+              throw new Error("Failed to parse daemon response");
+            }
+          }
+          break;
+        }
       }
 
+      throw new Error("No response from daemon");
+    },
+    [getSession],
+  );
+
+  const executeCommand = useCallback(
+    async (nodeName: string, command: string) => {
       setActionLoading(`${nodeName}-${command}`);
       setMessage(null);
 
       try {
-        // Map command string to enum
-        const commandMap: Record<string, number> = {
-          start: CommandType.COMMAND_TYPE_START,
-          stop: CommandType.COMMAND_TYPE_STOP,
-          restart: CommandType.COMMAND_TYPE_RESTART,
-          install: CommandType.COMMAND_TYPE_INSTALL,
-          uninstall: CommandType.COMMAND_TYPE_UNINSTALL,
-          build: CommandType.COMMAND_TYPE_BUILD,
-          clean: CommandType.COMMAND_TYPE_CLEAN,
-          enable_autostart: CommandType.COMMAND_TYPE_ENABLE_AUTOSTART,
-          disable_autostart: CommandType.COMMAND_TYPE_DISABLE_AUTOSTART,
-          get_logs: CommandType.COMMAND_TYPE_GET_LOGS,
-        };
-
-        // Look up target node to route command to correct machine
         const targetNode = nodes.find((n) => n.name === nodeName);
-        const commandKey = targetNode?.machine_id
-          ? `bubbaloop/${targetNode.machine_id}/daemon/command`
-          : "bubbaloop/daemon/command";
-
-        const cmd = NodeCommandProto.create({
-          command: commandMap[command] ?? CommandType.COMMAND_TYPE_START,
-          nodeName: nodeName,
-          nodePath: "",
-          requestId: crypto.randomUUID(),
-          targetMachine: targetNode?.machine_id || "",
-        });
-
-        const payload = NodeCommandProto.encode(cmd).finish();
-
-        // Send query and wait for reply
-        const receiver = await session.get(commandKey, {
-          payload: payload,
-          timeout: Duration.milliseconds.of(10000),
-        });
-
-        // Process first reply
-        let gotReply = false;
-        if (receiver) {
-          for await (const replyItem of receiver) {
-            gotReply = true;
-            try {
-              // Reply can be a Reply object with result() method
-              let sample: unknown;
-              if (replyItem instanceof Reply) {
-                const replyResult = replyItem.result();
-                if (replyResult instanceof ReplyError) {
-                  setMessage({
-                    text: "Reply error from daemon",
-                    type: "error",
-                  });
-                  break;
-                }
-                sample = replyResult;
-              } else {
-                sample = replyItem;
-              }
-
-              // Extract payload from Sample
-              const replyPayload = (
-                sample as { payload: () => { toBytes: () => Uint8Array } }
-              )
-                ?.payload?.()
-                ?.toBytes?.();
-              if (replyPayload) {
-                const result = CommandResultProto.decode(replyPayload);
-                if (result.success) {
-                  setMessage({
-                    text: result.message || "Command executed",
-                    type: "success",
-                  });
-                } else {
-                  setMessage({
-                    text: result.message || "Command failed",
-                    type: "error",
-                  });
-                }
-              }
-            } catch (e) {
-              console.error("[NodesView] Failed to decode reply:", e);
-            }
-            break; // Only process first reply
-          }
+        if (!targetNode?.machine_id) {
+          setMessage({ text: "Cannot resolve machine for this node", type: "error" });
+          return;
         }
 
-        if (!gotReply) {
-          setMessage({ text: "No response from daemon", type: "error" });
-        }
+        const result = await sendDaemonCommand(nodeName, command, targetNode.machine_id);
+        setMessage({
+          text: result.message || (result.success ? "Command executed" : "Command failed"),
+          type: result.success ? "success" : "error",
+        });
       } catch (err) {
         console.error("[NodesView] Command failed:", err);
         setMessage({
@@ -193,71 +164,22 @@ export function NodesViewPanel({
         setTimeout(() => setMessage(null), 4000);
       }
     },
-    [getSession, nodes],
+    [nodes, sendDaemonCommand],
   );
 
   // Fetch logs for a node via Zenoh query
   const fetchLogs = useCallback(
     async (nodeName: string): Promise<string> => {
-      const session = getSession();
-      if (!session) {
-        throw new Error("Not connected to Zenoh");
-      }
-
-      // Look up target node to route logs request to correct machine
       const targetNode = nodes.find((n) => n.name === nodeName);
-      const commandKey = targetNode?.machine_id
-        ? `bubbaloop/${targetNode.machine_id}/daemon/command`
-        : "bubbaloop/daemon/command";
+      if (!targetNode?.machine_id) throw new Error("Cannot resolve machine for this node");
 
-      const cmd = NodeCommandProto.create({
-        command: CommandType.COMMAND_TYPE_GET_LOGS,
-        nodeName: nodeName,
-        nodePath: "",
-        requestId: crypto.randomUUID(),
-        targetMachine: targetNode?.machine_id || "",
-      });
-
-      const payload = NodeCommandProto.encode(cmd).finish();
-
-      const receiver = await session.get(commandKey, {
-        payload: payload,
-        timeout: Duration.milliseconds.of(10000),
-      });
-
-      if (receiver) {
-        for await (const replyItem of receiver) {
-          let sample: unknown;
-          if (replyItem instanceof Reply) {
-            const replyResult = replyItem.result();
-            if (replyResult instanceof ReplyError) {
-              throw new Error("Reply error from daemon");
-            }
-            sample = replyResult;
-          } else {
-            sample = replyItem;
-          }
-
-          const replyPayload = (
-            sample as { payload: () => { toBytes: () => Uint8Array } }
-          )
-            ?.payload?.()
-            ?.toBytes?.();
-          if (replyPayload) {
-            const result = CommandResultProto.decode(replyPayload);
-            if (result.success) {
-              return result.output || "No logs available";
-            } else {
-              throw new Error(result.message || "Failed to fetch logs");
-            }
-          }
-          break;
-        }
+      const result = await sendDaemonCommand(nodeName, "get_logs", targetNode.machine_id);
+      if (result.success) {
+        return result.output || result.message || "No logs available";
       }
-
-      throw new Error("No response from daemon");
+      throw new Error(result.message || "Failed to fetch logs");
     },
-    [getSession, nodes],
+    [nodes, sendDaemonCommand],
   );
 
   // Group nodes by machine for multi-machine rendering
@@ -828,6 +750,28 @@ export function NodesViewPanel({
   );
 }
 
+// Collapsible config YAML viewer
+function ConfigSection({ config, configPath }: { config: string; configPath?: string }) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  return (
+    <div className="config-section">
+      <div
+        className="config-header"
+        onClick={() => setCollapsed((c) => !c)}
+        title={configPath || "Config"}
+      >
+        <span className={`collapse-arrow ${collapsed ? "collapsed" : ""}`}>&#9660;</span>
+        <span className="config-label">Config</span>
+        {configPath && <span className="config-path mono">{configPath}</span>}
+      </div>
+      {!collapsed && (
+        <pre className="config-content">{config}</pre>
+      )}
+    </div>
+  );
+}
+
 // Node detail sub-component
 interface NodeDetailProps {
   node: DiscoveredNode;
@@ -1029,6 +973,11 @@ function NodeDetail({
             )}
           </div>
         </div>
+      )}
+
+      {/* Config section */}
+      {node.config_path && (
+        <ConfigSection config={node.config} configPath={node.config_path} />
       )}
 
       {/* Controls row: start/stop, logs toggle, auto-refresh */}
@@ -1295,6 +1244,51 @@ function NodeDetail({
           background: var(--bg-tertiary);
           padding: 1px 6px;
           border-radius: 4px;
+        }
+
+        .config-section {
+          border: 1px solid var(--border-color);
+          border-radius: 6px;
+          overflow: hidden;
+        }
+
+        .config-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 12px;
+          background: var(--bg-secondary);
+          cursor: pointer;
+          user-select: none;
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text-secondary);
+        }
+
+        .config-header:hover {
+          background: var(--bg-tertiary);
+        }
+
+        .config-label {
+          color: var(--text-primary);
+        }
+
+        .config-path {
+          font-size: 11px;
+          color: var(--text-muted);
+          font-weight: 400;
+        }
+
+        .config-content {
+          margin: 0;
+          padding: 12px;
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 11px;
+          line-height: 1.5;
+          color: var(--text-secondary);
+          background: var(--bg-primary);
+          overflow-x: auto;
+          white-space: pre;
         }
 
         .controls-row {

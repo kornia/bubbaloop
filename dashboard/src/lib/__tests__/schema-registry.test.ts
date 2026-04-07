@@ -145,8 +145,8 @@ describe('extractTopicPrefix', () => {
     });
 
     it('extracts prefix from jetson_nano health topic', () => {
-      const topic = 'bubbaloop/production/jetson_nano/health/system-telemetry';
-      expect(extractTopicPrefix(topic)).toBe('bubbaloop/production/jetson_nano/health');
+      const topic = 'bubbaloop/production/jetson_nano/system-telemetry/health';
+      expect(extractTopicPrefix(topic)).toBe('bubbaloop/production/jetson_nano/system-telemetry');
     });
 
     it('extracts prefix from orin_dev01 weather topic', () => {
@@ -188,17 +188,17 @@ describe('extractTopicPrefix', () => {
 });
 
 describe('extractMachineId', () => {
-  it('extracts from scoped vanilla topic', () => {
-    const topic = 'bubbaloop/local/nvidia_orin00/health/system-telemetry';
+  it('extracts from global system-telemetry topic', () => {
+    const topic = 'bubbaloop/global/nvidia_orin00/system-telemetry/health';
     expect(extractMachineId(topic)).toBe('nvidia_orin00');
   });
 
-  it('extracts from machine-scoped daemon', () => {
-    const topic = 'bubbaloop/nvidia-orin00/daemon/nodes';
+  it('extracts from global daemon topic', () => {
+    const topic = 'bubbaloop/global/nvidia-orin00/daemon/nodes';
     expect(extractMachineId(topic)).toBe('nvidia-orin00');
   });
 
-  it('returns null for legacy daemon', () => {
+  it('returns null for legacy daemon (no global/local)', () => {
     const topic = 'bubbaloop/daemon/nodes';
     expect(extractMachineId(topic)).toBe(null);
   });
@@ -208,19 +208,24 @@ describe('extractMachineId', () => {
     expect(extractMachineId(topic)).toBe(null);
   });
 
-  it('handles system telemetry topic', () => {
-    const topic = 'bubbaloop/local/m1/system-telemetry/metrics';
+  it('handles global system telemetry topic', () => {
+    const topic = 'bubbaloop/global/m1/system-telemetry/metrics';
     expect(extractMachineId(topic)).toBe('m1');
   });
 
-  it('handles weather topics', () => {
-    const topic = 'bubbaloop/local/nvidia_orin00/weather/current';
+  it('handles global weather topics', () => {
+    const topic = 'bubbaloop/global/nvidia_orin00/weather/current';
     expect(extractMachineId(topic)).toBe('nvidia_orin00');
   });
 
-  it('handles health topics', () => {
-    const topic = 'bubbaloop/local/nvidia_orin00/health/system-telemetry';
+  it('handles global health topics', () => {
+    const topic = 'bubbaloop/global/nvidia_orin00/system-telemetry/health';
     expect(extractMachineId(topic)).toBe('nvidia_orin00');
+  });
+
+  it('returns null for local SHM topics', () => {
+    const topic = 'bubbaloop/local/nvidia_orin00/tapo_entrance/raw';
+    expect(extractMachineId(topic)).toBe(null);
   });
 
   it('returns null for topics with insufficient segments', () => {

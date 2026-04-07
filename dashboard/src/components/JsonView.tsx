@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { Sample, Reply, ReplyError } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload } from '../lib/zenoh';
+import { getSamplePayload, getEncodingInfo, hasExplicitEncoding, EncodingPredefined, EncodingInfo } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 import { useFleetContext } from '../contexts/FleetContext';
@@ -49,11 +49,43 @@ function summarizeLargeFields(data: Record<string, unknown>): Record<string, unk
   return result;
 }
 
-// Try to decode payload using schema registry first, then built-in decoders as fallback
-function decodePayload(payload: Uint8Array, topic: string, registry?: SchemaRegistry): { data: unknown; schema: string; schemaSource: SchemaSourceType; error?: string } {
+// Try to decode payload using encoding metadata first, then schema registry, then built-in decoders
+function decodePayload(
+  payload: Uint8Array,
+  topic: string,
+  registry?: SchemaRegistry,
+  encoding?: EncodingInfo,
+): { data: unknown; schema: string; schemaSource: SchemaSourceType; error?: string } {
   const text = new TextDecoder().decode(payload);
 
-  // 1. Try JSON first
+  // 0. Encoding-first: if encoding metadata is present and meaningful, use it directly
+  if (encoding && hasExplicitEncoding(encoding)) {
+    // APPLICATION_JSON variants — skip all other decode attempts
+    if (
+      encoding.id === EncodingPredefined.APPLICATION_JSON ||
+      encoding.id === EncodingPredefined.TEXT_JSON ||
+      encoding.id === EncodingPredefined.TEXT_JSON5
+    ) {
+      try {
+        const parsed = JSON.parse(text);
+        return { data: parsed, schema: 'JSON', schemaSource: 'builtin' };
+      } catch {
+        return { data: { _error: 'Invalid JSON despite APPLICATION_JSON encoding', _raw: text.slice(0, 200) }, schema: 'JSON', schemaSource: 'raw', error: 'Failed to parse JSON' };
+      }
+    }
+
+    // APPLICATION_PROTOBUF with schema suffix — try SchemaRegistry by type name
+    if (encoding.id === EncodingPredefined.APPLICATION_PROTOBUF && encoding.schema && registry) {
+      const result = registry.decode(encoding.schema, payload);
+      if (result) {
+        const data = summarizeLargeFields(result.data);
+        return { data, schema: result.typeName, schemaSource: 'dynamic' };
+      }
+      // Schema not loaded yet — fall through to dynamic discovery below
+    }
+  }
+
+  // 1. Try JSON sniff (covers no-encoding case and protobuf fallback)
   try {
     const parsed = JSON.parse(text);
     return { data: parsed, schema: 'JSON', schemaSource: 'builtin' };
@@ -155,6 +187,7 @@ export function RawDataViewPanel({
     try {
       const payload = getSamplePayload(sample);
       const sampleTopic = sample.keyexpr().toString();
+      const encodingInfo = getEncodingInfo(sample);
 
       // For daemon topics, skip small subscription payloads — GET polling provides full data
       if (sampleTopic.includes('bubbaloop/daemon/') && payload.length < 20) {
@@ -164,7 +197,7 @@ export function RawDataViewPanel({
       // Buffer payload for retry
       lastPayloadRef.current = { payload, topic: sampleTopic };
 
-      const result = decodePayload(payload, sampleTopic, registry);
+      const result = decodePayload(payload, sampleTopic, registry, encodingInfo);
 
       pendingDataRef.current = { data: result.data, schema: result.schema, source: result.schemaSource, error: result.error || null };
       lastUpdateRef.current = Date.now();
