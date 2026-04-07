@@ -7,17 +7,10 @@ Usage::
 
     ctx = NodeContext.connect()
     pub = ctx.publisher_json("weather/current")
+    sub = ctx.subscribe("other_node/data")
     while not ctx.is_shutdown():
         pub.put({"temperature": 22.5})
-        time.sleep(30)
-    ctx.close()
-
-SHM transport is always enabled — all publishers and subscribers on the
-session benefit from zero-copy delivery automatically when both sides are on
-the same machine. Use ``publisher_raw_local`` / ``subscriber_raw_local`` for
-data that must stay machine-local (e.g. raw RGBA frames from camera to
-detector) — these topics are outside ``bubbaloop/**`` and never cross the
-WebSocket bridge.
+        msg = sub.recv()   # auto-decoded: dict, proto, or bytes
 """
 
 import os
@@ -91,8 +84,9 @@ class NodeContext:
     def local_topic(self, suffix: str) -> str:
         """Return ``bubbaloop/local/{machine_id}/{suffix}``.
 
-        SHM-only — never crosses the WebSocket bridge. Use for large binary payloads
-        consumed only by processes on the same machine (e.g. raw RGBA camera frames).
+        SHM-only — never crosses the WebSocket bridge. Use for large binary
+        payloads consumed only by processes on the same machine (e.g. raw RGBA
+        camera frames).
         """
         return f"bubbaloop/local/{self.machine_id}/{suffix}"
 
@@ -126,11 +120,9 @@ class NodeContext:
     def publisher_raw(self, suffix: str, local: bool = False) -> "RawPublisher":
         """Declare a raw publisher with no encoding.
 
-        When ``local=True``, publishes to ``local/{machine_id}/{suffix}`` with SHM-specific
-        settings: ``congestion_control=Block`` so the publisher waits for the subscriber to
-        release the SHM buffer instead of silently dropping frames. Never crosses the bridge.
-
-        When ``local=False`` (default), publishes to ``bubbaloop/{scope}/{machine_id}/{suffix}``.
+        When ``local=True``, publishes to ``local/{machine_id}/{suffix}`` with
+        ``congestion_control=Block`` — waits for the subscriber to release the
+        SHM buffer instead of dropping frames. Never crosses the bridge.
         """
         from .publisher import RawPublisher
         key = self.local_topic(suffix) if local else self.topic(suffix)
@@ -140,21 +132,26 @@ class NodeContext:
     # Subscribers
     # ------------------------------------------------------------------
 
-    def subscriber_proto(self, suffix: str, local: bool = False) -> "ProtoSubscriber":
-        """Declare a protobuf subscriber that decodes messages automatically from the encoding header.
+    def subscribe(self, suffix: str, local: bool = False) -> "ProtoSubscriber":
+        """Declare a subscriber that auto-decodes every message by its encoding.
 
-        No ``_pb2`` imports needed. The shared :class:`SchemaRegistry` fetches
-        ``FileDescriptorSet`` from ``bubbaloop/**/schema`` on first encounter of
-        an unknown type and builds the message class dynamically.
+        - ``application/protobuf;<TypeName>`` → decoded proto object (schema fetched on demand)
+        - ``application/json``               → parsed ``dict``
+        - anything else                      → raw ``bytes``
 
-        Falls back to raw ``bytes`` if the encoding is not protobuf or the schema
-        cannot be resolved within the timeout (default 2s).
+        When ``local=True``, subscribes to the SHM-only local topic
+        (``bubbaloop/local/{machine_id}/{suffix}``) — use this to receive frames
+        from the camera node without crossing the WebSocket bridge.
 
         Usage::
 
-            sub = ctx.subscriber_proto("tapo_terrace/raw", local=True)
-            for msg in sub:   # decoded RawImage — no _pb2 imports needed
+            sub = ctx.subscribe("tapo_terrace/raw", local=True)
+            for msg in sub:   # RawImage decoded automatically
                 tensor = torch.frombuffer(msg.data, dtype=torch.uint8)
+
+            sub = ctx.subscribe("openmeteo/weather")
+            for msg in sub:   # dict
+                print(msg["temperature"])
         """
         from .schema_registry import SchemaRegistry
         from .subscriber import ProtoSubscriber
@@ -162,23 +159,6 @@ class NodeContext:
             self._schema_registry = SchemaRegistry(self.session)
         key = self.local_topic(suffix) if local else self.topic(suffix)
         return ProtoSubscriber(self.session, key, self._schema_registry)
-
-    def subscriber(self, suffix: str, msg_class=None) -> "TypedSubscriber":
-        """Declare a typed subscriber. Blocks on ``recv()``."""
-        from .subscriber import TypedSubscriber
-        return TypedSubscriber(self.session, self.topic(suffix), msg_class)
-
-    def subscriber_raw(self, suffix: str, local: bool = False) -> "RawSubscriber":
-        """Declare a raw subscriber that yields ``bytes`` with no decoding.
-
-        When ``local=True``, subscribes to ``local/{machine_id}/{suffix}`` — SHM zero-copy,
-        machine-local only. Counterpart to ``publisher_raw(suffix, local=True)``.
-
-        When ``local=False`` (default), subscribes to ``bubbaloop/{scope}/{machine_id}/{suffix}``.
-        """
-        from .subscriber import RawSubscriber
-        key = self.local_topic(suffix) if local else self.topic(suffix)
-        return RawSubscriber(self.session, key)
 
     # ------------------------------------------------------------------
     # Cleanup
