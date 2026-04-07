@@ -18,7 +18,7 @@ python-sdk/
     get_sample.py     # get_sample() — one-shot async subscribe-and-wait
     decode_sample.py  # ProtoDecoder — decode zenoh.Sample to protobuf
   tests/
-    test_context.py   # 48 unit tests — NO real Zenoh session needed
+    test_context.py   # 71 unit tests — NO real Zenoh session needed
   pyproject.toml      # Build config, deps, ruff/pytest/coverage
   pixi.toml           # Dev tasks: test, lint, fmt, check
 ```
@@ -29,7 +29,7 @@ python-sdk/
 # With pixi (recommended)
 cd python-sdk
 pixi run check       # fmt-check + lint (run before every commit)
-pixi run test        # 48 unit tests
+pixi run test        # 71 unit tests
 pixi run test-cov    # tests + coverage report
 
 # With venv (alternative)
@@ -45,6 +45,55 @@ cd python-sdk
 - Config in `pyproject.toml` under `[tool.ruff]` — do NOT add `.flake8` or `setup.cfg`
 - Line length: 120 characters
 - `TYPE_CHECKING` guard for cross-module type annotations — NEVER string-quoted forward refs (`"Foo"`)
+
+**Type annotations:**
+
+- Use modern Python 3.11+ union syntax: `X | Y` and `X | None` — NOT `Union[X, Y]` or `Optional[X]`
+- Annotate all public method parameters and return types
+- Annotate class attributes and instance variables when the type is not obvious from the assignment
+- When fixing type errors, follow this hierarchy:
+  1. Add proper type annotations
+  2. Use `X | Y` union syntax or `cast()` from `typing`
+  3. Use `TYPE_CHECKING` for circular imports
+  4. Last resort: `# type: ignore[<error-code>]` with a comment explaining why
+- AVOID `# type: ignore` without an error code — always be specific
+
+**Docstrings:**
+- Google docstring style for all public modules, classes, and functions
+- Do NOT add a docstring to `__init__()` — document instantiation at the class level instead
+- Include `Args:`, `Returns:`, and `Raises:` sections when applicable
+
+```python
+class TypedSubscriber:
+    """Blocking subscriber with optional timeout.
+
+    Internally queue-backed: Zenoh delivers raw bytes via a callback into a
+    ``queue.Queue``. Decoding happens in ``recv()`` on the consumer thread.
+
+    Args:
+        session: Active Zenoh session.
+        topic: Key expression to subscribe to.
+        msg_class: Protobuf message class for decoding, or None for raw bytes.
+    """
+
+    def __init__(self, session: zenoh.Session, topic: str, msg_class=None): ...
+
+def recv(self, timeout: float | None = None) -> bytes | None:
+    """Block until the next message arrives.
+
+    Args:
+        timeout: Max seconds to wait. None blocks indefinitely.
+
+    Returns:
+        Decoded message, raw bytes, or None on timeout/close.
+    """
+```
+
+**String formatting:**
+
+- Use `%`-style formatting for log calls — NOT f-strings: `log.info("Started %s", name)`
+  - Reason: lazy evaluation — the string is only formatted if the log level is active
+- Use f-strings everywhere else: `raise ValueError(f"Unknown topic: {topic}")`
 
 **Imports:**
 - Cross-module type-only imports go under `if TYPE_CHECKING:` at the top of the file
@@ -73,11 +122,10 @@ cd python-sdk
 Tests do NOT open a real Zenoh session. Use `_make_context()`:
 
 ```python
-def _make_context(scope, machine_id):
+def _make_context(machine_id):
     from bubbaloop_sdk.context import NodeContext
     ctx = object.__new__(NodeContext)
     ctx.session = MagicMock()
-    ctx.scope = scope
     ctx.machine_id = machine_id
     ctx.instance_name = machine_id
     ctx._shutdown = threading.Event()
@@ -107,4 +155,4 @@ assert event.wait(timeout=2.0), "handler not called within 2s"
 - `CallbackSubscriber` and `RawCallbackSubscriber` do NOT own an executor — `undeclare()` only calls `_sub.undeclare()`; the `_async` variants do own an executor and shut it down in `undeclare()`
 - `TypedSubscriber` and `RawSubscriber` are iterable (`for msg in sub`) but iteration blocks forever — always prefer `recv(timeout=...)` in shutdown-aware loops
 - `run_node()` reads `config.yaml` by default; override with `-c path/config.yaml`. The `name` field in config sets `instance_name` for health/schema topics — collisions happen if two instances share the same name
-- Health topic format: `bubbaloop/{scope}/{machine_id}/{instance_name}/health` — ensure consumer patterns match exactly
+- Health topic format: `bubbaloop/global/{machine_id}/{instance_name}/health` — ensure consumer patterns match exactly
