@@ -143,17 +143,21 @@ impl Soul {
     }
 
     /// Ensure the soul directory exists with default files.
+    /// On Unix, sets directory to 0700 and files to 0600 for security.
     pub fn ensure_defaults() {
         let dir = soul_directory();
         if let Err(e) = std::fs::create_dir_all(&dir) {
             log::warn!("Failed to create soul directory: {}", e);
             return;
         }
+        set_restrictive_dir_permissions(&dir);
 
         let identity_path = dir.join("identity.md");
         if !identity_path.exists() {
             if let Err(e) = std::fs::write(&identity_path, DEFAULT_IDENTITY) {
                 log::warn!("Failed to write default identity.md: {}", e);
+            } else {
+                set_restrictive_file_permissions(&identity_path);
             }
         }
 
@@ -161,6 +165,8 @@ impl Soul {
         if !caps_path.exists() {
             if let Err(e) = std::fs::write(&caps_path, DEFAULT_CAPABILITIES_TOML) {
                 log::warn!("Failed to write default capabilities.toml: {}", e);
+            } else {
+                set_restrictive_file_permissions(&caps_path);
             }
         }
     }
@@ -228,7 +234,9 @@ impl Soul {
              Be concise. Report what you did and the result, not what you plan to do.",
         );
 
-        std::fs::write(soul_dir.join("identity.md"), &identity)?;
+        let identity_path = soul_dir.join("identity.md");
+        std::fs::write(&identity_path, &identity)?;
+        set_restrictive_file_permissions(&identity_path);
 
         // Update approval mode in capabilities.toml (preserve other settings)
         let caps_path = soul_dir.join("capabilities.toml");
@@ -239,6 +247,7 @@ impl Soul {
         let updated = toml::to_string_pretty(&caps)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         std::fs::write(&caps_path, updated)?;
+        set_restrictive_file_permissions(&caps_path);
 
         println!();
         println!("  Agent configured: {} ({})", name, focus);
@@ -326,6 +335,34 @@ pub fn sanitize_agent_id(name: &str) -> String {
         result[..result.len().min(64)].to_string()
     }
 }
+
+/// Set restrictive permissions (0700) on a directory. Unix only, no-op on other platforms.
+#[cfg(unix)]
+fn set_restrictive_dir_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = std::fs::Permissions::from_mode(0o700);
+    if let Err(e) = std::fs::set_permissions(path, perms) {
+        log::warn!("Failed to set permissions on {}: {}", path.display(), e);
+    }
+}
+
+/// Set restrictive permissions (0700) on a directory. No-op on non-Unix.
+#[cfg(not(unix))]
+fn set_restrictive_dir_permissions(_path: &Path) {}
+
+/// Set restrictive permissions (0600) on a file. Unix only, no-op on other platforms.
+#[cfg(unix)]
+fn set_restrictive_file_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = std::fs::Permissions::from_mode(0o600);
+    if let Err(e) = std::fs::set_permissions(path, perms) {
+        log::warn!("Failed to set permissions on {}: {}", path.display(), e);
+    }
+}
+
+/// Set restrictive permissions (0600) on a file. No-op on non-Unix.
+#[cfg(not(unix))]
+fn set_restrictive_file_permissions(_path: &Path) {}
 
 /// Return the soul directory path (`~/.bubbaloop/soul/`).
 pub fn soul_directory() -> PathBuf {

@@ -234,6 +234,18 @@ impl AgentRuntime {
         let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
         let machine_id = crate::daemon::util::get_machine_id();
 
+        // Load authentication token for inbox message validation
+        let expected_token = match crate::mcp::auth::load_or_generate_token() {
+            Ok(token) => token,
+            Err(e) => {
+                log::error!("[Runtime] Failed to load MCP token: {}", e);
+                return Err(crate::agent::AgentError::Config(format!(
+                    "Failed to load MCP token: {}",
+                    e
+                )));
+            }
+        };
+
         // Create shared platform for all agents
         let platform = Arc::new(DaemonPlatform::new(
             node_manager,
@@ -568,6 +580,18 @@ impl AgentRuntime {
                     let payload = sample.payload().to_bytes().to_vec();
                     match serde_json::from_slice::<AgentMessage>(&payload) {
                         Ok(msg) => {
+                            // Validate auth token before routing
+                            let token_valid = match &msg.auth_token {
+                                Some(token) => crate::mcp::auth::validate_token(token, &expected_token),
+                                None => false,
+                            };
+                            if !token_valid {
+                                log::warn!(
+                                    "[Runtime] Rejected inbox message id={}: missing or invalid auth token",
+                                    msg.id
+                                );
+                                continue;
+                            }
                             log::info!(
                                 "[Runtime] Inbox message: id={}, agent={:?}, text_len={}",
                                 msg.id, msg.agent, msg.text.len()
@@ -641,6 +665,10 @@ async fn agent_loop(
     let initial_caps = soul.read().await.capabilities.clone();
     let mut arousal = ArousalState::new(&initial_caps);
 
+    // Rate limiting: minimum 2 seconds between LLM turns to prevent abuse.
+    const MIN_TURN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+    let mut last_turn_time: Option<tokio::time::Instant> = None;
+
     // Cache onboarding state in memory — avoids a syscall on every inbox message.
     // True only while the marker exists and identity.md hasn't been written yet.
     let mut needs_onboarding = onboarding_marker.exists() && !identity_path.exists();
@@ -658,6 +686,19 @@ async fn agent_loop(
         tokio::select! {
             // Inbox message
             Some(msg) = inbox_rx.recv() => {
+                // Rate limiting: enforce minimum interval between LLM turns
+                if let Some(last) = last_turn_time {
+                    let elapsed = last.elapsed();
+                    if elapsed < MIN_TURN_INTERVAL {
+                        let wait = MIN_TURN_INTERVAL - elapsed;
+                        log::warn!(
+                            "[Agent:{}] Rate limited: {}ms since last turn, waiting {}ms",
+                            agent_id, elapsed.as_millis(), wait.as_millis()
+                        );
+                        tokio::time::sleep(wait).await;
+                    }
+                }
+
                 arousal.spike(ArousalSource::UserInput);
                 let soul_snapshot = soul.read().await.clone();
 
@@ -675,6 +716,7 @@ async fn agent_loop(
                     None
                 };
 
+                last_turn_time = Some(tokio::time::Instant::now());
                 if let Err(e) = run_agent_turn(
                     &provider,
                     &dispatcher,
@@ -689,7 +731,10 @@ async fn agent_loop(
                     },
                 ).await {
                     log::error!("[Agent:{}] Turn failed: {}", agent_id, e);
-                    sink.emit(AgentEvent::error(&msg.id, &e.to_string())).await;
+                    // Sanitize error before sending over Zenoh outbox:
+                    // truncate to avoid leaking verbose API response details.
+                    let err_msg = sanitize_outbox_error(&e.to_string());
+                    sink.emit(AgentEvent::error(&msg.id, &err_msg)).await;
                     sink.emit(AgentEvent::done(&msg.id)).await;
                 }
             }
@@ -733,6 +778,14 @@ async fn agent_loop(
             arousal.update(&state);
 
             for job in &jobs {
+                // Rate limiting for job turns
+                if let Some(last) = last_turn_time {
+                    let elapsed = last.elapsed();
+                    if elapsed < MIN_TURN_INTERVAL {
+                        tokio::time::sleep(MIN_TURN_INTERVAL - elapsed).await;
+                    }
+                }
+
                 let soul_snapshot = soul.read().await.clone();
                 {
                     let backend = memory.backend.lock().await;
@@ -747,6 +800,7 @@ async fn agent_loop(
                 }
                 let cid = uuid::Uuid::new_v4().to_string();
 
+                last_turn_time = Some(tokio::time::Instant::now());
                 if let Err(e) = run_agent_turn(
                     &provider,
                     &dispatcher,
@@ -804,6 +858,24 @@ async fn agent_loop(
                 memory.clear_short_term();
             }
         }
+    }
+}
+
+/// Sanitize an error message before sending it over the Zenoh outbox.
+///
+/// Truncates to a maximum length and strips content that might contain
+/// verbose API request/response details to avoid leaking sensitive data.
+fn sanitize_outbox_error(msg: &str) -> String {
+    const MAX_LEN: usize = 200;
+    let sanitized: String = msg
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\n')
+        .take(MAX_LEN)
+        .collect();
+    if msg.len() > MAX_LEN {
+        format!("{}... (truncated)", sanitized)
+    } else {
+        sanitized
     }
 }
 
@@ -909,5 +981,27 @@ provider = "ollama"
 "#;
         let config: AgentsConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.agents["local-agent"].provider, "ollama");
+    }
+
+    #[test]
+    fn sanitize_outbox_error_truncates() {
+        let long_msg = "x".repeat(300);
+        let result = sanitize_outbox_error(&long_msg);
+        assert!(result.len() < 250);
+        assert!(result.ends_with("(truncated)"));
+    }
+
+    #[test]
+    fn sanitize_outbox_error_strips_control_chars() {
+        let msg = "error\x00with\x01control";
+        let result = sanitize_outbox_error(msg);
+        assert!(!result.contains('\x00'));
+        assert!(!result.contains('\x01'));
+    }
+
+    #[test]
+    fn sanitize_outbox_error_preserves_short_messages() {
+        let msg = "simple error";
+        assert_eq!(sanitize_outbox_error(msg), "simple error");
     }
 }

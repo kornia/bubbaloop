@@ -87,15 +87,43 @@ pub fn download_text(url: &str) -> Result<String> {
     }
 }
 
+/// Find sha256sum or shasum in standard system paths.
+///
+/// Searches `/usr/bin/sha256sum`, `/usr/local/bin/sha256sum`, `/usr/bin/shasum`
+/// in order, returning the first existing path.
+pub fn find_sha256sum() -> Option<(std::path::PathBuf, bool)> {
+    // (path, is_shasum) — shasum needs `-a 256` flag
+    for (dir, binary, is_shasum) in &[
+        ("/usr/bin", "sha256sum", false),
+        ("/usr/local/bin", "sha256sum", false),
+        ("/usr/bin", "shasum", true),
+        ("/usr/local/bin", "shasum", true),
+    ] {
+        let path = Path::new(dir).join(binary);
+        if path.exists() {
+            return Some((path, *is_shasum));
+        }
+    }
+    None
+}
+
 /// Verify that a file matches an expected SHA256 checksum.
 ///
 /// The `expected` string should be in the format output by `sha256sum`:
 /// `<hex_hash>  <filename>\n` or just `<hex_hash>`.
 pub fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
-    let output = Command::new("sha256sum")
-        .arg(path)
+    let (sha_bin, is_shasum) = find_sha256sum()
+        .ok_or_else(|| MarketplaceError::DownloadFailed("sha256sum/shasum not found in standard paths (/usr/bin, /usr/local/bin)".to_string()))?;
+
+    let mut cmd = Command::new(sha_bin);
+    if is_shasum {
+        cmd.args(["-a", "256"]);
+    }
+    cmd.arg(path);
+
+    let output = cmd
         .output()
-        .map_err(|e| MarketplaceError::DownloadFailed(format!("sha256sum not found: {}", e)))?;
+        .map_err(|e| MarketplaceError::DownloadFailed(format!("sha256sum failed to execute: {}", e)))?;
 
     if !output.status.success() {
         return Err(MarketplaceError::DownloadFailed(
@@ -118,10 +146,17 @@ pub fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
 }
 
 /// Set a file as executable (chmod 755).
+#[cfg(unix)]
 pub fn set_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let perms = std::fs::Permissions::from_mode(0o755);
     std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+/// Set a file as executable (no-op on non-Unix).
+#[cfg(not(unix))]
+pub fn set_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -172,13 +207,21 @@ pub fn download_precompiled(entry: &RegistryNode) -> Result<String> {
     log::info!("Downloading checksum from {}", checksum_url);
     let expected_checksum = download_text(&checksum_url)?;
 
-    // Download binary
+    // Download binary to a temp file, verify, then atomically rename
     let binary_path = binary_dir.join(binary_name);
+    let tmp_path = binary_dir.join(format!("{}.tmp", binary_name));
     log::info!("Downloading binary from {}", url);
-    download_file(&url, &binary_path)?;
+    download_file(&url, &tmp_path)?;
 
-    // Verify checksum
-    verify_sha256(&binary_path, &expected_checksum)?;
+    // Verify checksum on the temp file before moving into place
+    if let Err(e) = verify_sha256(&tmp_path, &expected_checksum) {
+        // Clean up the temp file on checksum failure
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    // Atomic rename to final path
+    std::fs::rename(&tmp_path, &binary_path)?;
 
     // Make executable
     set_executable(&binary_path)?;

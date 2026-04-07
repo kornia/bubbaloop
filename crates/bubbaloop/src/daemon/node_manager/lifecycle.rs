@@ -52,7 +52,7 @@ impl NodeManager {
                 .command
                 .as_deref()
                 .unwrap_or("./target/release/unknown");
-            Some(format!("{} -c {}", base_cmd, config_path))
+            Some(format!("{} -c \"{}\"", base_cmd, config_path))
         } else {
             manifest.command.clone()
         };

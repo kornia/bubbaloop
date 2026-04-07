@@ -103,11 +103,13 @@ jobs:
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
+        env:
+          DASH_VERSION: ${{ github.event.inputs.version }}
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: Bubbaloop Dashboard ${{ github.event.inputs.version }}
+          tag_name: ${{ env.DASH_VERSION }}
+          name: Bubbaloop Dashboard ${{ env.DASH_VERSION }}
           draft: false
-          prerelease: ${{ contains(github.event.inputs.version, '-') }}
+          prerelease: ${{ contains(env.DASH_VERSION, '-') }}
           generate_release_notes: false
           files: |
             release-assets/bubbaloop-dash-linux-amd64
@@ -123,7 +125,7 @@ jobs:
 
             ```bash
             # Download for your platform
-            curl -sSL https://github.com/kornia/bubbaloop/releases/download/${{ github.event.inputs.version }}/bubbaloop-dash-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') -o bubbaloop-dash
+            curl -sSL https://github.com/kornia/bubbaloop/releases/download/${{ env.DASH_VERSION }}/bubbaloop-dash-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') -o bubbaloop-dash
             chmod +x bubbaloop-dash
             ```
 

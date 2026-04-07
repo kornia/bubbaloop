@@ -2,7 +2,8 @@
 //!
 //! Lightweight HTTP endpoints that expose `PlatformOperations` to the CLI client.
 //! These run alongside MCP on the same axum router (port 8088) and are
-//! localhost-only, unauthenticated (same security model as the /health endpoint).
+//! localhost-only. Bearer token authentication is enforced at the HTTP
+//! middleware layer in `mcp/mod.rs`.
 
 use axum::extract::{Path, State};
 use axum::routing::{delete, get, post};

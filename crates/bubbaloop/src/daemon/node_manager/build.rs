@@ -56,7 +56,7 @@ impl NodeManager {
                 log::warn!(
                     "Could not check state of {} ({}), proceeding anyway",
                     name,
-                    e
+                    crate::daemon::util::sanitize_log_msg(&e.to_string())
                 );
             }
             _ => {}
@@ -246,7 +246,8 @@ fn validate_build_command(cmd: &str) -> Result<()> {
 
     // Reject dangerous shell metacharacters
     const DANGEROUS_CHARS: &[char] = &[
-        '$', '`', '|', ';', '&', '>', '<', '(', ')', '{', '}', '!', '\\', '\n', '\r',
+        '$', '`', '|', ';', '&', '>', '<', '(', ')', '{', '}', '!', '\\', '\n', '\r', '*', '?',
+        '[', ']', '~', '#',
     ];
     if let Some(bad_char) = cmd.chars().find(|c| DANGEROUS_CHARS.contains(c)) {
         return Err(NodeManagerError::BuildError(format!(

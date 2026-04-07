@@ -5,6 +5,7 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Bubbaloop Dashboard</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' ws: wss:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; script-src 'self' 'wasm-unsafe-eval'">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -20,13 +21,31 @@
     <script type="module" src="/src/main.tsx"></script>
     <script>
       // Catch fatal module loading errors (WASM, browser compat)
-      window.addEventListener('error', function(e) {
+      function showErrorFallback(title, message, hint) {
         var f = document.getElementById('loading-fallback');
-        if (f) { f.innerHTML = '<div style="text-align:center;padding:20px"><div style="font-size:24px;margin-bottom:12px;color:#ff1744">Failed to load</div><div style="color:#9090a0;font-size:14px;max-width:400px">' + (e.message || 'Unknown error') + '</div><div style="margin-top:16px;color:#606070;font-size:12px">Try Chrome or Safari 15+ on desktop</div></div>'; }
+        if (!f) return;
+        f.textContent = '';
+        var wrapper = document.createElement('div');
+        wrapper.style.cssText = 'text-align:center;padding:20px';
+        var h = document.createElement('div');
+        h.style.cssText = 'font-size:24px;margin-bottom:12px;color:#ff1744';
+        h.textContent = title;
+        var msg = document.createElement('div');
+        msg.style.cssText = 'color:#9090a0;font-size:14px;max-width:400px';
+        msg.textContent = message;
+        var foot = document.createElement('div');
+        foot.style.cssText = 'margin-top:16px;color:#606070;font-size:12px';
+        foot.textContent = hint;
+        wrapper.appendChild(h);
+        wrapper.appendChild(msg);
+        wrapper.appendChild(foot);
+        f.appendChild(wrapper);
+      }
+      window.addEventListener('error', function(e) {
+        showErrorFallback('Failed to load', e.message || 'Unknown error', 'Try Chrome or Safari 15+ on desktop');
       });
       window.addEventListener('unhandledrejection', function(e) {
-        var f = document.getElementById('loading-fallback');
-        if (f) { f.innerHTML = '<div style="text-align:center;padding:20px"><div style="font-size:24px;margin-bottom:12px;color:#ff1744">Connection Error</div><div style="color:#9090a0;font-size:14px;max-width:400px">' + (e.reason?.message || e.reason || 'Module failed to load') + '</div><div style="margin-top:16px;color:#606070;font-size:12px">Check console for details (F12)</div></div>'; }
+        showErrorFallback('Connection Error', e.reason?.message || String(e.reason || 'Module failed to load'), 'Check console for details (F12)');
       });
     </script>
   </body>

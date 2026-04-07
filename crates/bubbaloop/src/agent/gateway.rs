@@ -17,6 +17,9 @@ pub struct AgentMessage {
     /// Target agent ID. If None, routes to the default agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Bearer token for authentication (loaded from `~/.bubbaloop/mcp-token`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 // ── Outbox (Daemon → CLI) ────────────────────────────────────────
@@ -205,6 +208,7 @@ mod tests {
             id: "abc-123".to_string(),
             text: "list my nodes".to_string(),
             agent: Some("camera-expert".to_string()),
+            auth_token: Some("bb_test".to_string()),
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: AgentMessage = serde_json::from_str(&json).unwrap();
@@ -217,6 +221,7 @@ mod tests {
             id: "abc-123".to_string(),
             text: "hello".to_string(),
             agent: None,
+            auth_token: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(!json.contains("agent"));

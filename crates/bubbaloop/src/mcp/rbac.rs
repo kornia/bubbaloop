@@ -65,13 +65,16 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "get_system_telemetry"
         | "get_telemetry_history"
         | "list_missions"
-        | "list_constraints" => Tier::Viewer,
+        | "list_constraints"
+        | "get_belief"
+        | "list_world_state" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
         "start_node" | "stop_node" | "restart_node" | "get_node_config" | "send_command"
         | "get_node_logs" | "enable_autostart" | "disable_autostart" | "approve_proposal"
         | "reject_proposal" | "delete_job" | "pause_mission" | "resume_mission"
-        | "cancel_mission" => Tier::Operator,
+        | "cancel_mission"
+        | "update_belief" => Tier::Operator,
 
         // Admin tools (system modification)
         "install_node"
@@ -123,6 +126,8 @@ mod tests {
         assert_eq!(required_tier("discover_nodes"), Tier::Viewer);
         assert_eq!(required_tier("list_proposals"), Tier::Viewer);
         assert_eq!(required_tier("list_jobs"), Tier::Viewer);
+        assert_eq!(required_tier("get_belief"), Tier::Viewer);
+        assert_eq!(required_tier("list_world_state"), Tier::Viewer);
     }
 
     #[test]
@@ -132,6 +137,7 @@ mod tests {
         assert_eq!(required_tier("approve_proposal"), Tier::Operator);
         assert_eq!(required_tier("reject_proposal"), Tier::Operator);
         assert_eq!(required_tier("delete_job"), Tier::Operator);
+        assert_eq!(required_tier("update_belief"), Tier::Operator);
     }
 
     #[test]

@@ -46,6 +46,11 @@ pub async fn run_agent_client(
     Ok(())
 }
 
+/// Load the auth token from `~/.bubbaloop/mcp-token` for Zenoh gateway authentication.
+fn load_auth_token() -> Option<String> {
+    crate::mcp::auth::load_or_generate_token().ok()
+}
+
 /// Send a single message and render the streamed response (plain stdout, used for single-message mode).
 async fn send_and_render(
     session: &Arc<Session>,
@@ -56,6 +61,7 @@ async fn send_and_render(
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let correlation_id = uuid::Uuid::new_v4().to_string();
+    let auth_token = load_auth_token();
 
     // Subscribe to outbox BEFORE publishing (avoid missing early events)
     let outbox_pattern = gateway::outbox_wildcard(scope, machine_id);
@@ -70,6 +76,7 @@ async fn send_and_render(
         id: correlation_id.clone(),
         text: text.to_string(),
         agent: agent.map(|s| s.to_string()),
+        auth_token,
     };
     let payload = serde_json::to_vec(&msg)?;
     session
@@ -237,6 +244,9 @@ async fn run_tui_repl(
         .await
         .map_err(|e| format!("Failed to subscribe to outbox: {}", e))?;
 
+    // Load auth token once for all turns
+    let auth_token = load_auth_token();
+
     // ── App state ─────────────────────────────────────────────────────────────
     let mut output: Vec<OutputLine> = Vec::new();
     let mut input = String::new();
@@ -364,6 +374,7 @@ async fn run_tui_repl(
                                         id: cid,
                                         text: trimmed,
                                         agent: agent.map(|s| s.to_string()),
+                                        auth_token: auth_token.clone(),
                                     };
                                     if let Ok(payload) = serde_json::to_vec(&msg) {
                                         let _ = session.put(&inbox, payload).await;
@@ -504,12 +515,21 @@ async fn run_tui_repl(
 }
 
 /// Truncate a string to `max_len` characters, appending an ellipsis if needed.
+/// Uses char_indices() to avoid panicking on multi-byte UTF-8 characters.
 fn truncate_with_ellipsis(s: &str, max_len: usize) -> String {
-    if s.len() > max_len {
-        format!("{}…", &s[..max_len])
-    } else {
-        s.to_string()
+    if s.len() <= max_len {
+        return s.to_string();
     }
+    // Find the last char boundary that fits within max_len bytes
+    let mut end = 0;
+    for (i, c) in s.char_indices() {
+        let char_end = i + c.len_utf8();
+        if char_end > max_len {
+            break;
+        }
+        end = char_end;
+    }
+    format!("{}…", &s[..end])
 }
 
 /// Extract a short human-readable hint from a tool's JSON input.

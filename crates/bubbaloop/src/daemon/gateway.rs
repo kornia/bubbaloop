@@ -15,6 +15,9 @@ pub struct DaemonCommand {
     pub id: String,
     /// The command to execute.
     pub command: DaemonCommandType,
+    /// Bearer token for authentication (loaded from `~/.bubbaloop/mcp-token`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 /// Command types the daemon can process.
@@ -182,6 +185,7 @@ mod tests {
         let cmd = DaemonCommand {
             id: "abc-123".to_string(),
             command: DaemonCommandType::ListNodes,
+            auth_token: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
@@ -195,6 +199,7 @@ mod tests {
             command: DaemonCommandType::StartNode {
                 name: "camera".to_string(),
             },
+            auth_token: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
@@ -210,6 +215,7 @@ mod tests {
                 name: Some("entrance-cam".to_string()),
                 config: None,
             },
+            auth_token: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
@@ -265,6 +271,7 @@ mod tests {
             let cmd = DaemonCommand {
                 id: "id".to_string(),
                 command,
+                auth_token: Some("bb_test".to_string()),
             };
             let json = serde_json::to_string(&cmd).unwrap();
             let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();

@@ -37,6 +37,8 @@ pub struct DaemonClient {
     session: Arc<Session>,
     scope: String,
     machine_id: String,
+    /// Cached auth token loaded from `~/.bubbaloop/mcp-token`.
+    auth_token: Option<String>,
 }
 
 impl DaemonClient {
@@ -44,10 +46,12 @@ impl DaemonClient {
     pub fn new(session: Arc<Session>) -> Self {
         let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
         let machine_id = crate::daemon::util::get_machine_id();
+        let auth_token = crate::mcp::auth::load_or_generate_token().ok();
         Self {
             session,
             scope,
             machine_id,
+            auth_token,
         }
     }
 
@@ -164,6 +168,7 @@ impl DaemonClient {
         let cmd = DaemonCommand {
             id: correlation_id.clone(),
             command,
+            auth_token: self.auth_token.clone(),
         };
         let payload = serde_json::to_vec(&cmd)
             .map_err(|e| DaemonClientError::Request(format!("Serialize error: {}", e)))?;

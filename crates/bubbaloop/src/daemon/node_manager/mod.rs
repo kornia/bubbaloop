@@ -50,10 +50,15 @@ pub enum NodeManagerError {
 
 pub type Result<T> = std::result::Result<T, NodeManagerError>;
 
-/// Get all non-loopback IP addresses of this machine
+/// Get all non-loopback IP addresses of this machine.
+///
+/// Uses absolute path `/usr/bin/hostname` to avoid PATH-based lookup.
 fn get_machine_ips() -> Vec<String> {
     // Use `hostname -I` which returns all IPs (works on Linux)
-    if let Ok(output) = std::process::Command::new("hostname").arg("-I").output() {
+    if let Ok(output) = std::process::Command::new("/usr/bin/hostname")
+        .arg("-I")
+        .output()
+    {
         if output.status.success() {
             return String::from_utf8_lossy(&output.stdout)
                 .split_whitespace()
