@@ -3,20 +3,33 @@
 import zenoh
 
 
-class TypedSubscriber:
-    """Blocking subscriber. Iterates with ``for msg in sub`` (blocks on each recv)."""
+class ProtoSubscriber:
+    """Blocking subscriber that decodes protobuf automatically from the encoding header.
 
-    def __init__(self, session: zenoh.Session, topic: str, msg_class=None):
+    No ``_pb2`` imports needed. On each message the encoding string
+    (``application/protobuf;<TypeName>``) is used to look up the message class
+    in the shared :class:`~bubbaloop_sdk.schema_registry.SchemaRegistry`, which
+    fetches ``FileDescriptorSet`` from the publishing node's ``/schema`` queryable
+    on first encounter and caches the result.
+
+    Falls back to raw ``bytes`` if the encoding is not protobuf or the schema
+    cannot be resolved within the timeout (default 2s).
+
+    Usage::
+
+        sub = ctx.subscriber_proto("tapo_terrace/raw", local=True)
+        for msg in sub:   # decoded RawImage — no _pb2 imports needed
+            tensor = torch.frombuffer(msg.data, dtype=torch.uint8)
+    """
+
+    def __init__(self, session: zenoh.Session, topic: str, registry):
         self._sub = session.declare_subscriber(topic)
-        self._msg_class = msg_class
+        self._registry = registry
 
     def recv(self):
-        """Block until the next sample arrives and return the decoded message."""
+        """Block until next message and return the decoded proto object."""
         sample = self._sub.recv()
-        payload = bytes(sample.payload.to_bytes())
-        if self._msg_class is not None and hasattr(self._msg_class, "FromString"):
-            return self._msg_class.FromString(payload)
-        return payload
+        return self._registry.decode(sample)
 
     def __iter__(self):
         return self
@@ -36,15 +49,13 @@ class RawSubscriber:
 
     No decoding is applied — the caller owns the byte layout entirely.
     SHM zero-copy delivery is used automatically when both sides have the session
-    SHM transport enabled (``NodeContext.builder().with_shm().connect()``), but
-    the subscriber works over any Zenoh transport.
+    SHM transport enabled, but the subscriber works over any Zenoh transport.
 
     Usage::
 
-        ctx = NodeContext.builder().with_shm().connect()
-        sub = ctx.subscriber_raw("camera/raw")
+        sub = ctx.subscriber_raw("camera/raw", local=True)
         for raw_bytes in sub:
-            frame = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(h, w, 4)
+            tensor = torch.frombuffer(raw_bytes, dtype=torch.uint8)
     """
 
     def __init__(self, session: zenoh.Session, topic: str):
