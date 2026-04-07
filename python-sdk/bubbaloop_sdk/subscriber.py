@@ -66,6 +66,34 @@ class TypedSubscriber:
                 return self._msg_class.FromString(payload)
             return payload
         return None
+class ProtoSubscriber:
+    """Blocking subscriber that decodes protobuf automatically from the encoding header.
+
+    No ``_pb2`` imports needed. On each message the encoding string
+    (``application/protobuf;<TypeName>``) is used to look up the message class
+    in the shared :class:`~bubbaloop_sdk.schema_registry.SchemaRegistry`, which
+    fetches ``FileDescriptorSet`` from the publishing node's ``/schema`` queryable
+    on first encounter and caches the result.
+
+    Falls back to raw ``bytes`` if the encoding is not protobuf or the schema
+    cannot be resolved within the timeout (default 2s).
+
+    Usage::
+
+        sub = ctx.subscriber_proto("tapo_terrace/raw", local=True)
+        for msg in sub:   # decoded RawImage — no _pb2 imports needed
+            tensor = torch.frombuffer(msg.data, dtype=torch.uint8)
+    """
+
+    def __init__(self, session: zenoh.Session, topic: str, registry):
+        self._sub = session.declare_subscriber(topic)
+        self._registry = registry
+
+    def recv(self):
+        """Block until next message and return the decoded proto object."""
+        # NOTE: this Subscriber is new and does not yet implement timeouts or close handling.
+        sample = self._sub.recv()
+        return self._registry.decode(sample)
 
     def __iter__(self):
         return self
@@ -84,10 +112,21 @@ class TypedSubscriber:
 
 
 class RawSubscriber:
-    """Blocking subscriber that yields raw ``zenoh.Sample`` objects, with optional timeout.
+    """Blocking subscriber that yields raw ``bytes`` objects, with optional timeout.
 
     Internally queue-backed — same pattern as ``TypedSubscriber``.
     ``undeclare()`` pushes a sentinel to unblock any waiting ``recv()``.
+
+    No decoding is applied — the caller owns the byte layout entirely.
+    SHM zero-copy delivery is used automatically when both sides have the session
+    SHM transport enabled, but the subscriber works over any Zenoh transport.
+
+    Usage::
+
+        sub = ctx.subscriber_raw("camera/raw", local=True)
+        for raw_bytes in sub:
+            tensor = torch.frombuffer(raw_bytes, dtype=torch.uint8)
+
     """
 
     def __init__(self, session: zenoh.Session, key_expr: str):
@@ -100,7 +139,7 @@ class RawSubscriber:
 
         self._sub = session.declare_subscriber(key_expr, _on_sample)
 
-    def recv(self, timeout: float | None = None):
+    def recv(self, timeout: float | None = None) -> bytes | None:
         """Block until the next sample arrives. Returns ``None`` on timeout or close.
 
         Polls in ``_POLL_INTERVAL``-second slices so that all concurrent callers
@@ -118,7 +157,7 @@ class RawSubscriber:
             if sample is _CLOSED:
                 self._closed.set()
                 return None
-            return sample
+            return bytes(sample.payload)
         return None
 
     def __iter__(self):

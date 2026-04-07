@@ -74,7 +74,7 @@ describe('useLiveliness', () => {
     renderHook(() => useLiveliness(mockSession));
 
     await waitFor(() => {
-      expect(declareSubscriberSpy).toHaveBeenCalledWith('bubbaloop/**', {
+      expect(declareSubscriberSpy).toHaveBeenCalledWith('bubbaloop/global/**', {
         callback: expect.any(Function),
       });
     });

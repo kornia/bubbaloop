@@ -1,4 +1,4 @@
-"""Declared publishers for JSON and protobuf messages."""
+"""Declared publishers for JSON, protobuf, and SHM messages."""
 
 import json
 
@@ -54,6 +54,36 @@ class ProtoPublisher:
         else:
             raise TypeError(f"Expected protobuf message or bytes, got {type(msg).__name__}")
         self._pub.put(data)
+
+    def undeclare(self) -> None:
+        self._pub.undeclare()
+
+
+class RawPublisher:
+    """Declared publisher for raw byte payloads with no encoding overhead.
+
+    When ``local=True``, uses ``congestion_control=Block`` — the publisher waits for
+    the subscriber to release the SHM buffer instead of silently dropping frames.
+    Topic is ``local/{machine_id}/suffix`` (never crosses the WebSocket bridge).
+
+    When ``local=False`` (default), uses standard drop-on-congestion and publishes
+    to the global ``bubbaloop/**`` topic space.
+    """
+
+    def __init__(self, declared_publisher: zenoh.Publisher):
+        self._pub = declared_publisher
+
+    @classmethod
+    def _declare(cls, session: zenoh.Session, topic: str, local: bool = False) -> "RawPublisher":
+        kwargs = {}
+        if local:
+            kwargs["congestion_control"] = zenoh.CongestionControl.BLOCK
+        pub = session.declare_publisher(topic, **kwargs)
+        return cls(pub)
+
+    def put(self, data: bytes | bytearray) -> None:
+        """Publish raw bytes."""
+        self._pub.put(bytes(data))
 
     def undeclare(self) -> None:
         self._pub.undeclare()

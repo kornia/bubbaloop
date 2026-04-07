@@ -72,11 +72,14 @@ impl<T: prost::Message + Default> TypedSubscriber<T> {
     }
 }
 
-/// An untyped (raw) subscriber that exposes [`Sample`] values directly.
+/// Subscriber for raw byte payloads, counterpart to [`RawPublisher`](crate::RawPublisher).
+///
+/// Receives payloads as [`ZBytes`](zenoh::bytes::ZBytes) with no decoding — the caller
+/// owns the byte layout entirely. Works with any Zenoh transport; SHM zero-copy is used
+/// automatically when both sides have it enabled in their session config.
 ///
 /// Created via [`NodeContext::subscriber_raw`](crate::NodeContext::subscriber_raw).
-/// Useful for dashboard-style dynamic decoding where the type is not known at compile time.
-/// The caller reads `sample.encoding()` to decide how to decode the payload.
+/// Uses a small FIFO (4 slots) — older frames are dropped when the consumer is slow.
 pub struct RawSubscriber {
     inner: Subscriber<zenoh::handlers::FifoChannelHandler<Sample>>,
 }
@@ -85,7 +88,7 @@ impl RawSubscriber {
     pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
         let subscriber = session
             .declare_subscriber(key_expr.to_string())
-            .with(FifoChannel::new(256))
+            .with(FifoChannel::new(4))
             .await
             .map_err(|e| NodeError::SubscriberDeclare {
                 topic: key_expr.to_string(),
@@ -96,14 +99,24 @@ impl RawSubscriber {
         Ok(Self { inner: subscriber })
     }
 
-    /// Receive the next raw [`Sample`], or `None` if the subscriber was undeclared.
-    pub async fn recv(&self) -> Option<Sample> {
-        self.inner.handler().recv_async().await.ok()
+    /// Receive the next payload as [`ZBytes`](zenoh::bytes::ZBytes), or `None` if closed.
+    pub async fn recv(&self) -> Option<zenoh::bytes::ZBytes> {
+        self.inner
+            .handler()
+            .recv_async()
+            .await
+            .ok()
+            .map(|s| s.payload().clone())
     }
 
-    /// Try to receive a raw [`Sample`] without blocking.
-    pub fn try_recv(&self) -> Option<Sample> {
-        self.inner.handler().try_recv().ok().flatten()
+    /// Try to receive a payload without blocking.
+    pub fn try_recv(&self) -> Option<zenoh::bytes::ZBytes> {
+        self.inner
+            .handler()
+            .try_recv()
+            .ok()
+            .flatten()
+            .map(|s| s.payload().clone())
     }
 }
 

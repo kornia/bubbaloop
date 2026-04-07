@@ -50,7 +50,9 @@ def run_node(node_class) -> None:
     log.info("Starting (type=%s, config=%s)", node_class.name, args.config)
 
     ctx = NodeContext.connect(endpoint=args.endpoint, instance_name=instance_name)
-    log.info("Health heartbeat: bubbaloop/%s/%s/%s/health", ctx.scope, ctx.machine_id, instance_name)
+
+    start_health_heartbeat(ctx.session, ctx.machine_id, instance_name, ctx._shutdown)
+    log.info("Health heartbeat: bubbaloop/global/%s/%s/health", ctx.machine_id, instance_name)
 
     heartbeat = None
     try:

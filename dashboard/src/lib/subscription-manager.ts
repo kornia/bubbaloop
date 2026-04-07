@@ -534,14 +534,16 @@ export class ZenohSubscriptionManager {
     }
 
     try {
-      const subscriber = await endpoint.session.declareSubscriber('**', {
+      // Subscribe to global topics only — excludes local/** (SHM raw frames)
+      // which are machine-local and would overwhelm the WebSocket bridge.
+      const subscriber = await endpoint.session.declareSubscriber('bubbaloop/global/**', {
         handler: (sample) => {
           this.handleMonitorSample(sample, endpointId);
         },
       });
 
       endpoint.monitorSubscriber = subscriber;
-      console.log(`[SubscriptionManager] Started monitoring all topics on ${endpointId}`);
+      console.log(`[SubscriptionManager] Started monitoring global topics on ${endpointId}`);
     } catch (e) {
       console.error(`[SubscriptionManager] Failed to start monitoring:`, e);
     }
@@ -579,11 +581,20 @@ export class ZenohSubscriptionManager {
    * Handle a sample from the monitor wildcard subscription.
    * Aggregates stats by topic key expression.
    */
+  // Topics whose payloads should never be buffered by the monitor (raw binary frames).
+  private static readonly MONITOR_SKIP_SUFFIXES = ['/raw'];
+
   private handleMonitorSample(sample: Sample, endpointId: string): void {
     const endpoint = this.endpoints.get(endpointId);
     if (!endpoint) return;
 
     const keyExpr = sample.keyexpr().toString();
+
+    // Skip raw binary frame topics — they are SHM-local and their payloads
+    // (1–8 MB each) must not flow through the WebSocket bridge.
+    if (ZenohSubscriptionManager.MONITOR_SKIP_SUFFIXES.some(s => keyExpr.endsWith(s))) {
+      return;
+    }
     const now = Date.now();
 
     // Get or create monitored topic stats (use key expression directly)

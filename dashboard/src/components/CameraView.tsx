@@ -211,10 +211,10 @@ export function CameraView({
 
     const cameraHint = cameraName?.toLowerCase();
 
-    // Collect all camera topics matching camera/*/compressed pattern
+    // Collect all compressed frame topics (topic ends with /compressed)
     const cameraTopics = availableTopics.filter(dt => {
       const d = dt.display.toLowerCase();
-      return /camera\/[^/]+\/compressed/.test(d);
+      return d.endsWith('/compressed');
     });
 
     console.log(`[CameraView] Auto-detect: hint="${cameraHint}", availableTopics=${availableTopics.length}, cameraTopics=${cameraTopics.length}`, cameraTopics.map(t => t.display));
@@ -224,7 +224,7 @@ export function CameraView({
     // Try exact name match first, then fall back to first discovered camera
     const match = (cameraHint && cameraTopics.find(dt => {
       const d = dt.display.toLowerCase();
-      return d.includes(`camera/${cameraHint}/compressed`);
+      return d.includes(`${cameraHint}/compressed`);
     })) || cameraTopics[0];
 
     autoDetectedRef.current = true;
@@ -407,7 +407,7 @@ export function CameraView({
       <div className="camera-footer">
         {(() => {
           // Filter to only show CompressedImage topics
-          const cameraTopics = availableTopics.filter(t => t.display.includes('camera') && t.display.includes('compressed'));
+          const cameraTopics = availableTopics.filter(t => t.display.endsWith('/compressed'));
           return cameraTopics.length > 0 ? (
             <select
               className="topic-select"
