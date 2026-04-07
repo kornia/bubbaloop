@@ -8,7 +8,6 @@ import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
-import net from 'node:net';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -108,15 +107,18 @@ server.on('upgrade', (req, clientSocket, head) => {
     // Bi-directional pipe
     bridgeSocket.pipe(clientSocket);
     clientSocket.pipe(bridgeSocket);
+
+    bridgeSocket.on('error', () => clientSocket.destroy());
+    clientSocket.on('error', () => bridgeSocket.destroy());
   });
 
   proxyReq.on('error', () => clientSocket.destroy());
-  clientSocket.on('error', () => proxyReq.destroy());
 
+  if (head.length > 0) proxyReq.write(head);
   proxyReq.end();
 });
 
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '127.0.0.1', () => {
   const proto = useHttps ? 'https' : 'http';
   console.log(`\n  Bubbaloop Dashboard Server ${useHttps ? '(HTTPS)' : '(HTTP)'}\n`);
   console.log(`  Local:   ${proto}://localhost:${PORT}/`);
