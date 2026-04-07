@@ -66,6 +66,8 @@ class TypedSubscriber:
                 return self._msg_class.FromString(payload)
             return payload
         return None
+
+
 class ProtoSubscriber:
     """Blocking subscriber that decodes protobuf automatically from the encoding header.
 

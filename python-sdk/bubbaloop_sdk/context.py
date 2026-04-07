@@ -24,16 +24,16 @@ from typing import TYPE_CHECKING
 import zenoh
 
 if TYPE_CHECKING:
-    from .publisher import JsonPublisher, ProtoPublisher
+    from .publisher import JsonPublisher, ProtoPublisher, RawPublisher
     from .subscriber import (
         AsyncQueryable,
         CallbackSubscriber,
         CallbackSubscriberAsync,
+        ProtoSubscriber,
         RawCallbackSubscriber,
         RawCallbackSubscriberAsync,
         RawSubscriber,
         TypedSubscriber,
-        ProtoSubscriber,
     )
 
 
@@ -135,7 +135,7 @@ class NodeContext:
         type_name = msg_class.DESCRIPTOR.full_name if msg_class is not None else None
         return ProtoPublisher._declare(self.session, self.topic(suffix), type_name)
 
-    def publisher_raw(self, suffix: str, local: bool = False) -> "RawPublisher":
+    def publisher_raw(self, suffix: str, local: bool = False) -> RawPublisher:
         """Declare a raw publisher with no encoding.
 
         When ``local=True``, publishes to ``local/{machine_id}/{suffix}`` with
@@ -143,6 +143,7 @@ class NodeContext:
         SHM buffer instead of dropping frames. Never crosses the bridge.
         """
         from .publisher import RawPublisher
+
         key = self.local_topic(suffix) if local else self.topic(suffix)
         return RawPublisher._declare(self.session, key, local=local)
 
@@ -187,7 +188,8 @@ class NodeContext:
         """
         from .schema_registry import SchemaRegistry
         from .subscriber import ProtoSubscriber
-        if not hasattr(self, '_schema_registry'):
+
+        if not hasattr(self, "_schema_registry"):
             self._schema_registry = SchemaRegistry(self.session)
         key = self.local_topic(suffix) if local else self.topic(suffix)
         return ProtoSubscriber(self.session, key, self._schema_registry)
@@ -201,6 +203,7 @@ class NodeContext:
         When ``local=True``, subscribes to the SHM-only local topic.
         """
         from .subscriber import RawSubscriber
+
         key = self.local_topic(suffix) if local else self.topic(suffix)
         return RawSubscriber(self.session, key)
 
