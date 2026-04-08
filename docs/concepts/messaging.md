@@ -23,12 +23,11 @@ Low latency. No broker required. Runs over TCP, UDP, WebSocket, or shared memory
 Peer mode does direct P2P — messages never route through the router and are invisible to other clients.
 
 ```
-Nodes/CLI: mode = "client" <- all traffic flows through zenohd
-Daemon:    mode = "peer"   <- co-located with router, uses peer intentionally
+Nodes/CLI/Daemon: mode = "client" <- all traffic flows through zenohd
 ```
 
 !!! note
-    The daemon itself uses `"peer"` mode (see `daemon/mod.rs`) because it co-locates with the Zenoh router. This is the only exception — all nodes and CLI clients must use `"client"`.
+    Everything uses `"client"` mode — nodes, CLI, and the daemon itself (see `daemon/mod.rs`). Client mode routes all traffic through the Zenoh router, which is required for message visibility across participants.
 
 Rust:
 ```rust
@@ -187,7 +186,7 @@ const session = await Session.open(new Config("ws/127.0.0.1:10001"));
 
 // Subscribe to all camera topics on this machine
 const sub = await session.declareSubscriber(
-    "bubbaloop/local/my_machine/camera/**",
+    "bubbaloop/global/my_machine/camera/**",
     (sample) => {
         const bytes = new Uint8Array(sample.payload().buffer);
         const image = CompressedImage.decode(bytes);
@@ -195,7 +194,7 @@ const sub = await session.declareSubscriber(
 );
 
 // Query a node's schema
-const replies = await session.get("bubbaloop/local/my_machine/camera/schema");
+const replies = await session.get("bubbaloop/global/my_machine/camera/schema");
 for await (const reply of replies) {
     const descriptorBytes = new Uint8Array(reply.result().payload().buffer);
 }
@@ -421,4 +420,4 @@ Bind to `127.0.0.1`, not `0.0.0.0`. Never expose Zenoh ports directly to the int
 ## Next Steps
 
 - [Architecture](architecture.md) — Layer model, daemon, agent runtime
-- [Memory](memory.md) — 3-tier agent memory (short-term, episodic, semantic)
+- [Memory](memory.md) — 4-tier agent memory (world state, short-term, episodic, semantic)

@@ -16,7 +16,7 @@ AI agents revolutionized software engineering. **Bubbaloop brings that same powe
 | **Data plane** | None | **Zenoh (zero-copy pub/sub)** |
 | **Hardware** | None | **Self-describing sensor nodes** |
 | **Runs on** | Desktop / cloud | **Jetson, RPi, any Linux ARM64/x86** |
-| **MCP role** | Client (consumes tools) | **Server (37 tools, 3-tier RBAC)** |
+| **MCP role** | Client (consumes tools) | **Server (42+ tools, 3-tier RBAC)** |
 | **Scheduling** | Always-on LLM (~$5-10/day) | **Offline Tier 1 + LLM Tier 2 (~$0.05/day)** |
 
 ## Quick Install
@@ -112,6 +112,8 @@ bubbaloop node logs my-sensor
 
 ## YAML Skills (Zero-Code Sensors)
 
+Skills are declarative YAML configs that map to nodes. Drop a YAML file in `~/.bubbaloop/skills/` and `bubbaloop up` auto-installs the driver node and starts it.
+
 ```yaml
 # ~/.bubbaloop/skills/front-camera.yaml
 name: front-door
@@ -151,7 +153,7 @@ bubbaloop daemon
 | `discover_nodes` | Fleet-wide manifest discovery |
 | `query_zenoh` | Query any Zenoh key expression |
 
-37 tools total (30 MCP + 7 agent-internal). Configure Claude Code via `.mcp.json` (already in project root).
+42 MCP tools + agent-internal tools. Configure Claude Code via `.mcp.json` (already in project root).
 
 **Agent-internal tools** (daemon-side only, not exposed via MCP): `memory_search`, `memory_forget`, `schedule_task`, `create_proposal`, `read_file`, `write_file`, `run_command`.
 
@@ -168,7 +170,7 @@ CLI ───────────────┘               │
                                    │
 Daemon ────────────────────────────┤
   ├─ Node Manager (lifecycle)      │
-  ├─ MCP Server (30 tools)         │
+  ├─ MCP Server (42 tools)         │
   ├─ Telemetry Watchdog            │
   ├─ Agent Runtime (multi-agent)   │
   └─ Systemd D-Bus (zbus)         │
@@ -176,7 +178,7 @@ Daemon ────────────────────────�
 Nodes (self-describing) ───────────┘
   ├─ rtsp-camera            Rust    [H264 video, SHM raw frames]
   ├─ camera-object-detector Python  [YOLO11 detection on SHM frames]
-  ├─ camera-vlm             Python  [VLM scene description on SHM frames]
+  ├─ camera-vlm             Python  [VLM scene description (planned)]
   ├─ system-telemetry       Python  [CPU, memory, disk, network]
   ├─ network-monitor        Python  [HTTP, DNS, ping health checks]
   ├─ openmeteo              Python  [weather: current, hourly, daily]
@@ -187,7 +189,7 @@ The daemon hosts the **agent runtime** (multi-agent Zenoh gateway) alongside the
 
 **Per-agent features:**
 - **Soul**: `identity.md` (personality) + `capabilities.toml` (model, heartbeat). Hot-reload on file change.
-- **3-Tier Memory**: RAM (current turn) → NDJSON logs (episodic, BM25 search) → SQLite (jobs, proposals).
+- **4-Tier Memory**: World State (live SQLite, sensor-derived) → RAM (current turn) → NDJSON (episodic, BM25 search) → SQLite (beliefs, jobs, proposals).
 - **Adaptive Heartbeat**: Arousal-based decay — active agents check in frequently, idle agents stay quiet.
 - **Telemetry Watchdog**: CPU/RAM/disk monitoring with circuit breakers and 5 severity levels.
 

@@ -32,7 +32,7 @@ Key source files in `crates/bubbaloop/src/`:
 - `agent/provider/ollama.rs` — Ollama local LLM client with tool calling (`/api/chat`)
 - `agent/memory/` — 4-tier: world state (live SQLite) + short-term (RAM) + episodic (NDJSON) + semantic (SQLite)
 - `agent/heartbeat.rs` — Adaptive heartbeat: arousal + decay + state collection
-- `agent/dispatch.rs` — Internal MCP tool dispatch (49 tools: 39 MCP + 10 agent-internal, includes telemetry + beliefs + constraints + missions)
+- `agent/dispatch.rs` — Internal MCP tool dispatch (42 MCP + agent-internal tools, includes telemetry + beliefs + constraints + missions)
 - `cli/node/mod.rs` — node CRUD, validation, list/add/remove
 - `cli/node/install.rs` — install, precompiled binary download, GitHub clone
 - `cli/node/lifecycle.rs` — start, stop, restart, logs

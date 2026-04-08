@@ -114,19 +114,13 @@ step = align_to_4(width * bytes_per_pixel)
 
 | Topic | Description |
 |-------|-------------|
-| `/camera/{name}/compressed` | H264 compressed frames |
+| `bubbaloop/global/{machine_id}/{camera_name}/compressed` | H264 compressed frames (network-visible) |
 
-**Zenoh key expression:**
-
-```
-0/camera%{name}%compressed/**
-```
-
-### RawImage Topics (Future)
+### RawImage Topics
 
 | Topic | Description |
 |-------|-------------|
-| `/camera/{name}/image_raw` | Decoded RGB images |
+| `bubbaloop/local/{machine_id}/{camera_name}/raw` | Decoded RGBA images (SHM-only, same machine) |
 
 ## Usage Examples
 
@@ -149,6 +143,7 @@ fn publish_frame(
         pub_time: now_ns(),
         sequence,
         frame_id: frame_id.to_string(),
+        machine_id: machine_id.to_string(),
     };
 
     let image = CompressedImage {

@@ -21,6 +21,7 @@ message Header {
     uint64 pub_time = 2;    // Publication timestamp (nanoseconds)
     uint32 sequence = 3;    // Sequence number
     string frame_id = 4;    // Frame/source identifier
+    string machine_id = 5;  // Machine identifier
 }
 ```
 
@@ -32,6 +33,7 @@ message Header {
 | `pub_time` | uint64 | 2 | Publication timestamp in nanoseconds since Unix epoch |
 | `sequence` | uint32 | 3 | Monotonically increasing sequence number |
 | `frame_id` | string | 4 | Identifier for the data source (camera name, sensor ID, etc.) |
+| `machine_id` | string | 5 | Machine identifier (hostname-based, e.g., `nvidia_orin00`) |
 
 ## Field Details
 
@@ -83,6 +85,14 @@ Identifies the source of the data:
 - For weather: Service identifier (e.g., "openmeteo")
 - For sensors: Sensor name or ID
 
+### machine_id
+
+Identifies the machine that published the message:
+
+- Hostname with hyphens replaced by underscores (e.g., `nvidia_orin00`)
+- Set from `BUBBALOOP_MACHINE_ID` environment variable, or falls back to hostname
+- Used to distinguish data from different machines in multi-device deployments
+
 ## Usage Examples
 
 ### Rust
@@ -102,6 +112,7 @@ fn create_header(frame_id: &str, sequence: u32, acq_time: u64) -> Header {
         pub_time,
         sequence,
         frame_id: frame_id.to_string(),
+        machine_id: String::new(), // set by the node from BUBBALOOP_MACHINE_ID
     }
 }
 ```

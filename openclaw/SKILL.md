@@ -66,4 +66,4 @@ bubbaloop uses a dual-plane model:
 - **MCP (Control Plane)**: You interact here — lifecycle, config, commands
 - **Zenoh (Data Plane)**: Real-time sensor data flows here — pub/sub, queryables
 
-All topics follow: `bubbaloop/{scope}/{machine}/{node}/{resource}`
+All topics follow: `bubbaloop/{key_space}/{machine}/{node}/{resource}` where key_space is `global` (network-visible) or `local` (SHM-only)

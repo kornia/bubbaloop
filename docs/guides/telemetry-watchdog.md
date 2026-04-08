@@ -330,4 +330,4 @@ The watchdog uses the `sysinfo` crate — no `/proc` assumptions:
 | Service & config watcher | `crates/bubbaloop/src/daemon/telemetry/mod.rs` | ~250 |
 | Agent dispatch (3 tools) | `crates/bubbaloop/src/agent/dispatch.rs` | integrated |
 
-**Design document:** [`docs/plans/2026-03-05-telemetry-watchdog-design.md`](../plans/2026-03-05-telemetry-watchdog-design.md)
+**Source:** `crates/bubbaloop/src/daemon/telemetry/`

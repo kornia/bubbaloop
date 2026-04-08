@@ -364,7 +364,7 @@ async fn main() -> Result<()> {
 
     // Health heartbeat publisher
     let health_topic = format!(
-        "bubbaloop/global/{}/health/my-sensor",
+        "bubbaloop/global/{}/my-sensor/health",
         machine_id
     );
     let health_pub = zenoh_session.declare_publisher(&health_topic).await?;
@@ -507,10 +507,10 @@ pixi run build
 pixi run main -c config.yaml
 
 # In another terminal: verify health heartbeat
-z_sub -k "bubbaloop/local/*/health/my-sensor"
+z_sub -k "bubbaloop/global/*/my-sensor/health"
 
 # Verify data publishing
-z_sub -k "bubbaloop/local/*/my-sensor/*"
+z_sub -k "bubbaloop/global/*/my-sensor/*"
 ```
 
 ### Step 7: Install and run via daemon
@@ -639,7 +639,7 @@ class MySensorNode:
         logger.info(f"Publishing to: {self.full_topic}")
 
         self.health_publisher = self.session.declare_publisher(
-            f"bubbaloop/global/{self.machine_id}/health/my-sensor"
+            f"bubbaloop/global/{self.machine_id}/my-sensor/health"
         )
 
         # Declare schema queryable (NO complete=True!)
@@ -774,7 +774,7 @@ if __name__ == "__main__":
 ```python
 # build_proto.py
 #!/usr/bin/env python3
-"""Compile protobuf schemas for network-monitor node."""
+"""Compile protobuf schemas for my-sensor node."""
 
 import os
 import subprocess
@@ -834,8 +834,8 @@ python build_proto.py
 python main.py -c config.yaml
 
 # In another terminal: verify
-z_sub -k "bubbaloop/local/*/health/my-sensor"
-z_sub -k "bubbaloop/local/*/my-sensor/*"
+z_sub -k "bubbaloop/global/*/my-sensor/health"
+z_sub -k "bubbaloop/global/*/my-sensor/*"
 ```
 
 ### Step 6: Install and run via daemon
@@ -874,10 +874,12 @@ requires:
     - network
 ```
 
-**Required fields:**
+**Required fields** (validated by `bubbaloop node validate`):
 - `name` — 1-64 chars, `[a-zA-Z0-9_-]`, matches directory name
 - `version` — Semantic version (e.g., `"0.1.0"`)
 - `type` — `"rust"` or `"python"`
+
+**Recommended fields:**
 - `description` — Human-readable description
 - `author` — Your name or team
 - `build` — Command to build the node
@@ -1123,7 +1125,7 @@ pub struct Config {
 }
 
 pub struct MySensor {
-    publisher: zenoh::pubsub::Publisher<'static>,
+    publisher: bubbaloop_node::ProtoPublisher<proto::SensorReading>,
     rate_hz: f64,
 }
 
@@ -1135,8 +1137,7 @@ impl Node for MySensor {
     fn descriptor() -> &'static [u8] { DESCRIPTOR }
 
     async fn init(ctx: &NodeContext, config: &Config) -> Result<Self> {
-        let topic = ctx.topic(&config.publish_topic);
-        let publisher = ctx.session.declare_publisher(&topic).await?;
+        let publisher = ctx.publisher_proto::<proto::SensorReading>(&config.publish_topic).await?;
         Ok(Self { publisher, rate_hz: config.rate_hz })
     }
 
@@ -1153,7 +1154,7 @@ impl Node for MySensor {
                     let reading = proto::SensorReading {
                         // ... populate fields
                     };
-                    self.publisher.put(reading.encode_to_vec()).await.ok();
+                    self.publisher.put(&reading).await.ok();
                     seq = seq.wrapping_add(1);
                 }
             }
@@ -1164,7 +1165,7 @@ impl Node for MySensor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    bubbaloop_node_sdk::run_node::<MySensor>().await
+    bubbaloop_node::run_node::<MySensor>().await
 }
 ```
 
@@ -1195,6 +1196,52 @@ bubbaloop node start my-sensor
 | CLI arguments | ~15 lines | `-c config.yaml -e endpoint` |
 | Key space + machine_id | ~6 lines | global/local key spaces + BUBBALOOP_MACHINE_ID |
 | **Total saved** | **~86 lines** | Per node, automatically correct |
+
+### NodeContext API Reference
+
+The `NodeContext` struct is provided to your node by the SDK runtime. It has these public fields and methods:
+
+**Public fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `session` | `Arc<zenoh::Session>` | Zenoh session (client mode) |
+| `machine_id` | `String` | Machine identifier (from `BUBBALOOP_MACHINE_ID` or hostname) |
+| `instance_name` | `String` | Per-instance name (from config `name` field, or node type name) |
+| `shutdown_rx` | `watch::Receiver<()>` | Shutdown signal — select on this in your `run()` loop |
+
+**Topic builders:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `ctx.topic(suffix)` | `String` | `bubbaloop/global/{machine_id}/{suffix}` — network-visible |
+| `ctx.local_topic(suffix)` | `String` | `bubbaloop/local/{machine_id}/{suffix}` — SHM-only |
+
+**Publishers:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `ctx.publisher_proto::<T>(suffix)` | `ProtoPublisher<T>` | Protobuf with `APPLICATION_PROTOBUF` encoding + type name |
+| `ctx.publisher_json(suffix)` | `JsonPublisher` | JSON with `APPLICATION_JSON` encoding |
+| `ctx.publisher_raw(suffix, local)` | `RawPublisher` | Raw ZBytes; `local=true` for SHM with `CongestionControl::Block` |
+| `ctx.publisher_raw_proto::<T>(suffix)` | `RawPublisher` | Raw SHM with protobuf encoding header (always local) |
+
+**Subscribers:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `ctx.subscriber::<T>(suffix)` | `TypedSubscriber<T>` | Auto-decode protobuf, 256-slot FIFO |
+| `ctx.subscriber_raw(suffix, local)` | `RawSubscriber` | Raw ZBytes, 4-slot FIFO (older frames dropped) |
+
+**Utility functions** (module-level, not on `NodeContext`):
+
+| Function | Description |
+|----------|-------------|
+| `discover_nodes(&session, timeout)` | Find all nodes via health heartbeats; returns `Vec<NodeInfo>` |
+| `get_sample(session, key_expr, timeout)` | Single-shot pull without maintaining a subscription |
+| `ProtoDecoder::new(session)` | Dynamic protobuf decode via SchemaRegistry (queries `bubbaloop/**/schema`) |
+
+**Re-exported crates:** `bubbaloop_node` re-exports `zenoh`, `prost`, `tokio`, `anyhow`, `log`, `serde_json`, `async_trait` — no need to add these as direct dependencies.
 
 ### Cargo.toml for Rust SDK nodes
 
@@ -1281,8 +1328,8 @@ Before submitting a new node, verify ALL items:
 
 ## Getting Help
 
-- **Architecture overview:** `/home/nvidia/bubbaloop/ARCHITECTURE.md` (lines 85-220: Node Contract)
+- **Architecture overview:** `ARCHITECTURE.md` (Node Contract section)
 - **Official nodes repo:** https://github.com/kornia/bubbaloop-nodes-official
-- **Node SDK design:** `/home/nvidia/bubbaloop/docs/plans/2026-02-24-node-sdk-design.md`
+- **Node SDK source:** `crates/bubbaloop-node/`
 - **Bubbaloop CLI reference:** `bubbaloop node --help`
 - **Zenoh documentation:** https://zenoh.io/docs/
