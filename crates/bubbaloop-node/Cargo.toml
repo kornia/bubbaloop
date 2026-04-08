@@ -4,8 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "Batteries-included SDK for writing bubbaloop nodes"
 license = "Apache-2.0"
-# links enables DEP_BUBBALOOP_NODE_* metadata propagation to dependent node build scripts.
-links = "bubbaloop-node"
 
 [dependencies]
 bubbaloop-schemas = { path = "../bubbaloop-schemas" }
