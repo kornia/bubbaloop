@@ -231,7 +231,6 @@ impl AgentRuntime {
         telemetry: Option<Arc<crate::daemon::telemetry::TelemetryService>>,
     ) -> Result<(), crate::agent::AgentError> {
         let config = AgentsConfig::load_or_default();
-        let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
         let machine_id = crate::daemon::util::get_machine_id();
 
         // Load authentication token for inbox message validation
@@ -250,7 +249,6 @@ impl AgentRuntime {
         let platform = Arc::new(DaemonPlatform::new(
             node_manager,
             session.clone(),
-            scope.clone(),
             machine_id.clone(),
         ));
 
@@ -374,7 +372,7 @@ impl AgentRuntime {
             }
 
             // Create outbox sink
-            let outbox = gateway::outbox_topic(&scope, &machine_id, agent_id);
+            let outbox = gateway::outbox_topic(&machine_id, agent_id);
             let sink = match ZenohSink::new(&session, &outbox).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -393,7 +391,6 @@ impl AgentRuntime {
             let dispatcher = {
                 let d = Dispatcher::new_with_memory(
                     platform.clone(),
-                    scope.clone(),
                     machine_id.clone(),
                     agent_id.clone(),
                     memory.backend.clone(),
@@ -427,7 +424,7 @@ impl AgentRuntime {
                 is_default: entry.default,
                 machine_id: machine_id.clone(),
             };
-            let manifest_topic = gateway::manifest_topic(&scope, &machine_id, agent_id);
+            let manifest_topic = gateway::manifest_topic(&machine_id, agent_id);
             let manifest_json = serde_json::to_vec(&manifest).unwrap_or_default();
             let manifest_session = session.clone();
             tokio::spawn(async move {
@@ -449,7 +446,7 @@ impl AgentRuntime {
 
             // Subscribe to this agent's inbox topic so other agents can send messages.
             // Messages are appended to episodic memory and surface in the next prompt turn.
-            let inbox_topic = format!("bubbaloop/{}/agent/{}/inbox", scope, agent_id);
+            let inbox_topic = format!("bubbaloop/global/agent/{}/inbox", agent_id);
             let inbox_session = session.clone();
             let inbox_backend = memory.backend.clone();
             let mut inbox_shutdown = shutdown_rx.clone();
@@ -613,7 +610,7 @@ impl AgentRuntime {
         let runtime = AgentRuntime { handles };
 
         // Subscribe to shared inbox
-        let inbox = gateway::inbox_topic(&scope, &machine_id);
+        let inbox = gateway::inbox_topic(&machine_id);
         let subscriber = session
             .declare_subscriber(&inbox)
             .await

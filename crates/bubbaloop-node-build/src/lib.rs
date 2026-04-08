@@ -4,8 +4,9 @@
 /// include resolution pre-configured.
 use std::{env, fs, path::{Path, PathBuf}};
 
-/// Embedded `header.proto` — written to OUT_DIR so protoc can resolve imports.
-const HEADER_PROTO: &str = include_str!("../protos/header.proto");
+/// Embedded `header.proto` — single source of truth in bubbaloop-schemas.
+/// Written to OUT_DIR so protoc can resolve `import "header.proto"`.
+const HEADER_PROTO: &str = include_str!("../../bubbaloop-schemas/protos/header.proto");
 
 /// Compile node proto files with bubbaloop header types, includes, and descriptor
 /// output pre-configured.

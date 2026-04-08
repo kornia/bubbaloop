@@ -16,20 +16,44 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def test_topic_formatting():
-    ctx = _make_context("staging", "jetson_orin")
+    ctx = _make_context("jetson_orin")
     assert ctx.topic("camera/front/compressed") == (
-        "bubbaloop/staging/jetson_orin/camera/front/compressed"
+        "bubbaloop/global/jetson_orin/camera/front/compressed"
     )
 
 
-def test_topic_default_scope():
-    ctx = _make_context("local", "my_robot")
-    assert ctx.topic("sensor/imu") == "bubbaloop/local/my_robot/sensor/imu"
+def test_local_topic_formatting():
+    ctx = _make_context("my_robot")
+    assert ctx.local_topic("sensor/imu") == "bubbaloop/local/my_robot/sensor/imu"
 
 
 def test_topic_wildcard_suffix():
-    ctx = _make_context("prod", "edge_01")
-    assert ctx.topic("**") == "bubbaloop/prod/edge_01/**"
+    ctx = _make_context("edge_01")
+    assert ctx.topic("**") == "bubbaloop/global/edge_01/**"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_topic()
+# ---------------------------------------------------------------------------
+
+def test_resolve_topic_global():
+    ctx = _make_context("bot")
+    assert ctx._resolve_topic("data", False) == "bubbaloop/global/bot/data"
+
+
+def test_resolve_topic_local():
+    ctx = _make_context("bot")
+    assert ctx._resolve_topic("raw", True) == "bubbaloop/local/bot/raw"
+
+
+def test_global_and_local_share_suffix():
+    ctx = _make_context("edge_42")
+    global_topic = ctx.topic("sensor/data")
+    local_topic = ctx.local_topic("sensor/data")
+    assert global_topic.endswith("edge_42/sensor/data")
+    assert local_topic.endswith("edge_42/sensor/data")
+    assert "global" in global_topic
+    assert "local" in local_topic
 
 
 # ---------------------------------------------------------------------------
@@ -64,8 +88,8 @@ def test_import_publishers():
 
 
 def test_import_subscribers():
-    from bubbaloop_sdk import TypedSubscriber, RawSubscriber
-    assert TypedSubscriber is not None
+    from bubbaloop_sdk import ProtoSubscriber, RawSubscriber
+    assert ProtoSubscriber is not None
     assert RawSubscriber is not None
 
 
@@ -79,12 +103,12 @@ def test_import_run_node():
 # ---------------------------------------------------------------------------
 
 def test_shutdown_not_set_initially():
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     assert not ctx.is_shutdown()
 
 
 def test_shutdown_set_manually():
-    ctx = _make_context("local", "bot")
+    ctx = _make_context("bot")
     ctx._shutdown.set()
     assert ctx.is_shutdown()
 
@@ -142,14 +166,56 @@ def test_json_publisher_passthrough_str():
 
 
 # ---------------------------------------------------------------------------
+# RawPublisher.put()
+# ---------------------------------------------------------------------------
+
+def test_raw_publisher_puts_bytes():
+    from bubbaloop_sdk.publisher import RawPublisher
+    mock_pub = MagicMock()
+    RawPublisher(mock_pub).put(b"\x00\x01\x02")
+    mock_pub.put.assert_called_once_with(b"\x00\x01\x02")
+
+
+def test_raw_publisher_converts_bytearray():
+    from bubbaloop_sdk.publisher import RawPublisher
+    mock_pub = MagicMock()
+    RawPublisher(mock_pub).put(bytearray([0xFF, 0xFE]))
+    mock_pub.put.assert_called_once_with(b"\xff\xfe")
+
+
+# ---------------------------------------------------------------------------
+# Import surface (new exports)
+# ---------------------------------------------------------------------------
+
+def test_import_raw_publisher():
+    from bubbaloop_sdk import RawPublisher
+    assert RawPublisher is not None
+
+
+def test_import_proto_decoder():
+    from bubbaloop_sdk import ProtoDecoder
+    assert ProtoDecoder is not None
+
+
+def test_import_discover_nodes():
+    from bubbaloop_sdk import discover_nodes
+    assert callable(discover_nodes)
+
+
+def test_import_get_sample():
+    from bubbaloop_sdk import get_sample, GetSampleTimeout
+    assert callable(get_sample)
+    assert GetSampleTimeout is not None
+
+
+# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 
-def _make_context(scope: str, machine_id: str):
+def _make_context(machine_id: str):
     from bubbaloop_sdk.context import NodeContext
     ctx = object.__new__(NodeContext)
     ctx.session = MagicMock()
-    ctx.scope = scope
     ctx.machine_id = machine_id
     ctx.instance_name = machine_id
     ctx._shutdown = threading.Event()

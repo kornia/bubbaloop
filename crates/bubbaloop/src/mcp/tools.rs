@@ -193,14 +193,12 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     pub fn new(
         platform: std::sync::Arc<P>,
         auth_token: Option<String>,
-        scope: String,
         machine_id: String,
     ) -> Self {
         Self {
             platform,
             auth_token,
             tool_router: Self::tool_router(),
-            scope,
             machine_id,
         }
     }
@@ -330,7 +328,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/manifest",
-            self.scope, self.machine_id, req.node_name
+            "global", self.machine_id, req.node_name
         );
         let manifest_text = match self.platform.query_zenoh(&key_expr).await {
             Ok(text) => text,
@@ -384,7 +382,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/command",
-            self.scope, self.machine_id, req.node_name
+            "global", self.machine_id, req.node_name
         );
         let payload = serde_json::json!({
             "command": req.command,
@@ -589,8 +587,6 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
                                     "name": name,
                                     "description": manifest.get("description").and_then(|d| d.as_str()).unwrap_or(""),
                                     "version": manifest.get("version").and_then(|v| v.as_str()).unwrap_or(""),
-                                    "publishes": manifest.get("publishes").cloned().unwrap_or(serde_json::json!([])),
-                                    "commands": manifest.get("commands").cloned().unwrap_or(serde_json::json!([])),
                                 }));
                         }
                     }
@@ -625,7 +621,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
         let info = serde_json::json!({
-            "zenoh_topic": format!("bubbaloop/{}/{}/{}/**", self.scope, self.machine_id, req.node_name),
+            "zenoh_topic": format!("bubbaloop/{}/{}/{}/**", "global", self.machine_id, req.node_name),
             "encoding": "protobuf",
             "endpoint": "tcp/localhost:7447",
             "note": "Subscribe to this topic via Zenoh client library for real-time data. MCP is control-plane only."
@@ -651,7 +647,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             Err(_) => (0, 0, 0),
         };
         let status = serde_json::json!({
-            "scope": self.scope,
+            "scope": "global",
             "machine_id": self.machine_id,
             "nodes_total": total,
             "nodes_running": running,
@@ -670,7 +666,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         log::info!("[MCP] tool=get_machine_info");
         let info = serde_json::json!({
             "machine_id": self.machine_id,
-            "scope": self.scope,
+            "scope": "global",
             "arch": std::env::consts::ARCH,
             "os": std::env::consts::OS,
             "hostname": hostname::get()
@@ -873,7 +869,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
         let key = format!(
             "bubbaloop/{}/{}/{}/schema",
-            self.scope, self.machine_id, req.node_name
+            "global", self.machine_id, req.node_name
         );
         match self.platform.query_zenoh(&key).await {
             Ok(result) => Ok(CallToolResult::success(vec![Content::text(result)])),

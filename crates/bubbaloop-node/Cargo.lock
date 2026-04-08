@@ -276,12 +276,12 @@ dependencies = [
  "anyhow",
  "argh",
  "async-trait",
+ "bubbaloop-schemas",
  "ctrlc",
  "env_logger",
  "hostname",
  "log",
  "prost 0.14.3",
- "prost-build",
  "prost-reflect",
  "prost-types 0.14.3",
  "serde",
@@ -291,6 +291,16 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "zenoh",
+]
+
+[[package]]
+name = "bubbaloop-schemas"
+version = "0.1.0"
+dependencies = [
+ "prost 0.14.3",
+ "prost-build",
+ "prost-types 0.14.3",
+ "serde",
 ]
 
 [[package]]

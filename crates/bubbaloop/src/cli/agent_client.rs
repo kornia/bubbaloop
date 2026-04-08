@@ -14,8 +14,8 @@ use zenoh::Session;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Check if the daemon is reachable by querying the daemon manifest.
-pub async fn is_daemon_running(session: &Arc<Session>, scope: &str, machine_id: &str) -> bool {
-    let pattern = crate::daemon::gateway::manifest_topic(scope, machine_id);
+pub async fn is_daemon_running(session: &Arc<Session>, machine_id: &str) -> bool {
+    let pattern = crate::daemon::gateway::manifest_topic(machine_id);
     match session
         .get(&pattern)
         .target(zenoh::query::QueryTarget::BestMatching)
@@ -30,7 +30,6 @@ pub async fn is_daemon_running(session: &Arc<Session>, scope: &str, machine_id: 
 /// Run a single message or interactive REPL via Zenoh.
 pub async fn run_agent_client(
     session: Arc<Session>,
-    scope: &str,
     machine_id: &str,
     agent: Option<&str>,
     message: Option<&str>,
@@ -38,10 +37,10 @@ pub async fn run_agent_client(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(msg) = message {
         // Single-message mode: send and wait for Done (plain stdout, no TUI)
-        send_and_render(&session, scope, machine_id, agent, msg, verbose).await?;
+        send_and_render(&session, machine_id, agent, msg, verbose).await?;
     } else {
         // Interactive REPL mode: ratatui two-panel TUI
-        run_tui_repl(&session, scope, machine_id, agent, verbose).await?;
+        run_tui_repl(&session, machine_id, agent, verbose).await?;
     }
     Ok(())
 }
@@ -54,7 +53,6 @@ fn load_auth_token() -> Option<String> {
 /// Send a single message and render the streamed response (plain stdout, used for single-message mode).
 async fn send_and_render(
     session: &Arc<Session>,
-    scope: &str,
     machine_id: &str,
     agent: Option<&str>,
     text: &str,
@@ -64,14 +62,14 @@ async fn send_and_render(
     let auth_token = load_auth_token();
 
     // Subscribe to outbox BEFORE publishing (avoid missing early events)
-    let outbox_pattern = gateway::outbox_wildcard(scope, machine_id);
+    let outbox_pattern = gateway::outbox_wildcard(machine_id);
     let subscriber = session
         .declare_subscriber(&outbox_pattern)
         .await
         .map_err(|e| format!("Failed to subscribe to outbox: {}", e))?;
 
     // Publish to inbox
-    let inbox = gateway::inbox_topic(scope, machine_id);
+    let inbox = gateway::inbox_topic(machine_id);
     let msg = AgentMessage {
         id: correlation_id.clone(),
         text: text.to_string(),
@@ -99,7 +97,7 @@ async fn send_and_render(
                 match result {
                     Ok(sample) => {
                         // Extract agent_id from topic key expression:
-                        // bubbaloop/{scope}/{machine}/agent/{agent_id}/outbox
+                        // bubbaloop/global/{machine}/agent/{agent_id}/outbox
                         let agent_id_from_topic = sample.key_expr().as_str()
                             .split('/')
                             .nth(4)
@@ -224,7 +222,6 @@ impl Drop for TerminalGuard {
 /// Bottom panel (3 rows): input prompt, always visible.
 async fn run_tui_repl(
     session: &Arc<Session>,
-    scope: &str,
     machine_id: &str,
     agent: Option<&str>,
     verbose: bool,
@@ -238,7 +235,7 @@ async fn run_tui_repl(
     let _guard = TerminalGuard; // restored on drop
 
     // ── Subscribe to outbox once, shared for all turns ────────────────────────
-    let outbox_pattern = gateway::outbox_wildcard(scope, machine_id);
+    let outbox_pattern = gateway::outbox_wildcard(machine_id);
     let subscriber = session
         .declare_subscriber(&outbox_pattern)
         .await
@@ -369,7 +366,7 @@ async fn run_tui_repl(
                                     agent_header_shown = false;
                                     waiting_for_agent = true;
 
-                                    let inbox = gateway::inbox_topic(scope, machine_id);
+                                    let inbox = gateway::inbox_topic(machine_id);
                                     let msg = AgentMessage {
                                         id: cid,
                                         text: trimmed,
@@ -626,14 +623,13 @@ fn render_output_line(line: &OutputLine) -> Vec<ListItem<'static>> {
 /// Query all agent manifests and print a table.
 pub async fn run_agent_list(
     session: Arc<Session>,
-    scope: &str,
     machine_id: &str,
     all_machines: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let pattern = if all_machines {
-        gateway::manifest_wildcard_all(scope)
+        gateway::manifest_wildcard_all()
     } else {
-        gateway::manifest_wildcard(scope, machine_id)
+        gateway::manifest_wildcard(machine_id)
     };
 
     let replies = session

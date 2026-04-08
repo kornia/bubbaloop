@@ -63,18 +63,17 @@ pub fn validate_publish_topic(topic: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Build a scoped key expression for a node resource.
-/// Uses scope + machine_id to prevent cross-machine broadcast.
+/// Build a key expression for a node resource.
+/// Uses `global` key space + machine_id to prevent cross-machine broadcast.
 pub fn scoped_node_key(
-    scope: &str,
     machine_id: &str,
     node_name: &str,
     resource: &str,
 ) -> Result<String, String> {
     validate_node_name(node_name)?;
     Ok(format!(
-        "bubbaloop/{}/{}/{}/{}",
-        scope, machine_id, node_name, resource
+        "bubbaloop/global/{}/{}/{}",
+        machine_id, node_name, resource
     ))
 }
 
@@ -203,14 +202,14 @@ mod tests {
 
     #[test]
     fn test_scoped_node_key() {
-        let key = scoped_node_key("local", "jetson1", "openmeteo", "command").unwrap();
-        assert_eq!(key, "bubbaloop/local/jetson1/openmeteo/command");
+        let key = scoped_node_key("jetson1", "openmeteo", "command").unwrap();
+        assert_eq!(key, "bubbaloop/global/jetson1/openmeteo/command");
         assert!(!key.contains("**"));
     }
 
     #[test]
     fn test_scoped_node_key_rejects_invalid_name() {
-        assert!(scoped_node_key("local", "jetson1", "../bad", "command").is_err());
+        assert!(scoped_node_key("jetson1", "../bad", "command").is_err());
     }
 
     #[test]

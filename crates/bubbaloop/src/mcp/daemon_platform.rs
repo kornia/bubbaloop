@@ -14,7 +14,6 @@ use zenoh::Session;
 pub struct DaemonPlatform {
     pub node_manager: Arc<NodeManager>,
     pub session: Arc<Session>,
-    pub scope: String,
     pub machine_id: String,
     /// Cached path to the default agent's memory.db.
     agent_db_path: PathBuf,
@@ -22,17 +21,11 @@ pub struct DaemonPlatform {
 
 impl DaemonPlatform {
     /// Create a new DaemonPlatform, caching the agent DB path at construction.
-    pub fn new(
-        node_manager: Arc<NodeManager>,
-        session: Arc<Session>,
-        scope: String,
-        machine_id: String,
-    ) -> Self {
+    pub fn new(node_manager: Arc<NodeManager>, session: Arc<Session>, machine_id: String) -> Self {
         let agent_db_path = Self::compute_agent_db_path();
         Self {
             node_manager,
             session,
-            scope,
             machine_id,
             agent_db_path,
         }
@@ -147,10 +140,7 @@ impl PlatformOperations for DaemonPlatform {
     }
 
     async fn get_node_config(&self, name: &str) -> PlatformResult<Value> {
-        let key_expr = format!(
-            "bubbaloop/{}/{}/{}/config",
-            self.scope, self.machine_id, name
-        );
+        let key_expr = format!("bubbaloop/{}/{}/{}/config", "global", self.machine_id, name);
         let text = zenoh_get_text(&self.session, &key_expr).await;
         serde_json::from_str(&text).or_else(|_| Ok(serde_json::json!({ "raw": text })))
     }

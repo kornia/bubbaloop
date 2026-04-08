@@ -75,7 +75,6 @@ pub struct BubbaLoopMcpServer<P: PlatformOperations = platform::DaemonPlatform> 
     #[allow(dead_code)] // TODO(phase-3): Used for per-token tier differentiation
     pub(crate) auth_token: Option<String>,
     pub(crate) tool_router: ToolRouter<Self>,
-    pub(crate) scope: String,
     pub(crate) machine_id: String,
 }
 
@@ -86,7 +85,6 @@ impl<P: PlatformOperations> Clone for BubbaLoopMcpServer<P> {
             platform: self.platform.clone(),
             auth_token: self.auth_token.clone(),
             tool_router: self.tool_router.clone(),
-            scope: self.scope.clone(),
             machine_id: self.machine_id.clone(),
         }
     }
@@ -194,19 +192,17 @@ pub async fn run_mcp_stdio(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use rmcp::ServiceExt;
 
-    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = crate::daemon::util::get_machine_id();
 
     let platform = Arc::new(platform::DaemonPlatform::new(
         node_manager,
         session,
-        scope.clone(),
         machine_id.clone(),
     ));
 
     let server = BubbaLoopMcpServer::new(
         platform, None, // No auth token for stdio
-        scope, machine_id,
+        machine_id,
     );
 
     // rmcp stdio transport: reads JSON-RPC from stdin, writes to stdout
@@ -235,7 +231,6 @@ pub async fn run_mcp_server(
     log::info!("MCP authentication enabled (token in ~/.bubbaloop/mcp-token)");
     log::info!("Bearer token auth enforced on /mcp and /api/v1 routes");
 
-    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = crate::daemon::util::get_machine_id();
 
     let health_manager = node_manager.clone();
@@ -243,7 +238,6 @@ pub async fn run_mcp_server(
     let platform = Arc::new(platform::DaemonPlatform::new(
         node_manager,
         session,
-        scope.clone(),
         machine_id.clone(),
     ));
 
@@ -259,7 +253,6 @@ pub async fn run_mcp_server(
             Ok(BubbaLoopMcpServer::new(
                 platform.clone(),
                 Some(token.clone()),
-                scope.clone(),
                 machine_id.clone(),
             ))
         },

@@ -40,38 +40,6 @@ pub enum Capability {
     Gateway,
 }
 
-/// Declaration of a topic the node publishes or subscribes to
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct TopicSpec {
-    /// Topic suffix (e.g., "output", "compressed", "metrics")
-    pub suffix: String,
-    /// Protobuf message type (e.g., "bubbaloop.header.v1.Header")
-    #[serde(default)]
-    pub schema_type: Option<String>,
-    /// Publishing rate in Hz (0 = event-driven)
-    #[serde(default)]
-    pub rate_hz: Option<f64>,
-    /// Human-readable description
-    #[serde(default)]
-    pub description: Option<String>,
-}
-
-/// Declaration of a command the node accepts
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommandSpec {
-    /// Command name (e.g., "capture", "set_resolution")
-    pub name: String,
-    /// Human-readable description
-    #[serde(default)]
-    pub description: Option<String>,
-    /// JSON schema for parameters (optional)
-    #[serde(default)]
-    pub parameters: Option<serde_json::Value>,
-    /// JSON schema for return value (optional)
-    #[serde(default)]
-    pub returns: Option<serde_json::Value>,
-}
-
 /// Hardware/software requirements
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Requirements {
@@ -97,6 +65,8 @@ pub struct NodeManifest {
     pub description: String,
     #[serde(default)]
     pub author: Option<String>,
+    // TODO: move build/command to nodes.json (specified at `node add` time)
+    // so node.yaml is pure metadata. Requires daemon refactor.
     #[serde(default)]
     pub build: Option<String>,
     #[serde(default)]
@@ -107,15 +77,6 @@ pub struct NodeManifest {
     /// Capabilities this node provides
     #[serde(default)]
     pub capabilities: Vec<Capability>,
-    /// Topics this node publishes
-    #[serde(default)]
-    pub publishes: Vec<TopicSpec>,
-    /// Topics this node subscribes to
-    #[serde(default)]
-    pub subscribes: Vec<TopicSpec>,
-    /// Commands this node accepts
-    #[serde(default)]
-    pub commands: Vec<CommandSpec>,
     /// Hardware/software requirements
     #[serde(default)]
     pub requires: Option<Requirements>,

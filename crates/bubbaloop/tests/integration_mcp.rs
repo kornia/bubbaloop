@@ -48,7 +48,6 @@ impl TestHarness {
         let server = BubbaLoopMcpServer::new(
             platform,
             None, // no auth token
-            "test".to_string(),
             "test-machine".to_string(),
         );
 
@@ -242,7 +241,7 @@ async fn get_system_status() {
     let result = h.call("get_system_status").await.unwrap();
     let json = result_json(&result);
 
-    assert_eq!(json["scope"], "test");
+    assert_eq!(json["scope"], "global");
     assert_eq!(json["machine_id"], "test-machine");
     assert_eq!(json["nodes_total"], 1);
     assert_eq!(json["nodes_running"], 1);
@@ -272,7 +271,7 @@ async fn get_machine_info() {
     let json = result_json(&result);
 
     assert_eq!(json["machine_id"], "test-machine");
-    assert_eq!(json["scope"], "test");
+    assert_eq!(json["scope"], "global");
     // arch and os are runtime values, just verify they exist
     assert!(json["arch"].is_string());
     assert!(json["os"].is_string());

@@ -67,8 +67,8 @@ CLI client                Daemon (agent runtime)
     |<-- publish to outbox ------|
 ```
 
-- Shared inbox topic: `bubbaloop/{scope}/{machine_id}/agent/inbox`
-- Per-agent outbox: `bubbaloop/{scope}/{machine_id}/agent/{agent_id}/outbox`
+- Shared inbox topic: `bubbaloop/global/{machine_id}/agent/inbox`
+- Per-agent outbox: `bubbaloop/global/{machine_id}/agent/{agent_id}/outbox`
 - Wire format: JSON (`AgentMessage`, `AgentEvent`)
 
 **Per-agent state**
@@ -214,19 +214,18 @@ Node --> Protobuf --> Zenoh --> WebSocket Bridge --> Browser / Dashboard
 ## Topic Hierarchy
 
 ```
-bubbaloop/{scope}/{machine_id}/{node_name}/{resource}
-          |        |            |           |
-          |        |            |           +-- schema, manifest, health, config, command
-          |        |            +-------------- node identifier  [a-zA-Z0-9_-], 1-64 chars
-          |        +--------------------------- machine ID (e.g., nvidia_orin00)
-          +------------------------------------ scope (local / edge / cloud)
+bubbaloop/{key_space}/{machine_id}/{node_name}/{resource}
+           |          |            |            |
+           |          |            |            +-- data topic, health, schema
+           |          |            +--------------- node identifier  [a-zA-Z0-9_-], 1-64 chars
+           |          +---------------------------- machine ID (e.g., nvidia_orin00)
+           +--------------------------------------- global (network) or local (SHM-only)
 ```
 
-Nodes receive scope, machine ID, and Zenoh endpoint via environment variables
+Nodes receive machine ID and Zenoh endpoint via environment variables
 injected by the daemon into systemd unit files:
 
 ```
-BUBBALOOP_SCOPE=local
 BUBBALOOP_MACHINE_ID=nvidia_orin00
 BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447
 ```
