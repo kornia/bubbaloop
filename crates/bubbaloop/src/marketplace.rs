@@ -112,8 +112,11 @@ pub fn find_sha256sum() -> Option<(std::path::PathBuf, bool)> {
 /// The `expected` string should be in the format output by `sha256sum`:
 /// `<hex_hash>  <filename>\n` or just `<hex_hash>`.
 pub fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
-    let (sha_bin, is_shasum) = find_sha256sum()
-        .ok_or_else(|| MarketplaceError::DownloadFailed("sha256sum/shasum not found in standard paths (/usr/bin, /usr/local/bin)".to_string()))?;
+    let (sha_bin, is_shasum) = find_sha256sum().ok_or_else(|| {
+        MarketplaceError::DownloadFailed(
+            "sha256sum/shasum not found in standard paths (/usr/bin, /usr/local/bin)".to_string(),
+        )
+    })?;
 
     let mut cmd = Command::new(sha_bin);
     if is_shasum {
@@ -121,9 +124,9 @@ pub fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     }
     cmd.arg(path);
 
-    let output = cmd
-        .output()
-        .map_err(|e| MarketplaceError::DownloadFailed(format!("sha256sum failed to execute: {}", e)))?;
+    let output = cmd.output().map_err(|e| {
+        MarketplaceError::DownloadFailed(format!("sha256sum failed to execute: {}", e))
+    })?;
 
     if !output.status.success() {
         return Err(MarketplaceError::DownloadFailed(

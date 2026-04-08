@@ -73,8 +73,7 @@ pub fn required_tier(tool_name: &str) -> Tier {
         "start_node" | "stop_node" | "restart_node" | "get_node_config" | "send_command"
         | "get_node_logs" | "enable_autostart" | "disable_autostart" | "approve_proposal"
         | "reject_proposal" | "delete_job" | "pause_mission" | "resume_mission"
-        | "cancel_mission"
-        | "update_belief" => Tier::Operator,
+        | "cancel_mission" | "update_belief" => Tier::Operator,
 
         // Admin tools (system modification)
         "install_node"

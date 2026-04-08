@@ -5,26 +5,22 @@ use std::process::Command;
 use super::{send_command, LogsArgs, NodeError, Result};
 
 pub(crate) async fn start_node(name: &str) -> Result<()> {
-    crate::validation::validate_node_name(name)
-        .map_err(|e| NodeError::InvalidArgs(e))?;
+    crate::validation::validate_node_name(name).map_err(NodeError::InvalidArgs)?;
     send_command(name, "start").await
 }
 
 pub(crate) async fn stop_node(name: &str) -> Result<()> {
-    crate::validation::validate_node_name(name)
-        .map_err(|e| NodeError::InvalidArgs(e))?;
+    crate::validation::validate_node_name(name).map_err(NodeError::InvalidArgs)?;
     send_command(name, "stop").await
 }
 
 pub(crate) async fn restart_node(name: &str) -> Result<()> {
-    crate::validation::validate_node_name(name)
-        .map_err(|e| NodeError::InvalidArgs(e))?;
+    crate::validation::validate_node_name(name).map_err(NodeError::InvalidArgs)?;
     send_command(name, "restart").await
 }
 
 pub(crate) async fn view_logs(args: LogsArgs) -> Result<()> {
-    crate::validation::validate_node_name(&args.name)
-        .map_err(|e| NodeError::InvalidArgs(e))?;
+    crate::validation::validate_node_name(&args.name).map_err(NodeError::InvalidArgs)?;
     if args.follow {
         // Follow mode is only available for the systemd backend.
         let service = format!("bubbaloop-{}.service", args.name);

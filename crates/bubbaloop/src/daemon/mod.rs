@@ -191,7 +191,10 @@ async fn run_daemon_gateway(
                 }
             },
             Err(e) => {
-                log::warn!("[Gateway] Failed to register manifest queryable: {}", crate::daemon::util::sanitize_log_msg(&e.to_string()));
+                log::warn!(
+                    "[Gateway] Failed to register manifest queryable: {}",
+                    crate::daemon::util::sanitize_log_msg(&e.to_string())
+                );
             }
         }
     });

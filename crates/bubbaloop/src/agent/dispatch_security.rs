@@ -283,9 +283,7 @@ pub(crate) fn validate_command(command: &str) -> Result<(), String> {
     // Block redirection operators — can write arbitrary files.
     // Strip quoted strings first so we don't flag `>` inside quotes.
     let unquoted_for_redir = strip_quoted_strings(&normalized);
-    if unquoted_for_redir.contains('>')
-        || unquoted_for_redir.contains('<')
-    {
+    if unquoted_for_redir.contains('>') || unquoted_for_redir.contains('<') {
         return Err(
             "Blocked: shell redirection operators (>, <, >>, 2>) are not allowed.".to_string(),
         );

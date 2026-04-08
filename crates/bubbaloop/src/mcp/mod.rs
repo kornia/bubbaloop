@@ -252,10 +252,7 @@ pub async fn run_mcp_server(
     // Build auth layer before mcp_service closure consumes `token`.
     // /mcp and /api/v1 require bearer token; /health remains unauthenticated
     // for liveness probes.
-    let auth_layer = axum::middleware::from_fn_with_state(
-        token.clone(),
-        bearer_auth_middleware,
-    );
+    let auth_layer = axum::middleware::from_fn_with_state(token.clone(), bearer_auth_middleware);
 
     let mcp_service = StreamableHttpService::new(
         move || {
