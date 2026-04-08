@@ -159,7 +159,7 @@ See [Weather API](../../api/weather.md) for complete field documentation.
 
 ### No weather data
 
-1. Verify OpenMeteo service is running: `pixi run weather`
+1. Verify OpenMeteo service is running: `bubbaloop node list` (check openmeteo status)
 2. Check `bubbaloop debug topics` for weather topics
 3. Verify internet connectivity
 

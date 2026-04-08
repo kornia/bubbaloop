@@ -63,7 +63,7 @@ bubbaloop agent chat   # interactive REPL
 │  │  Short-term (RAM) | Episodic (NDJSON) | Semantic DB │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (49 tools) — sole control interface     │  │
+│  │  MCP Server (42 tools) — sole control interface     │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  Daemon (skill runtime + agent host)                │  │
@@ -91,7 +91,7 @@ bubbaloop agent chat   # interactive REPL
 ### v0.0.1–v0.0.6: MCP-Native Sensor Runtime
 
 - [x] Single binary: CLI + daemon + MCP server
-- [x] 37 MCP tools (discovery, lifecycle, data, config, system, memory, telemetry)
+- [x] 42 MCP tools (discovery, lifecycle, data, config, system, memory, telemetry, beliefs, missions, constraints, alerts)
 - [x] MCP is sole control interface — Zenoh for data only
 - [x] Marketplace with precompiled binaries (ARM64 + x86_64)
 - [x] Full node lifecycle via MCP: install, uninstall, start, stop, restart, autostart
@@ -280,8 +280,6 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 
 **New deps:** `sysinfo`. **New code:** ~1500 lines. **New tests:** 30.
 
-**Design doc:** `docs/plans/2026-03-05-telemetry-watchdog-design.md`
-
 ---
 
 ### Phase 5: Polish + "5 Minutes to Magic"
@@ -312,7 +310,7 @@ These are out of scope but represent natural evolution:
 
 ### Research Track: Physical Memory + Federated Agents ✅ SHIPPED v0.0.11
 
-Implemented in v0.0.11. Full implementation: `docs/plans/2026-03-08-physical-ai-memory-mission-implementation.md`
+Implemented in v0.0.11.
 
 #### Sensor-Grounded Belief Memory ✅
 
@@ -333,7 +331,7 @@ Memory confirmed or contradicted by sensor readings — not just conversation hi
 
 #### Federated Agents (Zenoh as federation bus) ✅
 
-- [x] **World state gossip:** `daemon/federated.rs` — topic helpers for `bubbaloop/{scope}/{machine_id}/agent/{id}/world_state`, `extract_machine_id()`, `prefix_remote_key()` for `remote:{machine_id}.` namespace.
+- [x] **World state gossip:** `daemon/federated.rs` — topic helpers for `bubbaloop/global/{machine_id}/agent/{id}/world_state`, `extract_machine_id()`, `prefix_remote_key()` for `remote:{machine_id}.` namespace.
 - [ ] **Quorum memory:** Critical observations confirmed by N agents — not yet wired to reactive layer.
 - [ ] **Full gossip subscriber:** Background task subscribing to remote world state topics — protocol helpers done, subscriber task pending.
 
@@ -375,7 +373,7 @@ Memory confirmed or contradicted by sensor readings — not just conversation hi
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 49 tools (39 MCP + 10 agent-internal) |
+| Control | MCP (rmcp) | Standard AI agent interface, 42 MCP tools + agent-internal tools |
 | Memory | SQLite (rusqlite) | Embedded, +1-2 MB, battle-tested everywhere |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
@@ -384,14 +382,7 @@ Memory confirmed or contradicted by sensor readings — not just conversation hi
 
 ---
 
-## Design Documents
+## Reference Documents
 
-- `docs/plans/2026-03-08-physical-ai-memory-mission-implementation.md` — Physical AI Memory & Mission system (4-tier memory, missions, safety layer, federated agents)
-- `docs/plans/2026-03-05-telemetry-watchdog-design.md` — Telemetry watchdog design (circuit breaker, agent bridge, hot-reload config)
-- `docs/plans/2026-03-05-telemetry-watchdog-implementation.md` — Telemetry watchdog implementation plan (11 tasks)
-- `docs/plans/2026-03-03-openclaw-agent-rewrite-design.md` — OpenClaw agent rewrite (Soul, 3-tier memory, adaptive heartbeat, proposals)
-- `docs/plans/2026-02-27-hardware-ai-agent-design.md` — Full agent design (architecture, memory, scheduling, security)
-- `docs/plans/2026-02-28-agent-implementation-design.md` — Agent implementation design (Phases 2-4)
-- `docs/plans/2026-02-28-agent-implementation.md` — Step-by-step implementation plan
 - `ARCHITECTURE.md` — Layer model, node contract, security, technology choices
 - `CONTRIBUTING.md` — Agentic workflows, agent tiers, validation

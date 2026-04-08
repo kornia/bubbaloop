@@ -5,7 +5,7 @@ Batteries-included framework for writing bubbaloop nodes. Reduces boilerplate fr
 ## Quick Start (Rust)
 
 ```rust
-use bubbaloop_node_sdk::{Node, NodeContext};
+use bubbaloop_node::{Node, NodeContext};
 
 struct MySensor;
 
@@ -53,8 +53,15 @@ The protobuf publisher extracts the type name from `MessageTypeName::type_name()
 
 | Method | Decoding | Use case |
 |--------|----------|----------|
-| `ctx.subscriber::<T>(suffix)` | Auto-decode protobuf | Node-to-node typed streams |
-| `ctx.subscriber_raw(key_expr)` | Raw `Sample` access | Dashboard-style dynamic decode |
+| `ctx.subscriber::<T>(suffix)` | Auto-decode protobuf, 256-slot FIFO | Node-to-node typed streams |
+| `ctx.subscriber_raw(suffix, local)` | Raw ZBytes, 4-slot FIFO | Video frames, dynamic decode |
+
+Additionally, two raw publisher variants:
+
+| Method | Encoding | Use case |
+|--------|----------|----------|
+| `ctx.publisher_raw(suffix, local)` | Raw ZBytes (custom encoding) | Video frames, SHM |
+| `ctx.publisher_raw_proto::<T>(suffix)` | `application/protobuf;{type_name}` + raw bytes | Proto without encode overhead |
 
 ## Python SDK
 
@@ -77,7 +84,7 @@ async def main():
 
 The SDK handles:
 - Zenoh client-mode session (routes through zenohd)
-- Schema queryable at `bubbaloop/{scope}/{machine_id}/{node_name}/schema`
+- Schema queryable at `bubbaloop/global/{machine_id}/{node_name}/schema`
 - Health heartbeat every 5s
 - YAML config loading
 - SIGINT/SIGTERM graceful shutdown

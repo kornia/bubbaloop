@@ -14,7 +14,7 @@ This guide explains how to deploy Bubbaloop across multiple machines (e.g., Jets
 │                                 │  │ (central)     │  │                                 │
 │    Tailscale / LAN              │  └───────────────┘  │    Tailscale / LAN              │
 │                                 │         │          │                                 │
-│                                 │         │ WS:10000 │                                 │
+│                                 │         │ WS:10001 │                                 │
 │                                 │  ┌──────┴───────┐  │                                 │
 │                                 │  │  Dashboard   │  │                                 │
 │                                 │  │  (Browser)   │  │                                 │
@@ -58,7 +58,7 @@ Each Jetson runs its own local zenohd router for several reasons:
 
 | Setting | Central Router | Jetson Router | Nodes |
 |---------|----------------|---------------|-------|
-| Mode | `router` | `router` | `peer` or `client` |
+| Mode | `router` | `router` | `client` |
 | Multicast | `false` | `false` | `false` |
 | Gossip | `true` | `true` | `false` |
 | Listen | `0.0.0.0:7447` | `127.0.0.1:7447` | N/A |
@@ -156,7 +156,7 @@ Benefits of Tailscale:
     gossip: { enabled: true, autoconnect: "router" },
   },
   plugins: {
-    remote_api: { websocket_port: 10000 },
+    remote_api: { websocket_port: 10001 },
   },
 }
 ```
@@ -191,6 +191,7 @@ Benefits of Tailscale:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `BUBBALOOP_MACHINE_ID` | Machine identifier (hyphens → underscores) | hostname |
 | `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
 | `RUST_LOG` | Log level | `info` |
 

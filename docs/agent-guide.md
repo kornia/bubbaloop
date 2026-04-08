@@ -152,7 +152,7 @@ Look for these log lines to confirm:
 ```
 [Runtime] Agent 'jean-clawd' ready (default=true)
 [Runtime] Agent 'camera-expert' ready (default=false)
-[Runtime] Agent runtime started: 2 agent(s), inbox=bubbaloop/local/{machine}/agent/inbox
+[Runtime] Agent runtime started: 2 agent(s), inbox=bubbaloop/global/{machine}/agent/inbox
 ```
 
 ### Step 4: Interact via CLI
@@ -236,19 +236,36 @@ bubbaloop/global/{machine_id}/agent/{agent_id}/manifest  ← agent capabilities 
 
 **Wire format (JSON):**
 
-Inbox (CLI → Daemon):
+Inbox — `AgentMessage` (CLI → Daemon):
 ```json
-{"id": "uuid", "text": "user message", "agent": "camera-expert"}
+{"id": "uuid", "text": "user message", "agent": "camera-expert", "auth_token": "bb_abc123"}
 ```
 
-Outbox (Daemon → CLI):
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | Yes | Unique message ID |
+| `text` | string | Yes | User message text |
+| `agent` | string | No | Target agent ID (omit for default agent) |
+| `auth_token` | string | No | Bearer token from `~/.bubbaloop/mcp-token` |
+
+Outbox — `AgentEvent` (Daemon → CLI):
 ```json
 {"id": "uuid", "type": "delta", "text": "token..."}
-{"id": "uuid", "type": "tool", "text": "get_system_status"}
+{"id": "uuid", "type": "tool", "text": "get_system_status", "input": "{\"name\":\"cam1\"}"}
 {"id": "uuid", "type": "tool_result", "text": "..."}
 {"id": "uuid", "type": "error", "text": "API error: 429"}
+{"id": "uuid", "type": "system", "text": "context: 3 world state entries, 2 memory episodes"}
 {"id": "uuid", "type": "done"}
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | Yes | Matches the inbox message ID |
+| `type` | string | Yes | Event type (see below) |
+| `text` | string | Yes | Event payload |
+| `input` | string | No | Tool input JSON (only on `tool` events) |
+
+**Event types:** `delta` (LLM token), `tool` (tool call), `tool_result` (tool output), `error` (API/runtime error), `system` (lifecycle context — world state, memory, turn counter), `done` (turn complete).
 
 ### Message Routing
 
@@ -360,7 +377,7 @@ Discover all nodes across all machines by querying manifests on `bubbaloop/**/ma
 
 **Returns:** Multi-line text with one manifest per line, formatted as:
 ```
-[bubbaloop/local/machine_id/node_name/manifest] {"name":"...","version":"...","capabilities":[...]}
+[bubbaloop/global/machine_id/node_name/manifest] {"name":"...","version":"...","capabilities":[...]}
 ```
 
 **Use case:** Fleet-wide discovery in multi-machine deployments.
@@ -463,7 +480,7 @@ Get Zenoh connection parameters for subscribing to a node's data stream. Returns
 **Returns:** JSON with Zenoh connection info:
 ```json
 {
-  "zenoh_topic": "bubbaloop/local/nvidia_orin00/rtsp-camera/**",
+  "zenoh_topic": "bubbaloop/global/nvidia_orin00/rtsp-camera/**",
   "encoding": "protobuf",
   "endpoint": "tcp/localhost:7447",
   "note": "Subscribe to this topic via Zenoh client library for real-time data. MCP is control-plane only."
@@ -723,7 +740,6 @@ Get overall system status including daemon health, node count, and Zenoh connect
 **Returns:** JSON status summary:
 ```json
 {
-  "scope": "local",
   "machine_id": "nvidia_orin00",
   "nodes_total": 12,
   "nodes_running": 10,
@@ -749,7 +765,6 @@ Get machine hardware and OS information: architecture, hostname, OS version.
 ```json
 {
   "machine_id": "nvidia_orin00",
-  "scope": "local",
   "arch": "aarch64",
   "os": "linux",
   "hostname": "jetson-orin"
@@ -765,11 +780,11 @@ Get machine hardware and OS information: architecture, hostname, OS version.
 Query a Zenoh key expression (admin only). Key must start with `bubbaloop/`. Returns up to 100 results.
 
 **Parameters:**
-- `key_expr` (string, required): Full Zenoh key expression to query (e.g., `"bubbaloop/local/nvidia_orin00/openmeteo/status"`)
+- `key_expr` (string, required): Full Zenoh key expression to query (e.g., `"bubbaloop/global/nvidia_orin00/openmeteo/status"`)
 
 **Returns:** Multi-line text with one result per line:
 ```
-[bubbaloop/local/nvidia_orin00/openmeteo/status] {"temperature":22.5,"pressure":1013}
+[bubbaloop/global/nvidia_orin00/openmeteo/status] {"temperature":22.5,"pressure":1013}
 ```
 
 **Use case:** Low-level debugging, custom queries not covered by other tools.
@@ -843,9 +858,9 @@ Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to e
 
 | Tier | Access Level | MCP Tools |
 |------|--------------|-----------|
-| **Viewer** (14) | Read-only monitoring | `list_nodes`, `get_node_health`, `get_node_schema`, `get_stream_info`, `get_system_status`, `get_machine_info`, `discover_nodes`, `get_node_manifest`, `list_commands`, `discover_capabilities`, `list_proposals`, `list_jobs`, `get_system_telemetry`, `get_telemetry_history` |
-| **Operator** (11) | Day-to-day operations | `start_node`, `stop_node`, `restart_node`, `get_node_config`, `send_command`, `get_node_logs`, `enable_autostart`, `disable_autostart`, `approve_proposal`, `reject_proposal`, `delete_job` |
-| **Admin** (8) | System modification | `install_node`, `remove_node`, `build_node`, `query_zenoh`, `uninstall_node`, `clean_node`, `clear_episodic_memory`, `update_telemetry_config` |
+| **Viewer** (18) | Read-only monitoring | `list_nodes`, `get_node_health`, `get_node_schema`, `get_stream_info`, `get_system_status`, `get_machine_info`, `discover_nodes`, `get_node_manifest`, `list_commands`, `discover_capabilities`, `list_proposals`, `list_jobs`, `get_system_telemetry`, `get_telemetry_history`, `list_missions`, `list_constraints`, `get_belief`, `list_world_state` |
+| **Operator** (15) | Day-to-day operations | `start_node`, `stop_node`, `restart_node`, `get_node_config`, `send_command`, `get_node_logs`, `enable_autostart`, `disable_autostart`, `approve_proposal`, `reject_proposal`, `delete_job`, `pause_mission`, `resume_mission`, `cancel_mission`, `update_belief` |
+| **Admin** (12) | System modification | `install_node`, `remove_node`, `build_node`, `query_zenoh`, `uninstall_node`, `clean_node`, `clear_episodic_memory`, `update_telemetry_config`, `configure_context`, `register_alert`, `unregister_alert`, `register_constraint` |
 
 **Default tier:** In single-user localhost mode, all requests are granted Admin tier.
 
@@ -1082,17 +1097,13 @@ get_system_status → get_node_logs
 
 ### Tool Count by Tier
 
-**MCP tools** (exposed to external clients via MCP server): 30 tools
+**MCP tools** (exposed to external clients via MCP server): 42 tools across Viewer/Operator/Admin tiers.
 
-- **Viewer:** 14 tools (read-only discovery and status)
-- **Operator:** 11 tools (lifecycle, config, commands)
-- **Admin:** 8 tools (install, build, system)
+**Agent-internal tools** (available only to the LLM agent via dispatch, not exposed via MCP):
 
-**Agent-internal tools** (available only to the LLM agent, not via MCP): 7 additional tools
+- `memory_search`, `memory_forget`, `schedule_task`, `create_proposal`, `read_file`, `write_file`, `run_command`, `publish_to_topic`
 
-- `memory_search`, `memory_forget`, `schedule_task`, `create_proposal`, `read_file`, `write_file`, `run_command`
-
-**Total:** 37 tools in agent dispatch (30 MCP + 7 agent-only)
+Note: `get_system_telemetry`, `get_telemetry_history`, and `update_telemetry_config` are available via both the MCP server and the agent dispatch.
 
 ### Key Paths
 
@@ -1135,7 +1146,7 @@ Now the agent autonomously monitors temperature every 15 minutes without further
 
 ## Summary
 
-- **37 tools** (30 MCP + 7 agent-only) across 3 RBAC tiers (Viewer, Operator, Admin)
+- **42 MCP tools + agent-internal tools** across 3 RBAC tiers (Viewer, Operator, Admin)
 - **Dual-plane architecture:** MCP for control, Zenoh for data
 - **Task scheduling** for autonomous behavior (cron jobs, retry with circuit breaker)
 - **Robustness** — turn/tool timeouts, provider retry, context recovery, result truncation

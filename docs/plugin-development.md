@@ -387,7 +387,7 @@ RUST_LOG=debug ./my-plugin
 
 ## Examples
 
-See `templates/rust-plugin/` and `templates/python-plugin/` for complete working examples.
+See `templates/rust-node/` and `templates/python-node/` for complete working examples.
 
 ---
 

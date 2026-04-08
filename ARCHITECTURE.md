@@ -49,7 +49,7 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 │  │  Episodic (NDJSON/FTS5) | Semantic (SQLite)         │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (49 tools) — sole control interface     │  │
+│  │  MCP Server (42 tools) — sole control interface     │  │
 │  │  RBAC (Viewer/Operator/Admin) | Bearer token auth   │  │
 │  │  PlatformOperations trait | Rate limiting            │  │
 │  └──────────────────────┬─────────────────────────────┘  │
@@ -90,18 +90,18 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 Every sensor node MUST implement these standard queryables:
 
 ```
-bubbaloop/{scope}/{machine_id}/{node_name}/schema      → FileDescriptorSet bytes
-bubbaloop/{scope}/{machine_id}/{node_name}/manifest    → JSON manifest
-bubbaloop/{scope}/{machine_id}/{node_name}/health      → "ok" | error details
-bubbaloop/{scope}/{machine_id}/{node_name}/config      → JSON config (GET/SET)
-bubbaloop/{scope}/{machine_id}/{node_name}/command     → JSON command interface
+bubbaloop/global/{machine_id}/{node_name}/schema      → FileDescriptorSet bytes
+bubbaloop/global/{machine_id}/{node_name}/manifest    → JSON manifest
+bubbaloop/global/{machine_id}/{node_name}/health      → "ok" | error details
+bubbaloop/global/{machine_id}/{node_name}/config      → JSON config (GET/SET)
+bubbaloop/global/{machine_id}/{node_name}/command     → JSON command interface
 ```
 
 Standard node publishers:
 
 ```
-bubbaloop/{scope}/{machine_id}/{publish_topic}          → Data (protobuf or JSON)
-bubbaloop/{scope}/{machine_id}/health/{node_name}       → Periodic heartbeat
+bubbaloop/global/{machine_id}/{publish_topic}          → Data (protobuf or JSON)
+bubbaloop/global/{machine_id}/{node_name}/health       → Periodic heartbeat
 ```
 
 ### Zenoh Encoding (Required)
@@ -116,7 +116,7 @@ Use the SDK's `publisher_proto()` / `publisher_json()` which set encoding automa
 ### Manifest Fields (Required)
 
 Each node serves a JSON manifest at `{topic_prefix}/manifest` with:
-- **Identity**: name, version, language, description, machine_id, scope
+- **Identity**: name, version, language, description, machine_id
 - **Hardware**: capabilities, requires_hardware
 - **Data**: publishes (topics, message types, rate, QoS)
 - **Control**: commands (name, description, parameters, returns)
@@ -157,7 +157,7 @@ Nodes that support imperative actions MUST declare `{topic_prefix}/command` quer
 
 ## Physical AI Memory & Mission Engine
 
-Implemented in v0.0.11. Full design: `docs/plans/2026-03-08-physical-ai-memory-mission-implementation.md`
+Implemented in v0.0.11.
 
 ### 4-Tier Memory Model
 
@@ -302,21 +302,19 @@ The daemon runs a cross-platform resource watchdog (`daemon/telemetry/`) that pr
 
 **Hot-reload:** Config at `~/.bubbaloop/telemetry.toml`, file-watched with guardrails (critical threshold 80-98%, min sampling 2s). Agent can tune thresholds at runtime.
 
-**Design doc:** `docs/plans/2026-03-05-telemetry-watchdog-design.md`
-
 ---
 
 ## Topic Hierarchy
 
 ```
-bubbaloop/{scope}/{machine_id}/{node_name}/{...}
-         ┬─────┬  ┬──────────┬  ┬────────┬
-         │     │  │          │  │        └─ Node-specific paths
-         │     │  │          │  └────────── Node identifier (1-64 chars, [a-zA-Z0-9_-])
-         │     │  │          └───────────── Machine identifier (e.g., nvidia_orin00)
-         │     │  └──────────────────────── Scope (local/edge/cloud)
-         │     └─────────────────────────── Namespace prefix
-         └───────────────────────────────── Project prefix
+bubbaloop/{key_space}/{machine_id}/{node_name}/{...}
+         ┬─────────┬  ┬──────────┬  ┬────────┬
+         │         │  │          │  │        └─ Node-specific paths
+         │         │  │          │  └────────── Node identifier (1-64 chars, [a-zA-Z0-9_-])
+         │         │  │          └───────────── Machine identifier (e.g., nvidia_orin00)
+         │         │  └──────────────────────── Key space: global (network) or local (SHM-only)
+         │         └─────────────────────────── Namespace prefix
+         └───────────────────────────────────── Project prefix
 ```
 
 ### Environment Variables (Node Runtime)
@@ -334,22 +332,22 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447  # Optional override
 
 ## MCP Server
 
-MCP is the **sole control interface**. 39 MCP tools + 10 agent-internal (49 total) across categories:
+MCP is the **sole control interface**. 42 MCP tools + agent-internal tools across categories:
 
 | Category | Tools |
 |----------|-------|
-| **Discovery** | list_nodes, discover_nodes, get_node_health, get_node_config, get_node_manifest, get_node_schema, get_stream_info, list_commands, discover_capabilities |
+| **Discovery** | list_nodes, discover_nodes, get_node_health, get_node_config, get_node_manifest, get_node_schema, get_node_logs, get_stream_info, list_commands, discover_capabilities |
 | **Lifecycle** | install_node, uninstall_node, start_node, stop_node, restart_node, build_node, remove_node, clean_node, enable_autostart, disable_autostart |
 | **Data** | send_command, query_zenoh |
 | **System** | get_system_status, get_machine_info |
-| **Memory** | list_jobs, delete_job, list_proposals, clear_episodic_memory |
+| **Memory** | list_jobs, delete_job, list_proposals, approve_proposal, reject_proposal, clear_episodic_memory |
 | **Beliefs** | update_belief, get_belief — durable subject+predicate assertions with confidence tracking |
 | **World State** | list_world_state — live sensor-derived snapshot injected into every agent turn |
 | **Context Providers** | configure_context — wire Zenoh topic → world state (no LLM); topic_pattern + value_field + optional filter |
 | **Missions** | list_missions, pause_mission, resume_mission, cancel_mission — YAML-file-driven (`~/.bubbaloop/agents/{id}/missions/`) |
 | **Constraints** | register_constraint, list_constraints — per-mission safety limits; params_json formats: `workspace={"x":[-1,1],"y":[-1,1],"z":[0,2]}`, `max_velocity=1.5`, `forbidden_zone={"center":[0,0,0],"radius":0.3}`, `max_force=50.0` |
 | **Alerts** | register_alert, unregister_alert — reactive arousal triggers when world state predicate matches |
-| **Agent-internal** | read_file, write_file, run_command, memory_search, memory_forget, schedule_task, create_proposal, get_system_telemetry, get_telemetry_history, update_telemetry_config |
+| **Agent-internal** | read_file, write_file, run_command, memory_search, memory_forget, schedule_task, create_proposal, publish_to_topic, get_system_telemetry, get_telemetry_history, update_telemetry_config |
 
 ### Transport Options
 
@@ -437,7 +435,7 @@ MCP is the **sole control interface**. 39 MCP tools + 10 agent-internal (49 tota
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 39 MCP tools + 10 agent-internal |
+| Control | MCP (rmcp) | Standard AI agent interface, 42 MCP tools + agent-internal tools |
 | Memory | SQLite (rusqlite) + NDJSON | 4-tier: world state (live SQLite) + RAM + episodic (NDJSON/FTS5) + semantic (SQLite). World state updated by context providers, not LLM. |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
@@ -461,5 +459,3 @@ MCP is the **sole control interface**. 39 MCP tools + 10 agent-internal (49 tota
   - `ROADMAP.md` — implementation phases
   - `CONTRIBUTING.md` — workflows and processes
   - `CLAUDE.md` — coding conventions and build commands
-  - `docs/plans/2026-03-03-openclaw-agent-rewrite-design.md` — OpenClaw agent rewrite design
-  - `docs/plans/2026-02-27-hardware-ai-agent-design.md` — full agent design

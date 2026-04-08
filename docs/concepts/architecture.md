@@ -94,7 +94,7 @@ systemd. Uses D-Bus (`zbus`) — no subprocess spawning.
 
 **Agent Runtime** — multi-agent Zenoh gateway. Described above.
 
-**MCP Server** — 30 MCP tools + 7 agent-internal tools (37 total), 3-tier RBAC, stdio + HTTP transports.
+**MCP Server** — 42 MCP tools + agent-internal tools, 3-tier RBAC, stdio + HTTP transports.
 
 **Telemetry Watchdog**
 
@@ -118,17 +118,21 @@ runtime via `update_telemetry_config`.
 
 The sole control interface. Zenoh is the data plane only.
 
-**30 MCP tools + 7 agent-internal tools (37 total) across 7 categories**
+**42 MCP tools + agent-internal tools across 11 categories**
 
 | Category | What it covers |
 |---|---|
-| Node lifecycle | install, uninstall, start, stop, restart, build, clean, autostart |
-| Fleet discovery | list nodes, health, config, manifest, schema, stream info |
-| Agent memory | search, forget, semantic store |
-| Telemetry | system metrics, history, config |
-| Scheduling | schedule task, list jobs, delete job |
-| Proposals | create, list proposals |
-| System | machine info, read/write file, run command |
+| Discovery | list nodes, health, config, manifest, schema, logs, stream info, commands, capabilities |
+| Lifecycle | install, uninstall, start, stop, restart, build, remove, clean, autostart |
+| Data | send command, query Zenoh |
+| System | system status, machine info |
+| Memory | jobs, proposals, clear episodic memory |
+| Beliefs | durable subject+predicate assertions with confidence |
+| World State | live sensor-derived snapshot |
+| Context Providers | wire Zenoh topics → world state |
+| Missions | list, pause, resume, cancel |
+| Constraints | register and list per-mission safety limits |
+| Alerts | register/unregister reactive arousal triggers |
 
 **3-tier RBAC**
 
@@ -138,7 +142,7 @@ The sole control interface. Zenoh is the data plane only.
 | Operator | Viewer + lifecycle, send_command, config writes |
 | Admin | Operator + install/uninstall, system tools |
 
-Default for stdio: Admin. Default for HTTP: Admin (Viewer planned for phase 2).
+Default for stdio: Admin. Default for HTTP: Viewer.
 
 **Dual-plane design**
 

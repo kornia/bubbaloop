@@ -4,28 +4,33 @@ Bubbaloop uses YAML configuration files for each component.
 
 ## Camera Configuration
 
-By default, the camera service reads `config.yaml` from the current directory:
+The RTSP camera is a standalone node from `bubbaloop-nodes-official`. Each camera instance has its own `config.yaml`:
 
 ```bash
-pixi run cameras -- -c /path/to/config.yaml
+# Install and start
+bubbaloop node install rtsp-camera
+bubbaloop node start rtsp-camera
 ```
 
 ### Basic Configuration
 
 ```yaml
-cameras:
-  - name: "camera_name"      # Unique identifier (used in topic names)
-    url: "rtsp://..."        # RTSP stream URL
-    latency: 200             # Buffer latency in milliseconds (optional)
+name: "front_door"           # Unique instance name (used in topic paths)
+url: "rtsp://..."            # RTSP stream URL
+latency: 200                 # Buffer latency in milliseconds (optional)
 ```
 
 ### Fields
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `name` | string | Yes | — | Unique camera identifier. Used in topic names: `/camera/{name}/compressed` |
+| `name` | string | Yes | — | Unique instance name. Used in topics: `bubbaloop/global/{machine_id}/{name}/compressed` |
 | `url` | string | Yes | — | Full RTSP URL including credentials if needed |
-| `latency` | integer | No | `200` | Stream buffer latency in milliseconds |
+| `latency` | integer | No | `200` | Stream buffer latency in milliseconds (1-10000) |
+| `frame_rate` | integer | No | — | Target publish rate in FPS (1-120, unlimited if unset) |
+| `raw_width` | integer | No | `560` | Width of raw RGBA frames (SHM path) |
+| `raw_height` | integer | No | `560` | Height of raw RGBA frames (SHM path) |
+| `hw_accel` | string | No | `nvidia` | Hardware acceleration: `nvidia` (Jetson NVDEC) or `cpu` |
 
 ### RTSP URL Format
 
@@ -49,21 +54,22 @@ url: "rtsp://camera.local:8554/h264"
 ### Complete Camera Example
 
 ```yaml
-cameras:
-  # Front door camera - Tapo C200
-  - name: "front_door"
-    url: "rtsp://tapo_user:tapo_pass@192.168.1.141:554/stream2"
-    latency: 200
+# config.yaml for a single camera instance
+name: front_door
+url: "rtsp://tapo_user:tapo_pass@192.168.1.141:554/stream2"
+latency: 200
+frame_rate: 10
+raw_width: 640
+raw_height: 480
+hw_accel: nvidia
+```
 
-  # Backyard camera - Higher latency for WiFi stability
-  - name: "backyard"
-    url: "rtsp://admin:admin@192.168.1.142:554/h264"
-    latency: 500
+For multiple cameras, create separate instances:
 
-  # Garage camera - Local wired connection
-  - name: "garage"
-    url: "rtsp://192.168.1.143:554/live"
-    latency: 100
+```bash
+bubbaloop node instance rtsp-camera front-door  --config configs/front_door.yaml --start
+bubbaloop node instance rtsp-camera backyard    --config configs/backyard.yaml --start
+bubbaloop node instance rtsp-camera garage      --config configs/garage.yaml --start
 ```
 
 ### Stream Selection
@@ -90,10 +96,11 @@ The `latency` parameter controls the GStreamer buffer size:
 
 ## Weather Service Configuration
 
-The OpenMeteo weather service uses its own configuration file:
+The OpenMeteo weather node is a standalone node from `bubbaloop-nodes-official`:
 
 ```bash
-pixi run weather -- -c crates/openmeteo/configs/config.yaml
+bubbaloop node install openmeteo
+bubbaloop node start openmeteo
 ```
 
 ### Weather Configuration
@@ -133,18 +140,19 @@ By default, services connect to a local Zenoh router at `tcp/127.0.0.1:7447`.
 ### Override Endpoint
 
 ```bash
-# Via CLI flag
-pixi run cameras -- -z tcp/192.168.1.100:7447
+# Via CLI flag (node binary)
+./rtsp_camera_node -c config.yaml -e tcp/192.168.1.100:7447
 
 # Via environment variable
-BUBBALOOP_ZENOH_ENDPOINT=tcp/192.168.1.100:7447 pixi run cameras
+BUBBALOOP_ZENOH_ENDPOINT=tcp/192.168.1.100:7447 bubbaloop daemon
 ```
 
 ### Priority Order
 
-1. `-z` / `--zenoh-endpoint` CLI flag (highest)
+1. `ZENOH_ENDPOINT` environment variable (highest)
 2. `BUBBALOOP_ZENOH_ENDPOINT` environment variable
-3. Default: `tcp/127.0.0.1:7447`
+3. `-e` / `--endpoint` CLI flag
+4. Default: `tcp/127.0.0.1:7447`
 
 ### Server Configuration
 
@@ -158,7 +166,7 @@ For running Zenoh as a router, use `zenoh.json5`:
   },
   plugins: {
     remote_api: {
-      websocket_port: 10000,
+      websocket_port: 10001,
     },
   },
 }
@@ -301,8 +309,9 @@ See [Remote Access](../dashboard/remote-access.md) for detailed setup instructio
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
-| `RUST_LOG` | Logging level | `warn` |
+| `ZENOH_ENDPOINT` | Zenoh router endpoint (highest priority) | `tcp/127.0.0.1:7447` |
+| `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint (fallback) | `tcp/127.0.0.1:7447` |
+| `RUST_LOG` | Logging level | `info` |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude | — |
 | `BUBBALOOP_MCP_PORT` | MCP HTTP server port | `8088` |
 | `BUBBALOOP_MACHINE_ID` | Machine identifier | hostname |
