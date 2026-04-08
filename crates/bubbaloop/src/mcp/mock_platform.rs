@@ -49,8 +49,6 @@ impl MockPlatform {
                     "type": "rust",
                     "description": "A test node",
                     "capabilities": ["sensor"],
-                    "publishes": [],
-                    "commands": [],
                 }),
             )]),
             zenoh_session: None,

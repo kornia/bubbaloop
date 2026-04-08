@@ -589,8 +589,6 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
                                     "name": name,
                                     "description": manifest.get("description").and_then(|d| d.as_str()).unwrap_or(""),
                                     "version": manifest.get("version").and_then(|v| v.as_str()).unwrap_or(""),
-                                    "publishes": manifest.get("publishes").cloned().unwrap_or(serde_json::json!([])),
-                                    "commands": manifest.get("commands").cloned().unwrap_or(serde_json::json!([])),
                                 }));
                         }
                     }
