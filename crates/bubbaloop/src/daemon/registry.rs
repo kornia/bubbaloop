@@ -40,17 +40,11 @@ pub enum Capability {
     Gateway,
 }
 
-/// Declaration of a topic the node publishes or subscribes to
+/// Declaration of a topic the node publishes
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TopicSpec {
     /// Topic suffix (e.g., "output", "compressed", "metrics")
     pub suffix: String,
-    /// Protobuf message type (e.g., "bubbaloop.header.v1.Header")
-    #[serde(default)]
-    pub schema_type: Option<String>,
-    /// Publishing rate in Hz (0 = event-driven)
-    #[serde(default)]
-    pub rate_hz: Option<f64>,
     /// Human-readable description
     #[serde(default)]
     pub description: Option<String>,
@@ -110,9 +104,6 @@ pub struct NodeManifest {
     /// Topics this node publishes
     #[serde(default)]
     pub publishes: Vec<TopicSpec>,
-    /// Topics this node subscribes to
-    #[serde(default)]
-    pub subscribes: Vec<TopicSpec>,
     /// Commands this node accepts
     #[serde(default)]
     pub commands: Vec<CommandSpec>,

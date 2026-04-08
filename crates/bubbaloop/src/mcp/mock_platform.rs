@@ -50,7 +50,6 @@ impl MockPlatform {
                     "description": "A test node",
                     "capabilities": ["sensor"],
                     "publishes": [],
-                    "subscribes": [],
                     "commands": [],
                 }),
             )]),
