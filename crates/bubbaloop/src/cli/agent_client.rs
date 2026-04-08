@@ -99,7 +99,7 @@ async fn send_and_render(
                 match result {
                     Ok(sample) => {
                         // Extract agent_id from topic key expression:
-                        // bubbaloop/global/{machine}/agent/{agent_id}/outbox
+                        // bubbaloop/{scope}/{machine}/agent/{agent_id}/outbox
                         let agent_id_from_topic = sample.key_expr().as_str()
                             .split('/')
                             .nth(4)

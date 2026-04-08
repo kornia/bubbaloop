@@ -18,7 +18,7 @@ impl Default for FederatedConfig {
 }
 
 /// Build the Zenoh topic for publishing world state from this machine.
-/// Format: `bubbaloop/global/{machine_id}/agent/{agent_id}/world_state`
+/// Format: `bubbaloop/{scope}/{machine_id}/agent/{agent_id}/world_state`
 pub fn world_state_topic(scope: &str, machine_id: &str, agent_id: &str) -> String {
     format!("bubbaloop/{scope}/{machine_id}/agent/{agent_id}/world_state")
 }
@@ -30,11 +30,11 @@ pub fn remote_world_state_pattern() -> &'static str {
 }
 
 /// Extract machine_id from a remote world state topic.
-/// Topic format: `bubbaloop/global/{machine_id}/agent/{agent_id}/world_state`
+/// Topic format: `bubbaloop/{scope}/{machine_id}/agent/{agent_id}/world_state`
 /// Returns None if format doesn't match.
 pub fn extract_machine_id(topic: &str) -> Option<&str> {
     let parts: Vec<&str> = topic.split('/').collect();
-    // [bubbaloop, global, {machine_id}, agent, {agent_id}, world_state]
+    // [bubbaloop, {scope}, {machine_id}, agent, {agent_id}, world_state]
     if parts.len() == 6
         && parts[0] == "bubbaloop"
         && parts[3] == "agent"

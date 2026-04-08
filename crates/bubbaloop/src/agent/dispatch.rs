@@ -532,7 +532,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             ToolDefinition {
                 name: "publish_to_topic".to_string(),
                 description: "Publish a message to a Zenoh topic. Use topic \
-                    bubbaloop/global/{machine}/agent/{name}/inbox to address a named agent's inbox. \
+                    bubbaloop/{scope}/agent/{name}/inbox to address a named agent's inbox. \
                     Inbox messages surface in the recipient's next prompt turn under Recent Events."
                     .to_string(),
                 input_schema: json!({

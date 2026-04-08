@@ -152,14 +152,14 @@ pub struct AgentManifest {
 
 /// Build the shared agent inbox topic.
 ///
-/// Format: `bubbaloop/global/{machine}/agent/inbox`
+/// Format: `bubbaloop/{scope}/{machine}/agent/inbox`
 pub fn inbox_topic(scope: &str, machine_id: &str) -> String {
     format!("bubbaloop/{}/{}/agent/inbox", scope, machine_id)
 }
 
 /// Build a per-agent outbox topic.
 ///
-/// Format: `bubbaloop/global/{machine}/agent/{agent_id}/outbox`
+/// Format: `bubbaloop/{scope}/{machine}/agent/{agent_id}/outbox`
 pub fn outbox_topic(scope: &str, machine_id: &str, agent_id: &str) -> String {
     format!(
         "bubbaloop/{}/{}/agent/{}/outbox",
@@ -169,7 +169,7 @@ pub fn outbox_topic(scope: &str, machine_id: &str, agent_id: &str) -> String {
 
 /// Build a per-agent manifest topic (queryable).
 ///
-/// Format: `bubbaloop/global/{machine}/agent/{agent_id}/manifest`
+/// Format: `bubbaloop/{scope}/{machine}/agent/{agent_id}/manifest`
 pub fn manifest_topic(scope: &str, machine_id: &str, agent_id: &str) -> String {
     format!(
         "bubbaloop/{}/{}/agent/{}/manifest",
@@ -179,21 +179,21 @@ pub fn manifest_topic(scope: &str, machine_id: &str, agent_id: &str) -> String {
 
 /// Build a wildcard pattern for discovering all agent manifests.
 ///
-/// Format: `bubbaloop/global/{machine}/agent/*/manifest`
+/// Format: `bubbaloop/{scope}/{machine}/agent/*/manifest`
 pub fn manifest_wildcard(scope: &str, machine_id: &str) -> String {
     format!("bubbaloop/{}/{}/agent/*/manifest", scope, machine_id)
 }
 
 /// Build a wildcard pattern for discovering agents on ALL machines.
 ///
-/// Format: `bubbaloop/global/*/agent/*/manifest`
+/// Format: `bubbaloop/{scope}/*/agent/*/manifest`
 pub fn manifest_wildcard_all(scope: &str) -> String {
     format!("bubbaloop/{}/*/agent/*/manifest", scope)
 }
 
 /// Build a wildcard pattern for subscribing to all agent outboxes.
 ///
-/// Format: `bubbaloop/global/{machine}/agent/*/outbox`
+/// Format: `bubbaloop/{scope}/{machine}/agent/*/outbox`
 pub fn outbox_wildcard(scope: &str, machine_id: &str) -> String {
     format!("bubbaloop/{}/{}/agent/*/outbox", scope, machine_id)
 }
