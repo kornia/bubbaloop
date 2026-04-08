@@ -664,7 +664,6 @@ pub fn generate_service_unit(
 
     // Propagate machine identity so nodes use the same ID as the daemon
     let machine_id = crate::daemon::util::get_machine_id();
-    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
 
     // Python nodes get extra sandboxing since they lack memory safety guarantees
     let python_sandbox = if node_type == "python" {
@@ -692,7 +691,6 @@ RestartSec=5
 Environment={environment}
 Environment={path_env}
 Environment=BUBBALOOP_MACHINE_ID={machine_id}
-Environment=BUBBALOOP_SCOPE={scope}
 
 # Security hardening (user service compatible)
 NoNewPrivileges=true
@@ -1239,10 +1237,10 @@ mod tests {
             content.contains("Environment=BUBBALOOP_MACHINE_ID="),
             "Missing BUBBALOOP_MACHINE_ID in unit:\n{content}"
         );
-        // Must contain BUBBALOOP_SCOPE for multi-environment routing
+        // BUBBALOOP_SCOPE was removed — all topics use hardcoded "global"
         assert!(
-            content.contains("Environment=BUBBALOOP_SCOPE="),
-            "Missing BUBBALOOP_SCOPE in unit:\n{content}"
+            !content.contains("BUBBALOOP_SCOPE"),
+            "BUBBALOOP_SCOPE should no longer be in unit:\n{content}"
         );
     }
 }

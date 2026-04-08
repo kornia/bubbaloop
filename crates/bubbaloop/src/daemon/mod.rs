@@ -142,7 +142,6 @@ async fn run_daemon_gateway(
     shutdown_tx: tokio::sync::watch::Sender<()>,
     mut shutdown_rx: tokio::sync::watch::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = util::get_machine_id();
     let start_time = std::time::Instant::now();
 
@@ -150,12 +149,11 @@ async fn run_daemon_gateway(
     let platform = std::sync::Arc::new(crate::mcp::platform::DaemonPlatform::new(
         node_manager.clone(),
         session.clone(),
-        scope.clone(),
         machine_id.clone(),
     ));
 
     // 1. Register manifest queryable
-    let manifest_key = gateway::manifest_topic(&scope, &machine_id);
+    let manifest_key = gateway::manifest_topic(&machine_id);
     let manifest_session = session.clone();
     let manifest_machine_id = machine_id.clone();
     let manifest_nm = node_manager.clone();
@@ -209,7 +207,7 @@ async fn run_daemon_gateway(
     };
 
     // 2. Register nodes queryable (returns JSON NodeList for dashboard)
-    let nodes_key = gateway::nodes_topic(&scope, &machine_id);
+    let nodes_key = gateway::nodes_topic(&machine_id);
     let nodes_session = session.clone();
     let nodes_nm = node_manager.clone();
     let mut nodes_shutdown = shutdown_rx.clone();
@@ -246,7 +244,7 @@ async fn run_daemon_gateway(
 
     // 3. Register command queryable (for dashboard / Zenoh GET clients)
     //    Accepts JSON NodeCommandJson, returns JSON CommandResultJson.
-    let cmd_queryable_key = gateway::command_topic(&scope, &machine_id);
+    let cmd_queryable_key = gateway::command_topic(&machine_id);
     let cmd_queryable_session = session.clone();
     let cmd_queryable_platform = platform.clone();
     let cmd_queryable_machine_id = machine_id.clone();
@@ -381,8 +379,8 @@ async fn run_daemon_gateway(
 
     // 4. Subscribe to command topic and dispatch (legacy JSON pub/sub for CLI clients).
     //    The JSON queryable above handles the dashboard's request/reply API.
-    let cmd_topic = gateway::command_topic(&scope, &machine_id);
-    let evt_topic = gateway::events_topic(&scope, &machine_id);
+    let cmd_topic = gateway::command_topic(&machine_id);
+    let evt_topic = gateway::events_topic(&machine_id);
 
     let subscriber = session.declare_subscriber(&cmd_topic).await.map_err(
         |e| -> Box<dyn std::error::Error> {
@@ -402,7 +400,7 @@ async fn run_daemon_gateway(
         "[Gateway] Daemon gateway started: cmd={}, events={}, manifest={}",
         cmd_topic,
         evt_topic,
-        gateway::manifest_topic(&scope, &machine_id),
+        gateway::manifest_topic(&machine_id),
     );
 
     loop {

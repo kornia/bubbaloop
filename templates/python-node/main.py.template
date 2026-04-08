@@ -60,8 +60,8 @@ def _get_machine_id() -> str:
 
 
 def _get_scope() -> str:
-    """Get scope from env var, default 'local'."""
-    return os.environ.get("BUBBALOOP_SCOPE", "local")
+    """Return the fixed key space for network-visible topics."""
+    return "global"
 
 
 def _load_descriptor_set() -> bytes | None:

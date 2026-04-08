@@ -222,11 +222,10 @@ bubbaloop/{key_space}/{machine_id}/{node_name}/{resource}
            +--------------------------------------- global (network) or local (SHM-only)
 ```
 
-Nodes receive scope, machine ID, and Zenoh endpoint via environment variables
+Nodes receive machine ID and Zenoh endpoint via environment variables
 injected by the daemon into systemd unit files:
 
 ```
-BUBBALOOP_SCOPE=local
 BUBBALOOP_MACHINE_ID=nvidia_orin00
 BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447
 ```

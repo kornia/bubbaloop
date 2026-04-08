@@ -18,9 +18,9 @@ impl Default for FederatedConfig {
 }
 
 /// Build the Zenoh topic for publishing world state from this machine.
-/// Format: `bubbaloop/{scope}/{machine_id}/agent/{agent_id}/world_state`
-pub fn world_state_topic(scope: &str, machine_id: &str, agent_id: &str) -> String {
-    format!("bubbaloop/{scope}/{machine_id}/agent/{agent_id}/world_state")
+/// Format: `bubbaloop/global/{machine_id}/agent/{agent_id}/world_state`
+pub fn world_state_topic(machine_id: &str, agent_id: &str) -> String {
+    format!("bubbaloop/global/{machine_id}/agent/{agent_id}/world_state")
 }
 
 /// Build the subscription pattern for remote world states (other machines).
@@ -30,7 +30,7 @@ pub fn remote_world_state_pattern() -> &'static str {
 }
 
 /// Extract machine_id from a remote world state topic.
-/// Topic format: `bubbaloop/{scope}/{machine_id}/agent/{agent_id}/world_state`
+/// Topic format: `bubbaloop/global/{machine_id}/agent/{agent_id}/world_state`
 /// Returns None if format doesn't match.
 pub fn extract_machine_id(topic: &str) -> Option<&str> {
     let parts: Vec<&str> = topic.split('/').collect();
@@ -57,19 +57,19 @@ mod tests {
 
     #[test]
     fn world_state_topic_format() {
-        let topic = world_state_topic("prod", "jetson-1", "rex");
-        assert_eq!(topic, "bubbaloop/prod/jetson-1/agent/rex/world_state");
+        let topic = world_state_topic("jetson-1", "rex");
+        assert_eq!(topic, "bubbaloop/global/jetson-1/agent/rex/world_state");
     }
 
     #[test]
     fn extract_machine_id_valid_topic() {
-        let topic = "bubbaloop/prod/jetson-1/agent/rex/world_state";
+        let topic = "bubbaloop/global/jetson-1/agent/rex/world_state";
         assert_eq!(extract_machine_id(topic), Some("jetson-1"));
     }
 
     #[test]
     fn extract_machine_id_invalid_topic() {
-        assert_eq!(extract_machine_id("bubbaloop/prod/world_state"), None);
+        assert_eq!(extract_machine_id("bubbaloop/global/world_state"), None);
         assert_eq!(extract_machine_id("other/path"), None);
     }
 

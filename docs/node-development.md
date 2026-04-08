@@ -88,7 +88,7 @@ A node is an autonomous process that:
 - Reports health via periodic heartbeats
 - Manages its own lifecycle (start, stop, restart)
 
-Nodes run as systemd user services managed by the bubbaloop daemon. They can run on any machine — the daemon scopes all topics by `scope` and `machine_id` for multi-machine deployments.
+Nodes run as systemd user services managed by the bubbaloop daemon. They can run on any machine — the daemon scopes all topics by `machine_id` for multi-machine deployments.
 
 > **Recommended:** Use the [Node SDK](#node-sdk-recommended) to create Rust nodes with ~50 lines of code. The manual approach below is for advanced use cases or Python nodes.
 
@@ -316,16 +316,14 @@ async fn main() -> Result<()> {
         .expect("Error setting Ctrl+C handler");
     }
 
-    // Read scope/machine env vars
-    let scope = std::env::var("BUBBALOOP_SCOPE")
-        .unwrap_or_else(|_| "local".to_string());
+    // Read machine ID env var
     let machine_id = std::env::var("BUBBALOOP_MACHINE_ID")
         .unwrap_or_else(|_| {
             hostname::get()
                 .map(|h| h.to_string_lossy().to_string())
                 .unwrap_or_else(|_| "unknown".to_string())
         });
-    log::info!("Scope: {}, Machine ID: {}", scope, machine_id);
+    log::info!("Machine ID: {}", machine_id);
 
     // Initialize Zenoh session in client mode
     let endpoint = std::env::var("ZENOH_ENDPOINT").unwrap_or(args.endpoint);
@@ -339,8 +337,8 @@ async fn main() -> Result<()> {
 
     // Declare schema queryable (NO .complete(true)!)
     let schema_key = format!(
-        "bubbaloop/{}/{}/my-sensor/schema",
-        scope, machine_id
+        "bubbaloop/global/{}/my-sensor/schema",
+        machine_id
     );
     let _schema_queryable = zenoh_session
         .declare_queryable(&schema_key)
@@ -358,16 +356,16 @@ async fn main() -> Result<()> {
 
     // Declare data publisher
     let data_topic = format!(
-        "bubbaloop/{}/{}/{}",
-        scope, machine_id, config.publish_topic
+        "bubbaloop/global/{}/{}",
+        machine_id, config.publish_topic
     );
     let publisher = zenoh_session.declare_publisher(&data_topic).await?;
     log::info!("Publishing to: {}", data_topic);
 
     // Health heartbeat publisher
     let health_topic = format!(
-        "bubbaloop/{}/{}/health/my-sensor",
-        scope, machine_id
+        "bubbaloop/global/{}/health/my-sensor",
+        machine_id
     );
     let health_pub = zenoh_session.declare_publisher(&health_topic).await?;
 
@@ -410,7 +408,6 @@ async fn main() -> Result<()> {
                         sequence: seq,
                         frame_id: "my-sensor".to_string(),
                         machine_id: machine_id.clone(),
-                        scope: scope.clone(),
                     }),
                     temperature: read_temperature(),
                     humidity: read_humidity(),
@@ -619,9 +616,8 @@ class MySensorNode:
                 "rate_hz": 1.0,
             }
 
-        # Resolve scope and machine_id from env vars
+        # Resolve machine_id from env var
         import os
-        self.scope = os.environ.get("BUBBALOOP_SCOPE", "local")
         self.machine_id = os.environ.get(
             "BUBBALOOP_MACHINE_ID", socket.gethostname()
         )
@@ -636,21 +632,21 @@ class MySensorNode:
 
         # Build topic: bubbaloop/global/{machine_id}/{publish_topic}
         topic_suffix = self.config["publish_topic"]
-        self.full_topic = f"bubbaloop/{self.scope}/{self.machine_id}/{topic_suffix}"
+        self.full_topic = f"bubbaloop/global/{self.machine_id}/{topic_suffix}"
 
         # Setup publishers
         self.publisher = self.session.declare_publisher(self.full_topic)
         logger.info(f"Publishing to: {self.full_topic}")
 
         self.health_publisher = self.session.declare_publisher(
-            f"bubbaloop/{self.scope}/{self.machine_id}/health/my-sensor"
+            f"bubbaloop/global/{self.machine_id}/health/my-sensor"
         )
 
         # Declare schema queryable (NO complete=True!)
         descriptor_path = Path(__file__).parent / "descriptor.bin"
         if descriptor_path.exists():
             self.descriptor_bytes = descriptor_path.read_bytes()
-            schema_key = f"bubbaloop/{self.scope}/{self.machine_id}/my-sensor/schema"
+            schema_key = f"bubbaloop/global/{self.machine_id}/my-sensor/schema"
             self.schema_queryable = self.session.declare_queryable(
                 schema_key,
                 lambda query: query.reply(query.key_expr, self.descriptor_bytes),
@@ -677,7 +673,6 @@ class MySensorNode:
                 sequence=self.sequence,
                 frame_id="my-sensor",
                 machine_id=self.machine_id,
-                scope=self.scope,
             )
         )
         reading.temperature = read_temperature()
@@ -977,7 +972,6 @@ message Header {
     uint32 sequence = 3;    // Monotonic sequence number
     string frame_id = 4;    // Frame/sensor identifier
     string machine_id = 5;  // Machine identifier
-    string scope = 6;       // Deployment scope
 }
 ```
 
@@ -1113,7 +1107,7 @@ Two SDKs are available — Rust (`bubbaloop-node`) and Python (`bubbaloop-sdk`) 
 - Automatic schema queryable registration
 - Automatic config file loading (YAML deserialization)
 - Automatic signal handling (SIGTERM/SIGINT)
-- Automatic scope/machine_id resolution
+- Automatic machine_id resolution
 - Automatic logging initialization
 
 **With the SDK, a complete node will look like this:**
@@ -1260,7 +1254,7 @@ Before submitting a new node, verify ALL items:
 - [ ] Rust: uses vanilla zenoh with prost for data pub/sub
 - [ ] Python: uses `eclipse-zenoh` + `protobuf`, compiles protos via `build_proto.py`
 - [ ] Accepts CLI flags: `-c config.yaml -e tcp/localhost:7447`
-- [ ] Uses `Header` message pattern (acq_time, pub_time, sequence, frame_id, machine_id, scope)
+- [ ] Uses `Header` message pattern (acq_time, pub_time, sequence, frame_id, machine_id)
 - [ ] Reads `BUBBALOOP_MACHINE_ID` env var (default: hostname); uses `global`/`local` key spaces (SDK handles automatically)
 
 ### Testing

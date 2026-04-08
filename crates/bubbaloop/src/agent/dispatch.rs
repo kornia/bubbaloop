@@ -34,7 +34,6 @@ impl ToolResult {
 /// Dispatches MCP tool calls directly to `PlatformOperations` methods.
 pub struct Dispatcher<P: PlatformOperations> {
     platform: Arc<P>,
-    scope: String,
     machine_id: String,
     agent_name: String,
     memory_backend: Option<Arc<tokio::sync::Mutex<crate::agent::memory::MemoryBackend>>>,
@@ -45,10 +44,9 @@ pub struct Dispatcher<P: PlatformOperations> {
 
 impl<P: PlatformOperations> Dispatcher<P> {
     /// Create a new dispatcher (backward-compatible, no memory).
-    pub fn new(platform: Arc<P>, scope: String, machine_id: String) -> Self {
+    pub fn new(platform: Arc<P>, machine_id: String) -> Self {
         Self {
             platform,
-            scope,
             machine_id,
             agent_name: String::new(),
             memory_backend: None,
@@ -79,7 +77,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
     /// Create a dispatcher with memory backend for agent use.
     pub fn new_with_memory(
         platform: Arc<P>,
-        scope: String,
         machine_id: String,
         agent_name: String,
         memory_backend: Arc<tokio::sync::Mutex<crate::agent::memory::MemoryBackend>>,
@@ -88,7 +85,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
     ) -> Self {
         Self {
             platform,
-            scope,
             machine_id,
             agent_name,
             memory_backend: Some(memory_backend),
@@ -532,7 +528,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             ToolDefinition {
                 name: "publish_to_topic".to_string(),
                 description: "Publish a message to a Zenoh topic. Use topic \
-                    bubbaloop/{scope}/agent/{name}/inbox to address a named agent's inbox. \
+                    bubbaloop/global/agent/{name}/inbox to address a named agent's inbox. \
                     Inbox messages surface in the recipient's next prompt turn under Recent Events."
                     .to_string(),
                 input_schema: json!({
@@ -706,7 +702,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             Err(_) => (0, 0, 0),
         };
         let status = json!({
-            "scope": self.scope,
+            "scope": "global",
             "machine_id": self.machine_id,
             "nodes_total": total,
             "nodes_running": running,
@@ -720,7 +716,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
     fn handle_get_machine_info(&self) -> ToolResult {
         let info = json!({
             "machine_id": self.machine_id,
-            "scope": self.scope,
+            "scope": "global",
             "arch": std::env::consts::ARCH,
             "os": std::env::consts::OS,
             "hostname": hostname::get()
@@ -792,7 +788,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
         };
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/manifest",
-            self.scope, self.machine_id, node_name
+            "global", self.machine_id, node_name
         );
         let manifest_text = match self.platform.query_zenoh(&key_expr).await {
             Ok(text) => text,
@@ -836,7 +832,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
         let info = json!({
             "zenoh_topic": format!(
                 "bubbaloop/{}/{}/{}/**",
-                self.scope, self.machine_id, node_name
+                "global", self.machine_id, node_name
             ),
             "encoding": "protobuf",
             "endpoint": "tcp/localhost:7447",
@@ -852,7 +848,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
         };
         let key = format!(
             "bubbaloop/{}/{}/{}/schema",
-            self.scope, self.machine_id, node_name
+            "global", self.machine_id, node_name
         );
         match self.platform.query_zenoh(&key).await {
             Ok(result) => ToolResult::success(result),
@@ -877,7 +873,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
 
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/command",
-            self.scope, self.machine_id, node_name
+            "global", self.machine_id, node_name
         );
         let payload = json!({ "command": command, "params": params });
         let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
@@ -1674,7 +1670,6 @@ mod tests {
                 crate::mcp::platform::mock::MockPlatform::new()
                     .with_session(coordinator_session.clone()),
             ),
-            "local".to_string(),
             "test-machine".to_string(),
             "coordinator".to_string(),
             coordinator_memory.backend.clone(),
@@ -1686,7 +1681,6 @@ mod tests {
                 crate::mcp::platform::mock::MockPlatform::new()
                     .with_session(worker_session.clone()),
             ),
-            "local".to_string(),
             "test-machine".to_string(),
             "worker".to_string(),
             worker_memory.backend.clone(),

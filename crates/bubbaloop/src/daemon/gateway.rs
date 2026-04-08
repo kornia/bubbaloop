@@ -274,35 +274,35 @@ pub struct CommandResultJson {
 /// Build the daemon command topic (CLI → Daemon).
 ///
 /// Format: `bubbaloop/global/{machine}/daemon/command`
-pub fn command_topic(_scope: &str, machine_id: &str) -> String {
+pub fn command_topic(machine_id: &str) -> String {
     format!("bubbaloop/global/{}/daemon/command", machine_id)
 }
 
 /// Build the daemon events topic (Daemon → CLI).
 ///
 /// Format: `bubbaloop/global/{machine}/daemon/events`
-pub fn events_topic(_scope: &str, machine_id: &str) -> String {
+pub fn events_topic(machine_id: &str) -> String {
     format!("bubbaloop/global/{}/daemon/events", machine_id)
 }
 
 /// Build the daemon manifest topic (queryable).
 ///
 /// Format: `bubbaloop/global/{machine}/daemon/manifest`
-pub fn manifest_topic(_scope: &str, machine_id: &str) -> String {
+pub fn manifest_topic(machine_id: &str) -> String {
     format!("bubbaloop/global/{}/daemon/manifest", machine_id)
 }
 
 /// Build a wildcard pattern for discovering daemon manifests on ALL machines.
 ///
 /// Format: `bubbaloop/global/*/daemon/manifest`
-pub fn manifest_wildcard(_scope: &str) -> String {
+pub fn manifest_wildcard() -> String {
     "bubbaloop/global/*/daemon/manifest".to_string()
 }
 
 /// Build the daemon nodes topic (queryable — returns JSON NodeListJson).
 ///
 /// Format: `bubbaloop/global/{machine}/daemon/nodes`
-pub fn nodes_topic(_scope: &str, machine_id: &str) -> String {
+pub fn nodes_topic(machine_id: &str) -> String {
     format!("bubbaloop/global/{}/daemon/nodes", machine_id)
 }
 
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn command_topic_format() {
         assert_eq!(
-            command_topic("local", "jetson01"),
+            command_topic("jetson01"),
             "bubbaloop/global/jetson01/daemon/command"
         );
     }
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn events_topic_format() {
         assert_eq!(
-            events_topic("local", "jetson01"),
+            events_topic("jetson01"),
             "bubbaloop/global/jetson01/daemon/events"
         );
     }
@@ -482,16 +482,13 @@ mod tests {
     #[test]
     fn manifest_topic_format() {
         assert_eq!(
-            manifest_topic("local", "jetson01"),
+            manifest_topic("jetson01"),
             "bubbaloop/global/jetson01/daemon/manifest"
         );
     }
 
     #[test]
     fn manifest_wildcard_format() {
-        assert_eq!(
-            manifest_wildcard("local"),
-            "bubbaloop/global/*/daemon/manifest"
-        );
+        assert_eq!(manifest_wildcard(), "bubbaloop/global/*/daemon/manifest");
     }
 }

@@ -29,8 +29,8 @@
 ### Adding a New Zenoh Publisher
 Edit `src/node.rs`:
 ```rust
-// Topics follow scoped pattern: bubbaloop/{scope}/{machine_id}/{{node_name}}/{resource}
-// The topic_prefix is built automatically from BUBBALOOP_SCOPE and BUBBALOOP_MACHINE_ID
+// Topics follow the pattern: bubbaloop/global/{machine_id}/{{node_name}}/{resource}
+// The topic_prefix is built automatically from BUBBALOOP_MACHINE_ID
 let my_topic = format!("{}/my_topic", topic_prefix);
 let publisher = session.declare_publisher(&my_topic).await?;
 

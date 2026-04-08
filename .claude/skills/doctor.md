@@ -53,13 +53,12 @@ Check that all node service files have required env vars:
 for f in ~/.config/systemd/user/bubbaloop-*.service; do
   name=$(basename "$f" .service)
   has_machine_id=$(grep -c 'BUBBALOOP_MACHINE_ID' "$f" 2>/dev/null || echo 0)
-  has_scope=$(grep -c 'BUBBALOOP_SCOPE' "$f" 2>/dev/null || echo 0)
-  echo "$name: MACHINE_ID=$has_machine_id SCOPE=$has_scope"
+  echo "$name: MACHINE_ID=$has_machine_id"
 done
 ```
 
-Node services MUST have `BUBBALOOP_MACHINE_ID` and `BUBBALOOP_SCOPE`. If missing:
-- If `--fix`: add them (get machine_id from `hostname | tr '-' '_'`, scope defaults to `local`)
+Node services MUST have `BUBBALOOP_MACHINE_ID`. If missing:
+- If `--fix`: add it (get machine_id from `hostname | tr '-' '_'`)
 - Otherwise: warn and show the fix command
 
 ### Step 5: Zenoh Router TCP Connections
@@ -272,8 +271,7 @@ Output a table:
 1. **Service not running**: `systemctl --user restart <service>`
 2. **Duplicate processes**: Kill stale PIDs, restart services
 3. **Missing MACHINE_ID**: Add `Environment=BUBBALOOP_MACHINE_ID=$(hostname | tr '-' '_')` to service file
-4. **Missing SCOPE**: Add `Environment=BUBBALOOP_SCOPE=local` to service file
-5. **Hyphenated topics/machine IDs**: Edit config.yaml and service files to use underscores
+4. **Hyphenated topics/machine IDs**: Edit config.yaml and service files to use underscores
 6. **Schema key mismatch**: Update node code to use consistent underscore naming for both data topics and schema keys
 7. **Bridge disconnecting**: Kill duplicates, restart bridge, check version match
 8. **Dashboard empty**: Refresh browser after bridge/Vite restart

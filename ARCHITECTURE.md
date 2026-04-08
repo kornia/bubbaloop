@@ -328,8 +328,7 @@ BUBBALOOP_MACHINE_ID=nvidia_orin00
 BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447  # Optional override
 ```
 
-> **Note:** The Node SDK uses fixed key spaces (`global`/`local`) instead of `BUBBALOOP_SCOPE`.
-> The daemon still reads `BUBBALOOP_SCOPE` for its own topics (daemon API, agent gateway).
+> **Note:** `BUBBALOOP_SCOPE` was removed. All topics use the fixed key spaces `global` (network-visible) and `local` (SHM-only).
 
 ---
 
