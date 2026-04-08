@@ -65,6 +65,8 @@ pub struct NodeManifest {
     pub description: String,
     #[serde(default)]
     pub author: Option<String>,
+    // TODO: move build/command to nodes.json (specified at `node add` time)
+    // so node.yaml is pure metadata. Requires daemon refactor.
     #[serde(default)]
     pub build: Option<String>,
     #[serde(default)]
