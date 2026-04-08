@@ -48,8 +48,8 @@ export function ZenohSubscriptionProvider({
   // Create manager once (lazy initialization)
   if (!managerRef.current) {
     managerRef.current = new ZenohSubscriptionManager();
-    // Expose for debugging
-    if (typeof window !== 'undefined') {
+    // Expose for debugging (dev only)
+    if (typeof window !== 'undefined' && import.meta.env.DEV) {
       (window as unknown as { __zenohSubManager?: ZenohSubscriptionManager }).__zenohSubManager = managerRef.current;
     }
   }

@@ -17,6 +17,52 @@ use rmcp::model::*;
 use rmcp::ServerHandler;
 use std::sync::Arc;
 
+/// Axum middleware that enforces Bearer token authentication.
+///
+/// Extracts the `Authorization: Bearer <token>` header and validates it
+/// against the expected token using constant-time comparison. Returns 401
+/// if the token is missing or invalid.
+async fn bearer_auth_middleware(
+    headers: axum::http::HeaderMap,
+    state: axum::extract::State<String>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let expected_token = &*state;
+    let auth_header = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+
+    match auth_header {
+        Some(header_value) if auth::validate_token(header_value, expected_token) => {
+            log::debug!("[AUTH] Bearer token validated successfully");
+            next.run(request).await
+        }
+        Some(_) => {
+            log::warn!("[AUTH] Invalid bearer token presented");
+            axum::response::Response::builder()
+                .status(axum::http::StatusCode::UNAUTHORIZED)
+                .header("WWW-Authenticate", "Bearer")
+                .body(axum::body::Body::from("Unauthorized: invalid token"))
+                .unwrap_or_else(|_| {
+                    axum::response::Response::new(axum::body::Body::from("Unauthorized"))
+                })
+        }
+        None => {
+            log::warn!("[AUTH] Missing Authorization header");
+            axum::response::Response::builder()
+                .status(axum::http::StatusCode::UNAUTHORIZED)
+                .header("WWW-Authenticate", "Bearer")
+                .body(axum::body::Body::from(
+                    "Unauthorized: missing Authorization header",
+                ))
+                .unwrap_or_else(|_| {
+                    axum::response::Response::new(axum::body::Body::from("Unauthorized"))
+                })
+        }
+    }
+}
+
 /// Default port for the MCP HTTP server.
 pub const MCP_PORT: u16 = 8088;
 
@@ -26,7 +72,7 @@ pub const MCP_PORT: u16 = 8088;
 /// and tests can plug in `MockPlatform`.
 pub struct BubbaLoopMcpServer<P: PlatformOperations = platform::DaemonPlatform> {
     pub(crate) platform: Arc<P>,
-    #[allow(dead_code)] // TODO(phase-2): Enforce in call_tool(). Currently single-user localhost.
+    #[allow(dead_code)] // TODO(phase-3): Used for per-token tier differentiation
     pub(crate) auth_token: Option<String>,
     pub(crate) tool_router: ToolRouter<Self>,
     pub(crate) scope: String,
@@ -90,9 +136,12 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
         request: CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        // RBAC authorization check
+        // RBAC authorization check.
+        // Bearer token auth is enforced at the HTTP middleware layer.
+        // Currently all authenticated callers receive Admin tier.
+        // TODO(phase-3): Encode tier in token (e.g., bb_admin_<uuid>, bb_viewer_<uuid>)
+        // and extract it here to enable per-token tier differentiation.
         let required = rbac::required_tier(&request.name);
-        // TODO(phase-2): Extract tier from auth token. Currently single-user localhost grants admin.
         let caller_tier = rbac::Tier::Admin;
         if !caller_tier.has_permission(required) {
             log::warn!(
@@ -184,7 +233,7 @@ pub async fn run_mcp_server(
     let token =
         auth::load_or_generate_token().map_err(|e| format!("Failed to load MCP token: {}", e))?;
     log::info!("MCP authentication enabled (token in ~/.bubbaloop/mcp-token)");
-    log::warn!("RBAC not yet enforced — all callers granted admin tier (single-user localhost)");
+    log::info!("Bearer token auth enforced on /mcp and /api/v1 routes");
 
     let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = crate::daemon::util::get_machine_id();
@@ -199,6 +248,11 @@ pub async fn run_mcp_server(
     ));
 
     let api_router = crate::api::api_router(platform.clone());
+
+    // Build auth layer before mcp_service closure consumes `token`.
+    // /mcp and /api/v1 require bearer token; /health remains unauthenticated
+    // for liveness probes.
+    let auth_layer = axum::middleware::from_fn_with_state(token.clone(), bearer_auth_middleware);
 
     let mcp_service = StreamableHttpService::new(
         move || {
@@ -234,6 +288,11 @@ pub async fn run_mcp_server(
         }
     });
 
+    let authenticated_routes = axum::Router::new()
+        .nest("/api/v1", api_router)
+        .nest_service("/mcp", mcp_service)
+        .layer(auth_layer);
+
     let router = axum::Router::new()
         .route(
             "/health",
@@ -256,8 +315,7 @@ pub async fn run_mcp_server(
                 }
             }),
         )
-        .nest("/api/v1", api_router)
-        .nest_service("/mcp", mcp_service)
+        .merge(authenticated_routes)
         .layer(tower_governor::GovernorLayer::new(governor_conf));
 
     let bind_addr = format!("127.0.0.1:{}", port);

@@ -53,6 +53,44 @@ pub fn load_or_generate_token_at(path: &std::path::Path) -> Result<String, std::
     #[cfg(not(unix))]
     {
         std::fs::write(path, &token)?;
+        // Restrict permissions on Windows: remove inherited ACEs and grant
+        // only the current user full control. Uses icacls which is available
+        // on all supported Windows versions (Vista+).
+        #[cfg(windows)]
+        {
+            let path_str = path.to_string_lossy();
+            if let Ok(username) = std::env::var("USERNAME") {
+                let icacls_result = std::process::Command::new("icacls")
+                    .args([
+                        path_str.as_ref(),
+                        "/inheritance:r",
+                        "/grant:r",
+                        &format!("{}:F", username),
+                    ])
+                    .output();
+                match icacls_result {
+                    Ok(output) if output.status.success() => {
+                        log::debug!("Restricted token file permissions via icacls");
+                    }
+                    Ok(output) => {
+                        log::warn!(
+                            "icacls failed to restrict token file permissions: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to run icacls to restrict token file permissions: {}",
+                            e
+                        );
+                    }
+                }
+            } else {
+                log::warn!(
+                    "USERNAME env var not set — cannot restrict token file permissions on Windows"
+                );
+            }
+        }
     }
 
     // SECURITY: Never log the token value itself

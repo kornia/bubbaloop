@@ -21,7 +21,15 @@ type AppView = "dashboard" | "loop";
 function getZenohEndpoint(): string {
   const params = new URLSearchParams(window.location.search);
   const override = params.get("zenoh");
-  if (override) return override;
+  if (override) {
+    try {
+      const url = new URL(override);
+      if (['localhost', '127.0.0.1', window.location.hostname].includes(url.hostname)) {
+        return override;
+      }
+      console.warn('Zenoh endpoint must be localhost or same-origin, ignoring override');
+    } catch { /* invalid URL, ignore */ }
+  }
 
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   return `${protocol}://${window.location.host}/zenoh`;

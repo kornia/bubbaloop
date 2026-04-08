@@ -340,11 +340,34 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
     Ok(model_name)
 }
 
+/// Find the ollama binary in standard system paths.
+///
+/// Searches well-known directories first, then falls back to PATH with a warning.
+fn find_ollama() -> std::path::PathBuf {
+    let candidates = &[
+        "/usr/bin/ollama",
+        "/usr/local/bin/ollama",
+        "/bin/ollama",
+        // macOS Homebrew paths
+        "/opt/homebrew/bin/ollama",
+        "/usr/local/Cellar/ollama/bin/ollama",
+    ];
+    for path in candidates {
+        let p = std::path::Path::new(path);
+        if p.exists() {
+            return p.to_path_buf();
+        }
+    }
+    log::warn!("ollama not found in standard paths, falling back to PATH lookup");
+    std::path::PathBuf::from("ollama")
+}
+
 /// Pull an Ollama model, showing progress via the CLI `ollama pull` command.
 async fn pull_ollama_model(model: &str, _endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n  Pulling {}...\n", model);
 
-    let status = tokio::process::Command::new("ollama")
+    let ollama_bin = find_ollama();
+    let status = tokio::process::Command::new(&ollama_bin)
         .args(["pull", model])
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())

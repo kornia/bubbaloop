@@ -19,6 +19,24 @@ pub fn get_machine_id() -> String {
         .replace('-', "_")
 }
 
+/// Sanitize a message for safe logging by stripping control characters.
+///
+/// Removes characters below 0x20 (except `\n` and `\t`) and DEL (0x7F)
+/// to prevent log injection from external error messages (D-Bus, Zenoh, serde, etc.).
+pub fn sanitize_log_msg(msg: &str) -> String {
+    msg.chars()
+        .map(|c| {
+            if c == '\n' || c == '\t' {
+                c
+            } else if c < '\x20' || c == '\x7F' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 /// Get current time in milliseconds since Unix epoch.
 ///
 /// Returns 0 if unable to determine current time.
@@ -100,5 +118,15 @@ mod tests {
         if let Some(v) = prev {
             std::env::set_var("BUBBALOOP_MACHINE_ID", v);
         }
+    }
+
+    #[test]
+    fn test_sanitize_log_msg_strips_control_chars() {
+        assert_eq!(sanitize_log_msg("hello\x00world"), "hello world");
+        assert_eq!(sanitize_log_msg("a\x01b\x7Fc"), "a b c");
+        // Preserve newlines and tabs
+        assert_eq!(sanitize_log_msg("line1\nline2\tok"), "line1\nline2\tok");
+        // Normal text is unchanged
+        assert_eq!(sanitize_log_msg("normal message"), "normal message");
     }
 }
