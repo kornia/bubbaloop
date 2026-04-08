@@ -51,9 +51,12 @@ Key source files in `crates/bubbaloop/src/`:
 
 Batteries-included framework for writing nodes. Reduces boilerplate from ~300 to ~50 lines.
 - `lib.rs` — `Node` trait, `run_node()`, re-exports (zenoh, prost, tokio, anyhow, log, serde_json)
-- `context.rs` — `NodeContext` (session, scope, machine_id, **instance_name**, shutdown_rx, `topic()`, `publisher_proto()`, `publisher_json()`, `subscriber()`, `subscriber_raw()`)
-- `publisher.rs` — `ProtoPublisher<T>` (APPLICATION_PROTOBUF + schema suffix), `JsonPublisher` (APPLICATION_JSON)
-- `subscriber.rs` — `TypedSubscriber<T>` (auto-decode), `RawSubscriber` (raw Sample access)
+- `context.rs` — `NodeContext` (session, machine_id, **instance_name**, shutdown_rx, `topic()`, `local_topic()`, `publisher_proto()`, `publisher_json()`, `publisher_raw()`, `publisher_raw_proto()`, `subscriber()`, `subscriber_raw()`)
+- `publisher.rs` — `ProtoPublisher<T>` (APPLICATION_PROTOBUF + schema suffix), `JsonPublisher` (APPLICATION_JSON), `RawPublisher` (ZBytes, optional encoding, SHM congestion control)
+- `subscriber.rs` — `TypedSubscriber<T>` (auto-decode, 256-slot FIFO), `RawSubscriber` (raw ZBytes, 4-slot FIFO)
+- `proto_decoder.rs` — `ProtoDecoder` (dynamic protobuf decode via SchemaRegistry, caches DescriptorPool)
+- `discover.rs` — `discover_nodes()`, `NodeInfo` (discovers nodes via health heartbeats)
+- `get_sample.rs` — `get_sample()` (single-shot pull without maintaining subscription)
 - `config.rs` — YAML config loading; `extract_name()` reads `name` field for per-instance topics
 - `zenoh_session.rs` — Client-mode Zenoh session (scouting disabled)
 - `health.rs` — Background health heartbeat (5s interval) to `{instance_name}/health`
@@ -68,7 +71,11 @@ bubbaloop-node = { git = "https://github.com/kornia/bubbaloop.git", branch = "ma
 bubbaloop-node-build = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
 ```
 
-**Multi-instance support:** SDK reads `name` from config YAML at startup. Health and schema topics use this name, so `tapo_entrance` and `tapo_terrace` instances of the same binary get separate topics: `bubbaloop/local/host/tapo_entrance/health` vs `bubbaloop/local/host/tapo_terrace/health`.
+**Multi-instance support:** SDK reads `name` from config YAML at startup. Health and schema topics use this name, so `tapo_entrance` and `tapo_terrace` instances of the same binary get separate topics: `bubbaloop/global/host/tapo_entrance/health` vs `bubbaloop/global/host/tapo_terrace/health`.
+
+**Topic key spaces:** Two fixed key spaces replace the old `{scope}`:
+- `ctx.topic(suffix)` → `bubbaloop/global/{machine_id}/{suffix}` (network-visible, dashboard, CLI)
+- `ctx.local_topic(suffix)` → `bubbaloop/local/{machine_id}/{suffix}` (SHM-only, same-machine, never crosses WebSocket bridge)
 
 ### Node Build Helper (`crates/bubbaloop-node-build/`)
 
@@ -80,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 Automatically: embeds `header.proto` (no local copy needed), maps `.bubbaloop.header.v1` → `::bubbaloop_node::schemas::header::v1`, writes `descriptor.bin` for schema queryable registration.
 
-Python SDK: `python-sdk/` — pure Python wrapper over zenoh-python, same API. Install:
+Python SDK: `python-sdk/` — synchronous Python wrapper over zenoh-python (no asyncio). Exports: `NodeContext`, `run_node`, `JsonPublisher`, `ProtoPublisher`, `RawPublisher`, `ProtoSubscriber` (auto-decode via SchemaRegistry), `RawSubscriber`, `ProtoDecoder`, `discover_nodes`, `get_sample`. Install:
 `pip install git+https://github.com/kornia/bubbaloop.git#subdirectory=python-sdk`
 
 Nodes repo: [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official)
@@ -102,7 +109,7 @@ Testing: `cargo test --features test-harness --test integration_mcp` (47 tests)
 ```bash
 pixi run check     # cargo check (fast — run after every change)
 pixi run clippy    # zero warnings enforced (-D warnings)
-pixi run test      # cargo test (676 unit tests)
+pixi run test      # cargo test (2400+ unit tests)
 pixi run fmt       # cargo fmt --all
 pixi run build     # cargo build --release (slow on ARM64; install mold+clang to speed up)
 cargo test --features test-harness --test integration_mcp  # 47 integration tests
@@ -206,3 +213,8 @@ Exception: views using encoding-first decode don't need gating.
 - Agent ID vs display name: agent ID (`agents.toml` key) is the routing/filesystem key — immutable. The display name lives in `identity.md` (hot-reloaded). Edit `identity.md` to rename an agent without touching the ID.
 - `agent setup` onboarding flow: writes `.needs-onboarding` marker in `~/.bubbaloop/agents/{id}/`. On first chat turn, daemon injects `NEW_AGENT_IDENTITY` prompt; LLM writes `identity.md`; daemon clears marker. `needs_onboarding` bool is cached in `agent_loop` to avoid hot-path `Path::exists()` calls.
 - `agents.toml` `model` field overrides `Soul.capabilities.model_name` per-agent. Omit to use soul default.
+- Topic key spaces: `global` = network-visible (dashboard, CLI, remote machines), `local` = SHM-only (same-machine, never crosses WebSocket bridge). The old `{scope}` (local/staging/prod) was removed — all topics now use `bubbaloop/global/...` or `bubbaloop/local/...`.
+- `RawPublisher` with `local=true` uses `CongestionControl::Block` — required for SHM so frames aren't silently dropped. Without it, slow consumers lose frames.
+- `RawSubscriber` uses a 4-slot FIFO (not 256 like `TypedSubscriber`) — older frames are intentionally dropped when the consumer is slow. This is correct for video frames.
+- Python `ProtoSubscriber` auto-decodes via `SchemaRegistry` (queries `bubbaloop/**/schema`, 2s timeout). No `_pb2` imports needed — schema is fetched from the publishing node at runtime.
+- Python SDK subscribers use `_BaseSubscriber` for shared iterator protocol. Only override `recv()` in subclasses.

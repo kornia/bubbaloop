@@ -134,12 +134,12 @@ pixi run cameras -- -z tcp/192.168.1.50:7447
 
 | Topic | Type | Description |
 |-------|------|-------------|
-| `bubbaloop/{scope}/{machine_id}/camera/{name}/compressed` | `CompressedImage` | H264 compressed frames |
+| `bubbaloop/global/{machine_id}/camera/{name}/compressed` | `CompressedImage` | H264 compressed frames |
 
 ### Topic Format
 
 ```
-bubbaloop/{scope}/{machine_id}/camera/{name}/compressed
+bubbaloop/global/{machine_id}/camera/{name}/compressed
 ```
 
 **Example:** Camera named `front_door` on machine `nvidia_orin00` publishes to:

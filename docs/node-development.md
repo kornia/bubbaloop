@@ -100,7 +100,7 @@ Nodes run as systemd user services managed by the bubbaloop daemon. They can run
 2. **config.yaml** — Runtime instance parameters (publish_topic, rate_hz, node-specific fields)
 3. **protos/** — Protobuf schema definitions for messages
 4. **build system** — pixi.toml with build/run tasks
-5. **health heartbeat** — Periodic publish to `bubbaloop/{scope}/{machine}/health/{name}`
+5. **health heartbeat** — Periodic publish to `bubbaloop/global/{machine_id}/{instance_name}/health`
 6. **schema queryable** — Serves FileDescriptorSet at `{prefix}/schema`
 7. **signal handling** — Graceful shutdown on SIGINT/SIGTERM
 
@@ -109,18 +109,17 @@ Nodes run as systemd user services managed by the bubbaloop daemon. They can run
 Every node operates within a scoped topic hierarchy:
 
 ```
-bubbaloop/{scope}/{machine_id}/{node_name}/schema      → FileDescriptorSet bytes
-bubbaloop/{scope}/{machine_id}/{node_name}/manifest    → JSON manifest
-bubbaloop/{scope}/{machine_id}/{node_name}/health      → "ok" | error details
-bubbaloop/{scope}/{machine_id}/{node_name}/config      → JSON config (GET/SET)
-bubbaloop/{scope}/{machine_id}/{node_name}/command     → JSON command interface
+bubbaloop/global/{machine_id}/{node_name}/schema      → FileDescriptorSet bytes
+bubbaloop/global/{machine_id}/{node_name}/manifest    → JSON manifest
+bubbaloop/global/{machine_id}/{node_name}/health      → "ok" | error details
+bubbaloop/global/{machine_id}/{node_name}/config      → JSON config (GET/SET)
+bubbaloop/global/{machine_id}/{node_name}/command     → JSON command interface
 
-bubbaloop/{scope}/{machine_id}/{publish_topic}         → Protobuf sensor data
-bubbaloop/{scope}/{machine_id}/health/{node_name}      → Periodic heartbeat
+bubbaloop/global/{machine_id}/{publish_topic}         → Protobuf sensor data
+bubbaloop/global/{machine_id}/{instance_name}/health  → Periodic heartbeat
 ```
 
 **Environment variables:**
-- `BUBBALOOP_SCOPE` (default: `"local"`) — Deployment context (site, fleet, etc.)
 - `BUBBALOOP_MACHINE_ID` (default: hostname) — Machine identifier
 
 **Topic naming rules:**
@@ -638,7 +637,7 @@ class MySensorNode:
         self.session = zenoh.open(zenoh_config)
         logger.info("Connected to zenoh")
 
-        # Build scoped topic: bubbaloop/{scope}/{machine_id}/{publish_topic}
+        # Build scoped topic: bubbaloop/global/{machine_id}/{publish_topic}
         topic_suffix = self.config["publish_topic"]
         self.full_topic = f"bubbaloop/{self.scope}/{self.machine_id}/{topic_suffix}"
 
@@ -1203,7 +1202,7 @@ bubbaloop node start my-sensor
 | Config loading | ~15 lines | YAML deserialization with clear errors |
 | Signal handling | ~8 lines | SIGINT/SIGTERM via watch channel |
 | CLI arguments | ~15 lines | `-c config.yaml -e endpoint` |
-| Scope resolution | ~6 lines | BUBBALOOP_SCOPE + BUBBALOOP_MACHINE_ID |
+| Key space + machine_id | ~6 lines | global/local key spaces + BUBBALOOP_MACHINE_ID |
 | **Total saved** | **~86 lines** | Per node, automatically correct |
 
 ### Cargo.toml for Rust SDK nodes
@@ -1243,10 +1242,10 @@ Before submitting a new node, verify ALL items:
 - [ ] `protos/` directory with `header.proto` and node-specific `.proto` files
 
 ### Communication
-- [ ] Publishes data via Zenoh to scoped topic: `bubbaloop/{scope}/{machine}/{node-name}/{resource}`
-- [ ] `config.yaml` specifies topic suffix only (no `bubbaloop/{scope}/{machine}/` prefix)
+- [ ] Publishes data via Zenoh to scoped topic: `bubbaloop/global/{machine_id}/{node-name}/{resource}`
+- [ ] `config.yaml` specifies topic suffix only (no `bubbaloop/global/{machine_id}/` prefix)
 - [ ] Uses protobuf serialization for all data messages
-- [ ] Publishes health heartbeat to `bubbaloop/{scope}/{machine}/health/{name}` (vanilla zenoh, not protobuf)
+- [ ] Publishes health heartbeat to `bubbaloop/global/{machine_id}/{instance_name}/health` (vanilla zenoh, not protobuf)
 - [ ] Heartbeat interval <= 10 seconds (recommended: 5 seconds)
 - [ ] Declares schema queryable at `{prefix}/schema` (serves FileDescriptorSet bytes)
 - [ ] Schema queryable does NOT use `.complete(true)` (Rust) or `complete=True` (Python)
@@ -1265,7 +1264,7 @@ Before submitting a new node, verify ALL items:
 - [ ] Python: uses `eclipse-zenoh` + `protobuf`, compiles protos via `build_proto.py`
 - [ ] Accepts CLI flags: `-c config.yaml -e tcp/localhost:7447`
 - [ ] Uses `Header` message pattern (acq_time, pub_time, sequence, frame_id, machine_id, scope)
-- [ ] Reads `BUBBALOOP_SCOPE` env var (default: `local`) and `BUBBALOOP_MACHINE_ID` env var (default: hostname)
+- [ ] Reads `BUBBALOOP_MACHINE_ID` env var (default: hostname); uses `global`/`local` key spaces (SDK handles automatically)
 
 ### Testing
 - [ ] Rust: config validation has unit tests (`#[cfg(test)]` module)

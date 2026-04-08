@@ -229,9 +229,9 @@ The agent loop includes multiple layers of fault tolerance:
 ### Zenoh Gateway Topics
 
 ```
-bubbaloop/{scope}/{machine}/agent/inbox                ← shared intake (all messages)
-bubbaloop/{scope}/{machine}/agent/{agent_id}/outbox    ← per-agent streamed response
-bubbaloop/{scope}/{machine}/agent/{agent_id}/manifest  ← agent capabilities (queryable)
+bubbaloop/global/{machine_id}/agent/inbox                ← shared intake (all messages)
+bubbaloop/global/{machine_id}/agent/{agent_id}/outbox    ← per-agent streamed response
+bubbaloop/global/{machine_id}/agent/{agent_id}/manifest  ← agent capabilities (queryable)
 ```
 
 **Wire format (JSON):**
@@ -896,8 +896,8 @@ A node is a self-describing sensor/actuator capability. Each node:
 - **Has a manifest** (JSON) describing its capabilities, published topics, commands, hardware requirements
 - **Publishes data** on Zenoh topics (protobuf-encoded for efficiency)
 - **Accepts commands** via its command queryable (JSON request/response)
-- **Reports health** via periodic heartbeats on `bubbaloop/{scope}/{machine_id}/{node_name}/heartbeat`
-- **Serves its schema** for runtime introspection on `bubbaloop/{scope}/{machine_id}/{node_name}/schema`
+- **Reports health** via periodic heartbeats on `bubbaloop/global/{machine_id}/{node_name}/health`
+- **Serves its schema** for runtime introspection on `bubbaloop/global/{machine_id}/{node_name}/schema`
 
 ### Node Lifecycle States
 
@@ -1020,10 +1020,9 @@ Use `discover_nodes` to find all nodes across the fleet. Trigger patterns like `
 ### Zenoh Key Structure
 
 ```
-bubbaloop/{scope}/{machine_id}/{node_name}/{topic}
+bubbaloop/global/{machine_id}/{node_name}/{topic}
 ```
 
-- `scope`: Deployment environment (default: "local")
 - `machine_id`: Unique machine identifier (hostname-based)
 - `node_name`: Node instance name
 - `topic`: Published topic (manifest, status, schema, command, etc.)

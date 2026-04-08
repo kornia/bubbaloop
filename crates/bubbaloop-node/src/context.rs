@@ -60,7 +60,7 @@ impl NodeContext {
     /// never crosses the WebSocket bridge. Use this for large binary payloads (e.g. RGBA
     /// frames) that only need to reach a consumer on the same machine.
     ///
-    /// When `local = false` (default), publishes to `bubbaloop/{scope}/{machine_id}/{suffix}`.
+    /// When `local = false` (default), publishes to `bubbaloop/global/{machine_id}/{suffix}`.
     pub async fn publisher_raw(
         &self,
         suffix: &str,
@@ -110,7 +110,7 @@ impl NodeContext {
     /// When `local = true`, subscribes to `local/{machine_id}/{suffix}` — SHM zero-copy,
     /// machine-local only. Counterpart to `publisher_raw(suffix, true)`.
     ///
-    /// When `local = false` (default), subscribes to `bubbaloop/{scope}/{machine_id}/{suffix}`.
+    /// When `local = false` (default), subscribes to `bubbaloop/global/{machine_id}/{suffix}`.
     ///
     /// Uses a small FIFO (4 slots) — older frames are dropped when the consumer is slow.
     pub async fn subscriber_raw(
@@ -126,18 +126,36 @@ impl NodeContext {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn topic_format() {
+    fn topic_builds_global_key() {
+        let machine_id = "jetson_01";
+        let suffix = "camera/front/compressed";
         assert_eq!(
-            format!("bubbaloop/global/{}/{}", "jetson_01", "camera/front/compressed"),
+            format!("bubbaloop/global/{}/{}", machine_id, suffix),
             "bubbaloop/global/jetson_01/camera/front/compressed"
         );
     }
 
     #[test]
-    fn local_topic_format() {
+    fn local_topic_builds_local_key() {
+        let machine_id = "jetson_01";
+        let suffix = "tapo_terrace/raw";
         assert_eq!(
-            format!("bubbaloop/local/{}/{}", "jetson_01", "tapo_terrace/raw"),
+            format!("bubbaloop/local/{}/{}", machine_id, suffix),
             "bubbaloop/local/jetson_01/tapo_terrace/raw"
+        );
+    }
+
+    #[test]
+    fn global_and_local_share_machine_id() {
+        let machine_id = "edge_42";
+        let suffix = "sensor/data";
+        let global = format!("bubbaloop/global/{}/{}", machine_id, suffix);
+        let local = format!("bubbaloop/local/{}/{}", machine_id, suffix);
+        assert!(global.starts_with("bubbaloop/global/"));
+        assert!(local.starts_with("bubbaloop/local/"));
+        assert_eq!(
+            global.strip_prefix("bubbaloop/global/"),
+            local.strip_prefix("bubbaloop/local/"),
         );
     }
 }

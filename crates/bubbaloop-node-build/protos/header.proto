@@ -8,5 +8,5 @@ message Header {
     uint32 sequence = 3;    // Message sequence number
     string frame_id = 4;    // Source identifier
     string machine_id = 5;  // Machine hostname
-    string scope = 6;       // Deployment scope (from BUBBALOOP_SCOPE env var)
+    reserved 6;             // was: scope (now derived from topic key expression)
 }

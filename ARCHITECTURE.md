@@ -324,10 +324,12 @@ bubbaloop/{scope}/{machine_id}/{node_name}/{...}
 Every node receives (injected by daemon via systemd unit files):
 
 ```bash
-BUBBALOOP_SCOPE=local
 BUBBALOOP_MACHINE_ID=nvidia_orin00
 BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447  # Optional override
 ```
+
+> **Note:** The Node SDK uses fixed key spaces (`global`/`local`) instead of `BUBBALOOP_SCOPE`.
+> The daemon still reads `BUBBALOOP_SCOPE` for its own topics (daemon API, agent gateway).
 
 ---
 

@@ -1,8 +1,10 @@
 """Node discovery via health heartbeats.
 
-Every node publishes ``"ok"`` to ``bubbaloop/{scope}/{machine_id}/{node_name}/health``
-every 5 seconds. Subscribing to ``bubbaloop/**/health`` for slightly longer than
-one heartbeat interval collects all live nodes.
+Every node publishes ``"ok"`` to
+``bubbaloop/global/{machine_id}/{node_name}/health`` (network-visible nodes)
+or ``bubbaloop/local/{machine_id}/{node_name}/health`` (SHM-only nodes)
+every 5 seconds. Subscribing to ``bubbaloop/**/health`` for slightly longer
+than one heartbeat interval collects all live nodes.
 
 Example::
 
@@ -12,8 +14,8 @@ Example::
     session = zenoh.open(zenoh.Config())
     nodes = discover_nodes(session)
     for node in nodes:
-        print(node.base_topic)   # bubbaloop/local/nvidia_orin00/tapo_terrace
-        print(node.schema_topic) # bubbaloop/local/nvidia_orin00/tapo_terrace/schema
+        print(node.base_topic)   # bubbaloop/global/nvidia_orin00/tapo_terrace
+        print(node.schema_topic) # bubbaloop/global/nvidia_orin00/tapo_terrace/schema
 """
 
 from __future__ import annotations
@@ -80,10 +82,12 @@ def discover_nodes(session: zenoh.Session, timeout: float = 6.5) -> list[NodeInf
 
 
 def _parse_health_key(key: str) -> NodeInfo | None:
-    """Parse ``bubbaloop/{scope}/{machine_id}/{node_name}/health`` → NodeInfo."""
+    """Parse ``bubbaloop/{global|local}/{machine_id}/{node_name}/health`` → NodeInfo."""
     parts = key.split("/")
-    # expected: ["bubbaloop", scope, machine_id, node_name, "health"]
+    # expected: ["bubbaloop", "global"|"local", machine_id, node_name, "health"]
     if len(parts) != 5 or parts[0] != "bubbaloop" or parts[4] != "health":
+        return None
+    if parts[1] not in ("global", "local"):
         return None
     _, scope, machine_id, node_name, _ = parts
     return NodeInfo(scope=scope, machine_id=machine_id, node_name=node_name)

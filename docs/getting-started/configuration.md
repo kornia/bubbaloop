@@ -305,7 +305,6 @@ See [Remote Access](../dashboard/remote-access.md) for detailed setup instructio
 | `RUST_LOG` | Logging level | `warn` |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude | — |
 | `BUBBALOOP_MCP_PORT` | MCP HTTP server port | `8088` |
-| `BUBBALOOP_SCOPE` | Zenoh topic scope | `local` |
 | `BUBBALOOP_MACHINE_ID` | Machine identifier | hostname |
 
 ## Next Steps
