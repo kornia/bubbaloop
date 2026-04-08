@@ -174,9 +174,13 @@ Daemon ────────────────────────�
   └─ Systemd D-Bus (zbus)         │
                                    │
 Nodes (self-describing) ───────────┘
-  ├─ rtsp-camera  [schema|manifest|health|config|command]
-  ├─ openmeteo    [schema|manifest|health|config|command]
-  └─ custom...    [schema|manifest|health|config|command]
+  ├─ rtsp-camera            Rust    [H264 video, SHM raw frames]
+  ├─ camera-object-detector Python  [YOLO11 detection on SHM frames]
+  ├─ camera-vlm             Python  [VLM scene description on SHM frames]
+  ├─ system-telemetry       Python  [CPU, memory, disk, network]
+  ├─ network-monitor        Python  [HTTP, DNS, ping health checks]
+  ├─ openmeteo              Python  [weather: current, hourly, daily]
+  └─ custom...              Rust/Py [your node here]
 ```
 
 The daemon hosts the **agent runtime** (multi-agent Zenoh gateway) alongside the MCP server. Agents are configured via `~/.bubbaloop/agents.toml` with per-agent identity and memory in `~/.bubbaloop/agents/{id}/`. The CLI is a thin Zenoh client — all LLM processing runs daemon-side.
@@ -200,6 +204,28 @@ Every node is self-describing with standard queryables:
 ```
 
 AI agents discover nodes via `bubbaloop/**/manifest` wildcard query, then interact through commands and data subscriptions.
+
+## Available Nodes
+
+Official nodes live in [bubbaloop-nodes-official](https://github.com/kornia/bubbaloop-nodes-official). Install any node with `bubbaloop node add`.
+
+### Sensors
+
+| Node | Type | Description | Topics |
+|------|------|-------------|--------|
+| **rtsp-camera** | Rust | RTSP camera capture with hardware H264 decode via GStreamer | `camera/{name}/compressed` (global), `camera/{name}/raw` (SHM local) |
+| **system-telemetry** | Python | CPU, memory, disk, network, and load metrics via psutil | `system-telemetry/metrics` |
+| **network-monitor** | Python | HTTP, DNS, and ICMP ping health checks | `network-monitor/status` |
+| **openmeteo** | Python | Open-Meteo weather data (current, 48h hourly, 7-day daily) | `weather/current`, `weather/hourly`, `weather/daily` |
+
+### Processors
+
+| Node | Type | Description | Topics |
+|------|------|-------------|--------|
+| **camera-object-detector** | Python | YOLO11 object detection on raw camera frames (SHM) | Subscribes `{name}/raw` (local), publishes `{name}/detections` |
+| **camera-vlm** | Python | Vision language model scene description on camera frames (SHM) | Subscribes `{name}/raw` (local), publishes `{name}/description` |
+
+All topics are prefixed with `bubbaloop/global/{machine_id}/` (network-visible) or `bubbaloop/local/{machine_id}/` (SHM-only).
 
 ## Development
 

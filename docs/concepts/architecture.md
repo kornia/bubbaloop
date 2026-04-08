@@ -67,8 +67,8 @@ CLI client                Daemon (agent runtime)
     |<-- publish to outbox ------|
 ```
 
-- Shared inbox topic: `bubbaloop/{scope}/{machine_id}/agent/inbox`
-- Per-agent outbox: `bubbaloop/{scope}/{machine_id}/agent/{agent_id}/outbox`
+- Shared inbox topic: `bubbaloop/global/{machine_id}/agent/inbox`
+- Per-agent outbox: `bubbaloop/global/{machine_id}/agent/{agent_id}/outbox`
 - Wire format: JSON (`AgentMessage`, `AgentEvent`)
 
 **Per-agent state**
@@ -214,11 +214,11 @@ Node --> Protobuf --> Zenoh --> WebSocket Bridge --> Browser / Dashboard
 ## Topic Hierarchy
 
 ```
-bubbaloop/{scope}/{machine_id}/{node_name}/{resource}
-          |        |            |           |
-          |        |            |           +-- schema, manifest, health, config, command
-          |        |            +-------------- node identifier  [a-zA-Z0-9_-], 1-64 chars
-          |        +--------------------------- machine ID (e.g., nvidia_orin00)
+bubbaloop/global/{machine_id}/{node_name}/{resource}
+          |       |            |           |
+          |       |            |           +-- schema, manifest, health, config, command
+          |       |            +-------------- node identifier  [a-zA-Z0-9_-], 1-64 chars
+          |       +--------------------------- machine ID (e.g., nvidia_orin00)
           +------------------------------------ scope (local / edge / cloud)
 ```
 

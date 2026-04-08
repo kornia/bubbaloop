@@ -30,7 +30,7 @@ impl NodeManager {
             .await
             .map_err(|e| NodeManagerError::BuildError(format!("Zenoh subscribe error: {}", e)))?;
 
-        // Subscribe to scoped health heartbeats: bubbaloop/{scope}/{machine}/{name}/health
+        // Subscribe to scoped health heartbeats: bubbaloop/global/{machine}/{name}/health
         let scoped_subscriber = session
             .declare_subscriber("bubbaloop/*/*/*/health")
             .await
@@ -175,7 +175,7 @@ impl NodeManager {
 ///
 /// Handles two formats:
 /// - Legacy:  `bubbaloop/nodes/{name}/health`             -> name at index 2
-/// - Scoped:  `bubbaloop/{scope}/{machine}/{name}/health` -> name at index 3
+/// - Scoped:  `bubbaloop/global/{machine}/{name}/health` -> name at index 3
 fn extract_health_node_name(key: &str) -> Option<String> {
     let parts: Vec<&str> = key.split('/').collect();
     if parts.is_empty() || parts[0] != "bubbaloop" {
@@ -187,7 +187,7 @@ fn extract_health_node_name(key: &str) -> Option<String> {
         return Some(parts[2].to_string());
     }
 
-    // Scoped format: bubbaloop/{scope}/{machine}/{name}/health
+    // Scoped format: bubbaloop/global/{machine}/{name}/health
     if parts.len() == 5 && parts[4] == "health" {
         return Some(parts[3].to_string());
     }

@@ -10,7 +10,7 @@ This mirrors the Rust SDK's ``SchemaQueryable`` — serving
 Example::
 
     schema_queryable = declare_schema_queryable(
-        ctx.session, ctx.scope, ctx.machine_id, "my-node", MyMessage
+        ctx.session, ctx.machine_id, "my-node", MyMessage
     )
     # keep schema_queryable alive for the duration of the node
 
@@ -25,7 +25,6 @@ import zenoh
 
 def declare_schema_queryable(
     session: zenoh.Session,
-    scope: str,
     machine_id: str,
     node_name: str,
     msg_class,
@@ -34,7 +33,7 @@ def declare_schema_queryable(
 
     The queryable listens at::
 
-        bubbaloop/{scope}/{machine_id}/{node_name}/schema
+        bubbaloop/global/{machine_id}/{node_name}/schema
 
     and replies with the serialized ``FileDescriptorSet`` bytes derived from
     ``msg_class.DESCRIPTOR.file.serialized_pb``.
@@ -42,7 +41,7 @@ def declare_schema_queryable(
     Returns the ``zenoh.Queryable`` — keep the reference alive for the
     lifetime of the node (garbage-collecting it will undeclare the queryable).
     """
-    topic = f"bubbaloop/{scope}/{machine_id}/{node_name}/schema"
+    topic = f"bubbaloop/global/{machine_id}/{node_name}/schema"
     descriptor_bytes: bytes = msg_class.DESCRIPTOR.file.serialized_pb
 
     def _handler(query: zenoh.Query) -> None:

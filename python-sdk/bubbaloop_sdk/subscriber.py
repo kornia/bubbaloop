@@ -3,7 +3,29 @@
 import zenoh
 
 
-class ProtoSubscriber:
+class _BaseSubscriber:
+    """Shared iterator protocol and cleanup for all subscriber types."""
+
+    def __init__(self, session: zenoh.Session, topic: str):
+        self._sub = session.declare_subscriber(topic)
+
+    def recv(self):
+        raise NotImplementedError
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            return self.recv()
+        except Exception as exc:
+            raise StopIteration from exc
+
+    def undeclare(self) -> None:
+        self._sub.undeclare()
+
+
+class ProtoSubscriber(_BaseSubscriber):
     """Blocking subscriber that decodes protobuf automatically from the encoding header.
 
     No ``_pb2`` imports needed. On each message the encoding string
@@ -17,13 +39,13 @@ class ProtoSubscriber:
 
     Usage::
 
-        sub = ctx.subscriber_proto("tapo_terrace/raw", local=True)
+        sub = ctx.subscribe("tapo_terrace/raw", local=True)
         for msg in sub:   # decoded RawImage — no _pb2 imports needed
             tensor = torch.frombuffer(msg.data, dtype=torch.uint8)
     """
 
     def __init__(self, session: zenoh.Session, topic: str, registry):
-        self._sub = session.declare_subscriber(topic)
+        super().__init__(session, topic)
         self._registry = registry
 
     def recv(self):
@@ -31,20 +53,8 @@ class ProtoSubscriber:
         sample = self._sub.recv()
         return self._registry.decode(sample)
 
-    def __iter__(self):
-        return self
 
-    def __next__(self):
-        try:
-            return self.recv()
-        except Exception as exc:
-            raise StopIteration from exc
-
-    def undeclare(self) -> None:
-        self._sub.undeclare()
-
-
-class RawSubscriber:
+class RawSubscriber(_BaseSubscriber):
     """Blocking subscriber that yields raw ``bytes``, counterpart to :class:`RawPublisher`.
 
     No decoding is applied — the caller owns the byte layout entirely.
@@ -53,27 +63,12 @@ class RawSubscriber:
 
     Usage::
 
-        sub = ctx.subscriber_raw("camera/raw", local=True)
+        sub = ctx.subscribe_raw("camera/raw", local=True)
         for raw_bytes in sub:
             tensor = torch.frombuffer(raw_bytes, dtype=torch.uint8)
     """
-
-    def __init__(self, session: zenoh.Session, topic: str):
-        self._sub = session.declare_subscriber(topic)
 
     def recv(self) -> bytes:
         """Block until the next frame arrives and return the raw bytes."""
         sample = self._sub.recv()
         return bytes(sample.payload)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        try:
-            return self.recv()
-        except Exception as exc:
-            raise StopIteration from exc
-
-    def undeclare(self) -> None:
-        self._sub.undeclare()

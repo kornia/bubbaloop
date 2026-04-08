@@ -40,20 +40,19 @@ mod tests {
             sequence: 42,
             frame_id: "cam0".into(),
             machine_id: "jetson1".into(),
-            scope: "default".into(),
         };
         let bytes = header.encode_to_vec();
         let decoded = Header::decode(bytes.as_slice()).unwrap();
         assert_eq!(decoded.sequence, 42);
         assert_eq!(decoded.frame_id, "cam0");
-        assert_eq!(decoded.scope, "default");
+        assert_eq!(decoded.machine_id, "jetson1");
     }
 
     #[test]
     fn test_header_default() {
         let header = Header::default();
-        assert_eq!(header.scope, "");
         assert_eq!(header.sequence, 0);
+        assert_eq!(header.frame_id, "");
     }
 
     #[test]

@@ -1,15 +1,22 @@
-"""Declared publishers for JSON, protobuf, and SHM messages."""
+"""Declared publishers for JSON, protobuf, and raw messages."""
 
 import json
 
 import zenoh
 
 
-class JsonPublisher:
-    """Declared publisher that sets APPLICATION_JSON encoding on every sample."""
+class _BasePublisher:
+    """Shared cleanup for all publisher types."""
 
     def __init__(self, declared_publisher: zenoh.Publisher):
         self._pub = declared_publisher
+
+    def undeclare(self) -> None:
+        self._pub.undeclare()
+
+
+class JsonPublisher(_BasePublisher):
+    """Declared publisher that sets APPLICATION_JSON encoding on every sample."""
 
     @classmethod
     def _declare(cls, session: zenoh.Session, topic: str) -> "JsonPublisher":
@@ -17,7 +24,7 @@ class JsonPublisher:
         return cls(pub)
 
     def put(self, value) -> None:
-        """Publish a JSON-serializable value (dict, list, str, …)."""
+        """Publish a JSON-serializable value (dict, list, str, ...)."""
         if isinstance(value, (bytes, bytearray)):
             data = bytes(value)
         elif isinstance(value, str):
@@ -26,15 +33,12 @@ class JsonPublisher:
             data = json.dumps(value).encode()
         self._pub.put(data)
 
-    def undeclare(self) -> None:
-        self._pub.undeclare()
 
-
-class ProtoPublisher:
+class ProtoPublisher(_BasePublisher):
     """Declared publisher that sets APPLICATION_PROTOBUF encoding on every sample."""
 
     def __init__(self, declared_publisher: zenoh.Publisher, type_name: str | None):
-        self._pub = declared_publisher
+        super().__init__(declared_publisher)
         self._type_name = type_name
 
     @classmethod
@@ -55,11 +59,8 @@ class ProtoPublisher:
             raise TypeError(f"Expected protobuf message or bytes, got {type(msg).__name__}")
         self._pub.put(data)
 
-    def undeclare(self) -> None:
-        self._pub.undeclare()
 
-
-class RawPublisher:
+class RawPublisher(_BasePublisher):
     """Declared publisher for raw byte payloads with no encoding overhead.
 
     When ``local=True``, uses ``congestion_control=Block`` — the publisher waits for
@@ -69,9 +70,6 @@ class RawPublisher:
     When ``local=False`` (default), uses standard drop-on-congestion and publishes
     to the global ``bubbaloop/**`` topic space.
     """
-
-    def __init__(self, declared_publisher: zenoh.Publisher):
-        self._pub = declared_publisher
 
     @classmethod
     def _declare(cls, session: zenoh.Session, topic: str, local: bool = False) -> "RawPublisher":
@@ -84,6 +82,3 @@ class RawPublisher:
     def put(self, data: bytes | bytearray) -> None:
         """Publish raw bytes."""
         self._pub.put(bytes(data))
-
-    def undeclare(self) -> None:
-        self._pub.undeclare()

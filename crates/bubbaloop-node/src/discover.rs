@@ -13,7 +13,7 @@ pub struct NodeInfo {
 }
 
 impl NodeInfo {
-    /// `bubbaloop/{scope}/{machine_id}/{node_name}`
+    /// `bubbaloop/{global|local}/{machine_id}/{node_name}`
     pub fn base_topic(&self) -> String {
         format!(
             "bubbaloop/{}/{}/{}",
@@ -21,12 +21,12 @@ impl NodeInfo {
         )
     }
 
-    /// `bubbaloop/{scope}/{machine_id}/{node_name}/schema`
+    /// `bubbaloop/{global|local}/{machine_id}/{node_name}/schema`
     pub fn schema_topic(&self) -> String {
         format!("{}/schema", self.base_topic())
     }
 
-    /// `bubbaloop/{scope}/{machine_id}/{node_name}/{resource}`
+    /// `bubbaloop/{global|local}/{machine_id}/{node_name}/{resource}`
     pub fn topic(&self, resource: &str) -> String {
         format!("{}/{}", self.base_topic(), resource)
     }
@@ -40,7 +40,7 @@ impl std::fmt::Display for NodeInfo {
 
 /// Discover all live nodes by collecting health heartbeats for `timeout`.
 ///
-/// Nodes publish `"ok"` to `bubbaloop/{scope}/{machine_id}/{node_name}/health`
+/// Nodes publish `"ok"` to `bubbaloop/global/{machine_id}/{node_name}/health`
 /// every 5 seconds. Waiting slightly longer than one interval (default: 6.5 s)
 /// is enough to hear from every live node.
 ///
@@ -94,10 +94,10 @@ pub async fn discover_nodes(
     Ok(nodes)
 }
 
-/// Parse `bubbaloop/{scope}/{machine_id}/{node_name}/health` → `NodeInfo`.
+/// Parse `bubbaloop/{global|local}/{machine_id}/{node_name}/health` → `NodeInfo`.
 fn parse_health_key(key: &str) -> Option<NodeInfo> {
     let parts: Vec<&str> = key.split('/').collect();
-    // ["bubbaloop", scope, machine_id, node_name, "health"]
+    // ["bubbaloop", "global"|"local", machine_id, node_name, "health"]
     if parts.len() != 5 || parts[0] != "bubbaloop" || parts[4] != "health" {
         return None;
     }

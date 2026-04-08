@@ -21,62 +21,52 @@ pip install -e ".[dev]"
 ### Protobuf node
 
 ```python
-import asyncio
+import time
 from bubbaloop_sdk import NodeContext
 from my_protos_pb2 import SensorData
 
-async def run():
-    ctx = await NodeContext.connect()
+ctx = NodeContext.connect()
 
-    # Publisher — encoding set once at declaration
-    pub = await ctx.publisher_proto("sensor/data", SensorData)
+# Publisher — encoding set once at declaration
+pub = ctx.publisher_proto("sensor/data", SensorData)
 
-    while not ctx.is_shutdown():
-        msg = SensorData(value=42.0)
-        await pub.put(msg)
-        await asyncio.sleep(0.1)
+while not ctx.is_shutdown():
+    msg = SensorData(value=42.0)
+    pub.put(msg)
+    time.sleep(0.1)
 
-    pub.undeclare()
-    ctx.close()
-
-asyncio.run(run())
+pub.undeclare()
+ctx.close()
 ```
 
 ### JSON node
 
 ```python
-import asyncio
+import time
 from bubbaloop_sdk import NodeContext
 
-async def run():
-    ctx = await NodeContext.connect()
-    pub = await ctx.publisher_json("weather/current")
+ctx = NodeContext.connect()
+pub = ctx.publisher_json("weather/current")
 
-    while not ctx.is_shutdown():
-        await pub.put({"temperature": 22.5, "humidity": 60})
-        await asyncio.sleep(1.0)
+while not ctx.is_shutdown():
+    pub.put({"temperature": 22.5, "humidity": 60})
+    time.sleep(1.0)
 
-    pub.undeclare()
-    ctx.close()
-
-asyncio.run(run())
+pub.undeclare()
+ctx.close()
 ```
 
-### Typed subscriber
+### Proto subscriber
 
 ```python
-import asyncio
 from bubbaloop_sdk import NodeContext
 from my_protos_pb2 import SensorData
 
-async def run():
-    ctx = await NodeContext.connect()
-    sub = await ctx.subscriber("sensor/data", SensorData)
+ctx = NodeContext.connect()
+sub = ctx.subscriber("sensor/data", SensorData)
 
-    async for msg in sub:
-        print(f"value: {msg.value}")
-
-asyncio.run(run())
+for msg in sub:
+    print(f"value: {msg.value}")
 ```
 
 ### Schema queryable (protobuf nodes)
@@ -87,7 +77,7 @@ from my_protos_pb2 import SensorData
 
 # Declare once — keeps the queryable alive while the reference is held
 schema_qbl = declare_schema_queryable(
-    ctx.session, ctx.scope, ctx.machine_id, "my-node", SensorData
+    ctx.session, ctx.machine_id, "my-node", SensorData
 )
 ```
 
@@ -96,7 +86,6 @@ schema_qbl = declare_schema_queryable(
 | Environment variable | Default | Description |
 |---|---|---|
 | `BUBBALOOP_ZENOH_ENDPOINT` | `tcp/127.0.0.1:7447` | Zenoh router endpoint |
-| `BUBBALOOP_SCOPE` | `local` | Topic scope |
 | `BUBBALOOP_MACHINE_ID` | hostname (sanitized) | Machine identifier |
 
 ## Requirements
@@ -111,24 +100,25 @@ schema_qbl = declare_schema_queryable(
 
 | Method | Description |
 |---|---|
-| `await NodeContext.connect(endpoint=None)` | Connect to Zenoh router |
-| `ctx.topic(suffix)` | Build `bubbaloop/{scope}/{machine_id}/{suffix}` |
-| `await ctx.publisher_proto(suffix, msg_class)` | Declared protobuf publisher |
-| `await ctx.publisher_json(suffix)` | Declared JSON publisher |
-| `await ctx.subscriber(suffix, msg_class=None)` | Typed async-iterable subscriber |
-| `await ctx.subscriber_raw(key_expr)` | Raw sample subscriber (no topic prefix) |
+| `NodeContext.connect(endpoint=None)` | Connect to Zenoh router |
+| `ctx.topic(suffix)` | Build `bubbaloop/global/{machine_id}/{suffix}` |
+| `ctx.local_topic(suffix)` | Build `bubbaloop/local/{machine_id}/{suffix}` (SHM-only) |
+| `ctx.publisher_proto(suffix, msg_class)` | Declared protobuf publisher |
+| `ctx.publisher_json(suffix)` | Declared JSON publisher |
+| `ctx.subscriber(suffix, msg_class=None)` | Proto subscriber (iterable) |
+| `ctx.subscriber_raw(key_expr)` | Raw sample subscriber (no topic prefix) |
 | `ctx.is_shutdown()` | True after SIGINT/SIGTERM |
-| `await ctx.wait_shutdown()` | Suspend until shutdown |
+| `ctx.wait_shutdown()` | Block until shutdown |
 | `ctx.close()` | Close the Zenoh session |
 
 ### `ProtoPublisher` / `JsonPublisher`
 
 | Method | Description |
 |---|---|
-| `await pub.put(msg)` | Publish a message |
+| `pub.put(msg)` | Publish a message |
 | `pub.undeclare()` | Release the Zenoh publisher |
 
-### `TypedSubscriber` / `RawSubscriber`
+### `ProtoSubscriber` / `RawSubscriber`
 
-Both support `async for` iteration.  `RawSubscriber` also exposes `recv()` for
-synchronous use and yields `zenoh.Sample` objects directly.
+Both support `for` iteration.  `RawSubscriber` also exposes `recv()` for
+direct use and yields `zenoh.Sample` objects directly.
