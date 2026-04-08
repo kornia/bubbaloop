@@ -162,7 +162,7 @@ For running Zenoh as a router, use `zenoh.json5`:
 {
   mode: "router",
   listen: {
-    endpoints: ["tcp/0.0.0.0:7447"],
+    endpoints: ["tcp/127.0.0.1:7447"],
   },
   plugins: {
     remote_api: {

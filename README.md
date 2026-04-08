@@ -112,6 +112,8 @@ bubbaloop node logs my-sensor
 
 ## YAML Skills (Zero-Code Sensors)
 
+Skills are declarative YAML configs that map to nodes. Drop a YAML file in `~/.bubbaloop/skills/` and `bubbaloop up` auto-installs the driver node and starts it.
+
 ```yaml
 # ~/.bubbaloop/skills/front-camera.yaml
 name: front-door
@@ -176,7 +178,7 @@ Daemon ────────────────────────�
 Nodes (self-describing) ───────────┘
   ├─ rtsp-camera            Rust    [H264 video, SHM raw frames]
   ├─ camera-object-detector Python  [YOLO11 detection on SHM frames]
-  ├─ camera-vlm             Python  [VLM scene description on SHM frames]
+  ├─ camera-vlm             Python  [VLM scene description (planned)]
   ├─ system-telemetry       Python  [CPU, memory, disk, network]
   ├─ network-monitor        Python  [HTTP, DNS, ping health checks]
   ├─ openmeteo              Python  [weather: current, hourly, daily]
@@ -187,7 +189,7 @@ The daemon hosts the **agent runtime** (multi-agent Zenoh gateway) alongside the
 
 **Per-agent features:**
 - **Soul**: `identity.md` (personality) + `capabilities.toml` (model, heartbeat). Hot-reload on file change.
-- **3-Tier Memory**: RAM (current turn) → NDJSON logs (episodic, BM25 search) → SQLite (jobs, proposals).
+- **4-Tier Memory**: World State (live SQLite, sensor-derived) → RAM (current turn) → NDJSON (episodic, BM25 search) → SQLite (beliefs, jobs, proposals).
 - **Adaptive Heartbeat**: Arousal-based decay — active agents check in frequently, idle agents stay quiet.
 - **Telemetry Watchdog**: CPU/RAM/disk monitoring with circuit breakers and 5 severity levels.
 

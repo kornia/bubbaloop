@@ -87,7 +87,7 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 
 ## Node Contract
 
-Every sensor node MUST implement these standard queryables:
+Every node exposes these standard queryables (SDK provides `schema` + `health` automatically; `manifest`, `config`, `command` are conventions nodes implement as needed):
 
 ```
 bubbaloop/global/{machine_id}/{node_name}/schema      → FileDescriptorSet bytes
@@ -446,7 +446,7 @@ MCP is the **sole control interface**. 42 MCP tools + agent-internal tools acros
 
 **Removed technologies:**
 - **TUI (ratatui/crossterm)** — Removed in v0.0.6. Codebase simplified to ~14K lines.
-- **Zenoh API queryables** — All access through MCP. Zenoh is data plane only.
+- **Zenoh API queryables for external control** — External clients use MCP, not raw Zenoh queryables. Nodes still use queryables internally (schema, health, manifest).
 - **Agent rule engine** — Replaced by two-tier scheduling (planned).
 
 ---

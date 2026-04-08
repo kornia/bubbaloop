@@ -510,7 +510,7 @@ pixi run main -c config.yaml
 z_sub -k "bubbaloop/global/*/my-sensor/health"
 
 # Verify data publishing
-z_sub -k "bubbaloop/local/*/my-sensor/*"
+z_sub -k "bubbaloop/global/*/my-sensor/*"
 ```
 
 ### Step 7: Install and run via daemon
@@ -774,7 +774,7 @@ if __name__ == "__main__":
 ```python
 # build_proto.py
 #!/usr/bin/env python3
-"""Compile protobuf schemas for network-monitor node."""
+"""Compile protobuf schemas for my-sensor node."""
 
 import os
 import subprocess

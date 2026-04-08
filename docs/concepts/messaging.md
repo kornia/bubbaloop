@@ -420,4 +420,4 @@ Bind to `127.0.0.1`, not `0.0.0.0`. Never expose Zenoh ports directly to the int
 ## Next Steps
 
 - [Architecture](architecture.md) — Layer model, daemon, agent runtime
-- [Memory](memory.md) — 3-tier agent memory (short-term, episodic, semantic)
+- [Memory](memory.md) — 4-tier agent memory (world state, short-term, episodic, semantic)

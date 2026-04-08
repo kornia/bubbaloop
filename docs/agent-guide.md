@@ -862,6 +862,8 @@ Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to e
 | **Operator** (15) | Day-to-day operations | `start_node`, `stop_node`, `restart_node`, `get_node_config`, `send_command`, `get_node_logs`, `enable_autostart`, `disable_autostart`, `approve_proposal`, `reject_proposal`, `delete_job`, `pause_mission`, `resume_mission`, `cancel_mission`, `update_belief` |
 | **Admin** (12) | System modification | `install_node`, `remove_node`, `build_node`, `query_zenoh`, `uninstall_node`, `clean_node`, `clear_episodic_memory`, `update_telemetry_config`, `configure_context`, `register_alert`, `unregister_alert`, `register_constraint` |
 
+The tier counts (18+15+12=45) include 3 telemetry tools that are mapped in both the MCP server and the agent dispatch. The MCP server exposes 42 unique tools.
+
 **Default tier:** In single-user localhost mode, all requests are granted Admin tier.
 
 **Token format:** `~/.bubbaloop/mcp-token` contains `<token>:<tier>` (e.g., `bb_abc123:operator`)
@@ -893,7 +895,7 @@ defence-in-depth security to prevent damage to existing platforms.
 
 1. **Privilege escalation** — `sudo`, `su` (requires manual execution)
 2. **Destructive filesystem** — `rm -rf /`, `mkfs`, `dd if=`, fork bombs
-3. **System control** — `shutdown`, `reboot`, `kill`, `killall`, `pkill`, `iptables`, `mount`
+3. **System control** — `shutdown`, `reboot`, `killall`, `pkill`, `iptables`, `mount` (`kill <numeric_pids>` is allowed for agent cleanup; `kill 0/1/-1` blocked)
 4. **Non-bubbaloop service management** — `systemctl stop/disable/mask <non-bubbaloop>` blocked; bubbaloop services allowed
 5. **System package managers** — `apt`, `apt-get`, `dpkg`, `yum`, `dnf`, `pacman`, `snap`, `flatpak` (use `pixi`/`pip` for project deps)
 6. **Network mutation** — `ifconfig up/down`, `ip link set`, `ip route`, `ip addr`
@@ -1127,7 +1129,7 @@ Note: `get_system_telemetry`, `get_telemetry_history`, and `update_telemetry_con
    → Understand data format (protobuf schema)
 
 4. get_stream_info(node_name="temperature-sensor")
-   → Get Zenoh topic: "bubbaloop/local/nvidia_orin00/temperature-sensor/reading"
+   → Get Zenoh topic: "bubbaloop/global/nvidia_orin00/temperature-sensor/reading"
 
 5. schedule_task(
      prompt="Check temperature-sensor health and report any anomalies",

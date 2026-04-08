@@ -14,8 +14,8 @@ How the pieces fit together.
   +---------+------------------------------------------------+
   |  Daemon (~12-13 MB single binary)                        |
   |                                                          |
-  |  Agent Runtime | MCP Server | Node Manager | Gateway    |
-  |                 |              |                          |
+  |  Agent Runtime  | MCP Server | Node Manager              |
+  |  (incl. Gateway)|              |                          |
   |  Telemetry Watchdog                                      |
   +---------+------------------------------------------------+
            |
@@ -26,7 +26,7 @@ How the pieces fit together.
   Camera   IMU    Motor   Weather     (self-describing nodes)
 ```
 
-One binary. Five subsystems. One data plane.
+One binary. Four subsystems. One data plane.
 
 ---
 
@@ -75,7 +75,7 @@ CLI client                Daemon (agent runtime)
 
 Each agent has:
 - `Soul` — identity.md + capabilities.toml in `~/.bubbaloop/agents/{id}/soul/`
-- 3-tier Memory — short-term (RAM), episodic (NDJSON + FTS5), semantic (SQLite)
+- 4-tier Memory — world state (live SQLite), short-term (RAM), episodic (NDJSON + FTS5), semantic (SQLite)
 - Adaptive heartbeat — arousal rises on activity, decays at rest
 
 **Configuration**
@@ -239,5 +239,5 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447
 ## Next Steps
 
 - [Messaging](messaging.md) — Zenoh pub/sub patterns and topic conventions
-- [Memory](memory.md) — 3-tier agent memory: short-term, episodic, semantic
+- [Memory](memory.md) — 4-tier agent memory: world state, short-term, episodic, semantic
 - [ARCHITECTURE.md](../../ARCHITECTURE.md) — Full security model, technology choices, design rationale

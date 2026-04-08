@@ -59,8 +59,8 @@ bubbaloop agent chat   # interactive REPL
 │  │  Soul | EventSink | Heartbeat | per-agent Memory   │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  3-Tier Memory                                      │  │
-│  │  Short-term (RAM) | Episodic (NDJSON) | Semantic DB │  │
+│  │  4-Tier Memory                                      │  │
+│  │  World State | Short-term | Episodic | Semantic     │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  MCP Server (42 tools) — sole control interface     │  │
@@ -181,7 +181,7 @@ config:
 
 ---
 
-### Phase 3: 3-Tier Memory (OpenClaw Rewrite)
+### Phase 3: 4-Tier Memory (OpenClaw Rewrite)
 
 **Goal:** "What happened at the front door yesterday?" — sensor-native memory with episodic recall.
 
