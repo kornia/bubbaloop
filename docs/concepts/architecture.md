@@ -214,12 +214,12 @@ Node --> Protobuf --> Zenoh --> WebSocket Bridge --> Browser / Dashboard
 ## Topic Hierarchy
 
 ```
-bubbaloop/global/{machine_id}/{node_name}/{resource}
-          |       |            |           |
-          |       |            |           +-- schema, manifest, health, config, command
-          |       |            +-------------- node identifier  [a-zA-Z0-9_-], 1-64 chars
-          |       +--------------------------- machine ID (e.g., nvidia_orin00)
-          +------------------------------------ scope (local / edge / cloud)
+bubbaloop/{key_space}/{machine_id}/{node_name}/{resource}
+           |          |            |            |
+           |          |            |            +-- data topic, health, schema
+           |          |            +--------------- node identifier  [a-zA-Z0-9_-], 1-64 chars
+           |          +---------------------------- machine ID (e.g., nvidia_orin00)
+           +--------------------------------------- global (network) or local (SHM-only)
 ```
 
 Nodes receive scope, machine ID, and Zenoh endpoint via environment variables

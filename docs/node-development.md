@@ -106,17 +106,14 @@ Nodes run as systemd user services managed by the bubbaloop daemon. They can run
 
 ### Zenoh Topics
 
-Every node operates within a scoped topic hierarchy:
+Every node operates within a topic hierarchy using two key spaces:
 
 ```
-bubbaloop/global/{machine_id}/{node_name}/schema      → FileDescriptorSet bytes
-bubbaloop/global/{machine_id}/{node_name}/manifest    → JSON manifest
-bubbaloop/global/{machine_id}/{node_name}/health      → "ok" | error details
-bubbaloop/global/{machine_id}/{node_name}/config      → JSON config (GET/SET)
-bubbaloop/global/{machine_id}/{node_name}/command     → JSON command interface
+bubbaloop/global/{machine_id}/{node_name}/health      → "ok" (always global)
+bubbaloop/global/{machine_id}/{node_name}/schema      → FileDescriptorSet bytes (always global)
 
-bubbaloop/global/{machine_id}/{publish_topic}         → Protobuf sensor data
-bubbaloop/global/{machine_id}/{instance_name}/health  → Periodic heartbeat
+bubbaloop/global/{machine_id}/{publish_topic}         → network-visible data
+bubbaloop/local/{machine_id}/{publish_topic}          → SHM-only data (same machine)
 ```
 
 **Environment variables:**
@@ -637,7 +634,7 @@ class MySensorNode:
         self.session = zenoh.open(zenoh_config)
         logger.info("Connected to zenoh")
 
-        # Build scoped topic: bubbaloop/global/{machine_id}/{publish_topic}
+        # Build topic: bubbaloop/global/{machine_id}/{publish_topic}
         topic_suffix = self.config["publish_topic"]
         self.full_topic = f"bubbaloop/{self.scope}/{self.machine_id}/{topic_suffix}"
 
@@ -1242,8 +1239,8 @@ Before submitting a new node, verify ALL items:
 - [ ] `protos/` directory with `header.proto` and node-specific `.proto` files
 
 ### Communication
-- [ ] Publishes data via Zenoh to scoped topic: `bubbaloop/global/{machine_id}/{node-name}/{resource}`
-- [ ] `config.yaml` specifies topic suffix only (no `bubbaloop/global/{machine_id}/` prefix)
+- [ ] Publishes data via Zenoh topic: `bubbaloop/{global|local}/{machine_id}/{suffix}`
+- [ ] `config.yaml` specifies topic suffix only — SDK prepends key space + machine_id
 - [ ] Uses protobuf serialization for all data messages
 - [ ] Publishes health heartbeat to `bubbaloop/global/{machine_id}/{instance_name}/health` (vanilla zenoh, not protobuf)
 - [ ] Heartbeat interval <= 10 seconds (recommended: 5 seconds)
