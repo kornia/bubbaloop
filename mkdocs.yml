@@ -120,6 +120,12 @@ nav:
       - Weather: dashboard/panels/weather.md
       - Stats & Metrics: dashboard/panels/stats.md
     - Remote Access: dashboard/remote-access.md
+  - Comparisons:
+    - Overview: comparisons/index.md
+    - Bubbaloop vs ROS2: comparisons/bubbaloop-vs-ros2.md
+    - Bubbaloop vs ROS1: comparisons/bubbaloop-vs-ros1.md
+    - Bubbaloop vs Dora-rs: comparisons/bubbaloop-vs-dora.md
+    - Bubbaloop vs ros-z: comparisons/bubbaloop-vs-rosz.md
   - Reference:
     - CLI Commands: reference/cli.md
     - API:
