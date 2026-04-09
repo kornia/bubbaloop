@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop message header format. Timestamp, source node, sequence number, and encoding metadata in every protobuf message."
+---
+
 # Header
 
 The `Header` message contains common metadata for all Bubbaloop messages.

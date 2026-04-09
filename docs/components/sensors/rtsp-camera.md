@@ -1,3 +1,7 @@
+---
+description: "RTSP camera node for Bubbaloop. Stream IP cameras via RTSP, publish frames over Zenoh, and feed them to vision detection pipelines."
+---
+
 # RTSP Camera
 
 The RTSP Camera sensor captures H264 video streams from IP cameras and publishes them to the Zenoh message bus.

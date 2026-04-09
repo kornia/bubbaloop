@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop topic key expressions. Global and local key spaces, topic naming conventions, and how nodes and agents discover each other via Zenoh."
+---
+
 # Topics
 
 Bubbaloop uses vanilla Zenoh key expressions for all message routing.

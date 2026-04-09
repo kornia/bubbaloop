@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop actuator nodes. Control motors, relays, LEDs, and robotic actuators via Zenoh commands from AI agents or automation rules."
+---
+
 # Actuators
 
 Actuators are components that interact with the physical world based on commands received via the Zenoh message bus.

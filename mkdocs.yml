@@ -1,4 +1,5 @@
 site_name: Bubbaloop
+site_url: https://kornia.org/bubbaloop/
 site_description: The open-source Hardware AI agent. Cameras, sensors, robots, and IoT fleets — orchestrated by AI.
 site_author: Edgar Riba
 
@@ -47,6 +48,10 @@ theme:
   favicon: assets/logo.svg
   icon:
     repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - meta
 
 markdown_extensions:
   - pymdownx.highlight:

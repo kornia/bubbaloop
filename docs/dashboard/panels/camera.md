@@ -1,3 +1,7 @@
+---
+description: "Camera panel in the Bubbaloop dashboard. Live video feed with detection overlays, snapshot capture, and multi-camera grid view."
+---
+
 # Camera Panel
 
 The Camera panel displays live H264 video streams from RTSP cameras using hardware-accelerated WebCodecs decoding.

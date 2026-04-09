@@ -1,3 +1,7 @@
+---
+description: "Troubleshoot common Bubbaloop issues. Node connectivity, Zenoh routing, agent errors, dashboard problems, and systemd service debugging."
+---
+
 # Bubbaloop Troubleshooting Guide
 
 This guide helps you diagnose and fix common issues with Bubbaloop services, the daemon, nodes, and the CLI. Start with **Quick Diagnostics** if you're experiencing problems.

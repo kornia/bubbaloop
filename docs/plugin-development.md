@@ -1,3 +1,7 @@
+---
+description: "Develop Bubbaloop plugins. Extend the runtime with custom MCP tools, agent capabilities, and integration modules."
+---
+
 # Bubbaloop Node Development Guide
 
 Create custom nodes for Bubbaloop in Rust or Python. Nodes connect to the Zenoh pub/sub network to publish sensor data, process messages, or integrate with external services.
@@ -75,7 +79,7 @@ prost-build = "0.14"
 
 ### Step 2: src/main.rs
 
-For the manual implementation pattern, see the [Node Development Guide](node-development.md#manual-implementation-raw-zenoh) which shows the complete pattern:
+For the manual implementation pattern, see the [Node Development Guide](node-development.md) which shows the complete pattern:
 - Zenoh client session creation
 - argh CLI parsing
 - ctrlc signal handling
@@ -262,7 +266,7 @@ python main.py -c config.yaml -e tcp/localhost:7447
 
 ## Common Patterns
 
-For common patterns including subscribing to topics, using protobuf messages, health heartbeats, and multiple publishers, see the [Node Development Guide](node-development.md#common-patterns) which documents:
+For common patterns including subscribing to topics, using protobuf messages, health heartbeats, and multiple publishers, see the [Node Development Guide](node-development.md) which documents:
 
 - **Subscribe to topics**: Raw Zenoh subscriber patterns with proper shutdown handling
 - **Protobuf encoding/decoding**: Using `bubbaloop-schemas` with prost
@@ -440,3 +444,10 @@ if !valid_topic {
 ### systemd Hardening
 
 Node services installed via the daemon include security directives (`NoNewPrivileges=true`, `ProtectSystem=strict`, etc.). For additional hardening, consider restricting network access with `PrivateNetwork=true` for monitoring-only nodes.
+
+## See Also
+
+- [Node Development Guide](node-development.md) — Full SDK reference and best practices for Rust and Python nodes
+- [Architecture](concepts/architecture.md) — Layer model, node contract, and MCP integration
+- [Messaging](concepts/messaging.md) — Zenoh pub/sub and topic conventions
+- [API Reference](api/index.md) — Protobuf message schemas used by nodes

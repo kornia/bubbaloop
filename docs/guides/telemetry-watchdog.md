@@ -1,4 +1,5 @@
 ---
+description: "Bubbaloop telemetry watchdog. Monitor CPU, RAM, and disk with 5 severity levels, automatic circuit breakers, and configurable alert thresholds."
 summary: Cross-platform resource watchdog that prevents OOM crashes on edge devices. Circuit breaker kills runaway nodes; agent decides restarts.
 read_when:
   - system is running out of memory

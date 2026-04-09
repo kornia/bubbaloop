@@ -1,3 +1,7 @@
+---
+description: "Develop custom Bubbaloop nodes. Rust and Python SDK guides, protobuf schema design, testing, and publishing to the node marketplace."
+---
+
 # Node Development Guide
 
 > A "node" is a self-describing sensor or actuator process in bubbaloop. Nodes are the core building blocks of the platform.
@@ -1333,3 +1337,10 @@ Before submitting a new node, verify ALL items:
 - **Node SDK source:** `crates/bubbaloop-node/`
 - **Bubbaloop CLI reference:** `bubbaloop node --help`
 - **Zenoh documentation:** https://zenoh.io/docs/
+
+## See Also
+
+- [Create Your First Node](guides/create-your-first-node.md) — Step-by-step walkthrough for new contributors
+- [Architecture](concepts/architecture.md) — Node contract, layer model, and system design
+- [Messaging](concepts/messaging.md) — Zenoh pub/sub, topics, and key expressions
+- [Node Marketplace](guides/node-marketplace.md) — Publishing and discovering nodes

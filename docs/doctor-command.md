@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop doctor command. Automated system health checks for dependencies, Zenoh connectivity, node status, and configuration validation."
+---
+
 # Bubbaloop Doctor Command
 
 The `bubbaloop doctor` command provides comprehensive system diagnostics and health checks for troubleshooting Zenoh router and daemon connectivity issues.
@@ -378,6 +382,7 @@ fi
 
 ## See Also
 
-- [Distributed Deployment Guide](distributed-deployment.md) - Multi-machine setup
-- [Debug Commands](../crates/bubbaloop/src/cli/debug.rs) - Low-level Zenoh debugging
-- [Daemon Documentation](../CLAUDE.md#daemon-service-management) - Daemon architecture
+- [Distributed Deployment Guide](distributed-deployment.md) — Multi-machine setup and connectivity
+- [Troubleshooting](reference/troubleshooting.md) — Common errors and solutions
+- [CLI Reference](reference/cli.md) — Full command reference
+- [Messaging](concepts/messaging.md) — Zenoh router and session concepts

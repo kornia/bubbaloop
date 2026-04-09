@@ -1,3 +1,7 @@
+---
+description: "OpenMeteo weather service node for Bubbaloop. Fetch real-time weather data and publish temperature, humidity, and conditions over Zenoh."
+---
+
 # OpenMeteo Weather Service
 
 The OpenMeteo service fetches weather data from the [Open-Meteo API](https://open-meteo.com/) and publishes it to the Zenoh message bus.

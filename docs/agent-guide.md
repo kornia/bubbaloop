@@ -1,3 +1,7 @@
+---
+description: "Build and configure AI agents in Bubbaloop. Soul identity, multi-agent runtime, adaptive heartbeat, tool dispatch, and memory-augmented reasoning."
+---
+
 # Bubbaloop Agent Guide
 
 > This document teaches AI agents how to use bubbaloop via MCP (Model Context Protocol). Read this before calling any tools.

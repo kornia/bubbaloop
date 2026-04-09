@@ -1,3 +1,7 @@
+---
+description: "Zenoh pub/sub messaging in Bubbaloop. Topics, key expressions, protobuf encoding, and microsecond-latency data flow between nodes and agents."
+---
+
 # Messaging
 
 Zenoh pub/sub, queryables, and the agent gateway protocol.

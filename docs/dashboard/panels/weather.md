@@ -1,3 +1,7 @@
+---
+description: "Weather panel in the Bubbaloop dashboard. Display real-time temperature, humidity, wind, and conditions from OpenMeteo service nodes."
+---
+
 # Weather Panel
 
 The Weather panel displays current conditions and forecasts from the OpenMeteo weather service.

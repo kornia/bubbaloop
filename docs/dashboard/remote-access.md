@@ -1,3 +1,7 @@
+---
+description: "Access the Bubbaloop dashboard remotely. SSH tunneling, reverse proxy setup, and secure access to your edge device dashboard."
+---
+
 # Remote Access
 
 Access the Bubbaloop dashboard from other machines on your network or over the internet.

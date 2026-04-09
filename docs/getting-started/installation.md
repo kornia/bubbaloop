@@ -1,3 +1,7 @@
+---
+description: "Install Bubbaloop on Jetson, Raspberry Pi, or any Linux device. Pre-built ARM64 and x86_64 binaries, or build from source with Rust."
+---
+
 # Installation
 
 Bubbaloop can be installed in two ways: using pre-built binaries (recommended for users) or building from source (for developers).

@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop sensor nodes. Camera, IMU, and environmental sensors publishing real-time data over Zenoh for AI agent consumption."
+---
+
 # Sensors
 
 Sensors are components that capture data from the physical world and publish it to the Zenoh message bus.

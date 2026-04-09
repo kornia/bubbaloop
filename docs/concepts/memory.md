@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop 3-tier agent memory system. Short-term RAM, episodic NDJSON with FTS5 search, and long-term SQLite semantic memory for persistent context."
+---
+
 # Memory & Mission Engine
 
 The LLM is expensive and slow — everything that doesn't need reasoning runs without it.

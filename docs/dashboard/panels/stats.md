@@ -1,3 +1,7 @@
+---
+description: "Stats and metrics panel in the Bubbaloop dashboard. CPU, RAM, disk usage, node health, message throughput, and telemetry history."
+---
+
 # Stats & Metrics Panel
 
 The Stats panel displays real-time metrics about topic activity, message frequencies, and system health.

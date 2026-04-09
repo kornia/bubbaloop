@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop web dashboard. Real-time visualization of camera feeds, sensor data, system metrics, and agent activity in your browser."
+---
+
 # Dashboard
 
 The Bubbaloop Dashboard is a React-based web application for real-time monitoring and visualization of data from all components in the system.

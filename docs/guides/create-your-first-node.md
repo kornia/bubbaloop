@@ -1,3 +1,7 @@
+---
+description: "Create your first Bubbaloop node. Step-by-step Rust tutorial using the Node SDK to build a self-describing sensor node in ~50 lines of code."
+---
+
 # Create Your First Node
 
 This guide walks you through creating a custom Bubbaloop node that publishes data via Zenoh.

@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop troubleshooting reference. Diagnostic commands, log analysis, and solutions for common runtime and connectivity issues."
+---
+
 # Troubleshooting
 
 Common issues and solutions for Bubbaloop.

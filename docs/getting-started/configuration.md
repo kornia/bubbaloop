@@ -1,3 +1,7 @@
+---
+description: "Configure Bubbaloop nodes, Zenoh networking, agent settings, and telemetry thresholds. YAML-based configuration with sensible defaults."
+---
+
 # Configuration
 
 Bubbaloop uses YAML configuration files for each component.

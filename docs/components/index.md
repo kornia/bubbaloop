@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop node catalog. Sensors, services, and actuators that plug into the runtime via Zenoh pub/sub with protobuf-encoded messages."
+---
+
 # Components
 
 Bubbaloop components are the building blocks of physical AI systems. Each component is a specialized node (Bubble) that connects to the Zenoh message bus (Loop).

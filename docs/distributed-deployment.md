@@ -1,3 +1,7 @@
+---
+description: "Deploy Bubbaloop across multiple devices. Multi-machine Zenoh routing, node distribution, and fleet orchestration for IoT deployments."
+---
+
 # Distributed Bubbaloop Deployment Guide
 
 This guide explains how to deploy Bubbaloop across multiple machines (e.g., Jetson devices) with a central orchestration point.
@@ -266,3 +270,10 @@ Shared memory only works for processes on the same machine connecting to the sam
 2. Configure each Jetson with local router pointing to central
 3. Verify connectivity with `zenoh-cli`
 4. Deploy nodes and confirm dashboard sees all devices
+
+## See Also
+
+- [Architecture](concepts/architecture.md) — System design and layer model
+- [Messaging](concepts/messaging.md) — Zenoh topics and pub/sub concepts
+- [Dashboard Remote Access](dashboard/remote-access.md) — Accessing the dashboard across machines
+- [Doctor Command](doctor-command.md) — Diagnosing connectivity issues

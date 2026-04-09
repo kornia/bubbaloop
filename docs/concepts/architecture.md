@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop architecture overview. Single-binary runtime with Zenoh data plane, multi-agent system, node manager, MCP server, and telemetry watchdog."
+---
+
 # Architecture
 
 How the pieces fit together.

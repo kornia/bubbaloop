@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop camera message API. Protobuf schema for video frames, image encoding, resolution, and detection overlay data."
+---
+
 # Camera Messages
 
 Camera messages define the format for image data published by camera sensors.
