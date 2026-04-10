@@ -15,6 +15,9 @@ use crate::agent::{run_agent_turn, AgentTurnInput, EventSink};
 use crate::daemon::belief_updater::spawn_belief_decay_task;
 use crate::daemon::context_provider::{spawn_provider, ProviderStore};
 use crate::daemon::mission::{watch_missions_dir, Mission, MissionStatus, MissionStore};
+use crate::daemon::reactive::{
+    evaluate_rules_fired, total_boost, FiredRule, ReactiveRule, ReactiveRuleStore,
+};
 use crate::daemon::registry::get_bubbaloop_home;
 use crate::mcp::platform::DaemonPlatform;
 use serde::{Deserialize, Serialize};
@@ -245,11 +248,14 @@ impl AgentRuntime {
             }
         };
 
-        // Create shared platform for all agents
+        // Create shared platform for all agents.
+        // `shutdown_rx` is forwarded so `configure_context` (via MCP) can spawn
+        // context providers live and tie them to daemon shutdown.
         let platform = Arc::new(DaemonPlatform::new(
             node_manager,
             session.clone(),
             machine_id.clone(),
+            Some(shutdown_rx.clone()),
         ));
 
         let mut handles = HashMap::new();
@@ -714,9 +720,31 @@ async fn agent_loop(
     let initial_caps = soul.read().await.capabilities.clone();
     let mut arousal = ArousalState::new(&initial_caps);
 
+    // Phase 3: load reactive rules for arousal integration.
+    let alerts_db_path = agent_directory(&agent_id).join("alerts.db");
+    let mut reactive_rules: Vec<ReactiveRule> = ReactiveRuleStore::open(&alerts_db_path)
+        .and_then(|s| s.list_rules())
+        .map(|configs| configs.into_iter().map(Into::into).collect())
+        .unwrap_or_default();
+    let mut tick_count: u64 = 0;
+    if !reactive_rules.is_empty() {
+        log::info!(
+            "[Agent:{}] Loaded {} reactive rules",
+            agent_id,
+            reactive_rules.len()
+        );
+    }
+
     // Rate limiting: minimum 2 seconds between LLM turns to prevent abuse.
     const MIN_TURN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
     let mut last_turn_time: Option<tokio::time::Instant> = None;
+
+    // Reactive-alert debounce: even if rules keep firing, only wake the LLM
+    // every `REACTIVE_TURN_MIN_INTERVAL`. The per-rule `debounce_secs` already
+    // throttles individual rules; this second gate stops many rules from
+    // stacking LLM turns when several alerts go hot together.
+    const REACTIVE_TURN_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+    let mut last_reactive_turn_time: Option<tokio::time::Instant> = None;
 
     // Cache onboarding state in memory — avoids a syscall on every inbox message.
     // True only while the marker exists and identity.md hasn't been written yet.
@@ -826,6 +854,101 @@ async fn agent_loop(
             };
             arousal.update(&state);
 
+            // Phase 3: evaluate reactive rules against world state.
+            tick_count += 1;
+            if tick_count.is_multiple_of(10) {
+                if let Ok(store) = ReactiveRuleStore::open(&alerts_db_path) {
+                    if let Ok(configs) = store.list_rules() {
+                        reactive_rules = configs.into_iter().map(Into::into).collect();
+                    }
+                }
+            }
+            // Phase 3: evaluate reactive rules. Any rules that fire both boost
+            // arousal (shrinks heartbeat interval) and — debounced — trigger an
+            // autonomous agent turn so the LLM actually reacts, not just ticks.
+            let mut fired_this_tick: Vec<FiredRule> = Vec::new();
+            if !reactive_rules.is_empty() {
+                let ws_entries = {
+                    let backend = memory.backend.lock().await;
+                    backend.semantic.world_state_snapshot().unwrap_or_default()
+                };
+                let ws_map: HashMap<&str, &str> = ws_entries
+                    .iter()
+                    .map(|e| (e.key.as_str(), e.value.as_str()))
+                    .collect();
+                if !ws_map.is_empty() {
+                    fired_this_tick = evaluate_rules_fired(&reactive_rules, &ws_map);
+                    let boost = total_boost(&fired_this_tick);
+                    if boost > 0.0 {
+                        arousal.add_external_boost(boost);
+                        log::info!(
+                            "[Agent:{}] Reactive alert boost: {:.2} ({} rule(s) fired)",
+                            agent_id,
+                            boost,
+                            fired_this_tick.len()
+                        );
+                    }
+                }
+            }
+
+            // If rules fired and the reactive-turn debounce allows it, wake the
+            // LLM with a synthesized prompt that names the fired rules. This is
+            // the only place reactive alerts become real LLM activity; without
+            // it arousal just shrinks the interval without ever calling the model.
+            let reactive_debounce_ok = match last_reactive_turn_time {
+                None => true,
+                Some(t) => t.elapsed() >= REACTIVE_TURN_MIN_INTERVAL,
+            };
+            if !fired_this_tick.is_empty() && reactive_debounce_ok {
+                // Rate-limit against any other turn on this agent.
+                if let Some(last) = last_turn_time {
+                    let elapsed = last.elapsed();
+                    if elapsed < MIN_TURN_INTERVAL {
+                        tokio::time::sleep(MIN_TURN_INTERVAL - elapsed).await;
+                    }
+                }
+
+                let prompt = build_reactive_prompt(&fired_this_tick);
+                let cid = uuid::Uuid::new_v4().to_string();
+                let soul_snapshot = soul.read().await.clone();
+                last_turn_time = Some(tokio::time::Instant::now());
+                last_reactive_turn_time = Some(tokio::time::Instant::now());
+
+                log::info!(
+                    "[Agent:{}] Reactive turn triggered (cid={}, rules={})",
+                    agent_id,
+                    cid,
+                    fired_this_tick.len()
+                );
+
+                if let Err(e) = run_agent_turn(
+                    &provider,
+                    &dispatcher,
+                    &mut memory,
+                    &soul_snapshot,
+                    &sink,
+                    &AgentTurnInput {
+                        user_input: Some(&prompt),
+                        job_id: None,
+                        correlation_id: &cid,
+                        soul_path: None, // Reactive turns never trigger onboarding
+                    },
+                )
+                .await
+                {
+                    log::error!("[Agent:{}] Reactive turn failed: {}", agent_id, e);
+                    let err_msg = sanitize_outbox_error(&e.to_string());
+                    sink.emit(AgentEvent::error(&cid, &err_msg)).await;
+                    sink.emit(AgentEvent::done(&cid)).await;
+                }
+            } else if !fired_this_tick.is_empty() {
+                log::debug!(
+                    "[Agent:{}] Reactive turn suppressed by debounce ({}s)",
+                    agent_id,
+                    REACTIVE_TURN_MIN_INTERVAL.as_secs()
+                );
+            }
+
             for job in &jobs {
                 // Rate limiting for job turns
                 if let Some(last) = last_turn_time {
@@ -908,6 +1031,35 @@ async fn agent_loop(
             }
         }
     }
+}
+
+/// Build the prompt text for a reactive-alert-triggered turn.
+///
+/// The agent receives this as `user_input`, framed so the LLM understands it's
+/// being woken by a background rule rather than a human message. The prompt
+/// lists every rule that just fired along with its predicate and description,
+/// so the model has enough grounding to decide whether (and how) to react.
+fn build_reactive_prompt(fired: &[FiredRule]) -> String {
+    let mut out = String::from(
+        "[reactive alert] One or more reactive rules just fired against world state. \
+         No human is waiting on this turn — you were woken by the rule engine. \
+         Use list_world_state to inspect current values, reason about whether the \
+         situation needs action, and take action only if the rule's intent requires it. \
+         If nothing needs doing, acknowledge briefly and stand down.\n\n\
+         Fired rules:\n",
+    );
+    for r in fired {
+        let desc = if r.description.is_empty() {
+            "(no description)"
+        } else {
+            r.description.as_str()
+        };
+        out.push_str(&format!(
+            "- {} [mission={}] predicate=`{}` boost={:.1} — {}\n",
+            r.id, r.mission_id, r.predicate, r.boost, desc
+        ));
+    }
+    out
 }
 
 /// Sanitize an error message before sending it over the Zenoh outbox.
@@ -1052,5 +1204,41 @@ provider = "ollama"
     fn sanitize_outbox_error_preserves_short_messages() {
         let msg = "simple error";
         assert_eq!(sanitize_outbox_error(msg), "simple error");
+    }
+
+    #[test]
+    fn build_reactive_prompt_lists_rules() {
+        let fired = vec![
+            FiredRule {
+                id: "r1".to_string(),
+                mission_id: "patrol".to_string(),
+                predicate: "motion.level > 0.05".to_string(),
+                description: "Motion detected on terrace".to_string(),
+                boost: 3.0,
+            },
+            FiredRule {
+                id: "r2".to_string(),
+                mission_id: "patrol".to_string(),
+                predicate: "dog.near_stairs = 'true'".to_string(),
+                description: String::new(),
+                boost: 2.5,
+            },
+        ];
+        let prompt = build_reactive_prompt(&fired);
+        assert!(prompt.contains("[reactive alert]"));
+        assert!(prompt.contains("list_world_state"));
+        assert!(prompt.contains("r1"));
+        assert!(prompt.contains("Motion detected on terrace"));
+        assert!(prompt.contains("r2"));
+        assert!(prompt.contains("(no description)"));
+        assert!(prompt.contains("motion.level > 0.05"));
+        assert!(prompt.contains("boost=3.0"));
+    }
+
+    #[test]
+    fn build_reactive_prompt_empty_is_well_formed() {
+        let prompt = build_reactive_prompt(&[]);
+        assert!(prompt.contains("[reactive alert]"));
+        assert!(prompt.contains("Fired rules:\n"));
     }
 }

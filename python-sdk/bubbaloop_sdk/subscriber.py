@@ -22,7 +22,10 @@ class _BaseSubscriber:
             raise StopIteration from exc
 
     def undeclare(self) -> None:
-        self._sub.undeclare()
+        try:
+            self._sub.undeclare()
+        except RuntimeError:
+            pass
 
 
 class ProtoSubscriber(_BaseSubscriber):

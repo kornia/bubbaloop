@@ -17,17 +17,31 @@ pub struct DaemonPlatform {
     pub machine_id: String,
     /// Cached path to the default agent's memory.db.
     agent_db_path: PathBuf,
+    /// Shutdown signal forwarded to any background tasks this platform spawns
+    /// (e.g. live context providers created via `configure_context`).
+    ///
+    /// `None` when constructed from the stdio MCP entry point — stdio's lifetime
+    /// is process-scoped, so shutdown is delivered by the kernel, not a channel.
+    /// In that case `configure_context` persists the provider but cannot spawn it
+    /// live; the agent runtime will pick it up on next daemon start.
+    shutdown_rx: Option<tokio::sync::watch::Receiver<()>>,
 }
 
 impl DaemonPlatform {
     /// Create a new DaemonPlatform, caching the agent DB path at construction.
-    pub fn new(node_manager: Arc<NodeManager>, session: Arc<Session>, machine_id: String) -> Self {
+    pub fn new(
+        node_manager: Arc<NodeManager>,
+        session: Arc<Session>,
+        machine_id: String,
+        shutdown_rx: Option<tokio::sync::watch::Receiver<()>>,
+    ) -> Self {
         let agent_db_path = Self::compute_agent_db_path();
         Self {
             node_manager,
             session,
             machine_id,
             agent_db_path,
+            shutdown_rx,
         }
     }
 
@@ -448,26 +462,44 @@ impl PlatformOperations for DaemonPlatform {
         };
 
         // Store the provider config in the providers database next to the agent memory.db
-        let providers_db_path = self
+        let agent_dir = self
             .agent_db_path
             .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("providers.db");
+            .unwrap_or(std::path::Path::new("."));
+        let providers_db_path = agent_dir.join("providers.db");
         let store = crate::daemon::context_provider::ProviderStore::open(&providers_db_path)
             .map_err(|e| PlatformError::Internal(e.to_string()))?;
         store
             .save_provider(&cfg)
             .map_err(|e| PlatformError::Internal(e.to_string()))?;
 
+        // Spawn the provider live so world state starts updating immediately,
+        // instead of waiting for the next daemon restart. Only possible when we
+        // have a shutdown channel (daemon-hosted MCP). For stdio MCP, the caller
+        // must restart the daemon to pick up the new provider.
+        let live_status = match self.shutdown_rx.clone() {
+            Some(shutdown_rx) => {
+                crate::daemon::context_provider::spawn_provider(
+                    cfg.clone(),
+                    self.session.clone(),
+                    self.agent_db_path.clone(),
+                    shutdown_rx,
+                );
+                "live"
+            }
+            None => "persisted (restart daemon to activate)",
+        };
+
         log::info!(
-            "[MCP] tool=configure_context mission_id={} provider_id={}",
+            "[MCP] tool=configure_context mission_id={} provider_id={} status={}",
             params.mission_id,
-            provider_id
+            provider_id,
+            live_status
         );
 
         Ok(format!(
-            "Context provider '{}' configured (mission={})",
-            provider_id, params.mission_id
+            "Context provider '{}' configured (mission={}, status={})",
+            provider_id, params.mission_id, live_status
         ))
     }
 

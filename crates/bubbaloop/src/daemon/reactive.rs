@@ -58,18 +58,58 @@ pub fn eval_predicate(predicate: &str, world_state: &HashMap<&str, &str>) -> boo
     apply_filter(predicate, &json)
 }
 
-/// Evaluate all rules against world state, fire matching ones, return total arousal boost.
-pub fn evaluate_rules(rules: &[ReactiveRule], world_state: &HashMap<&str, &str>) -> f64 {
+/// A rule that just fired during evaluation.
+/// Carries enough context for the caller to both boost arousal and synthesize
+/// a meaningful prompt describing why the agent is being woken.
+#[derive(Debug, Clone)]
+pub struct FiredRule {
+    pub id: String,
+    pub mission_id: String,
+    pub predicate: String,
+    pub description: String,
+    pub boost: f64,
+}
+
+/// Evaluate all rules against world state, fire matching ones, return the list of fired rules.
+///
+/// Callers that only need the summed arousal boost should use
+/// [`total_boost`] on the returned slice. Returning the rules themselves lets
+/// the agent loop build a descriptive prompt ("rules X, Y fired because ...")
+/// when a reactive alert wakes the LLM.
+pub fn evaluate_rules_fired(
+    rules: &[ReactiveRule],
+    world_state: &HashMap<&str, &str>,
+) -> Vec<FiredRule> {
     rules
         .iter()
         .filter_map(|r| {
             if r.should_fire(world_state) {
-                Some(r.fire())
+                let boost = r.fire();
+                Some(FiredRule {
+                    id: r.id.clone(),
+                    mission_id: r.mission_id.clone(),
+                    predicate: r.predicate.clone(),
+                    description: r.description.clone(),
+                    boost,
+                })
             } else {
                 None
             }
         })
-        .sum()
+        .collect()
+}
+
+/// Sum of arousal boosts from a set of fired rules.
+pub fn total_boost(fired: &[FiredRule]) -> f64 {
+    fired.iter().map(|r| r.boost).sum()
+}
+
+/// Evaluate all rules against world state, fire matching ones, return total arousal boost.
+///
+/// Thin wrapper around [`evaluate_rules_fired`] for call sites that only need
+/// the total (e.g. tests, legacy paths).
+pub fn evaluate_rules(rules: &[ReactiveRule], world_state: &HashMap<&str, &str>) -> f64 {
+    total_boost(&evaluate_rules_fired(rules, world_state))
 }
 
 // ── Persistence ────────────────────────────────────────────────────────
