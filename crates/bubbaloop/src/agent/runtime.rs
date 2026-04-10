@@ -912,7 +912,6 @@ async fn agent_loop(
                 let cid = uuid::Uuid::new_v4().to_string();
                 let soul_snapshot = soul.read().await.clone();
                 last_turn_time = Some(tokio::time::Instant::now());
-                last_reactive_turn_time = Some(tokio::time::Instant::now());
 
                 log::info!(
                     "[Agent:{}] Reactive turn triggered (cid={}, rules={})",
@@ -921,7 +920,7 @@ async fn agent_loop(
                     fired_this_tick.len()
                 );
 
-                if let Err(e) = run_agent_turn(
+                let reactive_result = run_agent_turn(
                     &provider,
                     &dispatcher,
                     &mut memory,
@@ -934,8 +933,15 @@ async fn agent_loop(
                         soul_path: None, // Reactive turns never trigger onboarding
                     },
                 )
-                .await
-                {
+                .await;
+
+                // Debounce counts from turn COMPLETION, not start. Setting it
+                // before would let fast-retrying heartbeat ticks (arousal shrinks
+                // the interval to 5s) fire another turn immediately after a
+                // 120s-timed-out turn, causing a cascade of failing turns.
+                last_reactive_turn_time = Some(tokio::time::Instant::now());
+
+                if let Err(e) = reactive_result {
                     log::error!("[Agent:{}] Reactive turn failed: {}", agent_id, e);
                     let err_msg = sanitize_outbox_error(&e.to_string());
                     sink.emit(AgentEvent::error(&cid, &err_msg)).await;
