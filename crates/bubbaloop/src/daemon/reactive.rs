@@ -104,14 +104,6 @@ pub fn total_boost(fired: &[FiredRule]) -> f64 {
     fired.iter().map(|r| r.boost).sum()
 }
 
-/// Evaluate all rules against world state, fire matching ones, return total arousal boost.
-///
-/// Thin wrapper around [`evaluate_rules_fired`] for call sites that only need
-/// the total (e.g. tests, legacy paths).
-pub fn evaluate_rules(rules: &[ReactiveRule], world_state: &HashMap<&str, &str>) -> f64 {
-    total_boost(&evaluate_rules_fired(rules, world_state))
-}
-
 // ── Persistence ────────────────────────────────────────────────────────
 
 /// Serializable configuration for a reactive rule (no AtomicI64).
@@ -308,7 +300,7 @@ mod tests {
         ];
         let mut ws = HashMap::new();
         ws.insert("x", "1");
-        let total = evaluate_rules(&rules, &ws);
+        let total = total_boost(&evaluate_rules_fired(&rules, &ws));
         assert!((total - 3.0).abs() < f64::EPSILON);
     }
 

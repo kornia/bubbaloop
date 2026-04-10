@@ -876,18 +876,16 @@ async fn agent_loop(
                     .iter()
                     .map(|e| (e.key.as_str(), e.value.as_str()))
                     .collect();
-                if !ws_map.is_empty() {
-                    fired_this_tick = evaluate_rules_fired(&reactive_rules, &ws_map);
-                    let boost = total_boost(&fired_this_tick);
-                    if boost > 0.0 {
-                        arousal.add_external_boost(boost);
-                        log::info!(
-                            "[Agent:{}] Reactive alert boost: {:.2} ({} rule(s) fired)",
-                            agent_id,
-                            boost,
-                            fired_this_tick.len()
-                        );
-                    }
+                fired_this_tick = evaluate_rules_fired(&reactive_rules, &ws_map);
+                let boost = total_boost(&fired_this_tick);
+                if boost > 0.0 {
+                    arousal.add_external_boost(boost);
+                    log::info!(
+                        "[Agent:{}] Reactive alert boost: {:.2} ({} rule(s) fired)",
+                        agent_id,
+                        boost,
+                        fired_this_tick.len()
+                    );
                 }
             }
 
@@ -895,10 +893,8 @@ async fn agent_loop(
             // LLM with a synthesized prompt that names the fired rules. This is
             // the only place reactive alerts become real LLM activity; without
             // it arousal just shrinks the interval without ever calling the model.
-            let reactive_debounce_ok = match last_reactive_turn_time {
-                None => true,
-                Some(t) => t.elapsed() >= REACTIVE_TURN_MIN_INTERVAL,
-            };
+            let reactive_debounce_ok =
+                last_reactive_turn_time.is_none_or(|t| t.elapsed() >= REACTIVE_TURN_MIN_INTERVAL);
             if !fired_this_tick.is_empty() && reactive_debounce_ok {
                 // Rate-limit against any other turn on this agent.
                 if let Some(last) = last_turn_time {
