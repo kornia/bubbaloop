@@ -1463,11 +1463,11 @@ impl<P: PlatformOperations> Dispatcher<P> {
             min_interval_secs: input
                 .get("min_interval_secs")
                 .and_then(|v| v.as_u64())
-                .map(|n| n as u32),
+                .and_then(|n| u32::try_from(n).ok()),
             max_age_secs: input
                 .get("max_age_secs")
                 .and_then(|v| v.as_u64())
-                .map(|n| n as u32),
+                .and_then(|n| u32::try_from(n).ok()),
             confidence_field: input
                 .get("confidence_field")
                 .and_then(|v| v.as_str())
@@ -1475,7 +1475,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             token_budget: input
                 .get("token_budget")
                 .and_then(|v| v.as_u64())
-                .map(|n| n as u32),
+                .and_then(|n| u32::try_from(n).ok()),
         };
         match self.platform.configure_context(params).await {
             Ok(msg) => ToolResult::success(msg),
@@ -1509,7 +1509,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             debounce_secs: input
                 .get("debounce_secs")
                 .and_then(|v| v.as_u64())
-                .map(|n| n as u32),
+                .and_then(|n| u32::try_from(n).ok()),
             arousal_boost: input.get("arousal_boost").and_then(|v| v.as_f64()),
         };
         match self.platform.register_alert(params).await {

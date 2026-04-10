@@ -746,6 +746,12 @@ async fn agent_loop(
     const REACTIVE_TURN_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
     let mut last_reactive_turn_time: Option<tokio::time::Instant> = None;
 
+    // How often to hot-reload reactive rules from disk (in heartbeat ticks).
+    // Trade-off: shorter = faster visibility for newly-registered rules but
+    // more DB traffic; longer = cheaper but laggier. 10 ticks ≈ up to 10×
+    // current heartbeat interval (~5s–60s depending on arousal).
+    const REACTIVE_RULE_RELOAD_INTERVAL: u64 = 10;
+
     // Cache onboarding state in memory — avoids a syscall on every inbox message.
     // True only while the marker exists and identity.md hasn't been written yet.
     let mut needs_onboarding = onboarding_marker.exists() && !identity_path.exists();
@@ -856,10 +862,32 @@ async fn agent_loop(
 
             // Phase 3: evaluate reactive rules against world state.
             tick_count += 1;
-            if tick_count.is_multiple_of(10) {
-                if let Ok(store) = ReactiveRuleStore::open(&alerts_db_path) {
-                    if let Ok(configs) = store.list_rules() {
-                        reactive_rules = configs.into_iter().map(Into::into).collect();
+            if tick_count.is_multiple_of(REACTIVE_RULE_RELOAD_INTERVAL) {
+                match ReactiveRuleStore::open(&alerts_db_path) {
+                    Ok(store) => match store.list_rules() {
+                        Ok(configs) => {
+                            reactive_rules = configs.into_iter().map(Into::into).collect();
+                        }
+                        Err(e) => {
+                            // Don't wipe the in-memory rule set on a transient read
+                            // error — keep the last known-good set and surface the
+                            // failure so the operator sees why new rules aren't
+                            // being picked up.
+                            log::warn!(
+                                "[Agent:{}] Reactive rule reload failed (list): {} — keeping {} cached rule(s)",
+                                agent_id,
+                                e,
+                                reactive_rules.len()
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!(
+                            "[Agent:{}] Reactive rule store open failed: {} — keeping {} cached rule(s)",
+                            agent_id,
+                            e,
+                            reactive_rules.len()
+                        );
                     }
                 }
             }
@@ -896,11 +924,23 @@ async fn agent_loop(
             let reactive_debounce_ok =
                 last_reactive_turn_time.is_none_or(|t| t.elapsed() >= REACTIVE_TURN_MIN_INTERVAL);
             if !fired_this_tick.is_empty() && reactive_debounce_ok {
-                // Rate-limit against any other turn on this agent.
+                // Rate-limit against any other turn on this agent. The sleep
+                // must be shutdown-aware: without the select, a reactive turn
+                // can block shutdown for up to `MIN_TURN_INTERVAL`.
                 if let Some(last) = last_turn_time {
                     let elapsed = last.elapsed();
                     if elapsed < MIN_TURN_INTERVAL {
-                        tokio::time::sleep(MIN_TURN_INTERVAL - elapsed).await;
+                        let wait = MIN_TURN_INTERVAL - elapsed;
+                        tokio::select! {
+                            _ = tokio::time::sleep(wait) => {}
+                            _ = shutdown_rx.changed() => {
+                                log::info!(
+                                    "[Agent:{}] Shutdown during reactive rate-limit wait — skipping turn",
+                                    agent_id
+                                );
+                                break;
+                            }
+                        }
                     }
                 }
 
@@ -1042,23 +1082,32 @@ async fn agent_loop(
 /// lists every rule that just fired along with its predicate and description,
 /// so the model has enough grounding to decide whether (and how) to react.
 fn build_reactive_prompt(fired: &[FiredRule]) -> String {
-    let mut out = String::from(
+    /// Upper bound on per-rule description length in the prompt, to protect
+    /// the LLM context from a misused or runaway description field.
+    const MAX_DESC_CHARS: usize = 200;
+
+    let wake_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut out = format!(
         "[reactive alert] One or more reactive rules just fired against world state. \
          No human is waiting on this turn — you were woken by the rule engine. \
+         Wake time: {wake_ts}. \
          Use list_world_state to inspect current values, reason about whether the \
          situation needs action, and take action only if the rule's intent requires it. \
          If nothing needs doing, acknowledge briefly and stand down.\n\n\
-         Fired rules:\n",
+         Fired rules:\n"
     );
     for r in fired {
         let desc = if r.description.is_empty() {
-            "(no description)"
+            "(no description)".to_string()
+        } else if r.description.chars().count() > MAX_DESC_CHARS {
+            let truncated: String = r.description.chars().take(MAX_DESC_CHARS).collect();
+            format!("{}… (truncated)", truncated)
         } else {
-            r.description.as_str()
+            r.description.clone()
         };
         out.push_str(&format!(
-            "- {} [mission={}] predicate=`{}` boost={:.1} — {}\n",
-            r.id, r.mission_id, r.predicate, r.boost, desc
+            "- {} [mission={}] predicate=`{}` — {}\n",
+            r.id, r.mission_id, r.predicate, desc
         ));
     }
     out
@@ -1229,18 +1278,38 @@ provider = "ollama"
         let prompt = build_reactive_prompt(&fired);
         assert!(prompt.contains("[reactive alert]"));
         assert!(prompt.contains("list_world_state"));
+        assert!(prompt.contains("Wake time: "));
         assert!(prompt.contains("r1"));
         assert!(prompt.contains("Motion detected on terrace"));
         assert!(prompt.contains("r2"));
         assert!(prompt.contains("(no description)"));
         assert!(prompt.contains("motion.level > 0.05"));
-        assert!(prompt.contains("boost=3.0"));
+        // Boost value is implementation detail — kept out of the prompt to
+        // avoid confusing the LLM with internal tuning parameters.
+        assert!(!prompt.contains("boost="));
     }
 
     #[test]
     fn build_reactive_prompt_empty_is_well_formed() {
         let prompt = build_reactive_prompt(&[]);
         assert!(prompt.contains("[reactive alert]"));
+        assert!(prompt.contains("Wake time: "));
         assert!(prompt.contains("Fired rules:\n"));
+    }
+
+    #[test]
+    fn build_reactive_prompt_truncates_long_description() {
+        let long_desc = "x".repeat(500);
+        let fired = vec![FiredRule {
+            id: "r1".to_string(),
+            mission_id: "m1".to_string(),
+            predicate: "p".to_string(),
+            description: long_desc,
+            boost: 1.0,
+        }];
+        let prompt = build_reactive_prompt(&fired);
+        assert!(prompt.contains("… (truncated)"));
+        // The full 500-char description should NOT appear.
+        assert!(!prompt.contains(&"x".repeat(500)));
     }
 }
