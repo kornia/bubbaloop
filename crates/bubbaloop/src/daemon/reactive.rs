@@ -8,6 +8,18 @@ use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::Duration;
+use tokio::time::Instant;
+
+/// After this many consecutive reactive-turn failures, the circuit breaker
+/// trips and suspends reactive evaluation for `REACTIVE_BREAKER_COOL_OFF`.
+pub const REACTIVE_BREAKER_THRESHOLD: u32 = 3;
+
+/// How long to suspend reactive evaluation once the circuit breaker trips.
+/// Five minutes is long enough that a runaway rule does not cause sustained
+/// LLM burn, but short enough that recovery is automatic after a transient
+/// upstream outage (ollama restart, network flap).
+pub const REACTIVE_BREAKER_COOL_OFF: Duration = Duration::from_secs(300);
 
 /// A reactive rule that fires when world state matches a predicate.
 /// Never calls the LLM -- only adjusts agent arousal.
@@ -134,6 +146,92 @@ pub fn merge_rule_state(old: &[ReactiveRule], new: Vec<ReactiveRule>) -> Vec<Rea
         }
     }
     new
+}
+
+// ── Circuit Breaker ────────────────────────────────────────────────────
+
+/// Last-resort bound on reactive-turn failures.
+///
+/// Commits A–C of the 2026-04-10 prevention series close three specific
+/// holes (HTTP hang, stale world state, reload-reset debounce). This
+/// breaker is commit D: a category-level bound that catches *any* other
+/// cause of runaway reactive work. After `threshold` consecutive reactive
+/// turn failures, the breaker trips and suppresses reactive evaluation
+/// for `cool_off`. A single successful reactive turn — or waiting out
+/// the cool-off window — closes the breaker and resets the counter.
+///
+/// Scope: lives inside a single `agent_loop` task, so it does not need
+/// `Send + Sync` wrapping. Each agent has its own breaker; a storm on
+/// one agent never suspends others.
+///
+/// Not about job turns: job turns are operator-initiated and should
+/// fail loudly. Only reactive turns (autonomous, rule-driven) are gated.
+#[derive(Debug)]
+pub struct ReactiveCircuitBreaker {
+    threshold: u32,
+    cool_off: Duration,
+    consecutive_failures: u32,
+    tripped_until: Option<Instant>,
+}
+
+impl ReactiveCircuitBreaker {
+    pub fn new(threshold: u32, cool_off: Duration) -> Self {
+        Self {
+            threshold,
+            cool_off,
+            consecutive_failures: 0,
+            tripped_until: None,
+        }
+    }
+
+    /// Call after a successful reactive turn. Clears the failure counter
+    /// and any open cool-off — a single success means the upstream is
+    /// healthy again and we should let rules fire freely.
+    pub fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+        self.tripped_until = None;
+    }
+
+    /// Call after a failed reactive turn. Returns `true` if *this* failure
+    /// is the one that tripped the breaker (useful to log the transition
+    /// exactly once, not on every subsequent check).
+    pub fn record_failure(&mut self, now: Instant) -> bool {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        if self.consecutive_failures >= self.threshold && self.tripped_until.is_none() {
+            self.tripped_until = Some(now + self.cool_off);
+            return true;
+        }
+        false
+    }
+
+    /// Is the breaker currently open (suppressing reactive turns)?
+    ///
+    /// Mutating because this also performs auto-close: once the cool-off
+    /// elapses, the breaker flips back to closed and the counter resets.
+    /// Callers get a consistent "can I fire a reactive turn right now?"
+    /// answer without having to remember to tick the breaker separately.
+    pub fn is_open(&mut self, now: Instant) -> bool {
+        match self.tripped_until {
+            Some(until) if now < until => true,
+            Some(_) => {
+                self.tripped_until = None;
+                self.consecutive_failures = 0;
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Time remaining until the breaker auto-closes. `None` when closed.
+    pub fn cool_off_remaining(&self, now: Instant) -> Option<Duration> {
+        self.tripped_until
+            .map(|until| until.saturating_duration_since(now))
+    }
+
+    /// Current consecutive failure count (for diagnostics / list_alerts).
+    pub fn consecutive_failures(&self) -> u32 {
+        self.consecutive_failures
+    }
 }
 
 // ── Persistence ────────────────────────────────────────────────────────
@@ -547,5 +645,155 @@ mod tests {
         assert_eq!(rule.debounce_secs, 45);
         assert!((rule.arousal_boost - 3.0).abs() < f64::EPSILON);
         assert_eq!(rule.last_fired_at.load(Ordering::Relaxed), 0);
+    }
+
+    // ── Circuit breaker tests ──
+    //
+    // The breaker takes `now: Instant` as a parameter rather than reading the
+    // clock, so tests can simulate arbitrary time passage deterministically.
+
+    #[tokio::test]
+    async fn breaker_starts_closed() {
+        let mut b = ReactiveCircuitBreaker::new(3, Duration::from_secs(300));
+        assert!(!b.is_open(Instant::now()));
+        assert_eq!(b.consecutive_failures(), 0);
+        assert_eq!(b.cool_off_remaining(Instant::now()), None);
+    }
+
+    #[tokio::test]
+    async fn breaker_opens_exactly_at_threshold() {
+        let mut b = ReactiveCircuitBreaker::new(3, Duration::from_secs(300));
+        let t0 = Instant::now();
+
+        // Failures 1 and 2 do not trip.
+        assert!(!b.record_failure(t0));
+        assert!(!b.is_open(t0));
+        assert!(!b.record_failure(t0));
+        assert!(!b.is_open(t0));
+
+        // Failure 3 trips the breaker, and record_failure returns true to
+        // signal the *transition* — callers can log exactly once.
+        assert!(b.record_failure(t0));
+        assert!(b.is_open(t0));
+    }
+
+    #[tokio::test]
+    async fn breaker_record_failure_signals_transition_only_once() {
+        let mut b = ReactiveCircuitBreaker::new(2, Duration::from_secs(300));
+        let t0 = Instant::now();
+        assert!(!b.record_failure(t0));
+        assert!(b.record_failure(t0)); // Transition: closed → open.
+                                       // Further failures while already open must NOT claim to be the
+                                       // transition — otherwise operators would get repeat "breaker tripped"
+                                       // logs every tick for the whole cool-off window.
+        assert!(!b.record_failure(t0));
+        assert!(!b.record_failure(t0));
+    }
+
+    #[tokio::test]
+    async fn breaker_record_success_resets_counter() {
+        let mut b = ReactiveCircuitBreaker::new(3, Duration::from_secs(300));
+        let t0 = Instant::now();
+        b.record_failure(t0);
+        b.record_failure(t0);
+        assert_eq!(b.consecutive_failures(), 2);
+
+        b.record_success();
+        assert_eq!(b.consecutive_failures(), 0);
+
+        // After reset, we need a full threshold of failures again to trip.
+        b.record_failure(t0);
+        b.record_failure(t0);
+        assert!(!b.is_open(t0));
+        assert!(b.record_failure(t0));
+        assert!(b.is_open(t0));
+    }
+
+    #[tokio::test]
+    async fn breaker_success_closes_an_open_breaker() {
+        // A success during an open cool-off window (e.g. the operator
+        // pinged the agent with a healthy job turn that proved upstream
+        // is up) should immediately clear both the counter and the
+        // tripped_until timestamp.
+        let mut b = ReactiveCircuitBreaker::new(2, Duration::from_secs(300));
+        let t0 = Instant::now();
+        b.record_failure(t0);
+        b.record_failure(t0);
+        assert!(b.is_open(t0));
+
+        b.record_success();
+        assert!(!b.is_open(t0));
+        assert_eq!(b.cool_off_remaining(t0), None);
+    }
+
+    #[tokio::test]
+    async fn breaker_closes_after_cool_off() {
+        let mut b = ReactiveCircuitBreaker::new(2, Duration::from_secs(10));
+        let t0 = Instant::now();
+        b.record_failure(t0);
+        b.record_failure(t0);
+        assert!(b.is_open(t0));
+
+        // Still open mid-window.
+        assert!(b.is_open(t0 + Duration::from_secs(5)));
+
+        // Auto-closes past the window; counter also resets so the next
+        // failure has a full threshold to climb before re-tripping.
+        let past = t0 + Duration::from_secs(11);
+        assert!(!b.is_open(past));
+        assert_eq!(b.consecutive_failures(), 0);
+    }
+
+    #[tokio::test]
+    async fn breaker_cool_off_remaining_reports_accurately() {
+        let mut b = ReactiveCircuitBreaker::new(1, Duration::from_secs(60));
+        let t0 = Instant::now();
+        assert_eq!(b.cool_off_remaining(t0), None);
+
+        b.record_failure(t0);
+        let remaining = b.cool_off_remaining(t0).unwrap();
+        assert!(remaining >= Duration::from_secs(59));
+        assert!(remaining <= Duration::from_secs(60));
+
+        let half = b.cool_off_remaining(t0 + Duration::from_secs(30)).unwrap();
+        assert!(half <= Duration::from_secs(30));
+
+        // Past the window, saturating_duration_since returns zero.
+        let past = b.cool_off_remaining(t0 + Duration::from_secs(90)).unwrap();
+        assert_eq!(past, Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn breaker_can_retrip_after_recovery() {
+        // Full cycle: trip → cool off → close → trip again. Confirms that
+        // recovery is real, not a one-shot fluke.
+        let mut b = ReactiveCircuitBreaker::new(2, Duration::from_secs(10));
+        let t0 = Instant::now();
+        b.record_failure(t0);
+        b.record_failure(t0);
+        assert!(b.is_open(t0));
+
+        let t1 = t0 + Duration::from_secs(11);
+        assert!(!b.is_open(t1));
+
+        // Fresh pair of failures trips it again.
+        assert!(!b.record_failure(t1));
+        assert!(b.record_failure(t1));
+        assert!(b.is_open(t1));
+    }
+
+    #[tokio::test]
+    async fn breaker_saturates_counter_does_not_overflow() {
+        // Paranoid smoke test: a stuck-failing agent over days must not
+        // panic on u32 overflow. `record_failure` uses `saturating_add`,
+        // so after arbitrarily many failures the counter stabilises at
+        // `u32::MAX` without wrapping or panicking.
+        let mut b = ReactiveCircuitBreaker::new(3, Duration::from_secs(1));
+        let t0 = Instant::now();
+        for _ in 0..10 {
+            b.record_failure(t0);
+        }
+        assert_eq!(b.consecutive_failures(), 10);
+        assert!(b.is_open(t0));
     }
 }

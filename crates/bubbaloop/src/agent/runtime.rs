@@ -16,7 +16,8 @@ use crate::daemon::belief_updater::spawn_belief_decay_task;
 use crate::daemon::context_provider::{spawn_provider, ProviderStore};
 use crate::daemon::mission::{watch_missions_dir, Mission, MissionStatus, MissionStore};
 use crate::daemon::reactive::{
-    evaluate_rules_fired, merge_rule_state, total_boost, FiredRule, ReactiveRule, ReactiveRuleStore,
+    evaluate_rules_fired, merge_rule_state, total_boost, FiredRule, ReactiveCircuitBreaker,
+    ReactiveRule, ReactiveRuleStore, REACTIVE_BREAKER_COOL_OFF, REACTIVE_BREAKER_THRESHOLD,
 };
 use crate::daemon::registry::get_bubbaloop_home;
 use crate::daemon::world_state_sweeper::spawn_world_state_sweeper;
@@ -759,6 +760,18 @@ async fn agent_loop(
     const REACTIVE_TURN_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
     let mut last_reactive_turn_time: Option<tokio::time::Instant> = None;
 
+    // Category-level bound on reactive-turn failures. After
+    // `REACTIVE_BREAKER_THRESHOLD` consecutive reactive turns fail, this
+    // breaker opens a `REACTIVE_BREAKER_COOL_OFF` window during which
+    // reactive evaluation is suppressed entirely. A single successful
+    // reactive turn (or waiting out the cool-off) closes it. Prevents
+    // the class of runaway autonomous work that caused incident
+    // 2026-04-10 regardless of the underlying root cause. Only reactive
+    // turns are gated — job turns are operator-initiated and must fail
+    // loudly.
+    let mut reactive_breaker =
+        ReactiveCircuitBreaker::new(REACTIVE_BREAKER_THRESHOLD, REACTIVE_BREAKER_COOL_OFF);
+
     // How often to hot-reload reactive rules from disk (in heartbeat ticks).
     // Trade-off: shorter = faster visibility for newly-registered rules but
     // more DB traffic; longer = cheaper but laggier. 10 ticks ≈ up to 10×
@@ -957,7 +970,23 @@ async fn agent_loop(
             // it arousal just shrinks the interval without ever calling the model.
             let reactive_debounce_ok =
                 last_reactive_turn_time.is_none_or(|t| t.elapsed() >= REACTIVE_TURN_MIN_INTERVAL);
-            if !fired_this_tick.is_empty() && reactive_debounce_ok {
+            // Circuit-breaker gate: if consecutive reactive-turn failures
+            // exceeded `REACTIVE_BREAKER_THRESHOLD`, suppress all reactive
+            // turns for `REACTIVE_BREAKER_COOL_OFF`. Auto-closes on expiry.
+            let breaker_now = tokio::time::Instant::now();
+            let breaker_open = reactive_breaker.is_open(breaker_now);
+            if breaker_open && !fired_this_tick.is_empty() {
+                let remaining = reactive_breaker
+                    .cool_off_remaining(breaker_now)
+                    .unwrap_or_default();
+                log::warn!(
+                    "[Agent:{}] Reactive turn suppressed by circuit breaker ({} rule(s) fired, {}s remaining in cool-off)",
+                    agent_id,
+                    fired_this_tick.len(),
+                    remaining.as_secs()
+                );
+            }
+            if !fired_this_tick.is_empty() && reactive_debounce_ok && !breaker_open {
                 // Rate-limit against any other turn on this agent. The sleep
                 // must be shutdown-aware: without the select, a reactive turn
                 // can block shutdown for up to `MIN_TURN_INTERVAL`.
@@ -1011,11 +1040,31 @@ async fn agent_loop(
                 // 120s-timed-out turn, causing a cascade of failing turns.
                 last_reactive_turn_time = Some(tokio::time::Instant::now());
 
-                if let Err(e) = reactive_result {
-                    log::error!("[Agent:{}] Reactive turn failed: {}", agent_id, e);
-                    let err_msg = sanitize_outbox_error(&e.to_string());
-                    sink.emit(AgentEvent::error(&cid, &err_msg)).await;
-                    sink.emit(AgentEvent::done(&cid)).await;
+                match &reactive_result {
+                    Ok(_) => {
+                        // Feed the breaker a success signal: a single healthy
+                        // reactive turn clears any accumulated failure count
+                        // and closes an open cool-off window.
+                        reactive_breaker.record_success();
+                    }
+                    Err(e) => {
+                        log::error!("[Agent:{}] Reactive turn failed: {}", agent_id, e);
+                        let err_msg = sanitize_outbox_error(&e.to_string());
+                        sink.emit(AgentEvent::error(&cid, &err_msg)).await;
+                        sink.emit(AgentEvent::done(&cid)).await;
+                        // Feed the breaker a failure signal. The first
+                        // failure that crosses the threshold returns true
+                        // from record_failure so we can log the transition
+                        // exactly once.
+                        if reactive_breaker.record_failure(tokio::time::Instant::now()) {
+                            log::warn!(
+                                "[Agent:{}] Reactive circuit breaker TRIPPED after {} consecutive failures — suspending reactive turns for {}s",
+                                agent_id,
+                                REACTIVE_BREAKER_THRESHOLD,
+                                REACTIVE_BREAKER_COOL_OFF.as_secs()
+                            );
+                        }
+                    }
                 }
             } else if !fired_this_tick.is_empty() {
                 log::debug!(
