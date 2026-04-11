@@ -19,6 +19,7 @@ use crate::daemon::reactive::{
     evaluate_rules_fired, total_boost, FiredRule, ReactiveRule, ReactiveRuleStore,
 };
 use crate::daemon::registry::get_bubbaloop_home;
+use crate::daemon::world_state_sweeper::spawn_world_state_sweeper;
 use crate::mcp::platform::DaemonPlatform;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -337,6 +338,18 @@ impl AgentRuntime {
                 3600,
                 belief_decay_shutdown,
             ));
+
+            // Spawn world_state TTL sweeper — deletes stale rows on a 30s cadence
+            // so a one-shot context-provider value can't drive reactive rules
+            // forever after its writer goes away. Incident 2026-04-10: a single
+            // synthetic motion value from a manual `zenoh put` kept firing the
+            // `motion.level > 0.05` rule for 17 hours because no code path was
+            // evicting stale rows from world_state. The SemanticStore has a
+            // read-time freshness filter (defence-in-depth) but we also want
+            // bounded storage growth and a clear audit trail of evictions.
+            let sweeper_db_path = agent_dir.join("memory.db");
+            let sweeper_shutdown = shutdown_rx.clone();
+            spawn_world_state_sweeper(agent_id.clone(), sweeper_db_path, sweeper_shutdown);
 
             // Spawn context providers — load from providers.db, subscribe to Zenoh topics,
             // write extracted values to world_state (no LLM involved).
@@ -896,9 +909,19 @@ async fn agent_loop(
             // autonomous agent turn so the LLM actually reacts, not just ticks.
             let mut fired_this_tick: Vec<FiredRule> = Vec::new();
             if !reactive_rules.is_empty() {
+                // Defence-in-depth with the world_state sweeper: even between
+                // sweeps (30s cadence), reactive evaluation must never see a
+                // stale row. Using `world_state_snapshot_fresh` filters rows
+                // where `now - last_seen_at > max_age_secs` at read time, so
+                // a context-provider value that stops updating stops firing
+                // rules within max_age_secs of its last write — regardless
+                // of when the sweeper next runs.
                 let ws_entries = {
                     let backend = memory.backend.lock().await;
-                    backend.semantic.world_state_snapshot().unwrap_or_default()
+                    backend
+                        .semantic
+                        .world_state_snapshot_fresh()
+                        .unwrap_or_default()
                 };
                 let ws_map: HashMap<&str, &str> = ws_entries
                     .iter()
