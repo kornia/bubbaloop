@@ -553,8 +553,12 @@ impl PlatformOperations for DaemonPlatform {
             id: rule_id.clone(),
             mission_id: params.mission_id,
             predicate: params.predicate,
-            debounce_secs: params.debounce_secs.unwrap_or(60),
-            arousal_boost: params.arousal_boost.unwrap_or(2.0),
+            debounce_secs: params
+                .debounce_secs
+                .unwrap_or(crate::daemon::reactive::DEFAULT_DEBOUNCE_SECS),
+            arousal_boost: params
+                .arousal_boost
+                .unwrap_or(crate::daemon::reactive::DEFAULT_AROUSAL_BOOST),
             description: params.description,
         };
         store

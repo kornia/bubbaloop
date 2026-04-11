@@ -236,6 +236,42 @@ impl ReactiveCircuitBreaker {
 
 // ── Persistence ────────────────────────────────────────────────────────
 
+/// Maximum length of a predicate string. Prevents accidental/malicious
+/// DOS via multi-megabyte predicates that would be parsed on every tick.
+pub const MAX_PREDICATE_LEN: usize = 2048;
+
+/// Maximum length of a rule description (operator-facing string, kept
+/// sane to bound list_alerts output size).
+pub const MAX_DESCRIPTION_LEN: usize = 1024;
+
+/// Smallest allowed debounce. Zero means "fire every tick" which, with
+/// a permissive predicate, is exactly the reactive storm the 2026-04-10
+/// incident demonstrated. A rule that legitimately needs high frequency
+/// should set 1s explicitly rather than 0.
+pub const MIN_DEBOUNCE_SECS: u32 = 1;
+
+/// Sanity ceiling on debounce. 1 day is already absurdly long for a
+/// reactive rule — anything larger is almost certainly a mistake and
+/// will feel like the rule is broken to whoever registered it.
+pub const MAX_DEBOUNCE_SECS: u32 = 86_400;
+
+/// Lower bound on arousal boost. Negative boosts would *reduce* arousal
+/// on rule fire, which is not a meaningful reactive-alert semantic.
+pub const MIN_AROUSAL_BOOST: f64 = 0.0;
+
+/// Upper bound on arousal boost. Picks a value that's high enough to
+/// always shrink the heartbeat interval to its minimum, but small enough
+/// that a typo (`200.0` instead of `2.0`) is caught before storage.
+pub const MAX_AROUSAL_BOOST: f64 = 100.0;
+
+/// Default `debounce_secs` used when the operator does not specify one.
+/// Kept in sync across the daemon platform, the mock platform, and the
+/// MCP tool handler so all validation paths see the same value.
+pub const DEFAULT_DEBOUNCE_SECS: u32 = 60;
+
+/// Default `arousal_boost` used when the operator does not specify one.
+pub const DEFAULT_AROUSAL_BOOST: f64 = 2.0;
+
 /// Serializable configuration for a reactive rule (no AtomicI64).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReactiveRuleConfig {
@@ -245,6 +281,118 @@ pub struct ReactiveRuleConfig {
     pub debounce_secs: u32,
     pub arousal_boost: f64,
     pub description: String,
+}
+
+impl ReactiveRuleConfig {
+    /// Validate every field against its invariants. Returns a clear error
+    /// message pointing at the first violated constraint, or `Ok(())`.
+    ///
+    /// This is the boundary that catches bad rules *at registration* —
+    /// long before evaluation time. Critical categories:
+    ///
+    /// 1. **Empty / operator-less predicate.** `apply_filter` treats an
+    ///    empty string (and any clause with no recognized comparison
+    ///    operator) as "match" — every tick, every row. Combined with a
+    ///    permissive `debounce_secs`, that is the exact pattern of the
+    ///    2026-04-10 reactive storm. Reject both shapes here.
+    ///
+    /// 2. **`debounce_secs = 0`.** Means "fire every tick" — another
+    ///    route to the same storm.
+    ///
+    /// 3. **Non-finite arousal boost** (NaN, ±∞). Poisons the arousal
+    ///    state and can make the heartbeat interval undefined. These
+    ///    values have no legitimate use.
+    ///
+    /// 4. **Out-of-band strings.** Bound predicate and description
+    ///    lengths to prevent pathological DB rows and unbounded
+    ///    list_alerts output.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        use anyhow::bail;
+
+        if self.id.trim().is_empty() {
+            bail!("rule id must be non-empty");
+        }
+        if self.mission_id.trim().is_empty() {
+            bail!("mission_id must be non-empty");
+        }
+
+        let predicate = self.predicate.trim();
+        if predicate.is_empty() {
+            bail!(
+                "predicate must be non-empty (empty predicates match every tick and cause reactive storms)"
+            );
+        }
+        if self.predicate.len() > MAX_PREDICATE_LEN {
+            bail!(
+                "predicate exceeds maximum length ({} > {})",
+                self.predicate.len(),
+                MAX_PREDICATE_LEN
+            );
+        }
+        if !predicate_has_operator(predicate) {
+            bail!(
+                "predicate must contain at least one comparison operator \
+                 (=, !=, >, <, >=, <=); got {:?}",
+                predicate
+            );
+        }
+
+        if self.description.len() > MAX_DESCRIPTION_LEN {
+            bail!(
+                "description exceeds maximum length ({} > {})",
+                self.description.len(),
+                MAX_DESCRIPTION_LEN
+            );
+        }
+
+        if self.debounce_secs < MIN_DEBOUNCE_SECS {
+            bail!(
+                "debounce_secs must be at least {} (got {}); debounce_secs = 0 \
+                 causes every-tick firing",
+                MIN_DEBOUNCE_SECS,
+                self.debounce_secs
+            );
+        }
+        if self.debounce_secs > MAX_DEBOUNCE_SECS {
+            bail!(
+                "debounce_secs must be at most {} (got {})",
+                MAX_DEBOUNCE_SECS,
+                self.debounce_secs
+            );
+        }
+
+        if !self.arousal_boost.is_finite() {
+            bail!("arousal_boost must be finite (got {})", self.arousal_boost);
+        }
+        if self.arousal_boost < MIN_AROUSAL_BOOST || self.arousal_boost > MAX_AROUSAL_BOOST {
+            bail!(
+                "arousal_boost must be in [{}, {}] (got {})",
+                MIN_AROUSAL_BOOST,
+                MAX_AROUSAL_BOOST,
+                self.arousal_boost
+            );
+        }
+
+        Ok(())
+    }
+}
+
+/// Scan a predicate for at least one comparison operator.
+///
+/// Mirrors the operator set in `apply_filter` in `context_provider.rs`.
+/// Kept as its own helper so the validation test suite can pin the
+/// operator list; if `apply_filter` grows new operators, update both.
+fn predicate_has_operator(predicate: &str) -> bool {
+    // Order matters only for readability — any match is sufficient.
+    // `==` is NOT in apply_filter's syntax, so `=` alone is the equality
+    // operator; that's the reason we check `!=` first (otherwise a `!=`
+    // clause would match the `=` branch and look like an equality test).
+    predicate.contains("!=")
+        || predicate.contains(">=")
+        || predicate.contains("<=")
+        || predicate.contains('>')
+        || predicate.contains('<')
+        || predicate.contains('=')
 }
 
 impl From<ReactiveRuleConfig> for ReactiveRule {
@@ -287,7 +435,14 @@ impl ReactiveRuleStore {
     }
 
     /// Save (insert or replace) a reactive rule configuration.
+    ///
+    /// Validates the rule before touching the database — any invariant
+    /// violation (see [`ReactiveRuleConfig::validate`]) is an error and
+    /// nothing is written. This is the single choke point for rule
+    /// persistence; both the daemon and mock platform go through here,
+    /// so validation is applied uniformly.
     pub fn save_rule(&self, rule: &ReactiveRuleConfig) -> anyhow::Result<()> {
+        rule.validate()?;
         self.conn.execute(
             "INSERT OR REPLACE INTO reactive_rules \
              (id, mission_id, predicate, debounce_secs, arousal_boost, description) \
@@ -795,5 +950,197 @@ mod tests {
         }
         assert_eq!(b.consecutive_failures(), 10);
         assert!(b.is_open(t0));
+    }
+
+    // ── Rule validation tests ──
+    //
+    // Validation is the boundary that catches bad rules at registration,
+    // long before they can cause storms at evaluation time. Each test
+    // pins one specific invariant so regressions fail loud.
+
+    fn valid_cfg() -> ReactiveRuleConfig {
+        ReactiveRuleConfig {
+            id: "a1".to_string(),
+            mission_id: "m1".to_string(),
+            predicate: "motion.level > 0.05".to_string(),
+            debounce_secs: 60,
+            arousal_boost: 2.0,
+            description: "motion detected".to_string(),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_well_formed_rule() {
+        valid_cfg()
+            .validate()
+            .expect("well-formed rule must validate");
+    }
+
+    #[test]
+    fn validate_rejects_empty_predicate() {
+        // This is the headline bug from the 2026-04-10 post-mortem:
+        // `apply_filter("")` returns true on every tick, so an empty
+        // predicate rule fires continuously. Must be rejected.
+        let mut c = valid_cfg();
+        c.predicate = String::new();
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("predicate must be non-empty"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_whitespace_only_predicate() {
+        // `apply_filter` trims clauses — a predicate of "   \t\n  " has
+        // no non-empty clauses, so it also matches every tick. Same bug.
+        let mut c = valid_cfg();
+        c.predicate = "   \t\n  ".to_string();
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("predicate must be non-empty"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_predicate_with_no_comparison_operator() {
+        // `apply_filter` silently skips clauses with no recognised
+        // operator (`continue`), which means a predicate like "dog" or
+        // "sensor_online" matches every tick. Catch this at registration.
+        let mut c = valid_cfg();
+        c.predicate = "just_a_word".to_string();
+        let err = c.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("comparison operator"),
+            "expected operator error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_all_supported_operators() {
+        // Pins the full operator set against the apply_filter syntax.
+        // If apply_filter grows a new operator, update predicate_has_operator.
+        for pred in ["x = 1", "x != 1", "x > 1", "x < 1", "x >= 1", "x <= 1"] {
+            let mut c = valid_cfg();
+            c.predicate = pred.to_string();
+            c.validate()
+                .unwrap_or_else(|e| panic!("predicate {pred:?} should validate: {e}"));
+        }
+    }
+
+    #[test]
+    fn validate_rejects_overlong_predicate() {
+        let mut c = valid_cfg();
+        // Valid operator at the end, but whole string is way too long.
+        c.predicate = format!("{} > 1", "a".repeat(MAX_PREDICATE_LEN));
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("exceeds maximum length"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_overlong_description() {
+        let mut c = valid_cfg();
+        c.description = "x".repeat(MAX_DESCRIPTION_LEN + 1);
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("description"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_debounce_zero() {
+        // The second route to every-tick firing, independent of
+        // predicate shape. Zero is not "as fast as possible" — it is
+        // "fire every heartbeat tick regardless of prior fire".
+        let mut c = valid_cfg();
+        c.debounce_secs = 0;
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("debounce_secs must be at least"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_debounce_too_large() {
+        let mut c = valid_cfg();
+        c.debounce_secs = MAX_DEBOUNCE_SECS + 1;
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("at most"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_nan_arousal_boost() {
+        let mut c = valid_cfg();
+        c.arousal_boost = f64::NAN;
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("finite"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_infinite_arousal_boost() {
+        let mut c = valid_cfg();
+        c.arousal_boost = f64::INFINITY;
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("finite"), "{err}");
+
+        let mut c = valid_cfg();
+        c.arousal_boost = f64::NEG_INFINITY;
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("finite"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_negative_arousal_boost() {
+        let mut c = valid_cfg();
+        c.arousal_boost = -1.0;
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("arousal_boost must be in"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range_arousal_boost() {
+        let mut c = valid_cfg();
+        c.arousal_boost = MAX_AROUSAL_BOOST + 1.0;
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("arousal_boost must be in"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_empty_id() {
+        let mut c = valid_cfg();
+        c.id = String::new();
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("rule id"), "{err}");
+
+        let mut c = valid_cfg();
+        c.id = "   ".to_string();
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("rule id"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_empty_mission_id() {
+        let mut c = valid_cfg();
+        c.mission_id = String::new();
+        let err = c.validate().unwrap_err().to_string();
+        assert!(err.contains("mission_id"), "{err}");
+    }
+
+    #[test]
+    fn save_rule_rejects_invalid_config_without_writing() {
+        // End-to-end: validation happens at the SQLite boundary, so a
+        // bad rule never reaches the database. Confirm the DB stays
+        // empty after a rejected save.
+        let dir = tempfile::tempdir().unwrap();
+        let store = ReactiveRuleStore::open(&dir.path().join("alerts.db")).unwrap();
+
+        let mut bad = valid_cfg();
+        bad.predicate = String::new();
+        let err = store.save_rule(&bad).unwrap_err().to_string();
+        assert!(err.contains("predicate"), "{err}");
+
+        assert!(
+            store.list_rules().unwrap().is_empty(),
+            "rejected rule must not be persisted"
+        );
+    }
+
+    #[test]
+    fn save_rule_accepts_valid_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ReactiveRuleStore::open(&dir.path().join("alerts.db")).unwrap();
+        store.save_rule(&valid_cfg()).unwrap();
+        assert_eq!(store.list_rules().unwrap().len(), 1);
     }
 }
