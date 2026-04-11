@@ -4,7 +4,7 @@
 //! the original `agent/claude.rs`, wrapped in the new ModelProvider trait.
 
 use super::{
-    ContentBlock, Message, ModelProvider, ModelResponse, ProviderError, StreamEvent,
+    http_client, ContentBlock, Message, ModelProvider, ModelResponse, ProviderError, StreamEvent,
     ToolDefinition, Usage,
 };
 use futures::StreamExt;
@@ -99,7 +99,8 @@ impl ClaudeProvider {
         // 1. Check env var (always highest priority)
         if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
             return Ok(Self {
-                client: reqwest::Client::new(),
+                // See provider/mod.rs:http_client() — must not use Client::new().
+                client: http_client(),
                 auth: AuthMethod::ApiKey(key),
                 model: model.unwrap_or(DEFAULT_MODEL).to_string(),
             });
@@ -108,7 +109,7 @@ impl ClaudeProvider {
         // 2. Check OAuth credentials
         if let Some(token) = Self::read_oauth_token() {
             return Ok(Self {
-                client: reqwest::Client::new(),
+                client: http_client(),
                 auth: AuthMethod::OAuthToken(token),
                 model: model.unwrap_or(DEFAULT_MODEL).to_string(),
             });
@@ -117,7 +118,7 @@ impl ClaudeProvider {
         // 3. Check API key file
         if let Some(key) = Self::read_key_file() {
             return Ok(Self {
-                client: reqwest::Client::new(),
+                client: http_client(),
                 auth: AuthMethod::ApiKey(key),
                 model: model.unwrap_or(DEFAULT_MODEL).to_string(),
             });
@@ -190,7 +191,7 @@ impl ClaudeProvider {
     /// Does not read any environment variables or files.
     pub fn with_api_key(api_key: impl Into<String>, model: Option<&str>) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: http_client(),
             auth: AuthMethod::ApiKey(api_key.into()),
             model: model.unwrap_or(DEFAULT_MODEL).to_string(),
         }

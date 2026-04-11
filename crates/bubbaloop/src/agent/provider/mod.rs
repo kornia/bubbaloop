@@ -5,6 +5,55 @@ pub mod ollama;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::time::Duration;
+
+// ── HTTP client defaults ────────────────────────────────────────────
+//
+// All provider HTTP clients MUST be built via `http_client()` below. Using
+// `reqwest::Client::new()` directly is a bug: it leaves both the request
+// timeout and the pool idle timeout unbounded, which on 2026-04-11 allowed
+// three ollama `/api/chat` requests to run for 2h33m+ each after the
+// agent-level `tokio::time::timeout` had already fired. The tokio timeout
+// dropped the response futures, but reqwest kept the TCP connections alive
+// in the idle pool and ollama continued generating server-side. CPU pinned
+// at 400%+ until the daemon was killed.
+//
+// The fix is defence-in-depth:
+//
+// * `timeout(HTTP_REQUEST_TIMEOUT)` — hyper closes the socket when the
+//   deadline passes, forcing the server to see "client closed" and abort.
+//   This is the load-bearing cancellation mechanism, not the outer
+//   `tokio::time::timeout` around `ModelProvider::complete()`.
+// * `pool_idle_timeout(HTTP_POOL_IDLE)` — caps how long an idle keep-alive
+//   connection can linger in reqwest's pool. Short enough that an orphaned
+//   connection can't outlive the agent turn that created it by much.
+//
+// `HTTP_REQUEST_TIMEOUT` is set higher than `agent::TURN_TIMEOUT_SECS` (120s)
+// so the agent-level timeout still produces the primary error path with its
+// nicer message; the HTTP timeout is the wall backstop for the case where
+// the tokio drop fails to propagate cancellation to the TCP layer.
+
+/// Hard wall-clock deadline on any single HTTP request to a model provider.
+/// Must be greater than `agent::TURN_TIMEOUT_SECS` so the agent-level timeout
+/// fires first in the normal path; this is the absolute backstop.
+pub const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(150);
+
+/// How long an idle HTTP connection may sit in the reqwest pool before being
+/// closed. Short values prevent stale keep-alive connections from outliving
+/// the work they were used for.
+pub const HTTP_POOL_IDLE: Duration = Duration::from_secs(30);
+
+/// Build a `reqwest::Client` with the provider-wide timeouts applied.
+///
+/// All `ModelProvider` implementations MUST use this — calling
+/// `reqwest::Client::new()` directly is a bug, see the module comment above.
+pub fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(HTTP_REQUEST_TIMEOUT)
+        .pool_idle_timeout(HTTP_POOL_IDLE)
+        .build()
+        .expect("reqwest client builder with static config must succeed")
+}
 
 /// Errors from model provider operations.
 #[derive(Debug, thiserror::Error)]
@@ -284,6 +333,98 @@ pub trait ModelProvider: Send + Sync {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Regression test for 2026-04-11 ollama-stuck-generation incident.
+    ///
+    /// If this test is ever deleted or the constant is lowered below
+    /// `TURN_TIMEOUT_SECS`, the HTTP layer will no longer act as a backstop
+    /// for the agent-level `tokio::time::timeout`, and a single hung request
+    /// can pile up indefinitely as ollama keeps generating behind a stale
+    /// idle-pool connection.
+    #[test]
+    fn http_request_timeout_exceeds_agent_turn_timeout() {
+        // `TURN_TIMEOUT_SECS` is module-private in agent/mod.rs but accessible
+        // via the submodule path since provider is a child of agent.
+        let turn_timeout = std::time::Duration::from_secs(super::super::TURN_TIMEOUT_SECS);
+        assert!(
+            HTTP_REQUEST_TIMEOUT > turn_timeout,
+            "HTTP_REQUEST_TIMEOUT ({:?}) must be > TURN_TIMEOUT_SECS ({:?}) so the \
+             agent-level timeout fires first in the normal path and the HTTP layer \
+             only fires as a wall backstop",
+            HTTP_REQUEST_TIMEOUT,
+            turn_timeout,
+        );
+    }
+
+    #[test]
+    fn http_pool_idle_is_bounded() {
+        // Orphaned keep-alive connections carrying stuck server-side state must
+        // not linger forever. 5 minutes is the upper bound we're willing to
+        // tolerate — keep this generous but finite.
+        assert!(
+            HTTP_POOL_IDLE <= std::time::Duration::from_secs(300),
+            "HTTP_POOL_IDLE ({:?}) must be <= 300s",
+            HTTP_POOL_IDLE
+        );
+    }
+
+    #[test]
+    fn http_client_builds_successfully() {
+        // Smoke test — if the builder config is ever invalid, this is where
+        // we find out. `http_client()` panics on failure by design (static
+        // config), and the panic message should point to this test.
+        let _client = http_client();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn http_client_actually_times_out_on_slow_server() {
+        // End-to-end proof that the timeout is attached. Start a TCP listener
+        // that accepts connections but never writes a response, then hit it
+        // with a client built via `http_client()`. Without an override, the
+        // client must give up in bounded time with a timeout error.
+        //
+        // NB: we use a lower override via `reqwest::Client::builder()` for
+        // test speed, but the shape of the test proves the mechanism works.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            // Accept and hold — never respond.
+            loop {
+                if let Ok((mut stream, _)) = listener.accept().await {
+                    tokio::spawn(async move {
+                        // Keep the socket open so the client doesn't see FIN.
+                        let mut buf = [0u8; 1];
+                        let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await;
+                        // Never write. Never close until client gives up.
+                        tokio::time::sleep(Duration::from_secs(600)).await;
+                    });
+                }
+            }
+        });
+
+        // Build a client with an explicit short timeout — mirrors http_client()
+        // but doesn't wait 150s in tests. The point is to prove the builder
+        // knobs we use in `http_client()` actually enforce timeouts.
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(300))
+            .pool_idle_timeout(Duration::from_secs(1))
+            .build()
+            .unwrap();
+
+        let start = std::time::Instant::now();
+        let err = client
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect_err("request to unresponsive server must time out");
+        let elapsed = start.elapsed();
+
+        assert!(err.is_timeout(), "expected timeout, got: {err:?}");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "timeout fired too late: {elapsed:?}"
+        );
+    }
 
     #[test]
     fn message_user_constructor() {

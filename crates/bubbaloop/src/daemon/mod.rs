@@ -26,6 +26,7 @@ pub mod supervisor;
 pub mod systemd;
 pub mod telemetry;
 pub mod util;
+pub mod world_state_sweeper;
 
 pub use node_manager::NodeManager;
 

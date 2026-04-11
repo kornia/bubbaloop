@@ -481,6 +481,53 @@ impl SemanticStore {
             .map_err(super::MemoryError::from)
     }
 
+    /// Read the world-state snapshot excluding stale entries.
+    ///
+    /// Stale entries (`now - last_seen_at > max_age_secs`) are filtered out at query
+    /// time. Reactive rule evaluation uses this to avoid firing predicates against
+    /// expired data — which otherwise causes the exact runaway-alert loop we hit
+    /// on 2026-04-10 when a synthetic motion value never aged out of the table.
+    ///
+    /// All returned entries have `stale == false` by construction, so callers do
+    /// not need to re-check.
+    pub fn world_state_snapshot_fresh(&self) -> super::Result<Vec<WorldStateEntry>> {
+        let now = super::now_epoch_secs() as i64;
+        let mut stmt = self.conn.prepare(
+            "SELECT key, value, confidence, source_topic, source_node, last_seen_at, max_age_secs \
+             FROM world_state \
+             WHERE (?1 - last_seen_at) <= max_age_secs \
+             ORDER BY key ASC",
+        )?;
+        let rows = stmt.query_map(params![now], |row| {
+            Ok(WorldStateEntry {
+                key: row.get(0)?,
+                value: row.get(1)?,
+                confidence: row.get(2)?,
+                source_topic: row.get(3)?,
+                source_node: row.get(4)?,
+                last_seen_at: row.get(5)?,
+                max_age_secs: row.get(6)?,
+                stale: false,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(super::MemoryError::from)
+    }
+
+    /// Delete world-state entries where `now - last_seen_at > max_age_secs`.
+    ///
+    /// Used by the background sweeper (`daemon::world_state_sweeper`) to bound
+    /// table growth. Returns the number of rows evicted. Safe to call concurrently
+    /// with writers: SQLite serializes on the WAL.
+    pub fn delete_stale_world_state(&self) -> super::Result<usize> {
+        let now = super::now_epoch_secs() as i64;
+        let n = self.conn.execute(
+            "DELETE FROM world_state WHERE (?1 - last_seen_at) > max_age_secs",
+            params![now],
+        )?;
+        Ok(n)
+    }
+
     // ── Beliefs CRUD ─────────────────────────────────────────────
 
     /// Upsert a belief. On conflict (subject, predicate), updates value/confidence/source
@@ -1198,6 +1245,99 @@ mod tests {
             snapshot[0].stale,
             "entry 600s old with max_age 300s should be stale"
         );
+    }
+
+    #[test]
+    fn world_state_snapshot_fresh_excludes_stale_entries() {
+        let (store, _dir) = test_store();
+        let now = super::super::now_epoch_secs() as i64;
+
+        // Fresh: 60s old, max_age 300 → included
+        store
+            .upsert_world_state_at("sensor.fresh", "42.0", 1.0, None, None, 300, now - 60)
+            .unwrap();
+        // Stale: 600s old, max_age 300 → excluded
+        store
+            .upsert_world_state_at("sensor.stale", "99.0", 1.0, None, None, 300, now - 600)
+            .unwrap();
+        // Fresh with long max_age: 6h old, max_age 86400 → included
+        store
+            .upsert_world_state_at(
+                "sensor.longlived",
+                "7.0",
+                1.0,
+                None,
+                None,
+                86400,
+                now - 21600,
+            )
+            .unwrap();
+
+        // Control: regular snapshot returns all three (with stale flag on the expired one)
+        let all = store.world_state_snapshot().unwrap();
+        assert_eq!(all.len(), 3, "baseline snapshot should return all entries");
+
+        // Fresh-only snapshot excludes sensor.stale
+        let fresh = store.world_state_snapshot_fresh().unwrap();
+        assert_eq!(fresh.len(), 2);
+        let keys: Vec<&str> = fresh.iter().map(|e| e.key.as_str()).collect();
+        assert!(keys.contains(&"sensor.fresh"));
+        assert!(keys.contains(&"sensor.longlived"));
+        assert!(!keys.contains(&"sensor.stale"));
+        // Fresh entries are never flagged stale
+        for entry in &fresh {
+            assert!(!entry.stale, "fresh snapshot must not contain stale rows");
+        }
+    }
+
+    #[test]
+    fn delete_stale_world_state_evicts_expired_rows() {
+        let (store, _dir) = test_store();
+        let now = super::super::now_epoch_secs() as i64;
+
+        store
+            .upsert_world_state_at("k.fresh", "1", 1.0, None, None, 300, now - 60)
+            .unwrap();
+        store
+            .upsert_world_state_at("k.expired1", "2", 1.0, None, None, 300, now - 600)
+            .unwrap();
+        store
+            .upsert_world_state_at("k.expired2", "3", 1.0, None, None, 60, now - 120)
+            .unwrap();
+
+        let evicted = store.delete_stale_world_state().unwrap();
+        assert_eq!(evicted, 2, "should evict both expired rows");
+
+        let remaining = store.world_state_snapshot().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].key, "k.fresh");
+    }
+
+    #[test]
+    fn delete_stale_world_state_is_idempotent_on_empty() {
+        let (store, _dir) = test_store();
+        // No rows at all
+        let evicted = store.delete_stale_world_state().unwrap();
+        assert_eq!(evicted, 0);
+        // Call again — still zero, still fine
+        let evicted = store.delete_stale_world_state().unwrap();
+        assert_eq!(evicted, 0);
+    }
+
+    #[test]
+    fn delete_stale_world_state_leaves_all_fresh_rows_intact() {
+        let (store, _dir) = test_store();
+        let now = super::super::now_epoch_secs() as i64;
+        store
+            .upsert_world_state_at("k.a", "1", 1.0, None, None, 3600, now - 1)
+            .unwrap();
+        store
+            .upsert_world_state_at("k.b", "2", 1.0, None, None, 3600, now - 1)
+            .unwrap();
+
+        let evicted = store.delete_stale_world_state().unwrap();
+        assert_eq!(evicted, 0);
+        assert_eq!(store.world_state_snapshot().unwrap().len(), 2);
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! Ollama provider — local LLM inference via `localhost:11434/api/chat`.
 
-use super::{ContentBlock, Message, ModelProvider, ModelResponse, ProviderError, Usage};
+use super::{
+    http_client, ContentBlock, Message, ModelProvider, ModelResponse, ProviderError, Usage,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -64,7 +66,10 @@ impl OllamaProvider {
         let endpoint =
             std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
         Ok(Self {
-            client: reqwest::Client::new(),
+            // NB: http_client() applies HTTP_REQUEST_TIMEOUT + HTTP_POOL_IDLE —
+            // see agent/provider/mod.rs for why `reqwest::Client::new()` would
+            // be a bug (incident 2026-04-11: stuck 2h+ generations).
+            client: http_client(),
             model: model.unwrap_or(DEFAULT_MODEL).to_string(),
             endpoint,
         })
