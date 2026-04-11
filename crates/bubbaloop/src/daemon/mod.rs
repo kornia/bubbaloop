@@ -26,6 +26,7 @@ pub mod supervisor;
 pub mod systemd;
 pub mod telemetry;
 pub mod util;
+pub mod world_state_sweeper;
 
 pub use node_manager::NodeManager;
 
@@ -145,11 +146,14 @@ async fn run_daemon_gateway(
     let machine_id = util::get_machine_id();
     let start_time = std::time::Instant::now();
 
-    // Create platform for dispatching commands
+    // Create platform for dispatching commands.
+    // `shutdown_rx` is forwarded so MCP tools that spawn background tasks
+    // (e.g. live context providers) tie their lifetime to daemon shutdown.
     let platform = std::sync::Arc::new(crate::mcp::platform::DaemonPlatform::new(
         node_manager.clone(),
         session.clone(),
         machine_id.clone(),
+        Some(shutdown_rx.clone()),
     ));
 
     // 1. Register manifest queryable

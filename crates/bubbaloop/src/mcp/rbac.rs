@@ -67,6 +67,7 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "list_missions"
         | "list_constraints"
         | "get_belief"
+        | "list_alerts"
         | "list_world_state" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
@@ -126,6 +127,7 @@ mod tests {
         assert_eq!(required_tier("list_proposals"), Tier::Viewer);
         assert_eq!(required_tier("list_jobs"), Tier::Viewer);
         assert_eq!(required_tier("get_belief"), Tier::Viewer);
+        assert_eq!(required_tier("list_alerts"), Tier::Viewer);
         assert_eq!(required_tier("list_world_state"), Tier::Viewer);
     }
 

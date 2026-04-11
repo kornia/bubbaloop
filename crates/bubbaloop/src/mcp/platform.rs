@@ -208,6 +208,18 @@ pub trait PlatformOperations: Send + Sync + 'static {
         alert_id: String,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
 
+    /// List reactive alert rules with full introspection details.
+    ///
+    /// Each entry includes the predicate, debounce / boost parameters,
+    /// and a `dangling_fields` list of world-state keys the predicate
+    /// references that no registered context provider appears to
+    /// produce. This surfaces the class of misconfiguration that caused
+    /// incident 2026-04-10 (rule firing on a ghost world-state key).
+    fn list_alerts(
+        &self,
+        mission_id: Option<String>,
+    ) -> impl std::future::Future<Output = PlatformResult<Vec<AlertInfo>>> + Send;
+
     // ── Constraints ───────────────────────────────────────────────────
 
     /// Register a safety constraint for a mission.
@@ -289,8 +301,51 @@ pub struct RegisterConstraintParams {
     pub params_json: String,
 }
 
+/// Rich view of a registered reactive alert rule.
+///
+/// Returned by [`PlatformOperations::list_alerts`]. `dangling_fields`
+/// is computed at query time by comparing the predicate's referenced
+/// world-state keys against the current set of context-provider
+/// templates. An empty list means every field in the predicate is
+/// plausibly produced by some provider; a non-empty list means the
+/// rule references keys that nothing is writing, so it will either
+/// never fire or will fire on stale/ghost values.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AlertInfo {
+    pub id: String,
+    pub mission_id: String,
+    pub predicate: String,
+    pub debounce_secs: u32,
+    pub arousal_boost: f64,
+    pub description: String,
+    pub dangling_fields: Vec<String>,
+}
+
+impl AlertInfo {
+    /// Build an `AlertInfo` from a persisted reactive rule and the
+    /// current set of provider key templates. Runs the dangling-field
+    /// analysis inline so every backend classifies rules identically.
+    pub fn from_rule(
+        rule: crate::daemon::reactive::ReactiveRuleConfig,
+        provider_templates: &[String],
+    ) -> Self {
+        let fields = crate::daemon::reactive::extract_predicate_fields(&rule.predicate);
+        let dangling_fields =
+            crate::daemon::reactive::find_dangling_fields(&fields, provider_templates);
+        Self {
+            id: rule.id,
+            mission_id: rule.mission_id,
+            predicate: rule.predicate,
+            debounce_secs: rule.debounce_secs,
+            arousal_boost: rule.arousal_boost,
+            description: rule.description,
+            dangling_fields,
+        }
+    }
+}
+
 /// Parameters for registering a reactive alert.
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct RegisterAlertParams {
     /// Mission this alert is attached to.
     pub mission_id: String,
@@ -304,6 +359,26 @@ pub struct RegisterAlertParams {
     pub arousal_boost: Option<f64>,
     /// Human-readable description of this alert.
     pub description: String,
+}
+
+impl RegisterAlertParams {
+    /// Build the persisted rule config, substituting defaults for any
+    /// fields the caller left as `None`. Single source of truth — both
+    /// the MCP tool-handler's preview check and every `PlatformOperations`
+    /// backend go through this so defaulting never drifts.
+    pub fn into_config(self, id: String) -> crate::daemon::reactive::ReactiveRuleConfig {
+        use crate::daemon::reactive::{
+            ReactiveRuleConfig, DEFAULT_AROUSAL_BOOST, DEFAULT_DEBOUNCE_SECS,
+        };
+        ReactiveRuleConfig {
+            id,
+            mission_id: self.mission_id,
+            predicate: self.predicate,
+            debounce_secs: self.debounce_secs.unwrap_or(DEFAULT_DEBOUNCE_SECS),
+            arousal_boost: self.arousal_boost.unwrap_or(DEFAULT_AROUSAL_BOOST),
+            description: self.description,
+        }
+    }
 }
 
 /// Parameters for configuring a context provider.

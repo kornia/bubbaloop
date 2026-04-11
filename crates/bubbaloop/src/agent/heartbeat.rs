@@ -7,6 +7,16 @@
 
 use crate::agent::soul::Capabilities;
 
+/// Upper bound on arousal. Any spike, boost, or source push is clamped to this.
+///
+/// The heartbeat interval is already clamped to `min_interval` via
+/// `interval_secs()`, so unbounded arousal growth has no effect on tick rate.
+/// But a persistently-true reactive rule could otherwise push arousal up by
+/// its `arousal_boost` every heartbeat forever — leaving `is_at_rest()` stuck
+/// at `false` long after the triggering condition clears, because decay has
+/// to work through an arbitrarily large value. Capping prevents that drift.
+pub const MAX_AROUSAL: f64 = 20.0;
+
 /// Arousal state for the adaptive heartbeat.
 #[derive(Debug, Clone)]
 pub struct ArousalState {
@@ -93,21 +103,24 @@ impl ArousalState {
             for source in &state.sources {
                 self.arousal += source.boost();
             }
+            self.arousal = self.arousal.min(MAX_AROUSAL);
         }
     }
 
     /// Spike arousal from a specific source (e.g., user input).
     pub fn spike(&mut self, source: ArousalSource) {
-        self.arousal += source.boost();
+        self.arousal = (self.arousal + source.boost()).min(MAX_AROUSAL);
     }
 
     /// Add an external arousal boost (e.g. from reactive rules).
     ///
     /// Phase 3: ReactiveRule arousal integration -- called by the daemon
-    /// when reactive rules fire against the current world state.
+    /// when reactive rules fire against the current world state. Clamped
+    /// to [`MAX_AROUSAL`] so a persistently-true predicate cannot push
+    /// arousal unboundedly upward.
     pub fn add_external_boost(&mut self, boost: f64) {
         log::debug!("[Heartbeat] external arousal boost: {:.2}", boost);
-        self.arousal += boost;
+        self.arousal = (self.arousal + boost).min(MAX_AROUSAL);
     }
 
     /// Get the current arousal level.
@@ -221,6 +234,41 @@ mod tests {
         assert_eq!(ArousalSource::NodeCrashRestart.boost(), 3.0);
         assert_eq!(ArousalSource::UserInput.boost(), 2.0);
         assert_eq!(ArousalSource::PendingJobFired.boost(), 1.0);
+    }
+
+    #[test]
+    fn external_boost_clamps_to_max() {
+        let mut state = ArousalState::new(&test_caps());
+        // Simulate a persistently-true reactive rule firing many times.
+        for _ in 0..1000 {
+            state.add_external_boost(5.0);
+        }
+        assert!(
+            (state.arousal() - MAX_AROUSAL).abs() < f64::EPSILON,
+            "arousal should clamp to MAX_AROUSAL, got {}",
+            state.arousal()
+        );
+    }
+
+    #[test]
+    fn spike_clamps_to_max() {
+        let mut state = ArousalState::new(&test_caps());
+        for _ in 0..20 {
+            state.spike(ArousalSource::NodeCrashRestart); // +3.0 each
+        }
+        assert!(state.arousal() <= MAX_AROUSAL);
+    }
+
+    #[test]
+    fn update_with_sources_clamps_to_max() {
+        let mut state = ArousalState::new(&test_caps());
+        state.arousal = MAX_AROUSAL - 1.0;
+        state.update(&HeartbeatState {
+            event_count: 1,
+            has_changes: true,
+            sources: vec![ArousalSource::NodeCrashRestart], // +3.0
+        });
+        assert!((state.arousal() - MAX_AROUSAL).abs() < f64::EPSILON);
     }
 
     #[test]

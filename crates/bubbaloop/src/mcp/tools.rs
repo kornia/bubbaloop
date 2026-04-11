@@ -118,6 +118,13 @@ pub(crate) struct AlertIdRequest {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct ListAlertsRequest {
+    /// Optional mission filter — omit to list alerts across all missions.
+    #[serde(default)]
+    mission_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct ConfigureContextRequest {
     /// Mission this provider is attached to.
     mission_id: String,
@@ -1148,6 +1155,20 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             description: req.description,
         };
 
+        // Validate at the MCP boundary so mock and daemon backends reject
+        // identical inputs identically. `into_config` is the single source
+        // of truth for default substitution — see
+        // `RegisterAlertParams::into_config`. The placeholder id is fine:
+        // the real one is minted by the backend; `validate()` only needs
+        // it to be non-empty.
+        if let Err(e) = params.clone().into_config("preview".to_string()).validate() {
+            log::warn!("[MCP] register_alert rejected: {}", e);
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))]));
+        }
+
         match self.platform.register_alert(params).await {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1165,6 +1186,31 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         log::info!("[MCP] tool=unregister_alert id={}", req.alert_id);
         match self.platform.unregister_alert(req.alert_id).await {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "List reactive alert rules with full introspection. \
+            Each entry includes predicate, debounce_secs, arousal_boost, description, \
+            and `dangling_fields` — world-state keys the predicate references \
+            that no registered context provider appears to produce. A non-empty \
+            dangling_fields list is a red flag: the rule may never fire, or may \
+            fire on stale/ghost values (see incident 2026-04-10). \
+            Optional mission_id filter.")]
+    async fn list_alerts(
+        &self,
+        Parameters(req): Parameters<ListAlertsRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_alerts mission_id={:?}", req.mission_id);
+        match self.platform.list_alerts(req.mission_id).await {
+            Ok(alerts) => {
+                let json = serde_json::to_string_pretty(&alerts)
+                    .unwrap_or_else(|e| format!("Error serializing: {}", e));
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: {}",
                 e

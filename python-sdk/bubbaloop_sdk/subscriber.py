@@ -8,6 +8,7 @@ class _BaseSubscriber:
 
     def __init__(self, session: zenoh.Session, topic: str):
         self._sub = session.declare_subscriber(topic)
+        self._undeclared = False
 
     def recv(self):
         raise NotImplementedError
@@ -22,6 +23,16 @@ class _BaseSubscriber:
             raise StopIteration from exc
 
     def undeclare(self) -> None:
+        """Release the underlying Zenoh subscriber. Idempotent.
+
+        Double-close is common during shutdown (explicit call + context-manager
+        exit, or test teardown racing with ``__del__``). We guard with a flag so
+        a legitimate first-call ``RuntimeError`` from Zenoh still propagates —
+        only repeat calls become no-ops.
+        """
+        if self._undeclared:
+            return
+        self._undeclared = True
         self._sub.undeclare()
 
 
