@@ -16,7 +16,7 @@ use crate::daemon::belief_updater::spawn_belief_decay_task;
 use crate::daemon::context_provider::{spawn_provider, ProviderStore};
 use crate::daemon::mission::{watch_missions_dir, Mission, MissionStatus, MissionStore};
 use crate::daemon::reactive::{
-    evaluate_rules_fired, total_boost, FiredRule, ReactiveRule, ReactiveRuleStore,
+    evaluate_rules_fired, merge_rule_state, total_boost, FiredRule, ReactiveRule, ReactiveRuleStore,
 };
 use crate::daemon::registry::get_bubbaloop_home;
 use crate::daemon::world_state_sweeper::spawn_world_state_sweeper;
@@ -879,7 +879,18 @@ async fn agent_loop(
                 match ReactiveRuleStore::open(&alerts_db_path) {
                     Ok(store) => match store.list_rules() {
                         Ok(configs) => {
-                            reactive_rules = configs.into_iter().map(Into::into).collect();
+                            // Reload without wiping debounce state: `From<ReactiveRuleConfig>`
+                            // zero-inits every rule's `last_fired_at`, so a naive
+                            // `configs.into_iter().map(Into::into).collect()` would cause
+                            // every previously-fired rule to refire on the next matching
+                            // tick — a bug that, in the 2026-04-10 incident, turned a
+                            // 1-alert-per-hour rule into a continuous firestorm every
+                            // reload cycle. `merge_rule_state` copies `last_fired_at`
+                            // forward for rules whose id survived the reload; new rules
+                            // stay at 0 (correct), deleted rules vanish (correct).
+                            let freshly_loaded: Vec<ReactiveRule> =
+                                configs.into_iter().map(Into::into).collect();
+                            reactive_rules = merge_rule_state(&reactive_rules, freshly_loaded);
                         }
                         Err(e) => {
                             // Don't wipe the in-memory rule set on a transient read

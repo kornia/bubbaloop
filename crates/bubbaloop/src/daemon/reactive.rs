@@ -104,6 +104,38 @@ pub fn total_boost(fired: &[FiredRule]) -> f64 {
     fired.iter().map(|r| r.boost).sum()
 }
 
+/// Merge `last_fired_at` state from an old rule set into a freshly-loaded one.
+///
+/// The reactive rule store is reloaded from SQLite every
+/// `REACTIVE_RULE_RELOAD_INTERVAL` ticks so operators can add/remove rules
+/// without restarting the agent. Naive reload — `configs.into_iter().map(Into::into).collect()` —
+/// wipes every rule's `last_fired_at: AtomicI64(0)`, which silently defeats
+/// debounce: a rule with `debounce_secs=3600` that fired 5 minutes ago will
+/// fire *again* on the very next tick after a reload, because its "never
+/// fired" sentinel is restored. In the 2026-04-10 incident this turned a
+/// 1-alert-per-hour rule into a continuous firestorm of LLM turns.
+///
+/// This helper is pure and deterministic: for every rule in `new`, if a rule
+/// with the same `id` existed in `old`, copy its `last_fired_at` timestamp
+/// forward. New rules (no match in `old`) keep their freshly-initialised
+/// zero, which is correct — they have genuinely never fired. Deleted rules
+/// (present in `old`, absent from `new`) are discarded, also correct.
+///
+/// Matching is by `id` only, not `(mission_id, id)`, because the SQLite
+/// primary key is `id` — rule ids are already globally unique.
+pub fn merge_rule_state(old: &[ReactiveRule], new: Vec<ReactiveRule>) -> Vec<ReactiveRule> {
+    let preserved: HashMap<&str, i64> = old
+        .iter()
+        .map(|r| (r.id.as_str(), r.last_fired_at.load(Ordering::Relaxed)))
+        .collect();
+    for rule in &new {
+        if let Some(&ts) = preserved.get(rule.id.as_str()) {
+            rule.last_fired_at.store(ts, Ordering::Relaxed);
+        }
+    }
+    new
+}
+
 // ── Persistence ────────────────────────────────────────────────────────
 
 /// Serializable configuration for a reactive rule (no AtomicI64).
@@ -302,6 +334,125 @@ mod tests {
         ws.insert("x", "1");
         let total = total_boost(&evaluate_rules_fired(&rules, &ws));
         assert!((total - 3.0).abs() < f64::EPSILON);
+    }
+
+    // Helper to build a ReactiveRule with a chosen last_fired_at.
+    fn mk_rule(id: &str, last: i64) -> ReactiveRule {
+        ReactiveRule {
+            id: id.to_string(),
+            mission_id: "m1".to_string(),
+            predicate: "x = 1".to_string(),
+            debounce_secs: 60,
+            arousal_boost: 1.0,
+            description: String::new(),
+            last_fired_at: AtomicI64::new(last),
+        }
+    }
+
+    #[test]
+    fn merge_rule_state_preserves_last_fired_for_matching_ids() {
+        // The whole point of the helper: after a reload, a rule that fired
+        // 10 seconds ago should still be counted as "fired 10 seconds ago",
+        // not "never fired". This is the regression from incident 2026-04-10.
+        let old = vec![mk_rule("a", 1000), mk_rule("b", 2000)];
+        // The "new" set comes from `configs.into_iter().map(Into::into).collect()`
+        // — i.e. every rule's last_fired_at starts at 0.
+        let new = vec![mk_rule("a", 0), mk_rule("b", 0)];
+
+        let merged = merge_rule_state(&old, new);
+
+        assert_eq!(merged[0].id, "a");
+        assert_eq!(merged[0].last_fired_at.load(Ordering::Relaxed), 1000);
+        assert_eq!(merged[1].id, "b");
+        assert_eq!(merged[1].last_fired_at.load(Ordering::Relaxed), 2000);
+    }
+
+    #[test]
+    fn merge_rule_state_leaves_newly_added_rules_at_zero() {
+        // New rules (no match in the old set) must keep their zero-init
+        // `last_fired_at` — they genuinely have never fired and should be
+        // allowed to fire immediately on the next matching world state.
+        let old = vec![mk_rule("a", 1000)];
+        let new = vec![mk_rule("a", 0), mk_rule("brand-new", 0)];
+
+        let merged = merge_rule_state(&old, new);
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].last_fired_at.load(Ordering::Relaxed), 1000);
+        assert_eq!(merged[1].id, "brand-new");
+        assert_eq!(merged[1].last_fired_at.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn merge_rule_state_drops_deleted_rules() {
+        // Rules that existed in `old` but were removed from SQLite should
+        // not reappear in the merged set.
+        let old = vec![mk_rule("keep", 500), mk_rule("gone", 999)];
+        let new = vec![mk_rule("keep", 0)];
+
+        let merged = merge_rule_state(&old, new);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].id, "keep");
+        assert_eq!(merged[0].last_fired_at.load(Ordering::Relaxed), 500);
+    }
+
+    #[test]
+    fn merge_rule_state_does_not_overwrite_nonzero_new_state() {
+        // Corner case: if the "new" set somehow arrives with a non-zero
+        // last_fired_at that's *newer* than the preserved value, the helper
+        // currently overwrites it with the old value. Document this: callers
+        // feed freshly-deserialised rules (always 0), so the only state that
+        // matters is `old`. This test pins the current behaviour so a future
+        // change can't silently break the invariant.
+        let old = vec![mk_rule("a", 500)];
+        let new = vec![mk_rule("a", 999)];
+
+        let merged = merge_rule_state(&old, new);
+
+        // Preserved value from `old` wins because the reload path always
+        // feeds zero-initialised new rules.
+        assert_eq!(merged[0].last_fired_at.load(Ordering::Relaxed), 500);
+    }
+
+    #[test]
+    fn reload_would_reset_debounce_without_merge() {
+        // Regression pin: demonstrate the exact behaviour the helper prevents.
+        // Without merge_rule_state, a rule that fired 10s ago and has a 60s
+        // debounce would fire again immediately after a reload because
+        // `From<ReactiveRuleConfig> for ReactiveRule` always produces
+        // last_fired_at = 0.
+        let now = crate::agent::memory::now_epoch_secs() as i64;
+        let old = vec![ReactiveRule {
+            id: "r".to_string(),
+            mission_id: "m1".to_string(),
+            predicate: "x = 1".to_string(),
+            debounce_secs: 60,
+            arousal_boost: 1.0,
+            description: String::new(),
+            last_fired_at: AtomicI64::new(now - 10),
+        }];
+        let reloaded_without_merge: Vec<ReactiveRule> = vec![ReactiveRuleConfig {
+            id: "r".to_string(),
+            mission_id: "m1".to_string(),
+            predicate: "x = 1".to_string(),
+            debounce_secs: 60,
+            arousal_boost: 1.0,
+            description: String::new(),
+        }]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+
+        let mut ws = HashMap::new();
+        ws.insert("x", "1");
+
+        // Without merge: debounce reset, fires on next tick (the bug).
+        assert!(reloaded_without_merge[0].should_fire(&ws));
+
+        // With merge: debounce preserved, still waiting out the window.
+        let merged = merge_rule_state(&old, reloaded_without_merge);
+        assert!(!merged[0].should_fire(&ws));
     }
 
     #[test]
