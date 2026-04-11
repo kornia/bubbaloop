@@ -717,6 +717,38 @@ impl AgentRuntime {
 }
 
 /// Per-agent event loop: processes inbox messages and heartbeat ticks.
+/// Warn once at startup for each reactive rule that references a
+/// world-state field not produced by any registered context provider.
+///
+/// Incident 2026-04-10 origin: a rule referenced `motion.level` but no
+/// registered provider produced it — a manual `zenoh put` had seeded the
+/// key, and the rule happily fired forever on that ghost value. Warning
+/// at load time makes the misconfiguration visible in logs even before
+/// the rule ever fires. Errors opening providers.db are swallowed —
+/// this is best-effort diagnostics, not a correctness gate, and agent
+/// startup must not fail because of it.
+fn warn_on_dangling_reactive_refs(agent_id: &str, rules: &[ReactiveRule]) {
+    let providers_db_path = agent_directory(agent_id).join("providers.db");
+    let provider_templates =
+        crate::daemon::context_provider::load_provider_templates(&providers_db_path)
+            .unwrap_or_default();
+    for rule in rules {
+        let fields = crate::daemon::reactive::extract_predicate_fields(&rule.predicate);
+        let dangling = crate::daemon::reactive::find_dangling_fields(&fields, &provider_templates);
+        if !dangling.is_empty() {
+            log::warn!(
+                "[Agent:{}] Reactive rule '{}' references world-state field(s) \
+                 {:?} that no registered context provider appears to produce. \
+                 The rule may never fire, or may fire on stale/ghost values. \
+                 Register a provider for these keys or rewrite the predicate.",
+                agent_id,
+                rule.id,
+                dangling
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn agent_loop(
     agent_id: String,
@@ -747,41 +779,7 @@ async fn agent_loop(
             agent_id,
             reactive_rules.len()
         );
-
-        // Dangling-reference sanity check at startup.
-        //
-        // Incident 2026-04-10 origin: a reactive rule referenced
-        // `motion.level` but no registered context provider produced
-        // it — a manual `zenoh put` had seeded the key, and the rule
-        // happily fired forever on that ghost value. We now warn at
-        // load time for every rule whose predicate fields are not
-        // covered by any provider template, so the problem is visible
-        // in logs even before the rule ever fires.
-        let providers_db_path = agent_directory(&agent_id).join("providers.db");
-        let provider_templates: Vec<String> = if providers_db_path.exists() {
-            ProviderStore::open(&providers_db_path)
-                .and_then(|s| s.list_providers())
-                .map(|ps| ps.into_iter().map(|p| p.world_state_key_template).collect())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        for rule in &reactive_rules {
-            let fields = crate::daemon::reactive::extract_predicate_fields(&rule.predicate);
-            let dangling =
-                crate::daemon::reactive::find_dangling_fields(&fields, &provider_templates);
-            if !dangling.is_empty() {
-                log::warn!(
-                    "[Agent:{}] Reactive rule '{}' references world-state field(s) \
-                     {:?} that no registered context provider appears to produce. \
-                     The rule may never fire, or may fire on stale/ghost values. \
-                     Register a provider for these keys or rewrite the predicate.",
-                    agent_id,
-                    rule.id,
-                    dangling
-                );
-            }
-        }
+        warn_on_dangling_reactive_refs(&agent_id, &reactive_rules);
     }
 
     // Rate limiting: minimum 2 seconds between LLM turns to prevent abuse.

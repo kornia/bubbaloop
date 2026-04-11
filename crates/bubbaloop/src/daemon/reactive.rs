@@ -329,10 +329,11 @@ impl ReactiveRuleConfig {
                 MAX_PREDICATE_LEN
             );
         }
-        if !predicate_has_operator(predicate) {
+        if extract_predicate_fields(predicate).is_empty() {
             bail!(
-                "predicate must contain at least one comparison operator \
-                 (=, !=, >, <, >=, <=); got {:?}",
+                "predicate must contain at least one well-formed \
+                 `field <op> value` clause (ops: =, !=, >, <, >=, <=); \
+                 got {:?}",
                 predicate
             );
         }
@@ -377,65 +378,25 @@ impl ReactiveRuleConfig {
     }
 }
 
-/// Scan a predicate for at least one comparison operator.
-///
-/// Mirrors the operator set in `apply_filter` in `context_provider.rs`.
-/// Kept as its own helper so the validation test suite can pin the
-/// operator list; if `apply_filter` grows new operators, update both.
-fn predicate_has_operator(predicate: &str) -> bool {
-    // Order matters only for readability — any match is sufficient.
-    // `==` is NOT in apply_filter's syntax, so `=` alone is the equality
-    // operator; that's the reason we check `!=` first (otherwise a `!=`
-    // clause would match the `=` branch and look like an equality test).
-    predicate.contains("!=")
-        || predicate.contains(">=")
-        || predicate.contains("<=")
-        || predicate.contains('>')
-        || predicate.contains('<')
-        || predicate.contains('=')
-}
-
 /// Extract the field name (LHS) from each clause of a predicate.
 ///
-/// Mirrors the parser in `apply_filter` — same operator precedence,
-/// same `" AND "` clause split, same trimming rules. Returns a
-/// deduplicated list in first-appearance order so the caller can use
-/// it for diagnostics (e.g. "predicate references unknown field X").
+/// Returns a deduplicated list in first-appearance order for
+/// diagnostics. Uses [`crate::daemon::context_provider::parse_clause`]
+/// so the static analyser stays in lockstep with the runtime evaluator
+/// by construction — no comment-enforced parallelism.
 ///
-/// Used by the dangling-reference check that warns when a reactive
-/// rule references a world-state key that no registered context
-/// provider appears to produce. The 2026-04-10 incident started
-/// exactly this way: a rule referenced `motion.level`, no provider
-/// was registered to populate it, and a manual `zenoh put` seeded
-/// the key by accident — so the rule happily fired forever on a
-/// "ghost" value.
+/// Used by the dangling-reference check for the 2026-04-10 incident:
+/// a rule referenced `motion.level`, no provider populated it, and a
+/// manual `zenoh put` seeded the key by accident — so the rule fired
+/// forever on a "ghost" value.
 pub fn extract_predicate_fields(predicate: &str) -> Vec<String> {
     let mut fields: Vec<String> = Vec::new();
     for clause in predicate.split(" AND ") {
-        let clause = clause.trim();
-        if clause.is_empty() {
-            continue;
-        }
-        // Operator precedence matches apply_filter: longest multi-char
-        // operators first so `!=` isn't confused with `=`.
-        let field = if let Some(pos) = clause.find("!=") {
-            &clause[..pos]
-        } else if let Some(pos) = clause.find(">=") {
-            &clause[..pos]
-        } else if let Some(pos) = clause.find("<=") {
-            &clause[..pos]
-        } else if let Some(pos) = clause.find('>') {
-            &clause[..pos]
-        } else if let Some(pos) = clause.find('<') {
-            &clause[..pos]
-        } else if let Some(pos) = clause.find('=') {
-            &clause[..pos]
-        } else {
-            continue;
-        };
-        let field = field.trim().to_string();
-        if !field.is_empty() && !fields.contains(&field) {
-            fields.push(field);
+        if let Some((field, _, _)) = crate::daemon::context_provider::parse_clause(clause) {
+            let field = field.to_string();
+            if !fields.contains(&field) {
+                fields.push(field);
+            }
         }
     }
     fields
@@ -1099,15 +1060,17 @@ mod tests {
         c.predicate = "just_a_word".to_string();
         let err = c.validate().unwrap_err().to_string();
         assert!(
-            err.contains("comparison operator"),
-            "expected operator error, got: {err}"
+            err.contains("well-formed"),
+            "expected well-formed-clause error, got: {err}"
         );
     }
 
     #[test]
     fn validate_accepts_all_supported_operators() {
         // Pins the full operator set against the apply_filter syntax.
-        // If apply_filter grows a new operator, update predicate_has_operator.
+        // Since validate() now goes through extract_predicate_fields ->
+        // parse_clause, adding a new operator to parse_clause lights up
+        // this test automatically.
         for pred in ["x = 1", "x != 1", "x > 1", "x < 1", "x >= 1", "x <= 1"] {
             let mut c = valid_cfg();
             c.predicate = pred.to_string();

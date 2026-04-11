@@ -321,8 +321,31 @@ pub struct AlertInfo {
     pub dangling_fields: Vec<String>,
 }
 
+impl AlertInfo {
+    /// Build an `AlertInfo` from a persisted reactive rule and the
+    /// current set of provider key templates. Runs the dangling-field
+    /// analysis inline so every backend classifies rules identically.
+    pub fn from_rule(
+        rule: crate::daemon::reactive::ReactiveRuleConfig,
+        provider_templates: &[String],
+    ) -> Self {
+        let fields = crate::daemon::reactive::extract_predicate_fields(&rule.predicate);
+        let dangling_fields =
+            crate::daemon::reactive::find_dangling_fields(&fields, provider_templates);
+        Self {
+            id: rule.id,
+            mission_id: rule.mission_id,
+            predicate: rule.predicate,
+            debounce_secs: rule.debounce_secs,
+            arousal_boost: rule.arousal_boost,
+            description: rule.description,
+            dangling_fields,
+        }
+    }
+}
+
 /// Parameters for registering a reactive alert.
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct RegisterAlertParams {
     /// Mission this alert is attached to.
     pub mission_id: String,
@@ -336,6 +359,26 @@ pub struct RegisterAlertParams {
     pub arousal_boost: Option<f64>,
     /// Human-readable description of this alert.
     pub description: String,
+}
+
+impl RegisterAlertParams {
+    /// Build the persisted rule config, substituting defaults for any
+    /// fields the caller left as `None`. Single source of truth — both
+    /// the MCP tool-handler's preview check and every `PlatformOperations`
+    /// backend go through this so defaulting never drifts.
+    pub fn into_config(self, id: String) -> crate::daemon::reactive::ReactiveRuleConfig {
+        use crate::daemon::reactive::{
+            ReactiveRuleConfig, DEFAULT_AROUSAL_BOOST, DEFAULT_DEBOUNCE_SECS,
+        };
+        ReactiveRuleConfig {
+            id,
+            mission_id: self.mission_id,
+            predicate: self.predicate,
+            debounce_secs: self.debounce_secs.unwrap_or(DEFAULT_DEBOUNCE_SECS),
+            arousal_boost: self.arousal_boost.unwrap_or(DEFAULT_AROUSAL_BOOST),
+            description: self.description,
+        }
+    }
 }
 
 /// Parameters for configuring a context provider.

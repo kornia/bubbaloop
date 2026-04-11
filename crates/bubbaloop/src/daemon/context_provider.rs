@@ -140,36 +140,79 @@ impl ProviderStore {
     }
 }
 
+/// Load only the `world_state_key_template` strings from a `providers.db`.
+///
+/// Returns an empty vector if the database file does not exist — missing
+/// providers.db is a legitimate "no providers configured yet" state, not
+/// an error. Any other failure (corrupt DB, lock contention) propagates.
+///
+/// Single source of truth for the "what keys do my providers produce?"
+/// snapshot used by reactive-rule dangling-reference detection. Both the
+/// agent startup warning in `agent/runtime.rs` and the live
+/// `PlatformOperations::list_alerts` query go through here so they see
+/// the same set of templates.
+pub fn load_provider_templates(providers_db_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    if !providers_db_path.exists() {
+        return Ok(Vec::new());
+    }
+    let store = ProviderStore::open(providers_db_path)?;
+    let templates = store
+        .list_providers()?
+        .into_iter()
+        .map(|p| p.world_state_key_template)
+        .collect();
+    Ok(templates)
+}
+
 // ── Filter, template, and field extraction utilities ────────────────
+
+/// Split a single clause like `"foo.bar >= 0.5"` into `(field, op, rhs)`.
+///
+/// Returns `None` for empty / operatorless clauses (caller decides whether
+/// to treat that as "fail open" / skip or as a parse error). Operator
+/// precedence: longest multi-char operators first (`!=`, `>=`, `<=`)
+/// before their single-char prefixes so `x != 1` is not parsed as `x = 1`.
+///
+/// This is the single source of truth for the tiny predicate DSL — both
+/// the runtime evaluator ([`apply_filter`]) and the static analyser
+/// ([`crate::daemon::reactive::extract_predicate_fields`]) go through
+/// here. Add new operators in one place.
+pub fn parse_clause(clause: &str) -> Option<(&str, &str, &str)> {
+    let clause = clause.trim();
+    if clause.is_empty() {
+        return None;
+    }
+    let (op, pos, op_len) = if let Some(pos) = clause.find("!=") {
+        ("!=", pos, 2)
+    } else if let Some(pos) = clause.find(">=") {
+        (">=", pos, 2)
+    } else if let Some(pos) = clause.find("<=") {
+        ("<=", pos, 2)
+    } else if let Some(pos) = clause.find('>') {
+        (">", pos, 1)
+    } else if let Some(pos) = clause.find('<') {
+        ("<", pos, 1)
+    } else if let Some(pos) = clause.find('=') {
+        ("=", pos, 1)
+    } else {
+        return None;
+    };
+    let field = clause[..pos].trim();
+    let rhs = clause[pos + op_len..].trim();
+    if field.is_empty() {
+        return None;
+    }
+    Some((field, op, rhs))
+}
 
 /// Minimal filter evaluator for "field=value AND field2>number" expressions.
 /// Supports =, !=, >, <, >=, <= operators. AND conjunction only.
 pub fn apply_filter(filter: &str, sample: &serde_json::Value) -> bool {
     for clause in filter.split(" AND ") {
-        let clause = clause.trim();
-        if clause.is_empty() {
-            continue;
-        }
-
-        // Parse operator (order matters: >= before >, <= before <, != before =)
-        let (field, op, expected) = if let Some(pos) = clause.find("!=") {
-            (&clause[..pos], "!=", clause[pos + 2..].trim())
-        } else if let Some(pos) = clause.find(">=") {
-            (&clause[..pos], ">=", clause[pos + 2..].trim())
-        } else if let Some(pos) = clause.find("<=") {
-            (&clause[..pos], "<=", clause[pos + 2..].trim())
-        } else if let Some(pos) = clause.find('>') {
-            (&clause[..pos], ">", clause[pos + 1..].trim())
-        } else if let Some(pos) = clause.find('<') {
-            (&clause[..pos], "<", clause[pos + 1..].trim())
-        } else if let Some(pos) = clause.find('=') {
-            (&clause[..pos], "=", clause[pos + 1..].trim())
-        } else {
-            // Unparseable clause — skip (fail open for robustness)
+        // Unparseable clause — skip (fail open for robustness).
+        let Some((field, op, expected)) = parse_clause(clause) else {
             continue;
         };
-
-        let field = field.trim();
         let actual = match sample.get(field) {
             Some(v) => v,
             None => return false,

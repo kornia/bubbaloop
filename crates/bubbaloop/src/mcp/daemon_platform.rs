@@ -585,10 +585,8 @@ impl PlatformOperations for DaemonPlatform {
         &self,
         mission_id: Option<String>,
     ) -> PlatformResult<Vec<super::platform::AlertInfo>> {
-        use crate::daemon::context_provider::ProviderStore;
-        use crate::daemon::reactive::{
-            extract_predicate_fields, find_dangling_fields, ReactiveRuleStore,
-        };
+        use crate::daemon::context_provider::load_provider_templates;
+        use crate::daemon::reactive::ReactiveRuleStore;
 
         let agent_dir = self
             .agent_db_path
@@ -617,34 +615,12 @@ impl PlatformOperations for DaemonPlatform {
         // against the same snapshot. Missing DB → empty templates →
         // every referenced field is dangling, which is the correct
         // answer: no providers means no coverage.
-        let provider_templates: Vec<String> = if providers_db_path.exists() {
-            let store = ProviderStore::open(&providers_db_path)
-                .map_err(|e| PlatformError::Internal(e.to_string()))?;
-            store
-                .list_providers()
-                .map_err(|e| PlatformError::Internal(e.to_string()))?
-                .into_iter()
-                .map(|p| p.world_state_key_template)
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let provider_templates = load_provider_templates(&providers_db_path)
+            .map_err(|e| PlatformError::Internal(e.to_string()))?;
 
         Ok(rules
             .into_iter()
-            .map(|r| {
-                let fields = extract_predicate_fields(&r.predicate);
-                let dangling = find_dangling_fields(&fields, &provider_templates);
-                super::platform::AlertInfo {
-                    id: r.id,
-                    mission_id: r.mission_id,
-                    predicate: r.predicate,
-                    debounce_secs: r.debounce_secs,
-                    arousal_boost: r.arousal_boost,
-                    description: r.description,
-                    dangling_fields: dangling,
-                }
-            })
+            .map(|r| super::platform::AlertInfo::from_rule(r, &provider_templates))
             .collect())
     }
 
