@@ -581,6 +581,73 @@ impl PlatformOperations for DaemonPlatform {
         Ok(format!("Alert '{}' unregistered", alert_id))
     }
 
+    async fn list_alerts(
+        &self,
+        mission_id: Option<String>,
+    ) -> PlatformResult<Vec<super::platform::AlertInfo>> {
+        use crate::daemon::context_provider::ProviderStore;
+        use crate::daemon::reactive::{
+            extract_predicate_fields, find_dangling_fields, ReactiveRuleStore,
+        };
+
+        let agent_dir = self
+            .agent_db_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
+        let alerts_db_path = agent_dir.join("alerts.db");
+        let providers_db_path = agent_dir.join("providers.db");
+
+        // Load raw rule configs. Missing DB file is treated as "no alerts".
+        let rules = if alerts_db_path.exists() {
+            let store = ReactiveRuleStore::open(&alerts_db_path)
+                .map_err(|e| PlatformError::Internal(e.to_string()))?;
+            match mission_id.as_deref() {
+                Some(mid) => store
+                    .rules_for_mission(mid)
+                    .map_err(|e| PlatformError::Internal(e.to_string()))?,
+                None => store
+                    .list_rules()
+                    .map_err(|e| PlatformError::Internal(e.to_string()))?,
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Load provider templates once so every rule is classified
+        // against the same snapshot. Missing DB → empty templates →
+        // every referenced field is dangling, which is the correct
+        // answer: no providers means no coverage.
+        let provider_templates: Vec<String> = if providers_db_path.exists() {
+            let store = ProviderStore::open(&providers_db_path)
+                .map_err(|e| PlatformError::Internal(e.to_string()))?;
+            store
+                .list_providers()
+                .map_err(|e| PlatformError::Internal(e.to_string()))?
+                .into_iter()
+                .map(|p| p.world_state_key_template)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        Ok(rules
+            .into_iter()
+            .map(|r| {
+                let fields = extract_predicate_fields(&r.predicate);
+                let dangling = find_dangling_fields(&fields, &provider_templates);
+                super::platform::AlertInfo {
+                    id: r.id,
+                    mission_id: r.mission_id,
+                    predicate: r.predicate,
+                    debounce_secs: r.debounce_secs,
+                    arousal_boost: r.arousal_boost,
+                    description: r.description,
+                    dangling_fields: dangling,
+                }
+            })
+            .collect())
+    }
+
     async fn register_constraint(
         &self,
         params: super::platform::RegisterConstraintParams,

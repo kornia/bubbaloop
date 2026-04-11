@@ -395,6 +395,99 @@ fn predicate_has_operator(predicate: &str) -> bool {
         || predicate.contains('=')
 }
 
+/// Extract the field name (LHS) from each clause of a predicate.
+///
+/// Mirrors the parser in `apply_filter` — same operator precedence,
+/// same `" AND "` clause split, same trimming rules. Returns a
+/// deduplicated list in first-appearance order so the caller can use
+/// it for diagnostics (e.g. "predicate references unknown field X").
+///
+/// Used by the dangling-reference check that warns when a reactive
+/// rule references a world-state key that no registered context
+/// provider appears to produce. The 2026-04-10 incident started
+/// exactly this way: a rule referenced `motion.level`, no provider
+/// was registered to populate it, and a manual `zenoh put` seeded
+/// the key by accident — so the rule happily fired forever on a
+/// "ghost" value.
+pub fn extract_predicate_fields(predicate: &str) -> Vec<String> {
+    let mut fields: Vec<String> = Vec::new();
+    for clause in predicate.split(" AND ") {
+        let clause = clause.trim();
+        if clause.is_empty() {
+            continue;
+        }
+        // Operator precedence matches apply_filter: longest multi-char
+        // operators first so `!=` isn't confused with `=`.
+        let field = if let Some(pos) = clause.find("!=") {
+            &clause[..pos]
+        } else if let Some(pos) = clause.find(">=") {
+            &clause[..pos]
+        } else if let Some(pos) = clause.find("<=") {
+            &clause[..pos]
+        } else if let Some(pos) = clause.find('>') {
+            &clause[..pos]
+        } else if let Some(pos) = clause.find('<') {
+            &clause[..pos]
+        } else if let Some(pos) = clause.find('=') {
+            &clause[..pos]
+        } else {
+            continue;
+        };
+        let field = field.trim().to_string();
+        if !field.is_empty() && !fields.contains(&field) {
+            fields.push(field);
+        }
+    }
+    fields
+}
+
+/// Given a set of provider `world_state_key_template` strings, return
+/// the list of `predicate_fields` that no template could plausibly
+/// produce.
+///
+/// Classification of templates:
+///   • **Literal** (no `{...}`): exact-match required.
+///   • **Prefix + placeholder** (`"object.{label}"` → prefix `"object."`):
+///     covers any field that `starts_with(prefix)`.
+///   • **Leading placeholder** (template begins with `{`): the prefix
+///     is empty and we cannot statically bound the output, so we
+///     return "nothing is dangling" for the whole rule rather than
+///     risk a false positive. This is an over-approximation of
+///     coverage: we'd rather miss a real dangling ref than bother
+///     the operator with a wrong warning.
+///
+/// Returns an empty vec if every field is covered.
+pub fn find_dangling_fields(
+    predicate_fields: &[String],
+    provider_templates: &[String],
+) -> Vec<String> {
+    let mut literals: Vec<&str> = Vec::new();
+    let mut prefixes: Vec<String> = Vec::new();
+    for tpl in provider_templates {
+        match tpl.find('{') {
+            None => literals.push(tpl.as_str()),
+            Some(0) => {
+                // Leading placeholder — bail out with "nothing is dangling".
+                return Vec::new();
+            }
+            Some(pos) => prefixes.push(tpl[..pos].to_string()),
+        }
+    }
+
+    predicate_fields
+        .iter()
+        .filter(|f| {
+            let f = f.as_str();
+            let literal_hit = literals.contains(&f);
+            let prefix_hit = prefixes
+                .iter()
+                .any(|p| !p.is_empty() && f.starts_with(p.as_str()));
+            !literal_hit && !prefix_hit
+        })
+        .cloned()
+        .collect()
+}
+
 impl From<ReactiveRuleConfig> for ReactiveRule {
     fn from(c: ReactiveRuleConfig) -> Self {
         Self {
@@ -1142,5 +1235,123 @@ mod tests {
         let store = ReactiveRuleStore::open(&dir.path().join("alerts.db")).unwrap();
         store.save_rule(&valid_cfg()).unwrap();
         assert_eq!(store.list_rules().unwrap().len(), 1);
+    }
+
+    // ---------- extract_predicate_fields ----------
+
+    #[test]
+    fn extract_fields_handles_simple_equality() {
+        let f = extract_predicate_fields("motion.level = 0.5");
+        assert_eq!(f, vec!["motion.level"]);
+    }
+
+    #[test]
+    fn extract_fields_splits_and_clauses() {
+        let f =
+            extract_predicate_fields("toddler.near_stairs = true AND toddler.confidence > 0.85");
+        assert_eq!(f, vec!["toddler.near_stairs", "toddler.confidence"]);
+    }
+
+    #[test]
+    fn extract_fields_supports_all_operators() {
+        // One clause per operator, mirroring apply_filter precedence.
+        let f =
+            extract_predicate_fields("a != 1 AND b >= 2 AND c <= 3 AND d > 4 AND e < 5 AND f = 6");
+        assert_eq!(f, vec!["a", "b", "c", "d", "e", "f"]);
+    }
+
+    #[test]
+    fn extract_fields_dedupes_repeated_references() {
+        let f = extract_predicate_fields("x > 0 AND x < 10 AND y = 1");
+        assert_eq!(f, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn extract_fields_ignores_empty_and_operatorless_clauses() {
+        // Empty trailing clause and a bare token with no operator should both
+        // be silently skipped — matching apply_filter's behavior.
+        let f = extract_predicate_fields("x = 1 AND  AND bogus");
+        assert_eq!(f, vec!["x"]);
+    }
+
+    #[test]
+    fn extract_fields_returns_empty_for_empty_input() {
+        assert!(extract_predicate_fields("").is_empty());
+        assert!(extract_predicate_fields("   ").is_empty());
+    }
+
+    // ---------- find_dangling_fields ----------
+
+    #[test]
+    fn dangling_empty_when_all_fields_covered_by_literal() {
+        let fields = vec!["motion.level".to_string()];
+        let tpls = vec!["motion.level".to_string()];
+        assert!(find_dangling_fields(&fields, &tpls).is_empty());
+    }
+
+    #[test]
+    fn dangling_reports_missing_literal() {
+        let fields = vec!["motion.level".to_string()];
+        let tpls = vec!["temperature.value".to_string()];
+        assert_eq!(
+            find_dangling_fields(&fields, &tpls),
+            vec!["motion.level".to_string()]
+        );
+    }
+
+    #[test]
+    fn dangling_empty_when_prefix_template_covers_field() {
+        // Template "object.{label}" → prefix "object." → covers any
+        // field that starts with "object.".
+        let fields = vec!["object.person".to_string(), "object.cat".to_string()];
+        let tpls = vec!["object.{label}".to_string()];
+        assert!(find_dangling_fields(&fields, &tpls).is_empty());
+    }
+
+    #[test]
+    fn dangling_reports_fields_outside_prefix() {
+        let fields = vec!["object.person".to_string(), "motion.level".to_string()];
+        let tpls = vec!["object.{label}".to_string()];
+        assert_eq!(
+            find_dangling_fields(&fields, &tpls),
+            vec!["motion.level".to_string()]
+        );
+    }
+
+    #[test]
+    fn dangling_mixes_literal_and_prefix_templates() {
+        let fields = vec![
+            "temperature.value".to_string(),
+            "object.person".to_string(),
+            "humidity".to_string(),
+        ];
+        let tpls = vec![
+            "temperature.value".to_string(),
+            "object.{label}".to_string(),
+        ];
+        assert_eq!(
+            find_dangling_fields(&fields, &tpls),
+            vec!["humidity".to_string()]
+        );
+    }
+
+    #[test]
+    fn dangling_returns_empty_for_leading_placeholder_template() {
+        // A template that begins with "{...}" cannot be statically
+        // bounded — we return "nothing is dangling" rather than risk a
+        // false positive warning.
+        let fields = vec!["anything.goes".to_string(), "else.here".to_string()];
+        let tpls = vec!["{key}".to_string()];
+        assert!(find_dangling_fields(&fields, &tpls).is_empty());
+    }
+
+    #[test]
+    fn dangling_treats_no_providers_as_all_dangling() {
+        let fields = vec!["a".to_string(), "b".to_string()];
+        let tpls: Vec<String> = Vec::new();
+        assert_eq!(
+            find_dangling_fields(&fields, &tpls),
+            vec!["a".to_string(), "b".to_string()]
+        );
     }
 }

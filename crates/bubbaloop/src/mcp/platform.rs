@@ -208,6 +208,18 @@ pub trait PlatformOperations: Send + Sync + 'static {
         alert_id: String,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
 
+    /// List reactive alert rules with full introspection details.
+    ///
+    /// Each entry includes the predicate, debounce / boost parameters,
+    /// and a `dangling_fields` list of world-state keys the predicate
+    /// references that no registered context provider appears to
+    /// produce. This surfaces the class of misconfiguration that caused
+    /// incident 2026-04-10 (rule firing on a ghost world-state key).
+    fn list_alerts(
+        &self,
+        mission_id: Option<String>,
+    ) -> impl std::future::Future<Output = PlatformResult<Vec<AlertInfo>>> + Send;
+
     // ── Constraints ───────────────────────────────────────────────────
 
     /// Register a safety constraint for a mission.
@@ -287,6 +299,26 @@ pub struct RegisterConstraintParams {
     pub constraint_type: String,
     /// JSON object with constraint-specific fields.
     pub params_json: String,
+}
+
+/// Rich view of a registered reactive alert rule.
+///
+/// Returned by [`PlatformOperations::list_alerts`]. `dangling_fields`
+/// is computed at query time by comparing the predicate's referenced
+/// world-state keys against the current set of context-provider
+/// templates. An empty list means every field in the predicate is
+/// plausibly produced by some provider; a non-empty list means the
+/// rule references keys that nothing is writing, so it will either
+/// never fire or will fire on stale/ghost values.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AlertInfo {
+    pub id: String,
+    pub mission_id: String,
+    pub predicate: String,
+    pub debounce_secs: u32,
+    pub arousal_boost: f64,
+    pub description: String,
+    pub dangling_fields: Vec<String>,
 }
 
 /// Parameters for registering a reactive alert.

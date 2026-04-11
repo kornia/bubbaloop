@@ -115,7 +115,7 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
                  **Context Providers:** configure_context — wire a Zenoh topic pattern to world state (daemon background task)\n\
                  **Missions:** list_missions, pause_mission, resume_mission, cancel_mission — YAML-file-driven goals (~/.bubbaloop/agents/{id}/missions/)\n\
                  **Constraints:** register_constraint, list_constraints — per-mission safety limits (workspace/max_velocity/forbidden_zone/max_force)\n\
-                 **Alerts:** register_alert, unregister_alert — reactive rules that spike arousal when world state matches\n\
+                 **Alerts:** register_alert, unregister_alert, list_alerts — reactive rules that spike arousal when world state matches (list_alerts surfaces dangling world-state refs)\n\
                  **System:** get_system_status, get_machine_info, query_zenoh, discover_nodes\n\n\
                  install_node accepts marketplace names (e.g., 'rtsp-camera'), local paths, or GitHub 'user/repo' format.\n\
                  Use discover_capabilities to find nodes by capability (sensor, actuator, processor, gateway).\n\
