@@ -6,6 +6,7 @@
  */
 
 import * as protobuf from 'protobufjs';
+import { decode as cborDecode } from 'cbor-x';
 import { Session, Reply, ReplyError, Sample } from '@eclipse-zenoh/zenoh-ts';
 import { Duration } from 'typed-duration';
 import { getSamplePayload, EncodingInfo, EncodingPredefined } from './zenoh';
@@ -445,6 +446,17 @@ export class SchemaRegistry {
         const text = new TextDecoder().decode(payload);
         const data = JSON.parse(text) as Record<string, unknown>;
         return { data, typeName: 'json', source: 'encoding' };
+      } catch {
+        return null;
+      }
+    }
+
+    // APPLICATION_CBOR — decode with cbor-x, no schema needed
+    if (id === EncodingPredefined.APPLICATION_CBOR) {
+      try {
+        const decoded = cborDecode(payload);
+        const data = snakeToCamel(decoded) as Record<string, unknown>;
+        return { data, typeName: 'cbor', source: 'encoding' };
       } catch {
         return null;
       }

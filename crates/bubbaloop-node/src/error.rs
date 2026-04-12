@@ -59,6 +59,15 @@ pub enum NodeError {
     #[error("protobuf decode failed: {0}")]
     Decode(String),
 
+    #[error("CBOR encode failed: {0}")]
+    CborEncode(String),
+
+    #[error("SHM pool setup failed: {0}")]
+    Shm(String),
+
+    #[error("SHM alloc failed: {0}")]
+    ShmAlloc(String),
+
     #[error("failed to create health publisher: {0}")]
     HealthPublisher(#[source] zenoh::Error),
 

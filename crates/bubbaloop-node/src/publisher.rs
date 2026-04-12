@@ -1,6 +1,13 @@
+use std::io::Cursor;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
-use zenoh::bytes::Encoding;
+use zenoh::bytes::{Encoding, ZBytes};
 use zenoh::qos::CongestionControl;
+use zenoh::shm::{
+    BlockOn, GarbageCollect, OwnedShmBuf, PosixShmProviderBackend, ShmProvider,
+    ShmProviderBuilder,
+};
+use zenoh::Wait;
 
 use crate::error::{NodeError, Result};
 
@@ -130,6 +137,149 @@ impl RawPublisher {
     }
 }
 
+/// A declared CBOR publisher that sets `Encoding::APPLICATION_CBOR` automatically.
+///
+/// Created via [`NodeContext::publisher_cbor`](crate::NodeContext::publisher_cbor).
+/// Serializes values via `ciborium` into a heap `Vec<u8>` before publishing —
+/// suitable for small structured messages (telemetry, config, events).
+///
+/// For large, hot-path payloads (camera frames, sensor buffers) use
+/// [`CborPublisherShm`] instead, which encodes directly into a pre-allocated
+/// shared-memory slot without a heap allocation per message.
+pub struct CborPublisher {
+    publisher: zenoh::pubsub::Publisher<'static>,
+}
+
+impl CborPublisher {
+    pub(crate) async fn new(session: &Arc<zenoh::Session>, key_expr: &str) -> Result<Self> {
+        let publisher = session
+            .declare_publisher(key_expr.to_string())
+            .encoding(Encoding::APPLICATION_CBOR)
+            .await
+            .map_err(|e| NodeError::PublisherDeclare {
+                topic: key_expr.to_string(),
+                source: e,
+            })?;
+
+        log::debug!("CborPublisher declared on '{}'", key_expr);
+        Ok(Self { publisher })
+    }
+
+    /// Serialize `value` as CBOR bytes and publish it.
+    pub async fn put<S: serde::Serialize>(&self, value: &S) -> Result<()> {
+        let mut bytes = Vec::new();
+        ciborium::into_writer(value, &mut bytes)
+            .map_err(|e| NodeError::CborEncode(e.to_string()))?;
+        self.publisher.put(bytes).await.map_err(NodeError::Publish)
+    }
+}
+
+/// A declared CBOR publisher backed by a pre-allocated POSIX shared-memory pool.
+///
+/// Created via [`NodeContext::publisher_cbor_shm`](crate::NodeContext::publisher_cbor_shm).
+///
+/// On every [`put`](CborPublisherShm::put), the publisher:
+/// 1. Allocates a slot from the SHM pool (blocks under backpressure via
+///    `BlockOn<GarbageCollect>` — the publisher waits for the subscriber to
+///    consume a slot instead of silently dropping the message).
+/// 2. Serializes the value with `ciborium` **directly into the mmap'd page**,
+///    no heap `Vec`, no intermediate copy.
+/// 3. Trims the SHM buffer to the exact CBOR length.
+/// 4. Ships the SHM handle as a `ZBytes` payload — the subscriber maps the
+///    same physical memory on the same machine.
+///
+/// The topic is always machine-local (`bubbaloop/local/{machine_id}/{suffix}`)
+/// because Zenoh shared-memory transport cannot cross machines. Congestion
+/// control is set to `Block` to pair correctly with `BlockOn<GarbageCollect>`.
+///
+/// **Picking `slot_count` and `slot_size`:**
+/// - `slot_size` must be >= the largest single CBOR-encoded message your node
+///   will publish. Undersize and `put()` returns an error; oversize and you
+///   waste resident memory.
+/// - `slot_count` controls how many in-flight messages can overlap before the
+///   publisher blocks. 4 slots is a reasonable default for single-consumer
+///   topics; raise it if you have slow subscribers that need more headroom.
+pub struct CborPublisherShm {
+    publisher: zenoh::pubsub::Publisher<'static>,
+    shm_provider: ShmProvider<PosixShmProviderBackend>,
+    slot_size: usize,
+}
+
+impl CborPublisherShm {
+    pub(crate) async fn new(
+        session: &Arc<zenoh::Session>,
+        key_expr: &str,
+        slot_count: usize,
+        slot_size: usize,
+    ) -> Result<Self> {
+        let pool_size = slot_count
+            .checked_mul(slot_size)
+            .ok_or_else(|| NodeError::Shm("slot_count * slot_size overflow".to_string()))?;
+        let backend = PosixShmProviderBackend::builder(pool_size)
+            .wait()
+            .map_err(|e| NodeError::Shm(format!("backend: {e:?}")))?;
+        let shm_provider = ShmProviderBuilder::backend(backend).wait();
+
+        let publisher = session
+            .declare_publisher(key_expr.to_string())
+            .encoding(Encoding::APPLICATION_CBOR)
+            .congestion_control(CongestionControl::Block)
+            .await
+            .map_err(|e| NodeError::PublisherDeclare {
+                topic: key_expr.to_string(),
+                source: e,
+            })?;
+
+        log::debug!(
+            "CborPublisherShm declared on '{}' (slots={}, slot_size={} B, pool={} B)",
+            key_expr,
+            slot_count,
+            slot_size,
+            pool_size
+        );
+        Ok(Self {
+            publisher,
+            shm_provider,
+            slot_size,
+        })
+    }
+
+    /// Size of each SHM slot in bytes. Messages larger than this fail to publish.
+    pub fn slot_size(&self) -> usize {
+        self.slot_size
+    }
+
+    /// Serialize `value` directly into a shared-memory slot and publish it.
+    ///
+    /// Blocks on allocation pressure — if all slots are in use, waits for a
+    /// consumer to free one instead of dropping the message.
+    pub async fn put<S: serde::Serialize>(&self, value: &S) -> Result<()> {
+        let mut sbuf = self
+            .shm_provider
+            .alloc(self.slot_size)
+            .with_policy::<BlockOn<GarbageCollect>>()
+            .await
+            .map_err(|e| NodeError::ShmAlloc(format!("{e:?}")))?;
+
+        let written = {
+            let mut cursor = Cursor::new(&mut sbuf[..]);
+            ciborium::into_writer(value, &mut cursor)
+                .map_err(|e| NodeError::CborEncode(e.to_string()))?;
+            cursor.position() as usize
+        };
+
+        let new_len = NonZeroUsize::new(written)
+            .ok_or_else(|| NodeError::CborEncode("CBOR encoded zero bytes".to_string()))?;
+        sbuf.try_resize(new_len)
+            .ok_or_else(|| NodeError::Shm("try_resize failed after encode".to_string()))?;
+
+        self.publisher
+            .put(ZBytes::from(sbuf))
+            .await
+            .map_err(NodeError::Publish)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,5 +306,24 @@ mod tests {
         let bytes = serde_json::to_vec(&value).unwrap();
         let back: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back["temperature"], 22.5);
+    }
+
+    #[test]
+    fn cbor_encoding_string() {
+        assert_eq!(Encoding::APPLICATION_CBOR.to_string(), "application/cbor");
+    }
+
+    #[test]
+    fn cbor_roundtrip_via_ciborium() {
+        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+        struct Sample {
+            n: u32,
+            label: String,
+        }
+        let value = Sample { n: 42, label: "hi".to_string() };
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&value, &mut bytes).unwrap();
+        let back: Sample = ciborium::from_reader(&bytes[..]).unwrap();
+        assert_eq!(back, value);
     }
 }

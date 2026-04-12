@@ -121,6 +121,59 @@ describe('SchemaRegistry.decodeWithEncoding', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // APPLICATION_CBOR
+  // ---------------------------------------------------------------------------
+  describe('APPLICATION_CBOR (id=8)', () => {
+    it('decodes valid CBOR payload and returns typeName=cbor', async () => {
+      const { encode } = await import('cbor-x');
+      const payload = encode({ temperature: 22.5, wind_speed_10m: 3.1 });
+      const result = await registry.decodeWithEncoding(
+        payload,
+        enc(EncodingPredefined.APPLICATION_CBOR),
+        'bubbaloop/local/m1/weather/current',
+        session,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.typeName).toBe('cbor');
+      expect(result!.source).toBe('encoding');
+      expect(result!.data).toHaveProperty('temperature', 22.5);
+      // snakeToCamel converts wind_speed_10m → windSpeed_10m
+      expect(result!.data).toHaveProperty('windSpeed_10m', 3.1);
+    });
+
+    it('returns null for invalid CBOR bytes', async () => {
+      const result = await registry.decodeWithEncoding(
+        new Uint8Array([0xff, 0xfe, 0xfd]),
+        enc(EncodingPredefined.APPLICATION_CBOR),
+        'test/topic',
+        session,
+      );
+      expect(result).toBeNull();
+    });
+
+    it('handles nested header structure (camera CompressedImage)', async () => {
+      const { encode } = await import('cbor-x');
+      const payload = encode({
+        header: { acq_time: 1000, pub_time: 2000, sequence: 42, frame_id: 'cam1', machine_id: 'jetson1' },
+        format: 'h264',
+        data: new Uint8Array([0, 0, 0, 1, 0x67]),
+      });
+      const result = await registry.decodeWithEncoding(
+        payload,
+        enc(EncodingPredefined.APPLICATION_CBOR),
+        'bubbaloop/local/m1/cam1/compressed_cbor',
+        session,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.data).toHaveProperty('format', 'h264');
+      const header = result!.data.header as Record<string, unknown>;
+      expect(header).toHaveProperty('acqTime', 1000);
+      expect(header).toHaveProperty('pubTime', 2000);
+      expect(header).toHaveProperty('sequence', 42);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // APPLICATION_PROTOBUF with schema suffix — type cached in registry
   // ---------------------------------------------------------------------------
   describe('APPLICATION_PROTOBUF (id=13) with schema suffix and cached type', () => {

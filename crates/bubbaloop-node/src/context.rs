@@ -54,6 +54,51 @@ impl NodeContext {
         crate::publisher::JsonPublisher::new(&self.session, &self.topic(suffix)).await
     }
 
+    /// Create a CBOR publisher with `APPLICATION_CBOR` encoding.
+    ///
+    /// Serializes values via `ciborium` into a heap `Vec<u8>` before publishing.
+    /// Suitable for small structured messages (telemetry, config, events) on
+    /// global (network-visible) topics.
+    ///
+    /// For large, hot-path binary payloads on the same machine, use
+    /// [`publisher_cbor_shm`](Self::publisher_cbor_shm) instead — it encodes
+    /// directly into shared memory without a heap allocation per message.
+    pub async fn publisher_cbor(&self, suffix: &str) -> Result<crate::publisher::CborPublisher> {
+        crate::publisher::CborPublisher::new(&self.session, &self.topic(suffix)).await
+    }
+
+    /// Create a CBOR publisher backed by a pre-allocated shared-memory pool.
+    ///
+    /// Each [`put`](crate::publisher::CborPublisherShm::put) allocates a slot,
+    /// encodes the value directly into the mmap'd page via `ciborium`, and
+    /// ships the SHM handle as a `ZBytes` payload — no heap `Vec`, no
+    /// intermediate copy.
+    ///
+    /// The topic is always machine-local (`bubbaloop/local/{machine_id}/{suffix}`)
+    /// because Zenoh SHM cannot cross machines. Congestion control is `Block`,
+    /// so the publisher waits for a consumer to free a slot instead of dropping
+    /// messages.
+    ///
+    /// **Parameters:**
+    /// - `slot_count`: number of in-flight slots. 4 is a reasonable default for
+    ///   single-consumer topics; raise if the consumer is slow.
+    /// - `slot_size`: bytes per slot — must fit the largest single CBOR-encoded
+    ///   message. Undersize → `put()` returns an error; oversize → wasted RAM.
+    pub async fn publisher_cbor_shm(
+        &self,
+        suffix: &str,
+        slot_count: usize,
+        slot_size: usize,
+    ) -> Result<crate::publisher::CborPublisherShm> {
+        crate::publisher::CborPublisherShm::new(
+            &self.session,
+            &self.local_topic(suffix),
+            slot_count,
+            slot_size,
+        )
+        .await
+    }
+
     /// Create a raw publisher that sends [`ZBytes`](zenoh::bytes::ZBytes) with no encoding.
     ///
     /// When `local = true`, publishes to `local/{machine_id}/{suffix}` — SHM zero-copy,

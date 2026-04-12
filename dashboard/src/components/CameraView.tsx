@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload, getEncodingInfo, hasExplicitEncoding, EncodingPredefined } from '../lib/zenoh';
+import { decode as cborDecode } from 'cbor-x';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useFleetContext } from '../contexts/FleetContext';
@@ -136,48 +137,54 @@ export function CameraView({
       const sampleTopic = sample.keyexpr().toString();
       const encodingInfo = getEncodingInfo(sample);
 
-      // If sample has an explicit encoding that is NOT protobuf, skip (CameraView
-      // only handles protobuf CompressedImage or unencoded binary).
+      // If sample has an explicit encoding that is NOT protobuf or CBOR, skip.
       if (
         hasExplicitEncoding(encodingInfo) &&
         encodingInfo.id !== EncodingPredefined.APPLICATION_PROTOBUF &&
-        encodingInfo.id !== EncodingPredefined.APPLICATION_OCTET_STREAM
+        encodingInfo.id !== EncodingPredefined.APPLICATION_OCTET_STREAM &&
+        encodingInfo.id !== EncodingPredefined.APPLICATION_CBOR
       ) {
         return;
       }
 
-      // Use SchemaRegistry to look up CompressedImage type and decode directly.
-      // This preserves raw bytes (no base64 roundtrip) for H264 decoding.
-      // When encoding carries a schema suffix, try it directly; otherwise fall back to
-      // well-known type name lookup.
-      const typeName = (encodingInfo.id === EncodingPredefined.APPLICATION_PROTOBUF && encodingInfo.schema)
-        ? encodingInfo.schema
-        : 'bubbaloop.camera.v1.CompressedImage';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let msg: any;
 
-      const msgType = registry.lookupType(typeName);
-      if (!msgType) {
-        // Schema not yet available — trigger discovery for node-specific schemas.
-        // Only gate on schemaReady for legacy nodes (no explicit encoding); nodes
-        // with APPLICATION_PROTOBUF encoding trigger on-demand fetch instead.
-        if (!hasExplicitEncoding(encodingInfo)) {
-          console.warn(`[CameraView] CompressedImage schema NOT found. Topic: ${sampleTopic}. Triggering discovery...`);
-          discoverForTopic(sampleTopic);
-        } else {
-          // Has explicit protobuf encoding but type not cached yet — discover async
-          discoverForTopic(sampleTopic);
+      if (encodingInfo.id === EncodingPredefined.APPLICATION_CBOR) {
+        // CBOR path: decode directly, same field structure as CompressedImage
+        try {
+          msg = cborDecode(payload);
+        } catch {
+          console.error('[CameraView] CBOR decode failed');
+          return;
         }
-        return;
+      } else {
+        // Protobuf path: use SchemaRegistry to look up CompressedImage type
+        const typeName = (encodingInfo.id === EncodingPredefined.APPLICATION_PROTOBUF && encodingInfo.schema)
+          ? encodingInfo.schema
+          : 'bubbaloop.camera.v1.CompressedImage';
+
+        const msgType = registry.lookupType(typeName);
+        if (!msgType) {
+          if (!hasExplicitEncoding(encodingInfo)) {
+            console.warn(`[CameraView] CompressedImage schema NOT found. Topic: ${sampleTopic}. Triggering discovery...`);
+            discoverForTopic(sampleTopic);
+          } else {
+            discoverForTopic(sampleTopic);
+          }
+          return;
+        }
+        msg = msgType.decode(payload);
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const msg = msgType.decode(payload) as any;
       const format: string = msg.format ?? '';
       const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data ?? []);
-      const header = msg.header ? {
-        acqTime: toLongBigInt(msg.header.acqTime),
-        pubTime: toLongBigInt(msg.header.pubTime),
-        sequence: msg.header.sequence ?? 0,
-        frameId: msg.header.frameId ?? '',
+      const rawHeader = msg.header;
+      const header = rawHeader ? {
+        acqTime: toLongBigInt(rawHeader.acqTime ?? rawHeader.acq_time),
+        pubTime: toLongBigInt(rawHeader.pubTime ?? rawHeader.pub_time),
+        sequence: rawHeader.sequence ?? 0,
+        frameId: rawHeader.frameId ?? rawHeader.frame_id ?? '',
       } : undefined;
 
       // Store latest metadata in ref (no re-render)
