@@ -5,7 +5,9 @@
 
 use crate::agent::dispatch_security;
 use crate::agent::provider::{ContentBlock, ToolDefinition};
-use crate::mcp::platform::{NodeCommand, PlatformOperations};
+use crate::mcp::platform::{
+    ConfigureContextParams, NodeCommand, PlatformOperations, RegisterAlertParams,
+};
 use crate::validation;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -34,7 +36,6 @@ impl ToolResult {
 /// Dispatches MCP tool calls directly to `PlatformOperations` methods.
 pub struct Dispatcher<P: PlatformOperations> {
     platform: Arc<P>,
-    scope: String,
     machine_id: String,
     agent_name: String,
     memory_backend: Option<Arc<tokio::sync::Mutex<crate::agent::memory::MemoryBackend>>>,
@@ -45,10 +46,9 @@ pub struct Dispatcher<P: PlatformOperations> {
 
 impl<P: PlatformOperations> Dispatcher<P> {
     /// Create a new dispatcher (backward-compatible, no memory).
-    pub fn new(platform: Arc<P>, scope: String, machine_id: String) -> Self {
+    pub fn new(platform: Arc<P>, machine_id: String) -> Self {
         Self {
             platform,
-            scope,
             machine_id,
             agent_name: String::new(),
             memory_backend: None,
@@ -79,7 +79,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
     /// Create a dispatcher with memory backend for agent use.
     pub fn new_with_memory(
         platform: Arc<P>,
-        scope: String,
         machine_id: String,
         agent_name: String,
         memory_backend: Arc<tokio::sync::Mutex<crate::agent::memory::MemoryBackend>>,
@@ -88,7 +87,6 @@ impl<P: PlatformOperations> Dispatcher<P> {
     ) -> Self {
         Self {
             platform,
-            scope,
             machine_id,
             agent_name,
             memory_backend: Some(memory_backend),
@@ -382,6 +380,119 @@ impl<P: PlatformOperations> Dispatcher<P> {
                     "required": []
                 }),
             },
+            // ── World state, context providers & reactive alerts ──
+            ToolDefinition {
+                name: "list_world_state".to_string(),
+                description: "List all live world state entries. World state is the agent's \
+                    live, key/value snapshot of sensor-derived facts (e.g. motion.level, \
+                    detected.label) populated by context providers. Use this to see the \
+                    current environment state before reasoning about what to do."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
+            ToolDefinition {
+                name: "configure_context".to_string(),
+                description: "Wire a Zenoh topic pattern to world state. The daemon starts a \
+                    background task that watches the topic and writes extracted values into \
+                    world state keys, making them visible to the agent's heartbeat and reactive \
+                    alerts. Use this to make sensor streams (motion, detections, telemetry) \
+                    influence the agent's arousal and prompt context."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "mission_id": {
+                            "type": "string",
+                            "description": "Mission this provider is attached to"
+                        },
+                        "topic_pattern": {
+                            "type": "string",
+                            "description": "Zenoh key expression pattern (e.g. 'bubbaloop/global/**/motion/score')"
+                        },
+                        "world_state_key_template": {
+                            "type": "string",
+                            "description": "Template for world state key (e.g. 'motion.level' or '{label}.location')"
+                        },
+                        "value_field": {
+                            "type": "string",
+                            "description": "JSON field path to extract as the value (e.g. 'motion_score')"
+                        },
+                        "filter": {
+                            "type": "string",
+                            "description": "Optional filter expression (e.g. 'label=dog AND confidence>0.85')"
+                        },
+                        "min_interval_secs": {
+                            "type": "integer",
+                            "description": "Minimum interval between writes for the same key (seconds)"
+                        },
+                        "max_age_secs": {
+                            "type": "integer",
+                            "description": "Maximum age before a world state entry is considered stale (seconds)"
+                        },
+                        "confidence_field": {
+                            "type": "string",
+                            "description": "Optional JSON field path to extract confidence from"
+                        },
+                        "token_budget": {
+                            "type": "integer",
+                            "description": "Approximate token budget for this provider's world state entries"
+                        }
+                    },
+                    "required": ["mission_id", "topic_pattern", "world_state_key_template", "value_field"]
+                }),
+            },
+            ToolDefinition {
+                name: "register_alert".to_string(),
+                description: "Register a reactive alert rule. When world state matches the \
+                    predicate, the agent's arousal spikes, shortening the heartbeat interval \
+                    and making the agent react faster. Combine with configure_context to wire \
+                    a sensor topic into world state first, then write a predicate over that key."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "mission_id": {
+                            "type": "string",
+                            "description": "Mission this alert is attached to"
+                        },
+                        "predicate": {
+                            "type": "string",
+                            "description": "World state predicate expression (e.g. \"motion.level > 0.05\" or \"toddler.near_stairs = 'true'\")"
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Human-readable description of this alert"
+                        },
+                        "debounce_secs": {
+                            "type": "integer",
+                            "description": "Minimum seconds between consecutive firings (default: 60)"
+                        },
+                        "arousal_boost": {
+                            "type": "number",
+                            "description": "Arousal boost when rule fires (default: 2.0)"
+                        }
+                    },
+                    "required": ["mission_id", "predicate", "description"]
+                }),
+            },
+            ToolDefinition {
+                name: "unregister_alert".to_string(),
+                description: "Unregister a reactive alert rule by its ID.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "alert_id": {
+                            "type": "string",
+                            "description": "The alert ID to remove"
+                        }
+                    },
+                    "required": ["alert_id"]
+                }),
+            },
             // ── Episodic memory tools ──
             ToolDefinition {
                 name: "memory_search".to_string(),
@@ -532,7 +643,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             ToolDefinition {
                 name: "publish_to_topic".to_string(),
                 description: "Publish a message to a Zenoh topic. Use topic \
-                    bubbaloop/{scope}/agent/{name}/inbox to address a named agent's inbox. \
+                    bubbaloop/global/agent/{name}/inbox to address a named agent's inbox. \
                     Inbox messages surface in the recipient's next prompt turn under Recent Events."
                     .to_string(),
                 input_schema: json!({
@@ -599,6 +710,10 @@ impl<P: PlatformOperations> Dispatcher<P> {
             "delete_job" => self.handle_delete_job(input).await,
             "create_proposal" => self.handle_create_proposal(input).await,
             "list_proposals" => self.handle_list_proposals(input).await,
+            "list_world_state" => self.handle_list_world_state().await,
+            "configure_context" => self.handle_configure_context(input).await,
+            "register_alert" => self.handle_register_alert(input).await,
+            "unregister_alert" => self.handle_unregister_alert(input).await,
             "get_system_telemetry" => self.handle_get_system_telemetry().await,
             "get_telemetry_history" => self.handle_get_telemetry_history(input).await,
             "update_telemetry_config" => self.handle_update_telemetry_config(input).await,
@@ -608,6 +723,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                  (list_nodes, start_node, etc.), system (read_file, write_file, \
                  run_command), memory (memory_search, memory_forget), jobs/proposals \
                  (schedule_task, list_jobs, delete_job, create_proposal, list_proposals), \
+                 world/context/alerts (list_world_state, configure_context, register_alert, unregister_alert), \
                  or telemetry (get_system_telemetry, get_telemetry_history, update_telemetry_config).",
                 name
             )),
@@ -706,7 +822,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             Err(_) => (0, 0, 0),
         };
         let status = json!({
-            "scope": self.scope,
+            "scope": "global",
             "machine_id": self.machine_id,
             "nodes_total": total,
             "nodes_running": running,
@@ -720,7 +836,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
     fn handle_get_machine_info(&self) -> ToolResult {
         let info = json!({
             "machine_id": self.machine_id,
-            "scope": self.scope,
+            "scope": "global",
             "arch": std::env::consts::ARCH,
             "os": std::env::consts::OS,
             "hostname": hostname::get()
@@ -792,7 +908,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
         };
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/manifest",
-            self.scope, self.machine_id, node_name
+            "global", self.machine_id, node_name
         );
         let manifest_text = match self.platform.query_zenoh(&key_expr).await {
             Ok(text) => text,
@@ -836,7 +952,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
         let info = json!({
             "zenoh_topic": format!(
                 "bubbaloop/{}/{}/{}/**",
-                self.scope, self.machine_id, node_name
+                "global", self.machine_id, node_name
             ),
             "encoding": "protobuf",
             "endpoint": "tcp/localhost:7447",
@@ -852,7 +968,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
         };
         let key = format!(
             "bubbaloop/{}/{}/{}/schema",
-            self.scope, self.machine_id, node_name
+            "global", self.machine_id, node_name
         );
         match self.platform.query_zenoh(&key).await {
             Ok(result) => ToolResult::success(result),
@@ -877,7 +993,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
 
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/command",
-            self.scope, self.machine_id, node_name
+            "global", self.machine_id, node_name
         );
         let payload = json!({ "command": command, "params": params });
         let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
@@ -1293,6 +1409,128 @@ impl<P: PlatformOperations> Dispatcher<P> {
         }
     }
 
+    // ── World state, context providers & reactive alerts ─────────────
+
+    async fn handle_list_world_state(&self) -> ToolResult {
+        match self.platform.list_world_state().await {
+            Ok(entries) => ToolResult::success(
+                serde_json::to_string_pretty(&entries)
+                    .unwrap_or_else(|_| "Error serializing world state".to_string()),
+            ),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_configure_context(&self, input: &Value) -> ToolResult {
+        let mission_id = match input.get("mission_id").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                return ToolResult::error("Missing required parameter: mission_id".to_string());
+            }
+        };
+        let topic_pattern = match input.get("topic_pattern").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                return ToolResult::error("Missing required parameter: topic_pattern".to_string());
+            }
+        };
+        let world_state_key_template = match input
+            .get("world_state_key_template")
+            .and_then(|v| v.as_str())
+        {
+            Some(s) => s.to_string(),
+            None => {
+                return ToolResult::error(
+                    "Missing required parameter: world_state_key_template".to_string(),
+                );
+            }
+        };
+        let value_field = match input.get("value_field").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                return ToolResult::error("Missing required parameter: value_field".to_string());
+            }
+        };
+        let params = ConfigureContextParams {
+            mission_id,
+            topic_pattern,
+            world_state_key_template,
+            value_field,
+            filter: input
+                .get("filter")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            min_interval_secs: input
+                .get("min_interval_secs")
+                .and_then(|v| v.as_u64())
+                .and_then(|n| u32::try_from(n).ok()),
+            max_age_secs: input
+                .get("max_age_secs")
+                .and_then(|v| v.as_u64())
+                .and_then(|n| u32::try_from(n).ok()),
+            confidence_field: input
+                .get("confidence_field")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            token_budget: input
+                .get("token_budget")
+                .and_then(|v| v.as_u64())
+                .and_then(|n| u32::try_from(n).ok()),
+        };
+        match self.platform.configure_context(params).await {
+            Ok(msg) => ToolResult::success(msg),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_register_alert(&self, input: &Value) -> ToolResult {
+        let mission_id = match input.get("mission_id").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                return ToolResult::error("Missing required parameter: mission_id".to_string());
+            }
+        };
+        let predicate = match input.get("predicate").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                return ToolResult::error("Missing required parameter: predicate".to_string());
+            }
+        };
+        let description = match input.get("description").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                return ToolResult::error("Missing required parameter: description".to_string());
+            }
+        };
+        let params = RegisterAlertParams {
+            mission_id,
+            predicate,
+            description,
+            debounce_secs: input
+                .get("debounce_secs")
+                .and_then(|v| v.as_u64())
+                .and_then(|n| u32::try_from(n).ok()),
+            arousal_boost: input.get("arousal_boost").and_then(|v| v.as_f64()),
+        };
+        match self.platform.register_alert(params).await {
+            Ok(msg) => ToolResult::success(msg),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
+    async fn handle_unregister_alert(&self, input: &Value) -> ToolResult {
+        let alert_id = match input.get("alert_id").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                return ToolResult::error("Missing required parameter: alert_id".to_string());
+            }
+        };
+        match self.platform.unregister_alert(alert_id).await {
+            Ok(msg) => ToolResult::success(msg),
+            Err(e) => ToolResult::error(format!("Error: {}", e)),
+        }
+    }
+
     // ── Telemetry tool handlers ──────────────────────────────────────
 
     async fn handle_get_system_telemetry(&self) -> ToolResult {
@@ -1500,7 +1738,7 @@ mod tests {
     use zenoh::pubsub::Subscriber;
     use zenoh::sample::Sample;
 
-    const TOOL_COUNT: usize = 38;
+    const TOOL_COUNT: usize = 42;
 
     #[test]
     fn tool_definitions_count() {
@@ -1674,7 +1912,6 @@ mod tests {
                 crate::mcp::platform::mock::MockPlatform::new()
                     .with_session(coordinator_session.clone()),
             ),
-            "local".to_string(),
             "test-machine".to_string(),
             "coordinator".to_string(),
             coordinator_memory.backend.clone(),
@@ -1686,7 +1923,6 @@ mod tests {
                 crate::mcp::platform::mock::MockPlatform::new()
                     .with_session(worker_session.clone()),
             ),
-            "local".to_string(),
             "test-machine".to_string(),
             "worker".to_string(),
             worker_memory.backend.clone(),

@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop troubleshooting reference. Diagnostic commands, log analysis, and solutions for common runtime and connectivity issues."
+---
+
 # Troubleshooting
 
 Common issues and solutions for Bubbaloop.
@@ -62,7 +66,7 @@ RTSP connection fails.
 **Debug:**
 
 ```bash
-RUST_LOG=debug pixi run cameras
+RUST_LOG=debug bubbaloop node logs rtsp-camera -f
 ```
 
 ### "Waiting for keyframe" in dashboard
@@ -125,7 +129,7 @@ Dashboard can't connect to Zenoh bridge.
 **Checklist:**
 
 1. Verify bridge is running: `pixi run bridge`
-2. Check bridge listening on port 10000
+2. Check bridge listening on port 10001
 3. Try refreshing the page
 4. Check browser console for errors
 
@@ -145,7 +149,7 @@ Video element shows nothing.
 
 **Checklist:**
 
-1. Verify camera is connected (check `pixi run cameras` logs)
+1. Verify camera is connected (check `bubbaloop node logs rtsp-camera` output)
 2. Verify topic is correct in panel settings
 3. Check browser console for decoder errors
 4. Try refreshing the page
@@ -214,7 +218,7 @@ OpenMeteo service not publishing.
 **Checklist:**
 
 1. Check internet connectivity
-2. Verify service is running: `pixi run weather`
+2. Verify service is running: `bubbaloop node logs openmeteo`
 3. Check service logs for API errors
 4. Verify Open-Meteo API is accessible
 
@@ -303,7 +307,7 @@ Can't establish WebSocket.
 **Solutions:**
 
 1. Verify `pixi run bridge` is running
-2. Check port 10000 is accessible
+2. Check port 10001 is accessible
 3. Check browser dev tools Network tab
 
 ## Logging
@@ -311,14 +315,15 @@ Can't establish WebSocket.
 ### Enable debug logging
 
 ```bash
-RUST_LOG=debug pixi run cameras
-RUST_LOG=debug pixi run weather
+RUST_LOG=debug bubbaloop node logs rtsp-camera -f
+RUST_LOG=debug bubbaloop node logs openmeteo -f
 ```
 
 ### View specific module logs
 
 ```bash
-RUST_LOG=bubbaloop::h264_capture=trace pixi run cameras
+# Set RUST_LOG before starting the node, or check logs via journalctl
+RUST_LOG=trace bubbaloop node logs rtsp-camera -f
 ```
 
 ### Browser console

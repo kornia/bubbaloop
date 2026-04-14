@@ -1,0 +1,248 @@
+# Bubbaloop — Full Documentation
+
+> Open-source Hardware AI agent. Single Rust binary for cameras, sensors, robots, and IoT fleets — orchestrated by AI agents with memory and real-time telemetry.
+
+## Quick Start
+
+Install and run in 30 seconds:
+
+```bash
+curl -sSL https://github.com/kornia/bubbaloop/releases/latest/download/install.sh | bash
+source ~/.bashrc
+bubbaloop doctor --fix
+bubbaloop up
+bubbaloop agent chat "What sensors do I have?"
+```
+
+## Architecture
+
+Single binary (~13 MB) with four subsystems running concurrently:
+
+1. **Node Manager** — builds, installs, starts/stops, health-monitors nodes via systemd (D-Bus/zbus)
+2. **Agent Runtime** — multi-agent Zenoh gateway with per-agent Soul, 4-tier memory, adaptive heartbeat
+3. **MCP Server** — 42 tools + agent-internal tools, 3-tier RBAC (Viewer/Operator/Admin), stdio + HTTP
+4. **Telemetry Watchdog** — CPU/RAM/disk monitoring, 5 severity levels, automatic circuit breakers
+
+Three entry points share the same agent runtime:
+- CLI: `bubbaloop agent chat` (thin Zenoh client, no LLM on CLI side)
+- MCP stdio: `bubbaloop mcp --stdio` (for Claude Code, Admin tier)
+- MCP HTTP: daemon on :8088 (bearer token auth, localhost only)
+
+### Layer Diagram
+
+```
+CLI / Dashboard / MCP Client
+         |
+         | Zenoh pub/sub
+         |
++---------+------------------------------------------------+
+|  Daemon (~13 MB single binary)                           |
+|  Agent Runtime  | MCP Server | Node Manager              |
+|  Telemetry Watchdog                                      |
++---------+------------------------------------------------+
+         |
+         | Zenoh pub/sub
+         |
++--------+--------+--------+
+Camera   IMU    Motor   Weather     (self-describing nodes)
+```
+
+## Zenoh Messaging
+
+Zenoh is a pub/sub/query protocol for robotics and IoT. Three patterns:
+
+| Pattern | Use |
+|---------|-----|
+| Pub/Sub | Continuous data streams (sensor frames, telemetry) |
+| Queryable | On-demand fetch (schema, config, health) |
+| Liveliness | Node presence detection |
+
+**CRITICAL: Always use `mode: "client"` for all nodes and CLI.** Peer mode bypasses the router.
+
+### Topic Convention
+
+```
+bubbaloop/{key_space}/{machine_id}/{suffix}
+```
+
+- `global` = network-visible (dashboard, CLI, remote machines)
+- `local` = SHM-only (never crosses WebSocket bridge)
+
+Examples:
+- `bubbaloop/global/nvidia_orin00/tapo_terrace/compressed` — camera frames
+- `bubbaloop/local/nvidia_orin00/tapo_terrace/raw` — raw RGBA (SHM-only)
+- `bubbaloop/global/nvidia_orin00/openmeteo/weather` — weather data
+
+### SDK Publishers (Rust)
+
+```rust
+let pub_proto = ctx.publisher_proto::<CompressedImage>("compressed").await?;
+pub_proto.put(&image).await?;
+
+let pub_json = ctx.publisher_json("weather").await?;
+pub_json.put(&serde_json::json!({"temperature": 22.5})).await?;
+```
+
+### SDK Publishers (Python)
+
+```python
+pub_proto = ctx.publisher_proto("compressed", msg_class=CompressedImage)
+pub_proto.put(image)
+
+pub_json = ctx.publisher_json("weather")
+pub_json.put({"temperature": 22.5})
+```
+
+## Agent Memory (4 Tiers)
+
+| Tier | Storage | Written By | Latency |
+|------|---------|-----------|---------|
+| 0 — World State | SQLite | Context Providers (no LLM) | <1ms |
+| 1 — Short-term | RAM Vec<Message> | Agent turns | instant |
+| 2 — Episodic | NDJSON + FTS5 | Compaction | <10ms |
+| 3 — Semantic | SQLite | Agent reasoning | <50ms |
+
+World State is injected at the top of every agent turn. Episodic memory uses BM25 search with temporal decay. Semantic memory stores beliefs (subject+predicate assertions with confidence).
+
+## Agent Gateway Protocol
+
+```
+CLI → publish to agent inbox → Daemon processes with LLM → publishes AgentEvents to outbox
+```
+
+Wire format is JSON. Event types: `delta` (streaming token), `tool` (calling tool), `tool_result`, `error`, `done`.
+
+## Node Contract
+
+Every node serves five standard queryables:
+
+| Resource | Returns |
+|----------|---------|
+| `{node}/schema` | Protobuf FileDescriptorSet (binary) |
+| `{node}/manifest` | Capabilities, topics, commands (JSON) |
+| `{node}/health` | Status and uptime (JSON) |
+| `{node}/config` | Current configuration (JSON) |
+| `{node}/command` | Imperative actions (JSON) |
+
+Discovery: query `bubbaloop/**/manifest` to find all nodes.
+
+## Node SDK
+
+### Rust
+
+```rust
+use bubbaloop_node::{Node, NodeContext, run_node};
+
+struct MySensor;
+
+#[async_trait]
+impl Node for MySensor {
+    async fn init(ctx: &NodeContext) -> anyhow::Result<Self> { Ok(Self) }
+    async fn run(self, ctx: NodeContext) -> anyhow::Result<()> {
+        let publisher = ctx.publisher_json("data").await?;
+        loop {
+            tokio::select! {
+                _ = ctx.shutdown_rx.changed() => break,
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                    publisher.put(&reading).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() { run_node::<MySensor>().await.unwrap(); }
+```
+
+Dependencies:
+```toml
+[dependencies]
+bubbaloop-node = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
+[build-dependencies]
+bubbaloop-node-build = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
+```
+
+### Python
+
+```python
+from bubbaloop_node import NodeContext, run_node, JsonPublisher
+
+class MySensor:
+    def __init__(self, ctx: NodeContext):
+        self.pub = ctx.publisher_json("data")
+
+    def run(self, ctx: NodeContext):
+        while not ctx.is_shutdown():
+            self.pub.put({"value": 42})
+            time.sleep(1)
+
+run_node(MySensor)
+```
+
+Install: `pip install git+https://github.com/kornia/bubbaloop.git#subdirectory=python-sdk`
+
+## MCP Tools (42 tools, 11 categories)
+
+| Category | Tools |
+|----------|-------|
+| Discovery | list nodes, health, config, manifest, schema, logs, stream info, commands, capabilities |
+| Lifecycle | install, uninstall, start, stop, restart, build, remove, clean, autostart |
+| Data | send command, query Zenoh |
+| System | system status, machine info |
+| Memory | jobs, proposals, clear episodic memory |
+| Beliefs | durable subject+predicate assertions with confidence |
+| World State | live sensor-derived snapshot |
+| Context Providers | wire Zenoh topics to world state |
+| Missions | list, pause, resume, cancel |
+| Constraints | register and list per-mission safety limits |
+| Alerts | register/unregister reactive arousal triggers |
+
+RBAC: Viewer (read-only) < Operator (lifecycle + commands) < Admin (install/uninstall + system).
+
+## CLI Reference
+
+| Command | Description |
+|---------|-------------|
+| `bubbaloop up` | Start daemon + load skills |
+| `bubbaloop status` | Show service and node status |
+| `bubbaloop doctor` | Run system diagnostics |
+| `bubbaloop login` | Authenticate with Anthropic |
+| `bubbaloop agent chat` | Interactive agent REPL |
+| `bubbaloop agent chat "msg"` | Single-message mode |
+| `bubbaloop agent setup` | Configure agent provider/model |
+| `bubbaloop agent list` | List running agents |
+| `bubbaloop node install <name>` | Install from marketplace |
+| `bubbaloop node start <name>` | Start a node |
+| `bubbaloop node stop <name>` | Stop a node |
+| `bubbaloop node list` | List registered nodes |
+| `bubbaloop node logs <name>` | View node logs |
+| `bubbaloop mcp --stdio` | Start MCP server (stdio) |
+
+## Telemetry Watchdog
+
+5 severity levels with adaptive sampling:
+
+| Level | Threshold | Sampling | Action |
+|-------|-----------|----------|--------|
+| Green | <60% RAM | 30s | Normal |
+| Yellow | 60-80% | 30s | Warn agent |
+| Orange | 80-90% | 10s | Urgent alert |
+| Red | 90-95% | 10s | Kill largest non-essential node |
+| Critical | >95% | 5s | Kill ALL non-essential nodes |
+
+Config: `~/.bubbaloop/telemetry.toml` (file-watched, hot-reload).
+
+## Supported Platforms
+
+- NVIDIA Jetson (Orin, Xavier, Nano) — ARM64
+- Raspberry Pi 4/5 — ARM64
+- Any Linux x86_64
+
+## Links
+
+- Repository: https://github.com/kornia/bubbaloop
+- Documentation: https://kornia.org/bubbaloop/
+- Discord: https://discord.com/invite/HfnywwpBnD
+- License: Apache-2.0

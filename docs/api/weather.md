@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop weather message API. Protobuf schema for temperature, humidity, pressure, wind speed, and weather condition codes."
+---
+
 # Weather Messages
 
 Weather messages define the format for data published by the OpenMeteo weather service.

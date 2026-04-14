@@ -26,6 +26,7 @@ pub mod supervisor;
 pub mod systemd;
 pub mod telemetry;
 pub mod util;
+pub mod world_state_sweeper;
 
 pub use node_manager::NodeManager;
 
@@ -55,6 +56,25 @@ pub async fn create_session(endpoint: Option<&str>) -> Result<Arc<Session>, zeno
     let ep = endpoint
         .or(env_endpoint.as_deref())
         .unwrap_or("tcp/127.0.0.1:7447");
+
+    // Validate endpoint to prevent JSON5 injection via format!() interpolation.
+    // Reject quotes, backslashes, control characters, and non-endpoint strings.
+    if ep.contains('"') || ep.contains('\\') || ep.chars().any(|c| c.is_control()) {
+        let msg = format!(
+            "Zenoh endpoint contains invalid characters (quotes, backslashes, or control chars): {}",
+            ep.chars().take(100).collect::<String>()
+        );
+        log::error!("{}", msg);
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, msg).into());
+    }
+    if !ep.contains('/') {
+        let msg = format!(
+            "Zenoh endpoint does not look valid (missing '/'): {}",
+            ep.chars().take(100).collect::<String>()
+        );
+        log::error!("{}", msg);
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, msg).into());
+    }
 
     log::info!("Connecting to Zenoh router at: {}", ep);
 
@@ -123,20 +143,21 @@ async fn run_daemon_gateway(
     shutdown_tx: tokio::sync::watch::Sender<()>,
     mut shutdown_rx: tokio::sync::watch::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
     let machine_id = util::get_machine_id();
     let start_time = std::time::Instant::now();
 
-    // Create platform for dispatching commands
+    // Create platform for dispatching commands.
+    // `shutdown_rx` is forwarded so MCP tools that spawn background tasks
+    // (e.g. live context providers) tie their lifetime to daemon shutdown.
     let platform = std::sync::Arc::new(crate::mcp::platform::DaemonPlatform::new(
         node_manager.clone(),
         session.clone(),
-        scope.clone(),
         machine_id.clone(),
+        Some(shutdown_rx.clone()),
     ));
 
     // 1. Register manifest queryable
-    let manifest_key = gateway::manifest_topic(&scope, &machine_id);
+    let manifest_key = gateway::manifest_topic(&machine_id);
     let manifest_session = session.clone();
     let manifest_machine_id = machine_id.clone();
     let manifest_nm = node_manager.clone();
@@ -172,13 +193,25 @@ async fn run_daemon_gateway(
                 }
             },
             Err(e) => {
-                log::warn!("[Gateway] Failed to register manifest queryable: {}", e);
+                log::warn!(
+                    "[Gateway] Failed to register manifest queryable: {}",
+                    crate::daemon::util::sanitize_log_msg(&e.to_string())
+                );
             }
         }
     });
 
+    // Load authentication token for gateway command validation
+    let expected_token = match crate::mcp::auth::load_or_generate_token() {
+        Ok(token) => token,
+        Err(e) => {
+            log::error!("[Gateway] Failed to load MCP token: {}", e);
+            return Err(format!("Failed to load MCP token: {}", e).into());
+        }
+    };
+
     // 2. Register nodes queryable (returns JSON NodeList for dashboard)
-    let nodes_key = gateway::nodes_topic(&scope, &machine_id);
+    let nodes_key = gateway::nodes_topic(&machine_id);
     let nodes_session = session.clone();
     let nodes_nm = node_manager.clone();
     let mut nodes_shutdown = shutdown_rx.clone();
@@ -215,7 +248,7 @@ async fn run_daemon_gateway(
 
     // 3. Register command queryable (for dashboard / Zenoh GET clients)
     //    Accepts JSON NodeCommandJson, returns JSON CommandResultJson.
-    let cmd_queryable_key = gateway::command_topic(&scope, &machine_id);
+    let cmd_queryable_key = gateway::command_topic(&machine_id);
     let cmd_queryable_session = session.clone();
     let cmd_queryable_platform = platform.clone();
     let cmd_queryable_machine_id = machine_id.clone();
@@ -350,8 +383,8 @@ async fn run_daemon_gateway(
 
     // 4. Subscribe to command topic and dispatch (legacy JSON pub/sub for CLI clients).
     //    The JSON queryable above handles the dashboard's request/reply API.
-    let cmd_topic = gateway::command_topic(&scope, &machine_id);
-    let evt_topic = gateway::events_topic(&scope, &machine_id);
+    let cmd_topic = gateway::command_topic(&machine_id);
+    let evt_topic = gateway::events_topic(&machine_id);
 
     let subscriber = session.declare_subscriber(&cmd_topic).await.map_err(
         |e| -> Box<dyn std::error::Error> {
@@ -371,7 +404,7 @@ async fn run_daemon_gateway(
         "[Gateway] Daemon gateway started: cmd={}, events={}, manifest={}",
         cmd_topic,
         evt_topic,
-        gateway::manifest_topic(&scope, &machine_id),
+        gateway::manifest_topic(&machine_id),
     );
 
     loop {
@@ -382,6 +415,29 @@ async fn run_daemon_gateway(
                         let payload = sample.payload().to_bytes().to_vec();
                         match serde_json::from_slice::<gateway::DaemonCommand>(&payload) {
                             Ok(cmd) => {
+                                // Validate auth token before dispatching
+                                let token_valid = match &cmd.auth_token {
+                                    Some(token) => crate::mcp::auth::validate_token(token, &expected_token),
+                                    None => false,
+                                };
+                                if !token_valid {
+                                    log::warn!(
+                                        "[Gateway] Rejected command id={}: missing or invalid auth token",
+                                        cmd.id
+                                    );
+                                    let reject_events = vec![
+                                        gateway::DaemonEvent::error(&cmd.id, "authentication required: invalid or missing auth_token"),
+                                        gateway::DaemonEvent::done(&cmd.id),
+                                    ];
+                                    for event in reject_events {
+                                        if let Ok(bytes) = serde_json::to_vec(&event) {
+                                            if let Err(e) = publisher.put(bytes).await {
+                                                log::warn!("[Gateway] Failed to publish reject event: {}", e);
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
                                 let events = dispatch_daemon_command(
                                     &cmd,
                                     &platform,
@@ -399,12 +455,12 @@ async fn run_daemon_gateway(
                                 }
                             }
                             Err(e) => {
-                                log::warn!("[Gateway] Invalid command message: {}", e);
+                                log::warn!("[Gateway] Invalid command message: {}", util::sanitize_log_msg(&e.to_string()));
                             }
                         }
                     }
                     Err(e) => {
-                        log::warn!("[Gateway] Command subscriber error: {}", e);
+                        log::warn!("[Gateway] Command subscriber error: {}", util::sanitize_log_msg(&e.to_string()));
                         break;
                     }
                 }

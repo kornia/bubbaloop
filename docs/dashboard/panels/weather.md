@@ -1,3 +1,7 @@
+---
+description: "Weather panel in the Bubbaloop dashboard. Display real-time temperature, humidity, wind, and conditions from OpenMeteo service nodes."
+---
+
 # Weather Panel
 
 The Weather panel displays current conditions and forecasts from the OpenMeteo weather service.
@@ -159,7 +163,7 @@ See [Weather API](../../api/weather.md) for complete field documentation.
 
 ### No weather data
 
-1. Verify OpenMeteo service is running: `pixi run weather`
+1. Verify OpenMeteo service is running: `bubbaloop node list` (check openmeteo status)
 2. Check `bubbaloop debug topics` for weather topics
 3. Verify internet connectivity
 

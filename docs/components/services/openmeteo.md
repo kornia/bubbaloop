@@ -1,3 +1,7 @@
+---
+description: "OpenMeteo weather service node for Bubbaloop. Fetch real-time weather data and publish temperature, humidity, and conditions over Zenoh."
+---
+
 # OpenMeteo Weather Service
 
 The OpenMeteo service fetches weather data from the [Open-Meteo API](https://open-meteo.com/) and publishes it to the Zenoh message bus.
@@ -104,25 +108,23 @@ fetch:
 
 ## Running
 
-### Start Weather Service
+### Start Weather Node
 
 ```bash
-# Default config
-pixi run weather
+# Via daemon (recommended)
+bubbaloop node start openmeteo
+bubbaloop node logs openmeteo -f
 
-# Custom config file
-pixi run weather -- -c /path/to/config.yaml
-
-# Custom Zenoh endpoint
-pixi run weather -- -z tcp/192.168.1.50:7447
+# Direct (for development)
+pixi run main -- -c config.yaml -e tcp/127.0.0.1:7447
 ```
 
 ### CLI Options
 
 | Option | Description |
 |--------|-------------|
-| `-c, --config` | Path to configuration file |
-| `-z, --zenoh-endpoint` | Zenoh router endpoint |
+| `-c, --config` | Path to configuration YAML file |
+| `-e, --endpoint` | Zenoh router endpoint |
 
 ## Topics
 
@@ -228,7 +230,7 @@ The [Weather Panel](../../dashboard/panels/weather.md) displays OpenMeteo data w
 
 1. Check internet connectivity
 2. Verify Open-Meteo API is accessible: `curl https://api.open-meteo.com/v1/forecast`
-3. Check `pixi run weather` logs for errors
+3. Check `bubbaloop node logs openmeteo` for errors
 
 ### Wrong location
 

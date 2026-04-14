@@ -1,3 +1,7 @@
+---
+description: "Camera panel in the Bubbaloop dashboard. Live video feed with detection overlays, snapshot capture, and multi-camera grid view."
+---
+
 # Camera Panel
 
 The Camera panel displays live H264 video streams from RTSP cameras using hardware-accelerated WebCodecs decoding.
@@ -152,7 +156,7 @@ End-to-end latency (camera to display):
 ### "Waiting for keyframe"
 
 - Wait a few seconds for the next keyframe
-- Check that camera is streaming (see `pixi run cameras` logs)
+- Check that camera is streaming (see `bubbaloop node logs rtsp-camera` output)
 - Verify H264 format (not H265/HEVC)
 
 ### Low FPS

@@ -236,6 +236,26 @@ fn validate_single_command_word(cmd_base: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Strip single- and double-quoted strings from a command,
+/// so that operators inside quotes are not flagged.
+fn strip_quoted_strings(cmd: &str) -> String {
+    let mut result = String::with_capacity(cmd.len());
+    let mut chars = cmd.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\'' || ch == '"' {
+            // Skip until the matching closing quote
+            for inner in chars.by_ref() {
+                if inner == ch {
+                    break;
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
 /// Block dangerous shell commands that could damage the system.
 ///
 /// Defence-in-depth: commands are checked against multiple categories.
@@ -260,14 +280,10 @@ pub(crate) fn validate_command(command: &str) -> Result<(), String> {
             ));
         }
     }
-    // Block redirection operators — can write arbitrary files
-    if normalized.contains(">>")
-        || normalized.contains("2>")
-        || normalized.contains("1>")
-        || normalized.contains(" > ")
-        || normalized.starts_with("> ")
-        || normalized.contains(" < ")
-    {
+    // Block redirection operators — can write arbitrary files.
+    // Strip quoted strings first so we don't flag `>` inside quotes.
+    let unquoted_for_redir = strip_quoted_strings(&normalized);
+    if unquoted_for_redir.contains('>') || unquoted_for_redir.contains('<') {
         return Err(
             "Blocked: shell redirection operators (>, <, >>, 2>) are not allowed.".to_string(),
         );
@@ -649,6 +665,18 @@ mod tests {
         assert!(validate_command("echo test >> /tmp/log").is_err());
         assert!(validate_command("cmd 2>/dev/null").is_err());
         assert!(validate_command("cmd < /etc/shadow").is_err());
+        // No-space redirection bypass (SEC-035)
+        assert!(validate_command("echo test >/etc/passwd").is_err());
+        assert!(validate_command("echo test>file").is_err());
+        assert!(validate_command("cmd 1>output").is_err());
+        assert!(validate_command("cmd <input").is_err());
+    }
+
+    #[test]
+    fn command_allows_greater_in_quotes() {
+        // > inside quotes should not be flagged
+        assert!(validate_command("echo 'a > b'").is_ok());
+        assert!(validate_command("echo \"2 > 1\"").is_ok());
     }
 
     #[test]

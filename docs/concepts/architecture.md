@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop architecture overview. Single-binary runtime with Zenoh data plane, multi-agent system, node manager, MCP server, and telemetry watchdog."
+---
+
 # Architecture
 
 How the pieces fit together.
@@ -14,8 +18,8 @@ How the pieces fit together.
   +---------+------------------------------------------------+
   |  Daemon (~12-13 MB single binary)                        |
   |                                                          |
-  |  Agent Runtime | MCP Server | Node Manager | Gateway    |
-  |                 |              |                          |
+  |  Agent Runtime  | MCP Server | Node Manager              |
+  |  (incl. Gateway)|              |                          |
   |  Telemetry Watchdog                                      |
   +---------+------------------------------------------------+
            |
@@ -26,7 +30,7 @@ How the pieces fit together.
   Camera   IMU    Motor   Weather     (self-describing nodes)
 ```
 
-One binary. Five subsystems. One data plane.
+One binary. Four subsystems. One data plane.
 
 ---
 
@@ -67,15 +71,15 @@ CLI client                Daemon (agent runtime)
     |<-- publish to outbox ------|
 ```
 
-- Shared inbox topic: `bubbaloop/{scope}/{machine_id}/agent/inbox`
-- Per-agent outbox: `bubbaloop/{scope}/{machine_id}/agent/{agent_id}/outbox`
+- Shared inbox topic: `bubbaloop/global/{machine_id}/agent/inbox`
+- Per-agent outbox: `bubbaloop/global/{machine_id}/agent/{agent_id}/outbox`
 - Wire format: JSON (`AgentMessage`, `AgentEvent`)
 
 **Per-agent state**
 
 Each agent has:
 - `Soul` — identity.md + capabilities.toml in `~/.bubbaloop/agents/{id}/soul/`
-- 3-tier Memory — short-term (RAM), episodic (NDJSON + FTS5), semantic (SQLite)
+- 4-tier Memory — world state (live SQLite), short-term (RAM), episodic (NDJSON + FTS5), semantic (SQLite)
 - Adaptive heartbeat — arousal rises on activity, decays at rest
 
 **Configuration**
@@ -94,7 +98,7 @@ systemd. Uses D-Bus (`zbus`) — no subprocess spawning.
 
 **Agent Runtime** — multi-agent Zenoh gateway. Described above.
 
-**MCP Server** — 30 MCP tools + 7 agent-internal tools (37 total), 3-tier RBAC, stdio + HTTP transports.
+**MCP Server** — 42 MCP tools + agent-internal tools, 3-tier RBAC, stdio + HTTP transports.
 
 **Telemetry Watchdog**
 
@@ -118,17 +122,21 @@ runtime via `update_telemetry_config`.
 
 The sole control interface. Zenoh is the data plane only.
 
-**30 MCP tools + 7 agent-internal tools (37 total) across 7 categories**
+**42 MCP tools + agent-internal tools across 11 categories**
 
 | Category | What it covers |
 |---|---|
-| Node lifecycle | install, uninstall, start, stop, restart, build, clean, autostart |
-| Fleet discovery | list nodes, health, config, manifest, schema, stream info |
-| Agent memory | search, forget, semantic store |
-| Telemetry | system metrics, history, config |
-| Scheduling | schedule task, list jobs, delete job |
-| Proposals | create, list proposals |
-| System | machine info, read/write file, run command |
+| Discovery | list nodes, health, config, manifest, schema, logs, stream info, commands, capabilities |
+| Lifecycle | install, uninstall, start, stop, restart, build, remove, clean, autostart |
+| Data | send command, query Zenoh |
+| System | system status, machine info |
+| Memory | jobs, proposals, clear episodic memory |
+| Beliefs | durable subject+predicate assertions with confidence |
+| World State | live sensor-derived snapshot |
+| Context Providers | wire Zenoh topics → world state |
+| Missions | list, pause, resume, cancel |
+| Constraints | register and list per-mission safety limits |
+| Alerts | register/unregister reactive arousal triggers |
 
 **3-tier RBAC**
 
@@ -138,7 +146,7 @@ The sole control interface. Zenoh is the data plane only.
 | Operator | Viewer + lifecycle, send_command, config writes |
 | Admin | Operator + install/uninstall, system tools |
 
-Default for stdio: Admin. Default for HTTP: Admin (Viewer planned for phase 2).
+Default for stdio: Admin. Default for HTTP: Viewer.
 
 **Dual-plane design**
 
@@ -214,19 +222,18 @@ Node --> Protobuf --> Zenoh --> WebSocket Bridge --> Browser / Dashboard
 ## Topic Hierarchy
 
 ```
-bubbaloop/{scope}/{machine_id}/{node_name}/{resource}
-          |        |            |           |
-          |        |            |           +-- schema, manifest, health, config, command
-          |        |            +-------------- node identifier  [a-zA-Z0-9_-], 1-64 chars
-          |        +--------------------------- machine ID (e.g., nvidia_orin00)
-          +------------------------------------ scope (local / edge / cloud)
+bubbaloop/{key_space}/{machine_id}/{node_name}/{resource}
+           |          |            |            |
+           |          |            |            +-- data topic, health, schema
+           |          |            +--------------- node identifier  [a-zA-Z0-9_-], 1-64 chars
+           |          +---------------------------- machine ID (e.g., nvidia_orin00)
+           +--------------------------------------- global (network) or local (SHM-only)
 ```
 
-Nodes receive scope, machine ID, and Zenoh endpoint via environment variables
+Nodes receive machine ID and Zenoh endpoint via environment variables
 injected by the daemon into systemd unit files:
 
 ```
-BUBBALOOP_SCOPE=local
 BUBBALOOP_MACHINE_ID=nvidia_orin00
 BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447
 ```
@@ -236,5 +243,5 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447
 ## Next Steps
 
 - [Messaging](messaging.md) — Zenoh pub/sub patterns and topic conventions
-- [Memory](memory.md) — 3-tier agent memory: short-term, episodic, semantic
+- [Memory](memory.md) — 4-tier agent memory: world state, short-term, episodic, semantic
 - [ARCHITECTURE.md](../../ARCHITECTURE.md) — Full security model, technology choices, design rationale

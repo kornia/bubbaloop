@@ -1,3 +1,7 @@
+---
+description: "RTSP camera node for Bubbaloop. Stream IP cameras via RTSP, publish frames over Zenoh, and feed them to vision detection pipelines."
+---
+
 # RTSP Camera
 
 The RTSP Camera sensor captures H264 video streams from IP cameras and publishes them to the Zenoh message bus.
@@ -6,17 +10,19 @@ The RTSP Camera sensor captures H264 video streams from IP cameras and publishes
 
 | Property | Value |
 |----------|-------|
-| Binary | `cameras_node` |
+| Binary | `rtsp_camera_node` |
 | Config File | `config.yaml` |
-| Output | `CompressedImage` (H264) |
-| Topic Pattern | `/camera/{name}/compressed` |
+| Output | `CompressedImage` (H264) + `RawImage` (RGBA over SHM) |
+| Topic Pattern | `bubbaloop/global/{machine_id}/{name}/compressed` |
 
 ## Features
 
-- **Zero-copy H264 passthrough** — No decoding, minimal CPU usage
-- **Multi-camera support** — Run multiple cameras simultaneously
+- **Zero-copy H264 passthrough** — No decoding on the compressed path, minimal CPU usage
+- **Multi-instance support** — Run multiple cameras as separate instances of the same binary
 - **SPS/PPS injection** — Stream compatibility for web decoding
-- **Configurable latency** — Balance between delay and stability
+- **Raw RGBA over SHM** — Decoded frames published via shared memory for local consumers
+- **Hardware acceleration** — NVIDIA NVDEC (Jetson) or CPU fallback
+- **Configurable latency and frame rate** — Balance between delay and throughput
 
 ## Architecture
 
@@ -48,20 +54,25 @@ flowchart LR
 
 ### Basic Configuration
 
+Each camera instance has its own `config.yaml`:
+
 ```yaml
-cameras:
-  - name: "front_door"
-    url: "rtsp://admin:password@192.168.1.100:554/stream1"
-    latency: 200
+name: tapo_entrance
+url: "rtsp://admin:password@192.168.1.100:554/stream1"
+latency: 200
 ```
 
 ### Configuration Fields
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `name` | string | Yes | — | Unique identifier, used in topic name |
+| `name` | string | Yes | — | Unique instance name (used in topic path and health) |
 | `url` | string | Yes | — | Full RTSP URL with credentials |
-| `latency` | integer | No | `200` | Buffer latency in milliseconds |
+| `latency` | integer | No | `200` | Buffer latency in milliseconds (1-10000) |
+| `frame_rate` | integer | No | — | Target publish rate in FPS (1-120, unlimited if unset) |
+| `raw_width` | integer | No | `560` | Width of raw RGBA frames (SHM path) |
+| `raw_height` | integer | No | `560` | Height of raw RGBA frames (SHM path) |
+| `hw_accel` | string | No | `nvidia` | Hardware acceleration: `nvidia` (Jetson NVDEC) or `cpu` |
 
 ### RTSP URL Format
 
@@ -82,50 +93,58 @@ url: "rtsp://192.168.1.100:554/live"
 url: "rtsp://camera.local:8554/h264"
 ```
 
-### Multi-Camera Configuration
+### Multi-Camera Setup
+
+Each camera runs as a separate instance of the same binary. Register each with a unique name and config:
+
+```bash
+bubbaloop node instance rtsp-camera entrance --config configs/entrance.yaml --start
+bubbaloop node instance rtsp-camera parking  --config configs/parking.yaml --start
+bubbaloop node instance rtsp-camera lobby    --config configs/lobby.yaml --start
+```
+
+Each config file is a single camera:
 
 ```yaml
-cameras:
-  - name: "entrance"
-    url: "rtsp://admin:pass@192.168.1.100:554/stream2"
-    latency: 200
+# configs/entrance.yaml
+name: entrance
+url: "rtsp://admin:pass@192.168.1.100:554/stream2"
+latency: 200
 
-  - name: "parking"
-    url: "rtsp://admin:pass@192.168.1.101:554/stream2"
-    latency: 200
-
-  - name: "lobby"
-    url: "rtsp://admin:pass@192.168.1.102:554/stream2"
-    latency: 300
+# configs/parking.yaml
+name: parking
+url: "rtsp://admin:pass@192.168.1.101:554/stream2"
+latency: 200
+hw_accel: cpu
 ```
 
 ## Running
 
-### Start Camera Service
+### Start Camera Node
 
 ```bash
-# Default config (config.yaml)
-pixi run cameras
+# Via daemon (recommended)
+bubbaloop node start rtsp-camera
+bubbaloop node logs rtsp-camera -f
 
-# Custom config file
-pixi run cameras -- -c /path/to/config.yaml
-
-# Custom Zenoh endpoint
-pixi run cameras -- -z tcp/192.168.1.50:7447
+# Direct (for development)
+pixi run main -- -c config.yaml -e tcp/127.0.0.1:7447
 ```
 
 ### CLI Options
 
 | Option | Description |
 |--------|-------------|
-| `-c, --config` | Path to configuration file |
-| `-z, --zenoh-endpoint` | Zenoh router endpoint |
+| `-c, --config` | Path to configuration YAML file |
+| `-e, --endpoint` | Zenoh router endpoint |
 
 ### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `ZENOH_ENDPOINT` | Override Zenoh endpoint |
+| `BUBBALOOP_ZENOH_ENDPOINT` | Override Zenoh endpoint (default: `tcp/127.0.0.1:7447`) |
+| `BUBBALOOP_MACHINE_ID` | Machine identifier (default: hostname) |
+| `RTSP_URL` | Override RTSP URL from config (useful for Docker/env-based deployments) |
 | `RUST_LOG` | Logging level (info, debug, trace) |
 
 ## Topics
@@ -134,18 +153,21 @@ pixi run cameras -- -z tcp/192.168.1.50:7447
 
 | Topic | Type | Description |
 |-------|------|-------------|
-| `bubbaloop/{scope}/{machine_id}/camera/{name}/compressed` | `CompressedImage` | H264 compressed frames |
+| `bubbaloop/global/{machine_id}/{name}/compressed` | `CompressedImage` | H264 compressed frames (network-visible) |
+| `bubbaloop/local/{machine_id}/{name}/raw` | `RawImage` | RGBA decoded frames (SHM-only, same machine) |
 
 ### Topic Format
 
-```
-bubbaloop/{scope}/{machine_id}/camera/{name}/compressed
-```
+The topic key is derived from the `name` config field. If the name ends with `_camera`, the suffix is stripped:
 
-**Example:** Camera named `front_door` on machine `nvidia_orin00` publishes to:
+- `name: tapo_entrance_camera` → topics at `tapo_entrance/compressed` and `tapo_entrance/raw`
+- `name: front_door` → topics at `front_door/compressed` and `front_door/raw`
+
+**Example:** Camera named `tapo_terrace` on machine `nvidia_orin00` publishes to:
 
 ```
-bubbaloop/local/nvidia_orin00/camera/front_door/compressed
+bubbaloop/global/nvidia_orin00/tapo_terrace/compressed   (H264, network-visible)
+bubbaloop/local/nvidia_orin00/tapo_terrace/raw           (RGBA, SHM-only)
 ```
 
 ## Message Format
@@ -167,7 +189,8 @@ See [Camera API](../../api/camera.md) for the full protobuf definition.
 | `acq_time` | Frame acquisition timestamp (nanoseconds) |
 | `pub_time` | Message publication timestamp (nanoseconds) |
 | `sequence` | Frame sequence number |
-| `frame_id` | Camera name |
+| `frame_id` | Camera instance name |
+| `machine_id` | Machine identifier (e.g., `nvidia_orin00`) |
 
 ## Performance
 
@@ -237,7 +260,7 @@ Many IP cameras offer multiple streams:
 
 1. Wait a few seconds for the next keyframe
 2. Verify camera is streaming H264 (not H265/HEVC)
-3. Check `pixi run cameras` logs for errors
+3. Check `bubbaloop node logs rtsp-camera` for errors
 
 ## Next Steps
 

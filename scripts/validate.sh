@@ -247,11 +247,10 @@ else
     fail "get_machine_id() defined $MACHINE_ID_DEFS times (expected 1)"
 fi
 
-step "Templates: scoped topics (BUBBALOOP_SCOPE + BUBBALOOP_MACHINE_ID)"
+step "Templates: machine ID in topic prefix (BUBBALOOP_MACHINE_ID)"
 SCOPE_OK=true
 for tpl in templates/python-node/main.py.template templates/rust-node/src/node.rs.template; do
     if [ -f "$tpl" ]; then
-        grep -q 'BUBBALOOP_SCOPE' "$tpl" || { fail "$tpl missing BUBBALOOP_SCOPE"; SCOPE_OK=false; }
         grep -q 'BUBBALOOP_MACHINE_ID' "$tpl" || { fail "$tpl missing BUBBALOOP_MACHINE_ID"; SCOPE_OK=false; }
     fi
 done

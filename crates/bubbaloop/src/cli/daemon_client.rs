@@ -35,19 +35,20 @@ pub type Result<T> = std::result::Result<T, DaemonClientError>;
 /// Zenoh-based client for daemon communication.
 pub struct DaemonClient {
     session: Arc<Session>,
-    scope: String,
     machine_id: String,
+    /// Cached auth token loaded from `~/.bubbaloop/mcp-token`.
+    auth_token: Option<String>,
 }
 
 impl DaemonClient {
     /// Create a new Zenoh-based daemon client with an existing session.
     pub fn new(session: Arc<Session>) -> Self {
-        let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
         let machine_id = crate::daemon::util::get_machine_id();
+        let auth_token = crate::mcp::auth::load_or_generate_token().ok();
         Self {
             session,
-            scope,
             machine_id,
+            auth_token,
         }
     }
 
@@ -63,7 +64,7 @@ impl DaemonClient {
     /// Check if the daemon is running by querying its manifest.
     /// Uses 1s timeout with 3 retries per Zenoh query convention.
     pub async fn is_running(&self) -> bool {
-        let pattern = gateway::manifest_topic(&self.scope, &self.machine_id);
+        let pattern = gateway::manifest_topic(&self.machine_id);
         for _ in 0..3 {
             if let Ok(replies) = self
                 .session
@@ -152,7 +153,7 @@ impl DaemonClient {
         let correlation_id = uuid::Uuid::new_v4().to_string();
 
         // Subscribe to events BEFORE publishing (avoid missing early events)
-        let evt_topic = gateway::events_topic(&self.scope, &self.machine_id);
+        let evt_topic = gateway::events_topic(&self.machine_id);
         let subscriber = self
             .session
             .declare_subscriber(&evt_topic)
@@ -160,10 +161,11 @@ impl DaemonClient {
             .map_err(|e| DaemonClientError::Request(format!("Failed to subscribe: {}", e)))?;
 
         // Publish command
-        let cmd_topic = gateway::command_topic(&self.scope, &self.machine_id);
+        let cmd_topic = gateway::command_topic(&self.machine_id);
         let cmd = DaemonCommand {
             id: correlation_id.clone(),
             command,
+            auth_token: self.auth_token.clone(),
         };
         let payload = serde_json::to_vec(&cmd)
             .map_err(|e| DaemonClientError::Request(format!("Serialize error: {}", e)))?;
@@ -230,7 +232,7 @@ impl DaemonClient {
     /// Query daemon health (manifest).
     /// Uses 1s timeout with 3 retries per Zenoh query convention.
     pub async fn health(&self) -> Result<DaemonManifest> {
-        let pattern = gateway::manifest_topic(&self.scope, &self.machine_id);
+        let pattern = gateway::manifest_topic(&self.machine_id);
         for _ in 0..3 {
             match self
                 .session

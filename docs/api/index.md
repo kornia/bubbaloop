@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop API reference. Protobuf message schemas, Zenoh topic conventions, and data formats for building custom integrations."
+---
+
 # API Reference
 
 Bubbaloop uses Protocol Buffers (protobuf) for message serialization across all components.

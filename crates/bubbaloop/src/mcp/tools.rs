@@ -118,6 +118,13 @@ pub(crate) struct AlertIdRequest {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct ListAlertsRequest {
+    /// Optional mission filter — omit to list alerts across all missions.
+    #[serde(default)]
+    mission_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct ConfigureContextRequest {
     /// Mission this provider is attached to.
     mission_id: String,
@@ -193,14 +200,12 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     pub fn new(
         platform: std::sync::Arc<P>,
         auth_token: Option<String>,
-        scope: String,
         machine_id: String,
     ) -> Self {
         Self {
             platform,
             auth_token,
             tool_router: Self::tool_router(),
-            scope,
             machine_id,
         }
     }
@@ -330,7 +335,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/manifest",
-            self.scope, self.machine_id, req.node_name
+            "global", self.machine_id, req.node_name
         );
         let manifest_text = match self.platform.query_zenoh(&key_expr).await {
             Ok(text) => text,
@@ -384,7 +389,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/command",
-            self.scope, self.machine_id, req.node_name
+            "global", self.machine_id, req.node_name
         );
         let payload = serde_json::json!({
             "command": req.command,
@@ -589,8 +594,6 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
                                     "name": name,
                                     "description": manifest.get("description").and_then(|d| d.as_str()).unwrap_or(""),
                                     "version": manifest.get("version").and_then(|v| v.as_str()).unwrap_or(""),
-                                    "publishes": manifest.get("publishes").cloned().unwrap_or(serde_json::json!([])),
-                                    "commands": manifest.get("commands").cloned().unwrap_or(serde_json::json!([])),
                                 }));
                         }
                     }
@@ -625,7 +628,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
         let info = serde_json::json!({
-            "zenoh_topic": format!("bubbaloop/{}/{}/{}/**", self.scope, self.machine_id, req.node_name),
+            "zenoh_topic": format!("bubbaloop/{}/{}/{}/**", "global", self.machine_id, req.node_name),
             "encoding": "protobuf",
             "endpoint": "tcp/localhost:7447",
             "note": "Subscribe to this topic via Zenoh client library for real-time data. MCP is control-plane only."
@@ -651,7 +654,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             Err(_) => (0, 0, 0),
         };
         let status = serde_json::json!({
-            "scope": self.scope,
+            "scope": "global",
             "machine_id": self.machine_id,
             "nodes_total": total,
             "nodes_running": running,
@@ -670,7 +673,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         log::info!("[MCP] tool=get_machine_info");
         let info = serde_json::json!({
             "machine_id": self.machine_id,
-            "scope": self.scope,
+            "scope": "global",
             "arch": std::env::consts::ARCH,
             "os": std::env::consts::OS,
             "hostname": hostname::get()
@@ -873,7 +876,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
         let key = format!(
             "bubbaloop/{}/{}/{}/schema",
-            self.scope, self.machine_id, req.node_name
+            "global", self.machine_id, req.node_name
         );
         match self.platform.query_zenoh(&key).await {
             Ok(result) => Ok(CallToolResult::success(vec![Content::text(result)])),
@@ -1152,6 +1155,20 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             description: req.description,
         };
 
+        // Validate at the MCP boundary so mock and daemon backends reject
+        // identical inputs identically. `into_config` is the single source
+        // of truth for default substitution — see
+        // `RegisterAlertParams::into_config`. The placeholder id is fine:
+        // the real one is minted by the backend; `validate()` only needs
+        // it to be non-empty.
+        if let Err(e) = params.clone().into_config("preview".to_string()).validate() {
+            log::warn!("[MCP] register_alert rejected: {}", e);
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))]));
+        }
+
         match self.platform.register_alert(params).await {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1169,6 +1186,31 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         log::info!("[MCP] tool=unregister_alert id={}", req.alert_id);
         match self.platform.unregister_alert(req.alert_id).await {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    #[tool(description = "List reactive alert rules with full introspection. \
+            Each entry includes predicate, debounce_secs, arousal_boost, description, \
+            and `dangling_fields` — world-state keys the predicate references \
+            that no registered context provider appears to produce. A non-empty \
+            dangling_fields list is a red flag: the rule may never fire, or may \
+            fire on stale/ghost values (see incident 2026-04-10). \
+            Optional mission_id filter.")]
+    async fn list_alerts(
+        &self,
+        Parameters(req): Parameters<ListAlertsRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=list_alerts mission_id={:?}", req.mission_id);
+        match self.platform.list_alerts(req.mission_id).await {
+            Ok(alerts) => {
+                let json = serde_json::to_string_pretty(&alerts)
+                    .unwrap_or_else(|e| format!("Error serializing: {}", e));
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: {}",
                 e

@@ -17,6 +17,9 @@ pub struct AgentMessage {
     /// Target agent ID. If None, routes to the default agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Bearer token for authentication (loaded from `~/.bubbaloop/mcp-token`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 // ── Outbox (Daemon → CLI) ────────────────────────────────────────
@@ -149,50 +152,47 @@ pub struct AgentManifest {
 
 /// Build the shared agent inbox topic.
 ///
-/// Format: `bubbaloop/{scope}/{machine}/agent/inbox`
-pub fn inbox_topic(scope: &str, machine_id: &str) -> String {
-    format!("bubbaloop/{}/{}/agent/inbox", scope, machine_id)
+/// Format: `bubbaloop/global/{machine}/agent/inbox`
+pub fn inbox_topic(machine_id: &str) -> String {
+    format!("bubbaloop/global/{}/agent/inbox", machine_id)
 }
 
 /// Build a per-agent outbox topic.
 ///
-/// Format: `bubbaloop/{scope}/{machine}/agent/{agent_id}/outbox`
-pub fn outbox_topic(scope: &str, machine_id: &str, agent_id: &str) -> String {
-    format!(
-        "bubbaloop/{}/{}/agent/{}/outbox",
-        scope, machine_id, agent_id
-    )
+/// Format: `bubbaloop/global/{machine}/agent/{agent_id}/outbox`
+pub fn outbox_topic(machine_id: &str, agent_id: &str) -> String {
+    format!("bubbaloop/global/{}/agent/{}/outbox", machine_id, agent_id)
 }
 
 /// Build a per-agent manifest topic (queryable).
 ///
-/// Format: `bubbaloop/{scope}/{machine}/agent/{agent_id}/manifest`
-pub fn manifest_topic(scope: &str, machine_id: &str, agent_id: &str) -> String {
+/// Format: `bubbaloop/global/{machine}/agent/{agent_id}/manifest`
+pub fn manifest_topic(machine_id: &str, agent_id: &str) -> String {
     format!(
-        "bubbaloop/{}/{}/agent/{}/manifest",
-        scope, machine_id, agent_id
+        "bubbaloop/global/{}/agent/{}/manifest",
+        machine_id, agent_id
     )
 }
 
 /// Build a wildcard pattern for discovering all agent manifests.
 ///
-/// Format: `bubbaloop/{scope}/{machine}/agent/*/manifest`
-pub fn manifest_wildcard(scope: &str, machine_id: &str) -> String {
-    format!("bubbaloop/{}/{}/agent/*/manifest", scope, machine_id)
+/// Format: `bubbaloop/global/{machine}/agent/*/manifest`
+pub fn manifest_wildcard(machine_id: &str) -> String {
+    format!("bubbaloop/global/{}/agent/*/manifest", machine_id)
 }
 
 /// Build a wildcard pattern for discovering agents on ALL machines.
 ///
-/// Format: `bubbaloop/{scope}/*/agent/*/manifest`
-pub fn manifest_wildcard_all(scope: &str) -> String {
-    format!("bubbaloop/{}/*/agent/*/manifest", scope)
+/// Format: `bubbaloop/global/*/agent/*/manifest`
+pub fn manifest_wildcard_all() -> String {
+    "bubbaloop/global/*/agent/*/manifest".to_string()
 }
 
 /// Build a wildcard pattern for subscribing to all agent outboxes.
 ///
-/// Format: `bubbaloop/{scope}/{machine}/agent/*/outbox`
-pub fn outbox_wildcard(scope: &str, machine_id: &str) -> String {
-    format!("bubbaloop/{}/{}/agent/*/outbox", scope, machine_id)
+/// Format: `bubbaloop/global/{machine}/agent/*/outbox`
+pub fn outbox_wildcard(machine_id: &str) -> String {
+    format!("bubbaloop/global/{}/agent/*/outbox", machine_id)
 }
 
 #[cfg(test)]
@@ -205,6 +205,7 @@ mod tests {
             id: "abc-123".to_string(),
             text: "list my nodes".to_string(),
             agent: Some("camera-expert".to_string()),
+            auth_token: Some("bb_test".to_string()),
         };
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: AgentMessage = serde_json::from_str(&json).unwrap();
@@ -217,6 +218,7 @@ mod tests {
             id: "abc-123".to_string(),
             text: "hello".to_string(),
             agent: None,
+            auth_token: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(!json.contains("agent"));
@@ -293,48 +295,48 @@ mod tests {
     #[test]
     fn inbox_topic_format() {
         assert_eq!(
-            inbox_topic("local", "jetson01"),
-            "bubbaloop/local/jetson01/agent/inbox"
+            inbox_topic("jetson01"),
+            "bubbaloop/global/jetson01/agent/inbox"
         );
     }
 
     #[test]
     fn outbox_topic_format() {
         assert_eq!(
-            outbox_topic("local", "jetson01", "jean-clawd"),
-            "bubbaloop/local/jetson01/agent/jean-clawd/outbox"
+            outbox_topic("jetson01", "jean-clawd"),
+            "bubbaloop/global/jetson01/agent/jean-clawd/outbox"
         );
     }
 
     #[test]
     fn manifest_topic_format() {
         assert_eq!(
-            manifest_topic("local", "jetson01", "camera-expert"),
-            "bubbaloop/local/jetson01/agent/camera-expert/manifest"
+            manifest_topic("jetson01", "camera-expert"),
+            "bubbaloop/global/jetson01/agent/camera-expert/manifest"
         );
     }
 
     #[test]
     fn manifest_wildcard_format() {
         assert_eq!(
-            manifest_wildcard("local", "jetson01"),
-            "bubbaloop/local/jetson01/agent/*/manifest"
+            manifest_wildcard("jetson01"),
+            "bubbaloop/global/jetson01/agent/*/manifest"
         );
     }
 
     #[test]
     fn outbox_wildcard_format() {
         assert_eq!(
-            outbox_wildcard("local", "jetson01"),
-            "bubbaloop/local/jetson01/agent/*/outbox"
+            outbox_wildcard("jetson01"),
+            "bubbaloop/global/jetson01/agent/*/outbox"
         );
     }
 
     #[test]
     fn manifest_wildcard_all_format() {
         assert_eq!(
-            manifest_wildcard_all("local"),
-            "bubbaloop/local/*/agent/*/manifest"
+            manifest_wildcard_all(),
+            "bubbaloop/global/*/agent/*/manifest"
         );
     }
 

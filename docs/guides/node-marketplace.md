@@ -1,3 +1,7 @@
+---
+description: "Browse and install Bubbaloop nodes from the marketplace. One-command install for cameras, weather sensors, and community-built integrations."
+---
+
 # Node Marketplace
 
 The Bubbaloop node ecosystem allows anyone to create, share, and install nodes.

@@ -1,3 +1,7 @@
+---
+description: "Raw data panel in the Bubbaloop dashboard. Inspect live Zenoh messages, protobuf payloads, and JSON data streams in real time."
+---
+
 # Raw Data Panel
 
 The Raw Data panel displays JSON-formatted data from any topic, allowing you to inspect message contents in real-time.

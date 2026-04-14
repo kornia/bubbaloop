@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop node catalog. Sensors, services, and actuators that plug into the runtime via Zenoh pub/sub with protobuf-encoded messages."
+---
+
 # Components
 
 Bubbaloop components are the building blocks of physical AI systems. Each component is a specialized node (Bubble) that connects to the Zenoh message bus (Loop).
@@ -40,38 +44,32 @@ flowchart TB
 
 Sensors capture data from the physical world and publish it to the message bus.
 
-| Component | Status | Description |
-|-----------|--------|-------------|
-| [RTSP Camera](sensors/rtsp-camera.md) | Available | Stream H264 video from RTSP cameras |
-| IMU | Planned | Accelerometer, gyroscope, magnetometer |
-| LiDAR | Planned | 3D point cloud capture |
-| GPS | Planned | Location tracking |
+| Component | Type | Status | Description |
+|-----------|------|--------|-------------|
+| [RTSP Camera](sensors/rtsp-camera.md) | Rust | Available | H264 video capture via GStreamer with SHM raw frames |
+| [System Telemetry](services/system-telemetry.md) | Python | Available | CPU, memory, disk, network, load metrics via psutil |
+| [Network Monitor](services/network-monitor.md) | Python | Available | HTTP, DNS, ICMP ping health checks |
+| [OpenMeteo](services/openmeteo.md) | Python | Available | Weather data from Open-Meteo API (current, hourly, daily) |
+| GPIO Sensor | Rust | Planned | GPIO pin monitoring |
 
-[View all sensors →](sensors/index.md)
+### Processors
 
-### Services
+Processors subscribe to data streams and publish derived results.
 
-Services provide data processing, external integrations, or computed outputs.
-
-| Component | Status | Description |
-|-----------|--------|-------------|
-| [OpenMeteo](services/openmeteo.md) | Available | Weather data from Open-Meteo API |
-| ML Inference | Planned | Object detection, classification |
-| SLAM | Planned | Simultaneous localization and mapping |
-
-[View all services →](services/index.md)
+| Component | Type | Status | Description |
+|-----------|------|--------|-------------|
+| Camera Object Detector | Python | Available | YOLO11 object detection on camera raw frames (SHM) |
+| Camera VLM | Python | Available | Scene description using vision language models on camera frames (SHM) |
 
 ### Actuators
 
 Actuators interact with the physical world based on commands received via the message bus.
 
-| Component | Status | Description |
-|-----------|--------|-------------|
-| Motor Controller | Planned | DC/stepper motor control |
-| Servo Controller | Planned | Servo position control |
-| Audio Output | Planned | Text-to-speech, alerts |
-
-[View all actuators →](actuators/index.md)
+| Component | Type | Status | Description |
+|-----------|------|--------|-------------|
+| Motor Controller | — | Planned | DC/stepper motor control |
+| Servo Controller | — | Planned | Servo position control |
+| Audio Output | — | Planned | Text-to-speech, alerts |
 
 ## Component Structure
 
@@ -97,56 +95,82 @@ Each component follows a common pattern:
 
 ## Creating Components
 
-Components are implemented as Rust applications using:
+Components are implemented using the **Node SDK** (Rust or Python):
 
-- **Zenoh**: Decentralized pub/sub with queryables
-- **protobuf**: Message serialization
-- **tokio**: Async runtime
-
-### Basic Structure
+### Rust (Node SDK)
 
 ```rust
-// Example component structure
-struct MyComponent {
-    session: Arc<Session>,
-    publisher: Publisher,
-    config: ComponentConfig,
-}
+use bubbaloop_node::{Node, NodeContext, JsonPublisher};
 
-impl MyComponent {
-    async fn new(config: ComponentConfig) -> Result<Self> {
-        let session = zenoh::open(zenoh::Config::default()).await?;
-        let publisher = session.declare_publisher("0/my_topic").await?;
-        Ok(Self { session, publisher, config })
+struct MySensor { publisher: JsonPublisher }
+
+#[bubbaloop_node::async_trait::async_trait]
+impl Node for MySensor {
+    type Config = serde_yaml::Value;
+    fn name() -> &'static str { "my-sensor" }
+    fn descriptor() -> &'static [u8] {
+        include_bytes!(concat!(env!("OUT_DIR"), "/descriptor.bin"))
     }
-
-    async fn run(&self) -> Result<()> {
+    async fn init(ctx: &NodeContext, _cfg: &Self::Config) -> anyhow::Result<Self> {
+        Ok(Self { publisher: ctx.publisher_json("data").await? })
+    }
+    async fn run(self, ctx: NodeContext) -> anyhow::Result<()> {
+        let mut shutdown = ctx.shutdown_rx.clone();
         loop {
-            let data = self.capture_data()?;
-            let message = self.serialize(data)?;
-            self.publisher.put(message).await?;
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+                    self.publisher.put(&serde_json::json!({"value": 42})).await?;
+                }
+            }
         }
+        Ok(())
     }
 }
 ```
+
+### Python (Node SDK)
+
+```python
+from bubbaloop_sdk import run_node
+
+class MySensor:
+    name = "my-sensor"
+
+    def __init__(self, ctx, config):
+        self.ctx = ctx
+        self.pub = ctx.publisher_json("data")
+
+    def run(self):
+        while not self.ctx.is_shutdown():
+            self.pub.put({"value": 42})
+            self.ctx._shutdown.wait(timeout=1.0)
+
+if __name__ == "__main__":
+    run_node(MySensor)
+```
+
+The SDK handles Zenoh session, health heartbeats, schema queryable, config loading, and shutdown automatically.
 
 ## Component Communication
 
-All components communicate via Zenoh topics:
+Components communicate via two Zenoh key spaces:
 
 ```mermaid
 flowchart LR
-    sensor[Sensor] -->|publish| topic1["/sensor/data"]
-    topic1 -->|subscribe| service[Service]
-    service -->|publish| topic2["/service/result"]
-    topic2 -->|subscribe| actuator[Actuator]
+    sensor[Sensor] -->|"global/…/compressed"| dashboard[Dashboard]
+    sensor -->|"local/…/raw (SHM)"| processor[Processor]
+    processor -->|"global/…/detections"| agent[AI Agent]
 ```
 
-See [Messaging](../concepts/messaging.md) for protocol details.
+- **Global** topics are network-visible (dashboard, CLI, remote machines)
+- **Local** topics are SHM-only (zero-copy, same machine)
+
+See [Messaging](../concepts/messaging.md) for protocol details and [Topics](../concepts/topics.md) for naming conventions.
 
 ## Next Steps
 
-- [Sensors](sensors/index.md) — Available sensor components
-- [Services](services/index.md) — Available service components
-- [Actuators](actuators/index.md) — Planned actuator components
+- [Create Your First Node](../guides/create-your-first-node.md) — Step-by-step tutorial
 - [Topics](../concepts/topics.md) — Topic naming conventions
+- [Messaging](../concepts/messaging.md) — Pub/sub patterns and SDK usage
+- [Node Marketplace](../guides/node-marketplace.md) — Installing and publishing nodes

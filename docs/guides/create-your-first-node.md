@@ -1,3 +1,7 @@
+---
+description: "Create your first Bubbaloop node. Step-by-step Rust tutorial using the Node SDK to build a self-describing sensor node in ~50 lines of code."
+---
+
 # Create Your First Node
 
 This guide walks you through creating a custom Bubbaloop node that publishes data via Zenoh.
@@ -31,11 +35,11 @@ This creates:
 
 ```
 my-sensor/
-  Cargo.toml         # Depends on bubbaloop-node-sdk + bubbaloop-schemas
+  Cargo.toml         # Depends on bubbaloop-node + bubbaloop-node-build + bubbaloop-schemas
   node.yaml          # Node manifest
   pixi.toml          # Build environment
   config.yaml        # Runtime configuration (publish_topic, rate_hz)
-  build.rs           # Proto compilation
+  build.rs           # Proto compilation (one-liner via bubbaloop-node-build)
   src/
     main.rs          # Node trait impl + run_node() (edit this)
 ```
@@ -45,7 +49,7 @@ my-sensor/
 Edit `src/main.rs`. The generated scaffold uses the Node SDK — you only implement `init()` and `run()`:
 
 ```rust
-use bubbaloop_node_sdk::{Node, NodeContext};
+use bubbaloop_node::{Node, NodeContext, JsonPublisher};
 
 #[async_trait::async_trait]
 impl Node for MySensorNode {
@@ -54,9 +58,8 @@ impl Node for MySensorNode {
     fn descriptor() -> &'static [u8] { DESCRIPTOR }
 
     async fn init(ctx: &NodeContext, config: &Config) -> anyhow::Result<Self> {
-        let topic = ctx.topic(&format!("{}/{}", Self::name(), config.publish_topic));
-        let publisher = ctx.session.declare_publisher(&topic).await
-            .map_err(|e| anyhow::anyhow!("Publisher: {e}"))?;
+        // SDK handles topic construction and encoding
+        let publisher = ctx.publisher_json(&config.publish_topic).await?;
         Ok(Self { publisher, rate_hz: config.rate_hz })
     }
 
@@ -69,7 +72,7 @@ impl Node for MySensorNode {
                 _ = shutdown_rx.changed() => break,
                 _ = tick.tick() => {
                     // YOUR SENSOR LOGIC HERE
-                    self.publisher.put(data).await.ok();
+                    self.publisher.put(&reading).await.ok();
                 }
             }
         }
@@ -80,10 +83,11 @@ impl Node for MySensorNode {
 
 The SDK automatically handles: Zenoh session, health heartbeat, schema queryable, config loading, signal handling, and logging. You focus on your sensor logic.
 
-Nodes publish using vanilla Zenoh topics with the standard format:
+Topics use two key spaces — `global` for network-visible data, `local` for SHM-only:
 
 ```
-bubbaloop/{scope}/{machine_id}/{node_name}/{resource}
+bubbaloop/global/{machine_id}/{suffix}   ← visible to dashboard, CLI, remote machines
+bubbaloop/local/{machine_id}/{suffix}    ← SHM zero-copy, same-machine only
 ```
 
 ## Step 3: Build

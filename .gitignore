@@ -79,6 +79,13 @@ Thumbs.db
 bubbaloop-nodes-official/
 crates/bubbaloop-nodes/
 
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+
 # Git worktrees
 .worktrees/
 .claude/worktrees/

@@ -42,7 +42,7 @@ def _hostname() -> str:
 
 
 class NodeContext:
-    """Zenoh session + scope/machine_id + shutdown signal for a bubbaloop node.
+    """Zenoh session + machine_id + shutdown signal for a bubbaloop node.
 
     Create with :meth:`connect`. Cleanup with :meth:`close` (or use as a
     context manager).
@@ -106,6 +106,9 @@ class NodeContext:
         """
         return f"bubbaloop/local/{self.machine_id}/{suffix}"
 
+    def _resolve_topic(self, suffix: str, local: bool) -> str:
+        return self.local_topic(suffix) if local else self.topic(suffix)
+
     # ------------------------------------------------------------------
     # Shutdown
     # ------------------------------------------------------------------
@@ -144,8 +147,7 @@ class NodeContext:
         """
         from .publisher import RawPublisher
 
-        key = self.local_topic(suffix) if local else self.topic(suffix)
-        return RawPublisher._declare(self.session, key, local=local)
+        return RawPublisher._declare(self.session, self._resolve_topic(suffix, local), local=local)
 
     # ------------------------------------------------------------------
     # Subscribers
@@ -191,8 +193,7 @@ class NodeContext:
 
         if not hasattr(self, "_schema_registry"):
             self._schema_registry = SchemaRegistry(self.session)
-        key = self.local_topic(suffix) if local else self.topic(suffix)
-        return ProtoSubscriber(self.session, key, self._schema_registry)
+        return ProtoSubscriber(self.session, self._resolve_topic(suffix, local), self._schema_registry)
 
     def subscribe_raw(self, suffix: str, local: bool = False) -> RawSubscriber:
         """Declare a subscriber that yields raw ``bytes`` with no decoding.
@@ -204,8 +205,7 @@ class NodeContext:
         """
         from .subscriber import RawSubscriber
 
-        key = self.local_topic(suffix) if local else self.topic(suffix)
-        return RawSubscriber(self.session, key)
+        return RawSubscriber(self.session, self._resolve_topic(suffix, local))
 
     # ------------------------------------------------------------------
     # Callback Subscribers

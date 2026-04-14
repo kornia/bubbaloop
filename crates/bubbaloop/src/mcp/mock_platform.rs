@@ -1,6 +1,8 @@
 //! Mock platform for testing — test-only implementation of PlatformOperations.
 
-use super::platform::{NodeCommand, NodeInfo, PlatformError, PlatformOperations, PlatformResult};
+use super::platform::{
+    AlertInfo, NodeCommand, NodeInfo, PlatformError, PlatformOperations, PlatformResult,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -10,7 +12,7 @@ pub struct MockPlatform {
     pub configs: Mutex<HashMap<String, Value>>,
     pub manifests: Mutex<Vec<(String, Value)>>,
     pub missions: Mutex<Vec<crate::daemon::mission::Mission>>,
-    pub alerts: Mutex<Vec<(String, String, String)>>, // (id, mission_id, predicate)
+    pub alerts: Mutex<Vec<AlertInfo>>,
     pub constraints: Mutex<Vec<(String, String, crate::daemon::constraints::Constraint)>>, // (id, mission_id, constraint)
     pub beliefs: Mutex<Vec<crate::agent::memory::semantic::Belief>>,
     pub world_state: Mutex<Vec<crate::agent::memory::WorldStateEntry>>,
@@ -49,9 +51,6 @@ impl MockPlatform {
                     "type": "rust",
                     "description": "A test node",
                     "capabilities": ["sensor"],
-                    "publishes": [],
-                    "subscribes": [],
-                    "commands": [],
                 }),
             )]),
             zenoh_session: None,
@@ -262,17 +261,33 @@ impl PlatformOperations for MockPlatform {
         params: super::platform::RegisterAlertParams,
     ) -> PlatformResult<String> {
         let alert_id = format!("alert-mock-{}", uuid::Uuid::new_v4());
-        self.alerts
-            .lock()
-            .unwrap()
-            .push((alert_id.clone(), params.mission_id, params.predicate));
+        // Mirror the daemon's default substitution so the in-memory
+        // state reflects what would actually be persisted.
+        let debounce_secs = params
+            .debounce_secs
+            .unwrap_or(crate::daemon::reactive::DEFAULT_DEBOUNCE_SECS);
+        let arousal_boost = params
+            .arousal_boost
+            .unwrap_or(crate::daemon::reactive::DEFAULT_AROUSAL_BOOST);
+        self.alerts.lock().unwrap().push(AlertInfo {
+            id: alert_id.clone(),
+            mission_id: params.mission_id,
+            predicate: params.predicate,
+            debounce_secs,
+            arousal_boost,
+            description: params.description,
+            // The mock doesn't track provider state, so we never
+            // report dangling fields — that analysis lives in the
+            // daemon implementation.
+            dangling_fields: Vec::new(),
+        });
         Ok(format!("Alert '{}' registered", alert_id))
     }
 
     async fn unregister_alert(&self, alert_id: String) -> PlatformResult<String> {
         let mut alerts = self.alerts.lock().unwrap();
         let before = alerts.len();
-        alerts.retain(|(id, _, _)| *id != alert_id);
+        alerts.retain(|a| a.id != alert_id);
         if alerts.len() < before {
             Ok(format!("Alert '{}' unregistered", alert_id))
         } else {
@@ -281,6 +296,19 @@ impl PlatformOperations for MockPlatform {
                 alert_id
             )))
         }
+    }
+
+    async fn list_alerts(&self, mission_id: Option<String>) -> PlatformResult<Vec<AlertInfo>> {
+        let alerts = self.alerts.lock().unwrap();
+        let out: Vec<AlertInfo> = match mission_id {
+            Some(mid) => alerts
+                .iter()
+                .filter(|a| a.mission_id == mid)
+                .cloned()
+                .collect(),
+            None => alerts.clone(),
+        };
+        Ok(out)
     }
 
     async fn register_constraint(
@@ -1266,6 +1294,81 @@ mod tests {
         let msg = mock.unregister_alert(alert_id.clone()).await.unwrap();
         assert!(msg.contains("unregistered"));
         assert!(mock.alerts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_alerts_returns_registered_rules() {
+        let mock = MockPlatform::new();
+        let p = crate::mcp::platform::RegisterAlertParams {
+            mission_id: "m1".to_string(),
+            predicate: "temp > 100".to_string(),
+            debounce_secs: Some(45),
+            arousal_boost: Some(3.5),
+            description: "hot".to_string(),
+        };
+        mock.register_alert(p).await.unwrap();
+
+        let listed = mock.list_alerts(None).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        let a = &listed[0];
+        assert_eq!(a.mission_id, "m1");
+        assert_eq!(a.predicate, "temp > 100");
+        assert_eq!(a.debounce_secs, 45);
+        assert!((a.arousal_boost - 3.5).abs() < f64::EPSILON);
+        assert_eq!(a.description, "hot");
+        // Mock doesn't track providers, so dangling_fields is always empty.
+        assert!(a.dangling_fields.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_alerts_filters_by_mission() {
+        let mock = MockPlatform::new();
+        for (mid, pred) in [("m1", "a = 1"), ("m2", "b = 2"), ("m1", "c = 3")] {
+            mock.register_alert(crate::mcp::platform::RegisterAlertParams {
+                mission_id: mid.to_string(),
+                predicate: pred.to_string(),
+                debounce_secs: None,
+                arousal_boost: None,
+                description: String::new(),
+            })
+            .await
+            .unwrap();
+        }
+
+        let all = mock.list_alerts(None).await.unwrap();
+        assert_eq!(all.len(), 3);
+
+        let only_m1 = mock.list_alerts(Some("m1".to_string())).await.unwrap();
+        assert_eq!(only_m1.len(), 2);
+        assert!(only_m1.iter().all(|a| a.mission_id == "m1"));
+    }
+
+    #[tokio::test]
+    async fn list_alerts_applies_defaults_on_register() {
+        // When debounce_secs/arousal_boost are omitted, the mock must
+        // substitute the same defaults the daemon uses, so introspection
+        // reflects the values that would actually take effect.
+        let mock = MockPlatform::new();
+        mock.register_alert(crate::mcp::platform::RegisterAlertParams {
+            mission_id: "m1".to_string(),
+            predicate: "x = 1".to_string(),
+            debounce_secs: None,
+            arousal_boost: None,
+            description: String::new(),
+        })
+        .await
+        .unwrap();
+
+        let listed = mock.list_alerts(None).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            listed[0].debounce_secs,
+            crate::daemon::reactive::DEFAULT_DEBOUNCE_SECS
+        );
+        assert!(
+            (listed[0].arousal_boost - crate::daemon::reactive::DEFAULT_AROUSAL_BOOST).abs()
+                < f64::EPSILON
+        );
     }
 
     #[tokio::test]

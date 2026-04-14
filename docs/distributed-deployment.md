@@ -1,3 +1,7 @@
+---
+description: "Deploy Bubbaloop across multiple devices. Multi-machine Zenoh routing, node distribution, and fleet orchestration for IoT deployments."
+---
+
 # Distributed Bubbaloop Deployment Guide
 
 This guide explains how to deploy Bubbaloop across multiple machines (e.g., Jetson devices) with a central orchestration point.
@@ -14,7 +18,7 @@ This guide explains how to deploy Bubbaloop across multiple machines (e.g., Jets
 │                                 │  │ (central)     │  │                                 │
 │    Tailscale / LAN              │  └───────────────┘  │    Tailscale / LAN              │
 │                                 │         │          │                                 │
-│                                 │         │ WS:10000 │                                 │
+│                                 │         │ WS:10001 │                                 │
 │                                 │  ┌──────┴───────┐  │                                 │
 │                                 │  │  Dashboard   │  │                                 │
 │                                 │  │  (Browser)   │  │                                 │
@@ -58,7 +62,7 @@ Each Jetson runs its own local zenohd router for several reasons:
 
 | Setting | Central Router | Jetson Router | Nodes |
 |---------|----------------|---------------|-------|
-| Mode | `router` | `router` | `peer` or `client` |
+| Mode | `router` | `router` | `client` |
 | Multicast | `false` | `false` | `false` |
 | Gossip | `true` | `true` | `false` |
 | Listen | `0.0.0.0:7447` | `127.0.0.1:7447` | N/A |
@@ -156,7 +160,7 @@ Benefits of Tailscale:
     gossip: { enabled: true, autoconnect: "router" },
   },
   plugins: {
-    remote_api: { websocket_port: 10000 },
+    remote_api: { websocket_port: 10001 },
   },
 }
 ```
@@ -191,6 +195,7 @@ Benefits of Tailscale:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `BUBBALOOP_MACHINE_ID` | Machine identifier (hyphens → underscores) | hostname |
 | `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
 | `RUST_LOG` | Log level | `info` |
 
@@ -265,3 +270,10 @@ Shared memory only works for processes on the same machine connecting to the sam
 2. Configure each Jetson with local router pointing to central
 3. Verify connectivity with `zenoh-cli`
 4. Deploy nodes and confirm dashboard sees all devices
+
+## See Also
+
+- [Architecture](concepts/architecture.md) — System design and layer model
+- [Messaging](concepts/messaging.md) — Zenoh topics and pub/sub concepts
+- [Dashboard Remote Access](dashboard/remote-access.md) — Accessing the dashboard across machines
+- [Doctor Command](doctor-command.md) — Diagnosing connectivity issues

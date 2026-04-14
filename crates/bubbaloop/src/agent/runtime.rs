@@ -15,7 +15,12 @@ use crate::agent::{run_agent_turn, AgentTurnInput, EventSink};
 use crate::daemon::belief_updater::spawn_belief_decay_task;
 use crate::daemon::context_provider::{spawn_provider, ProviderStore};
 use crate::daemon::mission::{watch_missions_dir, Mission, MissionStatus, MissionStore};
+use crate::daemon::reactive::{
+    evaluate_rules_fired, merge_rule_state, total_boost, FiredRule, ReactiveCircuitBreaker,
+    ReactiveRule, ReactiveRuleStore, REACTIVE_BREAKER_COOL_OFF, REACTIVE_BREAKER_THRESHOLD,
+};
 use crate::daemon::registry::get_bubbaloop_home;
+use crate::daemon::world_state_sweeper::spawn_world_state_sweeper;
 use crate::mcp::platform::DaemonPlatform;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -231,15 +236,28 @@ impl AgentRuntime {
         telemetry: Option<Arc<crate::daemon::telemetry::TelemetryService>>,
     ) -> Result<(), crate::agent::AgentError> {
         let config = AgentsConfig::load_or_default();
-        let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
         let machine_id = crate::daemon::util::get_machine_id();
 
-        // Create shared platform for all agents
+        // Load authentication token for inbox message validation
+        let expected_token = match crate::mcp::auth::load_or_generate_token() {
+            Ok(token) => token,
+            Err(e) => {
+                log::error!("[Runtime] Failed to load MCP token: {}", e);
+                return Err(crate::agent::AgentError::Config(format!(
+                    "Failed to load MCP token: {}",
+                    e
+                )));
+            }
+        };
+
+        // Create shared platform for all agents.
+        // `shutdown_rx` is forwarded so `configure_context` (via MCP) can spawn
+        // context providers live and tie them to daemon shutdown.
         let platform = Arc::new(DaemonPlatform::new(
             node_manager,
             session.clone(),
-            scope.clone(),
             machine_id.clone(),
+            Some(shutdown_rx.clone()),
         ));
 
         let mut handles = HashMap::new();
@@ -322,6 +340,18 @@ impl AgentRuntime {
                 belief_decay_shutdown,
             ));
 
+            // Spawn world_state TTL sweeper — deletes stale rows on a 30s cadence
+            // so a one-shot context-provider value can't drive reactive rules
+            // forever after its writer goes away. Incident 2026-04-10: a single
+            // synthetic motion value from a manual `zenoh put` kept firing the
+            // `motion.level > 0.05` rule for 17 hours because no code path was
+            // evicting stale rows from world_state. The SemanticStore has a
+            // read-time freshness filter (defence-in-depth) but we also want
+            // bounded storage growth and a clear audit trail of evictions.
+            let sweeper_db_path = agent_dir.join("memory.db");
+            let sweeper_shutdown = shutdown_rx.clone();
+            spawn_world_state_sweeper(agent_id.clone(), sweeper_db_path, sweeper_shutdown);
+
             // Spawn context providers — load from providers.db, subscribe to Zenoh topics,
             // write extracted values to world_state (no LLM involved).
             // Created by configure_context MCP tool.
@@ -362,7 +392,7 @@ impl AgentRuntime {
             }
 
             // Create outbox sink
-            let outbox = gateway::outbox_topic(&scope, &machine_id, agent_id);
+            let outbox = gateway::outbox_topic(&machine_id, agent_id);
             let sink = match ZenohSink::new(&session, &outbox).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -381,7 +411,6 @@ impl AgentRuntime {
             let dispatcher = {
                 let d = Dispatcher::new_with_memory(
                     platform.clone(),
-                    scope.clone(),
                     machine_id.clone(),
                     agent_id.clone(),
                     memory.backend.clone(),
@@ -415,7 +444,7 @@ impl AgentRuntime {
                 is_default: entry.default,
                 machine_id: machine_id.clone(),
             };
-            let manifest_topic = gateway::manifest_topic(&scope, &machine_id, agent_id);
+            let manifest_topic = gateway::manifest_topic(&machine_id, agent_id);
             let manifest_json = serde_json::to_vec(&manifest).unwrap_or_default();
             let manifest_session = session.clone();
             tokio::spawn(async move {
@@ -437,7 +466,7 @@ impl AgentRuntime {
 
             // Subscribe to this agent's inbox topic so other agents can send messages.
             // Messages are appended to episodic memory and surface in the next prompt turn.
-            let inbox_topic = format!("bubbaloop/{}/agent/{}/inbox", scope, agent_id);
+            let inbox_topic = format!("bubbaloop/global/agent/{}/inbox", agent_id);
             let inbox_session = session.clone();
             let inbox_backend = memory.backend.clone();
             let mut inbox_shutdown = shutdown_rx.clone();
@@ -601,7 +630,7 @@ impl AgentRuntime {
         let runtime = AgentRuntime { handles };
 
         // Subscribe to shared inbox
-        let inbox = gateway::inbox_topic(&scope, &machine_id);
+        let inbox = gateway::inbox_topic(&machine_id);
         let subscriber = session
             .declare_subscriber(&inbox)
             .await
@@ -620,6 +649,18 @@ impl AgentRuntime {
                     let payload = sample.payload().to_bytes().to_vec();
                     match serde_json::from_slice::<AgentMessage>(&payload) {
                         Ok(msg) => {
+                            // Validate auth token before routing
+                            let token_valid = match &msg.auth_token {
+                                Some(token) => crate::mcp::auth::validate_token(token, &expected_token),
+                                None => false,
+                            };
+                            if !token_valid {
+                                log::warn!(
+                                    "[Runtime] Rejected inbox message id={}: missing or invalid auth token",
+                                    msg.id
+                                );
+                                continue;
+                            }
                             log::info!(
                                 "[Runtime] Inbox message: id={}, agent={:?}, text_len={}",
                                 msg.id, msg.agent, msg.text.len()
@@ -676,6 +717,38 @@ impl AgentRuntime {
 }
 
 /// Per-agent event loop: processes inbox messages and heartbeat ticks.
+/// Warn once at startup for each reactive rule that references a
+/// world-state field not produced by any registered context provider.
+///
+/// Incident 2026-04-10 origin: a rule referenced `motion.level` but no
+/// registered provider produced it — a manual `zenoh put` had seeded the
+/// key, and the rule happily fired forever on that ghost value. Warning
+/// at load time makes the misconfiguration visible in logs even before
+/// the rule ever fires. Errors opening providers.db are swallowed —
+/// this is best-effort diagnostics, not a correctness gate, and agent
+/// startup must not fail because of it.
+fn warn_on_dangling_reactive_refs(agent_id: &str, rules: &[ReactiveRule]) {
+    let providers_db_path = agent_directory(agent_id).join("providers.db");
+    let provider_templates =
+        crate::daemon::context_provider::load_provider_templates(&providers_db_path)
+            .unwrap_or_default();
+    for rule in rules {
+        let fields = crate::daemon::reactive::extract_predicate_fields(&rule.predicate);
+        let dangling = crate::daemon::reactive::find_dangling_fields(&fields, &provider_templates);
+        if !dangling.is_empty() {
+            log::warn!(
+                "[Agent:{}] Reactive rule '{}' references world-state field(s) \
+                 {:?} that no registered context provider appears to produce. \
+                 The rule may never fire, or may fire on stale/ghost values. \
+                 Register a provider for these keys or rewrite the predicate.",
+                agent_id,
+                rule.id,
+                dangling
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn agent_loop(
     agent_id: String,
@@ -692,6 +765,51 @@ async fn agent_loop(
 ) {
     let initial_caps = soul.read().await.capabilities.clone();
     let mut arousal = ArousalState::new(&initial_caps);
+
+    // Phase 3: load reactive rules for arousal integration.
+    let alerts_db_path = agent_directory(&agent_id).join("alerts.db");
+    let mut reactive_rules: Vec<ReactiveRule> = ReactiveRuleStore::open(&alerts_db_path)
+        .and_then(|s| s.list_rules())
+        .map(|configs| configs.into_iter().map(Into::into).collect())
+        .unwrap_or_default();
+    let mut tick_count: u64 = 0;
+    if !reactive_rules.is_empty() {
+        log::info!(
+            "[Agent:{}] Loaded {} reactive rules",
+            agent_id,
+            reactive_rules.len()
+        );
+        warn_on_dangling_reactive_refs(&agent_id, &reactive_rules);
+    }
+
+    // Rate limiting: minimum 2 seconds between LLM turns to prevent abuse.
+    const MIN_TURN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+    let mut last_turn_time: Option<tokio::time::Instant> = None;
+
+    // Reactive-alert debounce: even if rules keep firing, only wake the LLM
+    // every `REACTIVE_TURN_MIN_INTERVAL`. The per-rule `debounce_secs` already
+    // throttles individual rules; this second gate stops many rules from
+    // stacking LLM turns when several alerts go hot together.
+    const REACTIVE_TURN_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+    let mut last_reactive_turn_time: Option<tokio::time::Instant> = None;
+
+    // Category-level bound on reactive-turn failures. After
+    // `REACTIVE_BREAKER_THRESHOLD` consecutive reactive turns fail, this
+    // breaker opens a `REACTIVE_BREAKER_COOL_OFF` window during which
+    // reactive evaluation is suppressed entirely. A single successful
+    // reactive turn (or waiting out the cool-off) closes it. Prevents
+    // the class of runaway autonomous work that caused incident
+    // 2026-04-10 regardless of the underlying root cause. Only reactive
+    // turns are gated — job turns are operator-initiated and must fail
+    // loudly.
+    let mut reactive_breaker =
+        ReactiveCircuitBreaker::new(REACTIVE_BREAKER_THRESHOLD, REACTIVE_BREAKER_COOL_OFF);
+
+    // How often to hot-reload reactive rules from disk (in heartbeat ticks).
+    // Trade-off: shorter = faster visibility for newly-registered rules but
+    // more DB traffic; longer = cheaper but laggier. 10 ticks ≈ up to 10×
+    // current heartbeat interval (~5s–60s depending on arousal).
+    const REACTIVE_RULE_RELOAD_INTERVAL: u64 = 10;
 
     // Cache onboarding state in memory — avoids a syscall on every inbox message.
     // True only while the marker exists and identity.md hasn't been written yet.
@@ -710,6 +828,19 @@ async fn agent_loop(
         tokio::select! {
             // Inbox message
             Some(msg) = inbox_rx.recv() => {
+                // Rate limiting: enforce minimum interval between LLM turns
+                if let Some(last) = last_turn_time {
+                    let elapsed = last.elapsed();
+                    if elapsed < MIN_TURN_INTERVAL {
+                        let wait = MIN_TURN_INTERVAL - elapsed;
+                        log::warn!(
+                            "[Agent:{}] Rate limited: {}ms since last turn, waiting {}ms",
+                            agent_id, elapsed.as_millis(), wait.as_millis()
+                        );
+                        tokio::time::sleep(wait).await;
+                    }
+                }
+
                 arousal.spike(ArousalSource::UserInput);
                 let soul_snapshot = soul.read().await.clone();
 
@@ -727,6 +858,7 @@ async fn agent_loop(
                     None
                 };
 
+                last_turn_time = Some(tokio::time::Instant::now());
                 if let Err(e) = run_agent_turn(
                     &provider,
                     &dispatcher,
@@ -741,7 +873,10 @@ async fn agent_loop(
                     },
                 ).await {
                     log::error!("[Agent:{}] Turn failed: {}", agent_id, e);
-                    sink.emit(AgentEvent::error(&msg.id, &e.to_string())).await;
+                    // Sanitize error before sending over Zenoh outbox:
+                    // truncate to avoid leaking verbose API response details.
+                    let err_msg = sanitize_outbox_error(&e.to_string());
+                    sink.emit(AgentEvent::error(&msg.id, &err_msg)).await;
                     sink.emit(AgentEvent::done(&msg.id)).await;
                 }
             }
@@ -784,7 +919,203 @@ async fn agent_loop(
             };
             arousal.update(&state);
 
+            // Phase 3: evaluate reactive rules against world state.
+            tick_count += 1;
+            if tick_count.is_multiple_of(REACTIVE_RULE_RELOAD_INTERVAL) {
+                match ReactiveRuleStore::open(&alerts_db_path) {
+                    Ok(store) => match store.list_rules() {
+                        Ok(configs) => {
+                            // Reload without wiping debounce state: `From<ReactiveRuleConfig>`
+                            // zero-inits every rule's `last_fired_at`, so a naive
+                            // `configs.into_iter().map(Into::into).collect()` would cause
+                            // every previously-fired rule to refire on the next matching
+                            // tick — a bug that, in the 2026-04-10 incident, turned a
+                            // 1-alert-per-hour rule into a continuous firestorm every
+                            // reload cycle. `merge_rule_state` copies `last_fired_at`
+                            // forward for rules whose id survived the reload; new rules
+                            // stay at 0 (correct), deleted rules vanish (correct).
+                            let freshly_loaded: Vec<ReactiveRule> =
+                                configs.into_iter().map(Into::into).collect();
+                            reactive_rules = merge_rule_state(&reactive_rules, freshly_loaded);
+                        }
+                        Err(e) => {
+                            // Don't wipe the in-memory rule set on a transient read
+                            // error — keep the last known-good set and surface the
+                            // failure so the operator sees why new rules aren't
+                            // being picked up.
+                            log::warn!(
+                                "[Agent:{}] Reactive rule reload failed (list): {} — keeping {} cached rule(s)",
+                                agent_id,
+                                e,
+                                reactive_rules.len()
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!(
+                            "[Agent:{}] Reactive rule store open failed: {} — keeping {} cached rule(s)",
+                            agent_id,
+                            e,
+                            reactive_rules.len()
+                        );
+                    }
+                }
+            }
+            // Phase 3: evaluate reactive rules. Any rules that fire both boost
+            // arousal (shrinks heartbeat interval) and — debounced — trigger an
+            // autonomous agent turn so the LLM actually reacts, not just ticks.
+            let mut fired_this_tick: Vec<FiredRule> = Vec::new();
+            if !reactive_rules.is_empty() {
+                // Defence-in-depth with the world_state sweeper: even between
+                // sweeps (30s cadence), reactive evaluation must never see a
+                // stale row. Using `world_state_snapshot_fresh` filters rows
+                // where `now - last_seen_at > max_age_secs` at read time, so
+                // a context-provider value that stops updating stops firing
+                // rules within max_age_secs of its last write — regardless
+                // of when the sweeper next runs.
+                let ws_entries = {
+                    let backend = memory.backend.lock().await;
+                    backend
+                        .semantic
+                        .world_state_snapshot_fresh()
+                        .unwrap_or_default()
+                };
+                let ws_map: HashMap<&str, &str> = ws_entries
+                    .iter()
+                    .map(|e| (e.key.as_str(), e.value.as_str()))
+                    .collect();
+                fired_this_tick = evaluate_rules_fired(&reactive_rules, &ws_map);
+                let boost = total_boost(&fired_this_tick);
+                if boost > 0.0 {
+                    arousal.add_external_boost(boost);
+                    log::info!(
+                        "[Agent:{}] Reactive alert boost: {:.2} ({} rule(s) fired)",
+                        agent_id,
+                        boost,
+                        fired_this_tick.len()
+                    );
+                }
+            }
+
+            // If rules fired and the reactive-turn debounce allows it, wake the
+            // LLM with a synthesized prompt that names the fired rules. This is
+            // the only place reactive alerts become real LLM activity; without
+            // it arousal just shrinks the interval without ever calling the model.
+            let reactive_debounce_ok =
+                last_reactive_turn_time.is_none_or(|t| t.elapsed() >= REACTIVE_TURN_MIN_INTERVAL);
+            // Circuit-breaker gate: if consecutive reactive-turn failures
+            // exceeded `REACTIVE_BREAKER_THRESHOLD`, suppress all reactive
+            // turns for `REACTIVE_BREAKER_COOL_OFF`. Auto-closes on expiry.
+            let breaker_now = tokio::time::Instant::now();
+            let breaker_open = reactive_breaker.is_open(breaker_now);
+            if breaker_open && !fired_this_tick.is_empty() {
+                let remaining = reactive_breaker
+                    .cool_off_remaining(breaker_now)
+                    .unwrap_or_default();
+                log::warn!(
+                    "[Agent:{}] Reactive turn suppressed by circuit breaker ({} rule(s) fired, {}s remaining in cool-off)",
+                    agent_id,
+                    fired_this_tick.len(),
+                    remaining.as_secs()
+                );
+            }
+            if !fired_this_tick.is_empty() && reactive_debounce_ok && !breaker_open {
+                // Rate-limit against any other turn on this agent. The sleep
+                // must be shutdown-aware: without the select, a reactive turn
+                // can block shutdown for up to `MIN_TURN_INTERVAL`.
+                if let Some(last) = last_turn_time {
+                    let elapsed = last.elapsed();
+                    if elapsed < MIN_TURN_INTERVAL {
+                        let wait = MIN_TURN_INTERVAL - elapsed;
+                        tokio::select! {
+                            _ = tokio::time::sleep(wait) => {}
+                            _ = shutdown_rx.changed() => {
+                                log::info!(
+                                    "[Agent:{}] Shutdown during reactive rate-limit wait — skipping turn",
+                                    agent_id
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                let prompt = build_reactive_prompt(&fired_this_tick);
+                let cid = uuid::Uuid::new_v4().to_string();
+                let soul_snapshot = soul.read().await.clone();
+                last_turn_time = Some(tokio::time::Instant::now());
+
+                log::info!(
+                    "[Agent:{}] Reactive turn triggered (cid={}, rules={})",
+                    agent_id,
+                    cid,
+                    fired_this_tick.len()
+                );
+
+                let reactive_result = run_agent_turn(
+                    &provider,
+                    &dispatcher,
+                    &mut memory,
+                    &soul_snapshot,
+                    &sink,
+                    &AgentTurnInput {
+                        user_input: Some(&prompt),
+                        job_id: None,
+                        correlation_id: &cid,
+                        soul_path: None, // Reactive turns never trigger onboarding
+                    },
+                )
+                .await;
+
+                // Debounce counts from turn COMPLETION, not start. Setting it
+                // before would let fast-retrying heartbeat ticks (arousal shrinks
+                // the interval to 5s) fire another turn immediately after a
+                // 120s-timed-out turn, causing a cascade of failing turns.
+                last_reactive_turn_time = Some(tokio::time::Instant::now());
+
+                match &reactive_result {
+                    Ok(_) => {
+                        // Feed the breaker a success signal: a single healthy
+                        // reactive turn clears any accumulated failure count
+                        // and closes an open cool-off window.
+                        reactive_breaker.record_success();
+                    }
+                    Err(e) => {
+                        log::error!("[Agent:{}] Reactive turn failed: {}", agent_id, e);
+                        let err_msg = sanitize_outbox_error(&e.to_string());
+                        sink.emit(AgentEvent::error(&cid, &err_msg)).await;
+                        sink.emit(AgentEvent::done(&cid)).await;
+                        // Feed the breaker a failure signal. The first
+                        // failure that crosses the threshold returns true
+                        // from record_failure so we can log the transition
+                        // exactly once.
+                        if reactive_breaker.record_failure(tokio::time::Instant::now()) {
+                            log::warn!(
+                                "[Agent:{}] Reactive circuit breaker TRIPPED after {} consecutive failures — suspending reactive turns for {}s",
+                                agent_id,
+                                REACTIVE_BREAKER_THRESHOLD,
+                                REACTIVE_BREAKER_COOL_OFF.as_secs()
+                            );
+                        }
+                    }
+                }
+            } else if !fired_this_tick.is_empty() {
+                log::debug!(
+                    "[Agent:{}] Reactive turn suppressed by debounce ({}s)",
+                    agent_id,
+                    REACTIVE_TURN_MIN_INTERVAL.as_secs()
+                );
+            }
+
             for job in &jobs {
+                // Rate limiting for job turns
+                if let Some(last) = last_turn_time {
+                    let elapsed = last.elapsed();
+                    if elapsed < MIN_TURN_INTERVAL {
+                        tokio::time::sleep(MIN_TURN_INTERVAL - elapsed).await;
+                    }
+                }
+
                 let soul_snapshot = soul.read().await.clone();
                 {
                     let backend = memory.backend.lock().await;
@@ -799,6 +1130,7 @@ async fn agent_loop(
                 }
                 let cid = uuid::Uuid::new_v4().to_string();
 
+                last_turn_time = Some(tokio::time::Instant::now());
                 if let Err(e) = run_agent_turn(
                     &provider,
                     &dispatcher,
@@ -856,6 +1188,62 @@ async fn agent_loop(
                 memory.clear_short_term();
             }
         }
+    }
+}
+
+/// Build the prompt text for a reactive-alert-triggered turn.
+///
+/// The agent receives this as `user_input`, framed so the LLM understands it's
+/// being woken by a background rule rather than a human message. The prompt
+/// lists every rule that just fired along with its predicate and description,
+/// so the model has enough grounding to decide whether (and how) to react.
+fn build_reactive_prompt(fired: &[FiredRule]) -> String {
+    /// Upper bound on per-rule description length in the prompt, to protect
+    /// the LLM context from a misused or runaway description field.
+    const MAX_DESC_CHARS: usize = 200;
+
+    let wake_ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut out = format!(
+        "[reactive alert] One or more reactive rules just fired against world state. \
+         No human is waiting on this turn — you were woken by the rule engine. \
+         Wake time: {wake_ts}. \
+         Use list_world_state to inspect current values, reason about whether the \
+         situation needs action, and take action only if the rule's intent requires it. \
+         If nothing needs doing, acknowledge briefly and stand down.\n\n\
+         Fired rules:\n"
+    );
+    for r in fired {
+        let desc = if r.description.is_empty() {
+            "(no description)".to_string()
+        } else if r.description.chars().count() > MAX_DESC_CHARS {
+            let truncated: String = r.description.chars().take(MAX_DESC_CHARS).collect();
+            format!("{}… (truncated)", truncated)
+        } else {
+            r.description.clone()
+        };
+        out.push_str(&format!(
+            "- {} [mission={}] predicate=`{}` — {}\n",
+            r.id, r.mission_id, r.predicate, desc
+        ));
+    }
+    out
+}
+
+/// Sanitize an error message before sending it over the Zenoh outbox.
+///
+/// Truncates to a maximum length and strips content that might contain
+/// verbose API request/response details to avoid leaking sensitive data.
+fn sanitize_outbox_error(msg: &str) -> String {
+    const MAX_LEN: usize = 200;
+    let sanitized: String = msg
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\n')
+        .take(MAX_LEN)
+        .collect();
+    if msg.len() > MAX_LEN {
+        format!("{}... (truncated)", sanitized)
+    } else {
+        sanitized
     }
 }
 
@@ -961,5 +1349,83 @@ provider = "ollama"
 "#;
         let config: AgentsConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.agents["local-agent"].provider, "ollama");
+    }
+
+    #[test]
+    fn sanitize_outbox_error_truncates() {
+        let long_msg = "x".repeat(300);
+        let result = sanitize_outbox_error(&long_msg);
+        assert!(result.len() < 250);
+        assert!(result.ends_with("(truncated)"));
+    }
+
+    #[test]
+    fn sanitize_outbox_error_strips_control_chars() {
+        let msg = "error\x00with\x01control";
+        let result = sanitize_outbox_error(msg);
+        assert!(!result.contains('\x00'));
+        assert!(!result.contains('\x01'));
+    }
+
+    #[test]
+    fn sanitize_outbox_error_preserves_short_messages() {
+        let msg = "simple error";
+        assert_eq!(sanitize_outbox_error(msg), "simple error");
+    }
+
+    #[test]
+    fn build_reactive_prompt_lists_rules() {
+        let fired = vec![
+            FiredRule {
+                id: "r1".to_string(),
+                mission_id: "patrol".to_string(),
+                predicate: "motion.level > 0.05".to_string(),
+                description: "Motion detected on terrace".to_string(),
+                boost: 3.0,
+            },
+            FiredRule {
+                id: "r2".to_string(),
+                mission_id: "patrol".to_string(),
+                predicate: "dog.near_stairs = 'true'".to_string(),
+                description: String::new(),
+                boost: 2.5,
+            },
+        ];
+        let prompt = build_reactive_prompt(&fired);
+        assert!(prompt.contains("[reactive alert]"));
+        assert!(prompt.contains("list_world_state"));
+        assert!(prompt.contains("Wake time: "));
+        assert!(prompt.contains("r1"));
+        assert!(prompt.contains("Motion detected on terrace"));
+        assert!(prompt.contains("r2"));
+        assert!(prompt.contains("(no description)"));
+        assert!(prompt.contains("motion.level > 0.05"));
+        // Boost value is implementation detail — kept out of the prompt to
+        // avoid confusing the LLM with internal tuning parameters.
+        assert!(!prompt.contains("boost="));
+    }
+
+    #[test]
+    fn build_reactive_prompt_empty_is_well_formed() {
+        let prompt = build_reactive_prompt(&[]);
+        assert!(prompt.contains("[reactive alert]"));
+        assert!(prompt.contains("Wake time: "));
+        assert!(prompt.contains("Fired rules:\n"));
+    }
+
+    #[test]
+    fn build_reactive_prompt_truncates_long_description() {
+        let long_desc = "x".repeat(500);
+        let fired = vec![FiredRule {
+            id: "r1".to_string(),
+            mission_id: "m1".to_string(),
+            predicate: "p".to_string(),
+            description: long_desc,
+            boost: 1.0,
+        }];
+        let prompt = build_reactive_prompt(&fired);
+        assert!(prompt.contains("… (truncated)"));
+        // The full 500-char description should NOT appear.
+        assert!(!prompt.contains(&"x".repeat(500)));
     }
 }

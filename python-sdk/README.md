@@ -43,17 +43,20 @@ from bubbaloop_sdk import NodeContext
 from my_protos_pb2 import SensorData
 
 ctx = NodeContext.connect()
+
+# Publisher — encoding set once at declaration
 pub = ctx.publisher_proto("sensor/data", SensorData)
 
 while not ctx.is_shutdown():
-    pub.put(SensorData(value=42.0))
+    msg = SensorData(value=42.0)
+    pub.put(msg)
     time.sleep(0.1)
 
 pub.undeclare()
 ctx.close()
 ```
 
-### Blocking subscriber (poll loop)
+### Proto subscriber
 
 ```python
 from bubbaloop_sdk import NodeContext
@@ -62,13 +65,8 @@ from my_protos_pb2 import SensorData
 ctx = NodeContext.connect()
 sub = ctx.subscriber("sensor/data", SensorData)
 
-while not ctx.is_shutdown():
-    msg = sub.recv(timeout=5.0)   # returns None on timeout
-    if msg is not None:
-        print(f"value: {msg.value}")
-
-sub.undeclare()
-ctx.close()
+for msg in sub:
+    print(f"value: {msg.value}")
 ```
 
 ### Callback subscriber (event-driven, no loop needed)
@@ -122,80 +120,64 @@ qbl.undeclare()   # call when done to release the thread pool
 
 ## Configuration
 
-| Environment variable         | Default               | Description               |
-| ---------------------------- | --------------------- | ------------------------- |
-| `BUBBALOOP_ZENOH_ENDPOINT`   | `tcp/127.0.0.1:7447`  | Zenoh router endpoint     |
-| `BUBBALOOP_SCOPE`            | `local`               | Topic scope               |
-| `BUBBALOOP_MACHINE_ID`       | hostname (sanitized)  | Machine identifier        |
+| Environment variable | Default | Description |
+|---|---|---|
+| `BUBBALOOP_ZENOH_ENDPOINT` | `tcp/127.0.0.1:7447` | Zenoh router endpoint |
+| `BUBBALOOP_MACHINE_ID` | hostname (sanitized) | Machine identifier |
 
 ## API reference
 
 ### `NodeContext`
 
-| Method                                              | Returns       | Description                                     |
-| --------------------------------------------------- | ------------- | ----------------------------------------------- |
-| `NodeContext.connect(endpoint=None, instance_name=None)` | `NodeContext` | Connect to Zenoh router                    |
-| `ctx.topic(suffix)`                                 | `str`         | Build `bubbaloop/{scope}/{machine_id}/{suffix}` |
-| `ctx.is_shutdown()`                                 | `bool`        | True after SIGINT/SIGTERM                       |
-| `ctx.wait_shutdown()`                               | —             | Block until SIGINT/SIGTERM                      |
-| `ctx.close()`                                       | —             | Close the Zenoh session                         |
-
-#### Publishers
-
-| Method                                          | Returns         | Description                              |
-| ----------------------------------------------- | --------------- | ---------------------------------------- |
-| `ctx.publisher_json(suffix)`                    | `JsonPublisher` | JSON publisher at `topic(suffix)`        |
-| `ctx.publisher_proto(suffix, msg_class=None)`   | `ProtoPublisher`| Protobuf publisher at `topic(suffix)`    |
-
-#### Blocking subscribers (poll with `recv`)
-
-| Method                                    | Returns          | Description                                                  |
-| ----------------------------------------- | ---------------- | ------------------------------------------------------------ |
-| `ctx.subscriber(suffix, msg_class=None)`  | `TypedSubscriber`| Queue-backed; `recv(timeout)` returns `None` on timeout      |
-| `ctx.subscriber_raw(key_expr)`            | `RawSubscriber`  | Same but yields raw `zenoh.Sample`; literal key expression   |
+| Method | Description |
+|---|---|
+| `NodeContext.connect(endpoint=None)` | Connect to Zenoh router |
+| `ctx.topic(suffix)` | Build `bubbaloop/global/{machine_id}/{suffix}` |
+| `ctx.local_topic(suffix)` | Build `bubbaloop/local/{machine_id}/{suffix}` (SHM-only) |
+| `ctx.publisher_proto(suffix, msg_class)` | Declared protobuf publisher |
+| `ctx.publisher_json(suffix)` | Declared JSON publisher |
+| `ctx.publisher_raw(suffix, local=False)` | Declared raw publisher (no encoding) |
+| `ctx.subscribe(suffix, local=False)` | Auto-decode subscriber (proto/json/bytes) |
+| `ctx.subscribe_raw(suffix, local=False)` | Raw bytes subscriber |
+| `ctx.subscriber(suffix, msg_class=None)` | TypedSubscriber (queue-backed, timeout support) |
+| `ctx.subscriber_raw(key_expr)` | Raw sample subscriber (no topic prefix) |
+| `ctx.is_shutdown()` | True after SIGINT/SIGTERM |
+| `ctx.wait_shutdown()` | Block until shutdown |
+| `ctx.close()` | Close the Zenoh session |
 
 #### Callback subscribers (event-driven)
 
 Handler is called from Zenoh's internal thread. Keep handlers fast; use `_async`
 variants for slow work.
 
-| Method                                                                        | Returns                   | Description                                    |
-| ----------------------------------------------------------------------------- | ------------------------- | ---------------------------------------------- |
-| `ctx.subscriber_callback(suffix, handler, msg_class=None)`                    | `CallbackSubscriber`      | Decoded message passed to handler              |
-| `ctx.subscriber_raw_callback(key_expr, handler)`                              | `RawCallbackSubscriber`   | Raw `zenoh.Sample` to handler; literal key     |
-| `ctx.subscriber_callback_async(suffix, handler, msg_class=None, max_workers=4)` | `CallbackSubscriberAsync` | Handler runs in thread pool                 |
-| `ctx.subscriber_raw_callback_async(key_expr, handler, max_workers=4)`         | `RawCallbackSubscriberAsync` | Raw sample; handler in thread pool          |
+| Method | Description |
+|---|---|
+| `ctx.subscriber_callback(suffix, handler, msg_class=None)` | Decoded message to handler |
+| `ctx.subscriber_raw_callback(key_expr, handler)` | Raw `zenoh.Sample` to handler |
+| `ctx.subscriber_callback_async(suffix, handler, msg_class=None, max_workers=4)` | Handler in thread pool |
+| `ctx.subscriber_raw_callback_async(key_expr, handler, max_workers=4)` | Raw sample; handler in thread pool |
 
 #### Queryables
 
 Do **not** pass `complete=True` — it blocks wildcard queries used by the dashboard.
 
-| Method                                              | Returns          | Description                                         |
-| --------------------------------------------------- | ---------------- | --------------------------------------------------- |
-| `ctx.queryable(suffix, handler)`                    | `zenoh.Queryable`| Handler at `topic(suffix)`; called from Zenoh thread|
-| `ctx.queryable_raw(key_expr, handler)`              | `zenoh.Queryable`| Handler at literal key expression                   |
-| `ctx.queryable_async(suffix, handler, max_workers=4)` | `AsyncQueryable` | Handler in thread pool; call `undeclare()` to release|
-| `ctx.queryable_raw_async(key_expr, handler, max_workers=4)` | `AsyncQueryable` | Raw key; handler in thread pool             |
+| Method | Description |
+|---|---|
+| `ctx.queryable(suffix, handler)` | Handler at `topic(suffix)` |
+| `ctx.queryable_raw(key_expr, handler)` | Handler at literal key expression |
+| `ctx.queryable_async(suffix, handler, max_workers=4)` | Handler in thread pool |
+| `ctx.queryable_raw_async(key_expr, handler, max_workers=4)` | Raw key; handler in thread pool |
 
-### Publisher methods
+#### Publishers
 
-| Method        | Description                                                    |
-| ------------- | -------------------------------------------------------------- |
-| `pub.put(msg)`| Publish a message (bytes, proto message, or dict for JSON)     |
+| Method | Description |
+|---|---|
+| `pub.put(msg)` | Publish a message |
+| `pub.undeclare()` | Release the Zenoh publisher |
 
-### Blocking subscriber methods
+### `ProtoSubscriber` / `RawSubscriber`
 
-| Method                  | Description                               |
-| ----------------------- | ----------------------------------------- |
-| `sub.recv(timeout=None)`| Return next message or `None` on timeout  |
-| `sub.undeclare()`       | Stop receiving samples                    |
-| `for msg in sub`        | Iterate (blocks indefinitely)             |
-
-### Callback subscriber / AsyncQueryable methods
-
-| Method           | Description                                                          |
-| ---------------- | -------------------------------------------------------------------- |
-| `sub.undeclare()`| Undeclare subscriber and shut down thread pool (async variants)      |
+Both support `for` iteration. `RawSubscriber` yields `bytes` directly.
 
 ## Requirements
 

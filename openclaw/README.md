@@ -4,43 +4,65 @@ This directory contains configuration files for integrating bubbaloop with OpenC
 
 ## What bubbaloop Provides
 
-Bubbaloop exposes 24 MCP tools for managing physical sensors, cameras, and actuators:
+Bubbaloop exposes 42 MCP tools for managing physical sensors, cameras, and actuators:
 
-**Discovery (6 tools)**
+**Discovery (10 tools)**
 - `list_nodes` - List all nodes with status and capabilities
-- `get_node_detail` - Get detailed info about a specific node
-- `get_node_health` - Check node health status
-- `get_node_manifest` - Get node self-description
 - `discover_nodes` - Find all nodes across machines
+- `get_node_health` - Check node health status
+- `get_node_config` - Read node configuration
+- `get_node_manifest` - Get node self-description
 - `get_node_schema` - Get protobuf schema of node data
+- `get_node_logs` - View recent systemd logs
+- `get_stream_info` - Get Zenoh connection params for streaming
+- `list_commands` - List available commands for a node
+- `discover_capabilities` - Discover node capabilities across fleet
 
-**Lifecycle (5 tools)**
+**Lifecycle (10 tools)**
+- `install_node` - Install a node from marketplace, path, or GitHub
+- `uninstall_node` - Uninstall a node
 - `start_node` - Start a stopped node
 - `stop_node` - Stop a running node
 - `restart_node` - Restart a node
 - `build_node` - Build a node from source
-- `get_node_logs` - View recent systemd logs
+- `remove_node` - Remove a node from registry
+- `clean_node` - Clean node build artifacts
+- `enable_autostart` - Enable systemd autostart
+- `disable_autostart` - Disable systemd autostart
 
-**Data Access (3 tools)**
-- `query_zenoh` - Query Zenoh topics for current data
-- `get_stream_info` - Get Zenoh connection params for streaming
+**Data (2 tools)**
+- `query_zenoh` - Query any Zenoh key expression
 - `send_command` - Send commands to nodes
-
-**Configuration (2 tools)**
-- `get_node_config` - Read node configuration
-- `list_commands` - List available commands for a node
-
-**Automation (6 tools)**
-- `list_agent_rules` - List all automation rules
-- `add_rule` - Add a new rule
-- `remove_rule` - Remove a rule
-- `update_rule` - Update an existing rule
-- `test_rule` - Test a rule against sample data
-- `get_events` - View recent rule triggers
 
 **System (2 tools)**
 - `get_system_status` - Overall system health
 - `get_machine_info` - Hardware and OS info
+
+**Scheduling & Proposals (6 tools)**
+- `list_jobs` - List scheduled jobs
+- `delete_job` - Delete a scheduled job
+- `list_proposals` - List pending proposals
+- `approve_proposal` - Approve a proposal
+- `reject_proposal` - Reject a proposal
+- `clear_episodic_memory` - Clear agent episodic memory
+
+**Beliefs & World State (4 tools)**
+- `get_belief` - Get a belief by subject+predicate
+- `update_belief` - Update a belief with confidence
+- `list_world_state` - List live sensor-derived state
+- `configure_context` - Wire Zenoh topic to world state
+
+**Missions & Safety (6 tools)**
+- `list_missions` - List active missions
+- `pause_mission` - Pause a running mission
+- `resume_mission` - Resume a paused mission
+- `cancel_mission` - Cancel a mission
+- `register_constraint` - Register safety constraint
+- `list_constraints` - List safety constraints
+
+**Alerts & Telemetry (2 tools)**
+- `register_alert` - Register reactive alert trigger
+- `unregister_alert` - Remove an alert trigger
 
 ## Prerequisites
 
@@ -79,7 +101,7 @@ The `BUBBALOOP_ZENOH_ENDPOINT` environment variable can be customized to connect
 
 ## Available Tools
 
-Once configured, your OpenClaw agent can discover all 24 bubbaloop tools via MCP's `tools/list` method. Each tool includes parameter schemas and descriptions.
+Once configured, your OpenClaw agent can discover all 42 bubbaloop tools via MCP's `tools/list` method. Each tool includes parameter schemas and descriptions.
 
 Example workflows:
 

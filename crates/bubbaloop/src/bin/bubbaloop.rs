@@ -388,13 +388,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             };
 
-            let scope = std::env::var("BUBBALOOP_SCOPE").unwrap_or_else(|_| "local".to_string());
             let local_machine_id = bubbaloop::daemon::util::get_machine_id();
 
             // Check daemon is reachable
-            if !bubbaloop::cli::agent_client::is_daemon_running(&session, &scope, &local_machine_id)
-                .await
-            {
+            if !bubbaloop::cli::agent_client::is_daemon_running(&session, &local_machine_id).await {
                 eprintln!("Error: Daemon is not running.");
                 eprintln!("  Start it with: bubbaloop daemon start");
                 return Ok(());
@@ -406,7 +403,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         parse_agent_target(chat_cmd.agent.as_deref(), &local_machine_id);
                     if let Err(e) = bubbaloop::cli::agent_client::run_agent_client(
                         session,
-                        &scope,
                         target_machine,
                         agent,
                         chat_cmd.message.as_deref(),
@@ -423,7 +419,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 bubbaloop::cli::agent::AgentSubcommand::List(list_cmd) => {
                     if let Err(e) = bubbaloop::cli::agent_client::run_agent_list(
                         session,
-                        &scope,
                         &local_machine_id,
                         list_cmd.all,
                     )

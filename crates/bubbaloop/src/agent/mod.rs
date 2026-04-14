@@ -140,6 +140,8 @@ pub enum AgentError {
     Io(#[from] std::io::Error),
     #[error("Turn timed out after {0}s")]
     TurnTimeout(u64),
+    #[error("Configuration error: {0}")]
+    Config(String),
 }
 
 pub type Result<T> = std::result::Result<T, AgentError>;

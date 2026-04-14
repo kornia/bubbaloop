@@ -1,4 +1,5 @@
 ---
+description: "Bubbaloop telemetry watchdog. Monitor CPU, RAM, and disk with 5 severity levels, automatic circuit breakers, and configurable alert thresholds."
 summary: Cross-platform resource watchdog that prevents OOM crashes on edge devices. Circuit breaker kills runaway nodes; agent decides restarts.
 read_when:
   - system is running out of memory
@@ -330,4 +331,4 @@ The watchdog uses the `sysinfo` crate — no `/proc` assumptions:
 | Service & config watcher | `crates/bubbaloop/src/daemon/telemetry/mod.rs` | ~250 |
 | Agent dispatch (3 tools) | `crates/bubbaloop/src/agent/dispatch.rs` | integrated |
 
-**Design document:** [`docs/plans/2026-03-05-telemetry-watchdog-design.md`](../plans/2026-03-05-telemetry-watchdog-design.md)
+**Source:** `crates/bubbaloop/src/daemon/telemetry/`

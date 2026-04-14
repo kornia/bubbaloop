@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop web dashboard. Real-time visualization of camera feeds, sensor data, system metrics, and agent activity in your browser."
+---
+
 # Dashboard
 
 The Bubbaloop Dashboard is a React-based web application for real-time monitoring and visualization of data from all components in the system.
@@ -51,12 +55,16 @@ pixi run up
 
 The dashboard supports multiple panel types for different data:
 
-| Panel | Description |
-|-------|-------------|
-| [Camera](panels/camera.md) | H264 video stream with live stats |
-| [Raw Data](panels/raw-data.md) | JSON view of any topic data |
-| [Weather](panels/weather.md) | OpenMeteo weather conditions and forecasts |
-| [Stats](panels/stats.md) | Topic frequency and message metrics |
+| Panel | Component | Description |
+|-------|-----------|-------------|
+| [Camera](panels/camera.md) | CameraView | H264 video stream with live stats |
+| [Raw Data](panels/raw-data.md) | JsonView | JSON view of any topic data |
+| [Weather](panels/weather.md) | WeatherView | OpenMeteo weather conditions and forecasts |
+| [Stats](panels/stats.md) | StatsView | Topic frequency and message metrics |
+| Nodes | NodesView | Node fleet status and health |
+| Network Monitor | NetworkMonitorView | Zenoh network topology and traffic |
+| System Telemetry | SystemTelemetryView | CPU, memory, and disk monitoring |
+| Mesh | MeshView | 3D mesh visualization |
 
 ## Interface
 
@@ -94,7 +102,7 @@ Each panel has controls:
 The dashboard automatically connects to the Zenoh WebSocket bridge via the built-in Vite proxy:
 
 1. Dashboard loads at `:5173`
-2. WebSocket proxied to bridge at `:10000`
+2. WebSocket proxied to bridge at `:10001`
 3. Connection established automatically
 
 ### Connection Status
@@ -149,9 +157,9 @@ To run the dashboard separately:
 # Terminal 1: Zenoh bridge
 pixi run bridge
 
-# Terminal 2: Services (cameras, weather)
-pixi run cameras
-pixi run weather
+# Terminal 2: Start nodes
+bubbaloop node start rtsp-camera
+bubbaloop node start openmeteo
 
 # Terminal 3: Dashboard
 pixi run dashboard

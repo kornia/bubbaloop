@@ -83,17 +83,42 @@ impl NodeManager {
                 // Extract node name from key (handles both formats)
                 let key_str = sample.key_expr().as_str();
                 if let Some(name) = extract_health_node_name(key_str) {
-                    let now = Self::now_ms();
-                    log::debug!("Received health heartbeat from node: {}", name);
+                    // Validate the node name from the topic
+                    if crate::validation::validate_node_name(&name).is_err() {
+                        log::warn!(
+                            "Ignoring heartbeat with invalid node name from topic: {}",
+                            key_str
+                        );
+                        continue;
+                    }
 
-                    // Update health state (match by effective name)
+                    let now = Self::now_ms();
+
+                    // Verify the node is registered and in a running state
                     let mut nodes = manager_heartbeat.nodes.write().await;
+                    let mut found = false;
                     for node in nodes.values_mut() {
                         if node.effective_name() == name {
-                            node.health_status = HealthStatus::Healthy;
-                            node.last_health_check_ms = now;
+                            if node.status != NodeStatus::Running {
+                                log::warn!(
+                                    "Ignoring heartbeat from node '{}' which is not running (status: {:?})",
+                                    name,
+                                    node.status
+                                );
+                            } else {
+                                log::debug!("Received health heartbeat from node: {}", name);
+                                node.health_status = HealthStatus::Healthy;
+                                node.last_health_check_ms = now;
+                            }
+                            found = true;
                             break;
                         }
+                    }
+                    if !found {
+                        log::warn!(
+                            "Ignoring heartbeat from unknown/unregistered node: {}",
+                            name
+                        );
                     }
                 }
             }

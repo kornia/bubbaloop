@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop service nodes. Weather, geocoding, and data enrichment services that augment sensor data with external context."
+---
+
 # Services
 
 Services are components that provide data processing, external integrations, or computed outputs. Unlike sensors, services may not directly interact with hardware but instead consume data from other sources.

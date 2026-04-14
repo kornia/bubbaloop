@@ -1,3 +1,7 @@
+---
+description: "Bubbaloop CLI reference. Complete command list for daemon control, node management, agent interaction, and system diagnostics."
+---
+
 # CLI Commands
 
 Reference for the Bubbaloop command-line interface.

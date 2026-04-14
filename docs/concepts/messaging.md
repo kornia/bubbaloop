@@ -1,3 +1,7 @@
+---
+description: "Zenoh pub/sub messaging in Bubbaloop. Topics, key expressions, protobuf encoding, and microsecond-latency data flow between nodes and agents."
+---
+
 # Messaging
 
 Zenoh pub/sub, queryables, and the agent gateway protocol.
@@ -23,12 +27,11 @@ Low latency. No broker required. Runs over TCP, UDP, WebSocket, or shared memory
 Peer mode does direct P2P — messages never route through the router and are invisible to other clients.
 
 ```
-Nodes/CLI: mode = "client" <- all traffic flows through zenohd
-Daemon:    mode = "peer"   <- co-located with router, uses peer intentionally
+Nodes/CLI/Daemon: mode = "client" <- all traffic flows through zenohd
 ```
 
 !!! note
-    The daemon itself uses `"peer"` mode (see `daemon/mod.rs`) because it co-locates with the Zenoh router. This is the only exception — all nodes and CLI clients must use `"client"`.
+    Everything uses `"client"` mode — nodes, CLI, and the daemon itself (see `daemon/mod.rs`). Client mode routes all traffic through the Zenoh router, which is required for message visibility across participants.
 
 Rust:
 ```rust
@@ -44,28 +47,30 @@ conf.insert_json5('mode', '"client"')
 
 ## Topic Convention
 
-All topics follow one pattern:
+All topics live in two key spaces:
 
 ```
-bubbaloop/{scope}/{machine_id}/{node_name}/{resource}
+bubbaloop/global/{machine_id}/{suffix}   ← network-visible (dashboard, CLI, remote machines)
+bubbaloop/local/{machine_id}/{suffix}    ← SHM-only (never crosses WebSocket bridge)
 ```
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `scope` | Logical grouping | `local`, `prod`, `lab` |
 | `machine_id` | Hostname (hyphens → underscores) | `nvidia_orin00` |
-| `node_name` | Node binary name | `camera`, `openmeteo` |
-| `resource` | Data type or sub-topic | `compressed`, `health`, `schema` |
+| `suffix` | Node instance name + resource | `tapo_terrace/compressed`, `openmeteo/weather` |
+
+Use **global** for data that the dashboard or other machines should see.
+Use **local** for large binary payloads (raw RGBA frames) consumed only on the same machine via SHM zero-copy.
 
 Examples:
 
 | Topic | Description |
 |-------|-------------|
-| `bubbaloop/local/nvidia_orin00/camera/compressed` | Camera frames (protobuf) |
-| `bubbaloop/local/nvidia_orin00/openmeteo/current` | Current weather reading |
-| `bubbaloop/local/nvidia_orin00/camera/health` | Camera node heartbeat |
-| `bubbaloop/local/nvidia_orin00/camera/schema` | FileDescriptorSet bytes |
-| `bubbaloop/local/nvidia_orin00/daemon/api/nodes` | Daemon node list |
+| `bubbaloop/global/nvidia_orin00/tapo_terrace/compressed` | Camera frames (protobuf, network-visible) |
+| `bubbaloop/local/nvidia_orin00/tapo_terrace/raw` | Camera raw RGBA (SHM-only) |
+| `bubbaloop/global/nvidia_orin00/openmeteo/weather` | Current weather reading |
+| `bubbaloop/global/nvidia_orin00/tapo_terrace/health` | Camera node heartbeat |
+| `bubbaloop/global/nvidia_orin00/tapo_terrace/schema` | FileDescriptorSet bytes |
 
 Hostname sanitization: `nvidia-orin-00` becomes `nvidia_orin_00`. Hyphens in topic paths break wildcard matching.
 
@@ -73,60 +78,96 @@ Hostname sanitization: `nvidia-orin-00` becomes `nvidia_orin_00`. Hyphens in top
 
 ## Message Patterns
 
-### Rust Publisher
+### SDK Publishers (recommended)
+
+The Node SDK handles encoding, topic construction, and SHM configuration:
 
 ```rust
-use prost::Message;
+// Rust — protobuf publisher (sets APPLICATION_PROTOBUF encoding + type name)
+let pub_proto = ctx.publisher_proto::<CompressedImage>("compressed").await?;
+pub_proto.put(&image).await?;
 
-let publisher = session
-    .declare_publisher("bubbaloop/local/my_machine/camera/compressed")
-    .await?;
+// JSON publisher (sets APPLICATION_JSON encoding)
+let pub_json = ctx.publisher_json("weather").await?;
+pub_json.put(&serde_json::json!({"temperature": 22.5})).await?;
 
-publisher.put(image.encode_to_vec()).await?;
+// Raw SHM publisher for local-only large payloads
+let pub_raw = ctx.publisher_raw("raw", true).await?;
+pub_raw.put(zbytes_payload).await?;
 ```
 
-### Rust Subscriber
+```python
+# Python — protobuf publisher
+pub_proto = ctx.publisher_proto("compressed", msg_class=CompressedImage)
+pub_proto.put(image)
+
+# JSON publisher
+pub_json = ctx.publisher_json("weather")
+pub_json.put({"temperature": 22.5})
+
+# Raw SHM publisher for local-only large payloads
+pub_raw = ctx.publisher_raw("raw", local=True)
+pub_raw.put(raw_bytes)
+```
+
+### SDK Subscribers (recommended)
 
 ```rust
-let subscriber = session
-    .declare_subscriber("bubbaloop/local/my_machine/camera/**")
-    .await?;
+// Rust — typed subscriber (auto-decodes protobuf)
+let sub = ctx.subscriber::<CompressedImage>("tapo_terrace/compressed").await?;
+while let Some(image) = sub.recv().await {
+    // image is already decoded
+}
 
-while let Ok(sample) = subscriber.recv_async().await {
-    let bytes = sample.payload().to_bytes();
-    let image = CompressedImage::decode(bytes.as_ref())?;
+// Raw subscriber (ZBytes, no decoding — for SHM frames)
+let sub_raw = ctx.subscriber_raw("tapo_terrace/raw", true).await?;
+while let Some(payload) = sub_raw.recv().await {
+    // payload is ZBytes — zero-copy if SHM
 }
 ```
 
-### Rust Queryable
+```python
+# Python — auto-decoding subscriber (proto, JSON, or bytes based on encoding)
+sub = ctx.subscribe("tapo_terrace/raw", local=True)
+for msg in sub:   # decoded proto object — no _pb2 imports needed
+    tensor = torch.frombuffer(msg.data, dtype=torch.uint8)
+
+# Raw subscriber (bytes, no decoding)
+sub_raw = ctx.subscribe_raw("camera/raw", local=True)
+for raw_bytes in sub_raw:
+    tensor = torch.frombuffer(raw_bytes, dtype=torch.uint8)
+```
+
+### Raw Zenoh (low-level)
+
+For cases where you need direct Zenoh access:
+
+```rust
+// Rust — raw Zenoh publisher
+let publisher = session
+    .declare_publisher("bubbaloop/global/my_machine/camera/compressed")
+    .await?;
+publisher.put(image.encode_to_vec()).await?;
+```
+
+```python
+# Python — raw Zenoh publisher
+pub = session.declare_publisher("bubbaloop/global/my_machine/sensor/data")
+pub.put(payload_bytes)
+```
+
+### Queryable
 
 ```rust
 // NEVER use .complete(true) — blocks wildcard discovery like bubbaloop/**/schema
 let queryable = session
-    .declare_queryable("bubbaloop/local/my_machine/camera/schema")
+    .declare_queryable("bubbaloop/global/my_machine/camera/schema")
     .await?;
 
 while let Ok(query) = queryable.recv_async().await {
     query.reply(query.key_expr(), schema_bytes.clone()).await?;
 }
 ```
-
-### Python Publisher
-
-```python
-import zenoh
-import json
-
-conf = zenoh.Config()
-conf.insert_json5('mode', '"client"')
-conf.insert_json5('connect/endpoints', '["tcp/127.0.0.1:7447"]')
-
-session = zenoh.open(conf)
-pub = session.declare_publisher('bubbaloop/local/my_machine/sensor/data')
-pub.put(payload_bytes)
-```
-
-### Python Queryable
 
 ```python
 def on_query(query):
@@ -135,7 +176,7 @@ def on_query(query):
     # RIGHT: query.key_expr
     query.reply(query.key_expr, payload_bytes)
 
-queryable = session.declare_queryable('bubbaloop/local/my_machine/sensor/schema', on_query)
+queryable = session.declare_queryable('bubbaloop/global/my_machine/sensor/schema', on_query)
 ```
 
 ### TypeScript (Dashboard / Browser)
@@ -149,7 +190,7 @@ const session = await Session.open(new Config("ws/127.0.0.1:10001"));
 
 // Subscribe to all camera topics on this machine
 const sub = await session.declareSubscriber(
-    "bubbaloop/local/my_machine/camera/**",
+    "bubbaloop/global/my_machine/camera/**",
     (sample) => {
         const bytes = new Uint8Array(sample.payload().buffer);
         const image = CompressedImage.decode(bytes);
@@ -157,7 +198,7 @@ const sub = await session.declareSubscriber(
 );
 
 // Query a node's schema
-const replies = await session.get("bubbaloop/local/my_machine/camera/schema");
+const replies = await session.get("bubbaloop/global/my_machine/camera/schema");
 for await (const reply of replies) {
     const descriptorBytes = new Uint8Array(reply.result().payload().buffer);
 }
@@ -172,9 +213,9 @@ The daemon hosts a multi-agent runtime. All LLM processing is daemon-side. The C
 ### Topics
 
 ```
-bubbaloop/{scope}/{machine}/agent/inbox                   <- shared inbox (all agents)
-bubbaloop/{scope}/{machine}/agent/{agent_id}/outbox       <- per-agent event stream
-bubbaloop/{scope}/{machine}/agent/{agent_id}/manifest     <- queryable: agent metadata
+bubbaloop/global/{machine}/agent/inbox                   <- shared inbox (all agents)
+bubbaloop/global/{machine}/agent/{agent_id}/outbox       <- per-agent event stream
+bubbaloop/global/{machine}/agent/{agent_id}/manifest     <- queryable: agent metadata
 ```
 
 ### Wire Format
@@ -259,10 +300,16 @@ Every well-behaved node serves five standard queryables:
 | `config` | `/config` | YAML or JSON config |
 | `command` | `/command` | Accepts control commands |
 
-Discovery: query `bubbaloop/**/manifest` to find all nodes on the network.
+Discovery: query `bubbaloop/**/manifest` to find all nodes, or use the SDK:
 
 ```rust
-// Discover all nodes
+// SDK discovery (recommended)
+let nodes = bubbaloop_node::discover_nodes(&session, Duration::from_secs(2)).await?;
+for node in &nodes {
+    println!("{}/{}", node.machine_id, node.node_name);
+}
+
+// Raw Zenoh discovery
 let replies = session
     .get("bubbaloop/**/manifest")
     .target(QueryTarget::All)
@@ -377,4 +424,4 @@ Bind to `127.0.0.1`, not `0.0.0.0`. Never expose Zenoh ports directly to the int
 ## Next Steps
 
 - [Architecture](architecture.md) — Layer model, daemon, agent runtime
-- [Memory](memory.md) — 3-tier agent memory (short-term, episodic, semantic)
+- [Memory](memory.md) — 4-tier agent memory (world state, short-term, episodic, semantic)

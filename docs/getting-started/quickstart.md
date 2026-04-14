@@ -1,3 +1,7 @@
+---
+description: "Get Bubbaloop running in 30 seconds. Install the binary, start the daemon, and connect your first camera or sensor on Jetson or Raspberry Pi."
+---
+
 # Quickstart
 
 Get started with Bubbaloop in minutes.

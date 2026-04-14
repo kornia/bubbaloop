@@ -4,7 +4,7 @@
 //! the original `agent/claude.rs`, wrapped in the new ModelProvider trait.
 
 use super::{
-    ContentBlock, Message, ModelProvider, ModelResponse, ProviderError, StreamEvent,
+    http_client, ContentBlock, Message, ModelProvider, ModelResponse, ProviderError, StreamEvent,
     ToolDefinition, Usage,
 };
 use futures::StreamExt;
@@ -99,7 +99,8 @@ impl ClaudeProvider {
         // 1. Check env var (always highest priority)
         if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
             return Ok(Self {
-                client: reqwest::Client::new(),
+                // See provider/mod.rs:http_client() — must not use Client::new().
+                client: http_client(),
                 auth: AuthMethod::ApiKey(key),
                 model: model.unwrap_or(DEFAULT_MODEL).to_string(),
             });
@@ -108,7 +109,7 @@ impl ClaudeProvider {
         // 2. Check OAuth credentials
         if let Some(token) = Self::read_oauth_token() {
             return Ok(Self {
-                client: reqwest::Client::new(),
+                client: http_client(),
                 auth: AuthMethod::OAuthToken(token),
                 model: model.unwrap_or(DEFAULT_MODEL).to_string(),
             });
@@ -117,7 +118,7 @@ impl ClaudeProvider {
         // 3. Check API key file
         if let Some(key) = Self::read_key_file() {
             return Ok(Self {
-                client: reqwest::Client::new(),
+                client: http_client(),
                 auth: AuthMethod::ApiKey(key),
                 model: model.unwrap_or(DEFAULT_MODEL).to_string(),
             });
@@ -126,9 +127,29 @@ impl ClaudeProvider {
         Err(ProviderError::MissingCredentials)
     }
 
+    /// Check that a credential file has restrictive permissions (Unix only).
+    /// Logs a warning if the file is more permissive than 0o600 but does not
+    /// prevent reading — this avoids breaking functionality.
+    #[cfg(unix)]
+    fn check_credential_permissions(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                log::warn!(
+                    "Credential file {:?} has permissions {:o} — should be 0600 or stricter",
+                    path,
+                    mode
+                );
+            }
+        }
+    }
+
     /// Try to read the API key from `~/.bubbaloop/anthropic-key`.
     fn read_key_file() -> Option<String> {
         let path = dirs::home_dir()?.join(".bubbaloop").join("anthropic-key");
+        #[cfg(unix)]
+        Self::check_credential_permissions(&path);
         let content = std::fs::read_to_string(path).ok()?;
         let key = content.lines().next()?.trim().to_string();
         if key.is_empty() {
@@ -144,6 +165,8 @@ impl ClaudeProvider {
         let path = dirs::home_dir()?
             .join(".bubbaloop")
             .join("oauth-credentials.json");
+        #[cfg(unix)]
+        Self::check_credential_permissions(&path);
         let content = std::fs::read_to_string(path).ok()?;
         let creds: serde_json::Value = serde_json::from_str(&content).ok()?;
 
@@ -168,7 +191,7 @@ impl ClaudeProvider {
     /// Does not read any environment variables or files.
     pub fn with_api_key(api_key: impl Into<String>, model: Option<&str>) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: http_client(),
             auth: AuthMethod::ApiKey(api_key.into()),
             model: model.unwrap_or(DEFAULT_MODEL).to_string(),
         }

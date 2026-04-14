@@ -40,38 +40,6 @@ pub enum Capability {
     Gateway,
 }
 
-/// Declaration of a topic the node publishes or subscribes to
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct TopicSpec {
-    /// Topic suffix (e.g., "output", "compressed", "metrics")
-    pub suffix: String,
-    /// Protobuf message type (e.g., "bubbaloop.header.v1.Header")
-    #[serde(default)]
-    pub schema_type: Option<String>,
-    /// Publishing rate in Hz (0 = event-driven)
-    #[serde(default)]
-    pub rate_hz: Option<f64>,
-    /// Human-readable description
-    #[serde(default)]
-    pub description: Option<String>,
-}
-
-/// Declaration of a command the node accepts
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommandSpec {
-    /// Command name (e.g., "capture", "set_resolution")
-    pub name: String,
-    /// Human-readable description
-    #[serde(default)]
-    pub description: Option<String>,
-    /// JSON schema for parameters (optional)
-    #[serde(default)]
-    pub parameters: Option<serde_json::Value>,
-    /// JSON schema for return value (optional)
-    #[serde(default)]
-    pub returns: Option<serde_json::Value>,
-}
-
 /// Hardware/software requirements
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Requirements {
@@ -97,6 +65,8 @@ pub struct NodeManifest {
     pub description: String,
     #[serde(default)]
     pub author: Option<String>,
+    // TODO: move build/command to nodes.json (specified at `node add` time)
+    // so node.yaml is pure metadata. Requires daemon refactor.
     #[serde(default)]
     pub build: Option<String>,
     #[serde(default)]
@@ -107,15 +77,6 @@ pub struct NodeManifest {
     /// Capabilities this node provides
     #[serde(default)]
     pub capabilities: Vec<Capability>,
-    /// Topics this node publishes
-    #[serde(default)]
-    pub publishes: Vec<TopicSpec>,
-    /// Topics this node subscribes to
-    #[serde(default)]
-    pub subscribes: Vec<TopicSpec>,
-    /// Commands this node accepts
-    #[serde(default)]
-    pub commands: Vec<CommandSpec>,
     /// Hardware/software requirements
     #[serde(default)]
     pub requires: Option<Requirements>,
@@ -241,14 +202,28 @@ pub fn load_registry() -> Result<NodesRegistry> {
     Ok(registry)
 }
 
-/// Save the nodes registry
+/// Save the nodes registry.
+///
+/// NOTE: Registry mutations are serialized through the daemon's NodeManager.
+/// File locking is not used here — all callers must go through the daemon
+/// to avoid concurrent writes. Direct CLI calls (register_node, unregister_node)
+/// are single-threaded by nature of the CLI process model.
 pub fn save_registry(registry: &NodesRegistry) -> Result<()> {
     let home = get_bubbaloop_home();
     fs::create_dir_all(&home)?;
 
     let path = get_nodes_file();
     let content = serde_json::to_string_pretty(registry)?;
-    fs::write(path, content)?;
+    fs::write(&path, content)?;
+
+    // Set restrictive permissions on Unix (0600 — owner read/write only)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let _ = std::fs::set_permissions(&path, perms);
+    }
+
     Ok(())
 }
 
@@ -331,6 +306,11 @@ pub fn register_node(
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
         .to_string();
+
+    // Validate config_override if provided
+    if let Some(config) = config_override {
+        validate_config_override(config)?;
+    }
 
     // Add to registry
     registry.nodes.push(NodeEntry {
@@ -490,6 +470,58 @@ pub fn check_is_built(node_path: &str, manifest: &NodeManifest) -> bool {
 
     // External binary, pixi task, or other launcher — assume built
     true
+}
+
+/// Validate a config_override path to prevent systemd specifier injection and path traversal.
+///
+/// Rejects:
+/// - `%` characters (systemd specifier expansion: `%n`, `%i`, `%h`, etc.)
+/// - `..` path segments (path traversal)
+/// - null bytes
+/// - newlines and carriage returns
+fn validate_config_override(config: &str) -> Result<()> {
+    if config.is_empty() {
+        return Err(RegistryError::InvalidNode(
+            "Config override path cannot be empty".to_string(),
+        ));
+    }
+
+    if config.contains('\0') {
+        return Err(RegistryError::InvalidNode(
+            "Config override path cannot contain null bytes".to_string(),
+        ));
+    }
+
+    if config.contains('\n') || config.contains('\r') {
+        return Err(RegistryError::InvalidNode(
+            "Config override path cannot contain newlines".to_string(),
+        ));
+    }
+
+    if config.contains('%') {
+        return Err(RegistryError::InvalidNode(
+            "Config override path cannot contain '%' (systemd specifier injection)".to_string(),
+        ));
+    }
+
+    // Check for path traversal via ".." segments
+    for segment in config.split('/') {
+        if segment == ".." {
+            return Err(RegistryError::InvalidNode(
+                "Config override path cannot contain '..' segments (path traversal)".to_string(),
+            ));
+        }
+    }
+    // Also check Windows-style path separators
+    for segment in config.split('\\') {
+        if segment == ".." {
+            return Err(RegistryError::InvalidNode(
+                "Config override path cannot contain '..' segments (path traversal)".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// Get current timestamp as ISO 8601 string (RFC 3339 format)
@@ -751,6 +783,43 @@ mod tests {
                 effective_name(&entries[i], &manifest)
             );
         }
+    }
+
+    #[test]
+    fn test_validate_config_override_valid() {
+        assert!(validate_config_override("/etc/bubbaloop/terrace.yaml").is_ok());
+        assert!(validate_config_override("/home/user/.bubbaloop/config.yaml").is_ok());
+        assert!(validate_config_override("config.yaml").is_ok());
+    }
+
+    #[test]
+    fn test_validate_config_override_rejects_systemd_specifiers() {
+        assert!(validate_config_override("/etc/%n/config.yaml").is_err());
+        assert!(validate_config_override("/home/%h/config.yaml").is_err());
+        assert!(validate_config_override("%i.yaml").is_err());
+    }
+
+    #[test]
+    fn test_validate_config_override_rejects_path_traversal() {
+        assert!(validate_config_override("/etc/../passwd").is_err());
+        assert!(validate_config_override("../secret.yaml").is_err());
+        assert!(validate_config_override("/home/user/../../etc/shadow").is_err());
+    }
+
+    #[test]
+    fn test_validate_config_override_rejects_null_bytes() {
+        assert!(validate_config_override("/etc/config\0.yaml").is_err());
+    }
+
+    #[test]
+    fn test_validate_config_override_rejects_newlines() {
+        assert!(validate_config_override("/etc/config\n.yaml").is_err());
+        assert!(validate_config_override("/etc/config\r.yaml").is_err());
+    }
+
+    #[test]
+    fn test_validate_config_override_rejects_empty() {
+        assert!(validate_config_override("").is_err());
     }
 
     // -----------------------------------------------------------------------

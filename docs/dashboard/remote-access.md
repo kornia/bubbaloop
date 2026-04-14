@@ -1,3 +1,7 @@
+---
+description: "Access the Bubbaloop dashboard remotely. SSH tunneling, reverse proxy setup, and secure access to your edge device dashboard."
+---
+
 # Remote Access
 
 Access the Bubbaloop dashboard from other machines on your network or over the internet.
@@ -67,7 +71,7 @@ The Vite development server proxies WebSocket connections:
 │                                                             │
 │  ┌──────────────┐    ┌──────────────────────────────────┐  │
 │  │  Dashboard   │    │  Zenoh Bridge                     │  │
-│  │  :5173       │───▶│  :10000 (WebSocket)               │  │
+│  │  :5173       │───▶│  :10001 (WebSocket)               │  │
 │  │  (Vite)      │    │                                   │  │
 │  └──────────────┘    └──────────────────────────────────┘  │
 │         │                                                   │
@@ -93,11 +97,11 @@ For accessing cameras from a laptop connected to a robot:
 ┌─────────────────────────────────────────────────────────────┐
 │                    Server (Robot)                            │
 │  ┌────────────────┐         ┌──────────────────────────┐    │
-│  │  cameras_node  │──TCP───▶│  zenohd                  │    │
-│  │  (-z :7447)    │  :7447  │  - tcp :7447 (router)    │    │
-│  └────────────────┘         │  - ws :10000 (API)       │    │
+│  │  rtsp-camera   │──TCP───▶│  zenohd                  │    │
+│  │  (-e :7447)    │  :7447  │  - tcp :7447 (router)    │    │
+│  └────────────────┘         │  - ws :10001 (API)       │    │
 │  ┌────────────────┐         └───────────┬──────────────┘    │
-│  │  weather_node  │──TCP────────────────┘                   │
+│  │  openmeteo     │──TCP────────────────┘                   │
 │  └────────────────┘                     │                   │
 └─────────────────────────────────────────┼───────────────────┘
                                           │ TCP :7447
@@ -106,7 +110,7 @@ For accessing cameras from a laptop connected to a robot:
 │                           ┌─────────────▼──────────────┐    │
 │  ┌───────────────┐   WS   │  zenohd                    │    │
 │  │  Dashboard    │◀───────│  - connects to server:7447 │    │
-│  │  Browser      │ :10000 │  - ws :10000 (local)       │    │
+│  │  Browser      │ :10001 │  - ws :10001 (local)       │    │
 │  └───────────────┘        └────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -119,8 +123,8 @@ On the robot:
 # Start Zenoh router
 zenohd -c zenoh.json5
 
-# Start cameras
-pixi run cameras
+# Start camera node
+bubbaloop node start rtsp-camera
 ```
 
 **zenoh.json5:**
@@ -133,7 +137,7 @@ pixi run cameras
   },
   plugins: {
     remote_api: {
-      websocket_port: 10000,
+      websocket_port: 10001,
     },
   },
 }
@@ -163,7 +167,7 @@ pixi run dashboard
 |------|----------|-----------|---------|
 | 5173 | TCP | Inbound | Dashboard HTTPS |
 | 7447 | TCP | Inbound | Zenoh router (if distributed) |
-| 10000 | TCP | Inbound | WebSocket (if direct access) |
+| 10001 | TCP | Inbound | WebSocket (if direct access) |
 
 ### UFW (Ubuntu)
 
@@ -173,7 +177,7 @@ sudo ufw allow 5173/tcp
 
 # Distributed setup
 sudo ufw allow 7447/tcp
-sudo ufw allow 10000/tcp
+sudo ufw allow 10001/tcp
 ```
 
 ### iptables
@@ -184,7 +188,7 @@ sudo iptables -A INPUT -p tcp --dport 5173 -j ACCEPT
 
 # Distributed setup
 sudo iptables -A INPUT -p tcp --dport 7447 -j ACCEPT
-sudo iptables -A INPUT -p tcp --dport 10000 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 10001 -j ACCEPT
 ```
 
 ## Mobile Access

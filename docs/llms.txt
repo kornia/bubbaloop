@@ -1,0 +1,70 @@
+# Bubbaloop
+
+> Open-source Hardware AI agent. Single Rust binary for cameras, sensors, robots, and IoT fleets — orchestrated by AI agents with memory and real-time telemetry.
+
+Bubbaloop is a physical AI orchestration platform built on Zenoh pub/sub. It runs as a single ~13MB binary on edge devices (Jetson, Raspberry Pi, any Linux) and provides:
+
+- **Multi-agent runtime** with Soul identity, 4-tier memory (world state, short-term, episodic, semantic), and adaptive heartbeat
+- **42 MCP tools** with 3-tier RBAC for node lifecycle, data queries, agent memory, beliefs, missions, and constraints
+- **Zenoh data plane** for microsecond-latency pub/sub between sensor nodes, actuators, and AI agents
+- **Node SDK** (Rust + Python) for building self-describing nodes in ~50 lines of code
+- **Telemetry watchdog** with 5 severity levels and automatic circuit breakers
+- **Web dashboard** for real-time visualization of camera feeds, sensor data, and system metrics
+
+## Documentation
+
+- [Quickstart](https://kornia.org/bubbaloop/getting-started/quickstart/): Install and run in 30 seconds
+- [Installation](https://kornia.org/bubbaloop/getting-started/installation/): Platform-specific install instructions
+- [Configuration](https://kornia.org/bubbaloop/getting-started/configuration/): YAML-based node and system configuration
+- [Architecture](https://kornia.org/bubbaloop/concepts/architecture/): Runtime design, daemon subsystems, security layers
+- [Messaging](https://kornia.org/bubbaloop/concepts/messaging/): Zenoh pub/sub patterns, topic conventions, wire format
+- [Memory](https://kornia.org/bubbaloop/concepts/memory/): 4-tier agent memory and mission engine
+- [Topics](https://kornia.org/bubbaloop/concepts/topics/): Key expression hierarchy and naming conventions
+- [Agent Guide](https://kornia.org/bubbaloop/agent-guide/): Multi-agent setup, Soul, identity, capabilities
+- [Create Your First Node](https://kornia.org/bubbaloop/guides/create-your-first-node/): Step-by-step Rust node tutorial
+- [Node Marketplace](https://kornia.org/bubbaloop/guides/node-marketplace/): Browse and install community nodes
+- [Telemetry Watchdog](https://kornia.org/bubbaloop/guides/telemetry-watchdog/): Resource monitoring and circuit breakers
+- [CLI Reference](https://kornia.org/bubbaloop/reference/cli/): Complete command reference
+- [API Reference](https://kornia.org/bubbaloop/api/): Protobuf schemas and message formats
+- [Dashboard](https://kornia.org/bubbaloop/dashboard/): Web UI for real-time visualization
+- [Troubleshooting](https://kornia.org/bubbaloop/troubleshooting/): Common issues and solutions
+
+## Key Concepts
+
+### Node Contract
+Every node serves five standard Zenoh queryables: schema (FileDescriptorSet), manifest (capabilities), health (status), config (YAML), and command (imperative actions). Agents discover nodes via `bubbaloop/**/manifest` wildcard queries.
+
+### Topic Hierarchy
+```
+bubbaloop/{key_space}/{machine_id}/{node_name}/{resource}
+```
+- `global` = network-visible (dashboard, CLI, remote machines)
+- `local` = SHM-only (same-machine, never crosses WebSocket bridge)
+
+### MCP Integration
+Run `bubbaloop mcp --stdio` for Claude Code integration, or use the daemon's HTTP endpoint on :8088 for remote agents. 42 tools across 11 categories: Discovery, Lifecycle, Data, System, Memory, Beliefs, World State, Context Providers, Missions, Constraints, Alerts.
+
+### Node SDK
+```rust
+use bubbaloop_node::{Node, NodeContext, run_node};
+
+struct MySensor;
+
+#[async_trait]
+impl Node for MySensor {
+    async fn init(ctx: &NodeContext) -> anyhow::Result<Self> { Ok(Self) }
+    async fn run(self, ctx: NodeContext) -> anyhow::Result<()> {
+        let publisher = ctx.publisher_json("data").await?;
+        // publish sensor data...
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() { run_node::<MySensor>().await.unwrap(); }
+```
+
+## Source Code
+
+- [GitHub Repository](https://github.com/kornia/bubbaloop)
+- License: Apache-2.0
