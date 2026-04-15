@@ -266,8 +266,30 @@ pub struct NodeCommandJson {
     #[serde(default)]
     pub target_machine: String,
     /// Command issue time (milliseconds since epoch).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_ms_lenient")]
     pub timestamp_ms: i64,
+}
+
+/// Accept timestamp_ms as integer or float (JS `Date.now()` encodes as CBOR float).
+fn deserialize_ms_lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    use serde::de::{self, Visitor};
+    struct V;
+    impl Visitor<'_> for V {
+        type Value = i64;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("integer or float milliseconds")
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<i64, E> {
+            Ok(v)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<i64, E> {
+            Ok(v as i64)
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<i64, E> {
+            Ok(v as i64)
+        }
+    }
+    d.deserialize_any(V)
 }
 
 /// JSON-serializable reply from the command queryable.
