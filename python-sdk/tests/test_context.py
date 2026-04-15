@@ -93,9 +93,8 @@ def test_import_publishers():
 
 
 def test_import_subscribers():
-    from bubbaloop_sdk import ProtoSubscriber, RawSubscriber, TypedSubscriber
+    from bubbaloop_sdk import ProtoSubscriber, RawSubscriber
 
-    assert TypedSubscriber is not None
     assert ProtoSubscriber is not None
     assert RawSubscriber is not None
 
@@ -202,71 +201,6 @@ def test_json_publisher_passthrough_str():
     mock_pub.put.assert_called_once_with(b"hello")
 
 
-# ---------------------------------------------------------------------------
-# TypedSubscriber — queue-backed with timeout
-# ---------------------------------------------------------------------------
-
-
-def test_typed_subscriber_recv_returns_none_on_timeout():
-    """recv(timeout) returns None when queue is empty within timeout."""
-    from bubbaloop_sdk.subscriber import TypedSubscriber
-
-    mock_session = MagicMock()
-    mock_session.declare_subscriber.return_value = MagicMock()
-    sub = TypedSubscriber(mock_session, "test/topic")
-    result = sub.recv(timeout=0.05)
-    assert result is None
-
-
-def test_typed_subscriber_recv_returns_message_when_available():
-    """recv() returns the message put into the queue by the callback."""
-    from bubbaloop_sdk.subscriber import TypedSubscriber
-
-    mock_session = MagicMock()
-    captured_handler = []
-
-    def fake_declare(topic, handler):
-        captured_handler.append(handler)
-        return MagicMock()
-
-    mock_session.declare_subscriber.side_effect = fake_declare
-    sub = TypedSubscriber(mock_session, "test/topic")
-
-    # Simulate Zenoh delivering a sample
-    fake_sample = MagicMock()
-    fake_sample.payload.to_bytes.return_value = b"\x01\x02"
-    captured_handler[0](fake_sample)
-
-    result = sub.recv(timeout=1.0)
-    assert result == b"\x01\x02"
-
-
-def test_typed_subscriber_recv_decodes_proto():
-    """recv() decodes with FromString when msg_class provided."""
-    from bubbaloop_sdk.subscriber import TypedSubscriber
-
-    mock_session = MagicMock()
-    captured_handler = []
-
-    def fake_declare(topic, handler):
-        captured_handler.append(handler)
-        return MagicMock()
-
-    mock_session.declare_subscriber.side_effect = fake_declare
-
-    fake_msg_class = MagicMock()
-    fake_msg_class.FromString.return_value = "decoded"
-    sub = TypedSubscriber(mock_session, "test/topic", msg_class=fake_msg_class)
-
-    fake_sample = MagicMock()
-    fake_sample.payload.to_bytes.return_value = b"\x01"
-    captured_handler[0](fake_sample)
-
-    result = sub.recv(timeout=1.0)
-    assert result == "decoded"
-    fake_msg_class.FromString.assert_called_once_with(b"\x01")
-
-
 def test_raw_subscriber_recv_returns_bytes():
     """RawSubscriber.recv() returns bytes from sample payload."""
     from bubbaloop_sdk.subscriber import RawSubscriber
@@ -286,30 +220,8 @@ def test_raw_subscriber_recv_returns_bytes():
 
 
 # ---------------------------------------------------------------------------
-# TypedSubscriber / RawSubscriber — undeclare unblocks recv()
+# RawSubscriber — undeclare unblocks recv()
 # ---------------------------------------------------------------------------
-
-
-def test_typed_subscriber_undeclare_unblocks_recv():
-    """undeclare() unblocks a thread waiting in recv(timeout=None)."""
-    from bubbaloop_sdk.subscriber import TypedSubscriber
-
-    mock_session = MagicMock()
-    mock_session.declare_subscriber.return_value = MagicMock()
-    sub = TypedSubscriber(mock_session, "test/topic")
-
-    result_holder = []
-
-    def blocking_recv():
-        result_holder.append(sub.recv(timeout=None))
-
-    t = threading.Thread(target=blocking_recv)
-    t.start()
-    sub.undeclare()
-    t.join(timeout=2.0)
-
-    assert not t.is_alive(), "recv() did not unblock after undeclare()"
-    assert result_holder == [None]
 
 
 def test_raw_subscriber_undeclare_is_idempotent():
@@ -324,46 +236,6 @@ def test_raw_subscriber_undeclare_is_idempotent():
     sub.undeclare()
     sub.undeclare()  # second call is a no-op
     mock_sub.undeclare.assert_called_once()
-
-
-def test_typed_subscriber_decode_happens_in_recv_not_callback():
-    """FromString is called in recv(), not inside the Zenoh callback."""
-    from bubbaloop_sdk.subscriber import TypedSubscriber
-
-    mock_session = MagicMock()
-    captured_handler = []
-
-    def fake_declare(topic, handler):
-        captured_handler.append(handler)
-        return MagicMock()
-
-    mock_session.declare_subscriber.side_effect = fake_declare
-    decode_thread_ids = []
-    callback_thread_id = []
-
-    class FakeMsgClass:
-        @staticmethod
-        def FromString(data):
-            decode_thread_ids.append(threading.current_thread().ident)
-            return f"decoded:{data}"
-
-    sub = TypedSubscriber(mock_session, "test/topic", msg_class=FakeMsgClass)
-
-    def zenoh_callback():
-        callback_thread_id.append(threading.current_thread().ident)
-        fake_sample = MagicMock()
-        fake_sample.payload.to_bytes.return_value = b"\x01"
-        captured_handler[0](fake_sample)
-
-    t = threading.Thread(target=zenoh_callback)
-    t.start()
-    t.join()
-
-    result = sub.recv(timeout=1.0)
-
-    assert result == "decoded:b'\\x01'"
-    # Decode must NOT have happened on the Zenoh (callback) thread
-    assert decode_thread_ids[0] != callback_thread_id[0]
 
 
 # ---------------------------------------------------------------------------
@@ -942,27 +814,6 @@ def test_publisher_proto_uses_topic_prefix():
 
 
 # ---------------------------------------------------------------------------
-# NodeContext.subscriber() / subscriber_raw() via context
-# ---------------------------------------------------------------------------
-
-
-def test_subscriber_uses_topic_prefix():
-    """subscriber() declares at topic(suffix)."""
-    ctx = _make_context("bot")
-    ctx.subscriber("sensor/data")
-    called_topic = ctx.session.declare_subscriber.call_args[0][0]
-    assert called_topic == "bubbaloop/global/bot/sensor/data"
-
-
-def test_subscriber_raw_uses_literal_key_expr():
-    """subscriber_raw() declares at the literal key expression."""
-    ctx = _make_context("bot")
-    ctx.subscriber_raw("bubbaloop/**/health")
-    called_topic = ctx.session.declare_subscriber.call_args[0][0]
-    assert called_topic == "bubbaloop/**/health"
-
-
-# ---------------------------------------------------------------------------
 # NodeContext.close() and context manager
 # ---------------------------------------------------------------------------
 
@@ -1018,20 +869,8 @@ def test_connect_instance_name_override(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# TypedSubscriber / RawSubscriber — undeclare() and iteration
+# RawSubscriber — undeclare() and iteration
 # ---------------------------------------------------------------------------
-
-
-def test_typed_subscriber_undeclare():
-    """undeclare() calls undeclare on the underlying zenoh subscriber."""
-    from bubbaloop_sdk.subscriber import TypedSubscriber
-
-    mock_session = MagicMock()
-    mock_sub = MagicMock()
-    mock_session.declare_subscriber.return_value = mock_sub
-    sub = TypedSubscriber(mock_session, "test/topic")
-    sub.undeclare()
-    mock_sub.undeclare.assert_called_once()
 
 
 def test_raw_subscriber_undeclare():
@@ -1046,48 +885,6 @@ def test_raw_subscriber_undeclare():
     mock_sub.undeclare.assert_called_once()
 
 
-def test_typed_subscriber_iteration():
-    """Iterating over TypedSubscriber yields decoded messages."""
-    from bubbaloop_sdk.subscriber import TypedSubscriber
-
-    mock_session = MagicMock()
-    captured_handler = []
-
-    def fake_declare(topic, handler):
-        captured_handler.append(handler)
-        return MagicMock()
-
-    mock_session.declare_subscriber.side_effect = fake_declare
-    sub = TypedSubscriber(mock_session, "test/topic")
-
-    # Feed two samples then stop iteration by checking queue empty
-    for payload in [b"\x01", b"\x02"]:
-        fake_sample = MagicMock()
-        fake_sample.payload.to_bytes.return_value = payload
-        captured_handler[0](fake_sample)
-
-    results = []
-    for msg in sub:
-        results.append(msg)
-        if len(results) == 2:
-            break
-
-    assert results == [b"\x01", b"\x02"]
-
-
-def test_typed_subscriber_recv_returns_none_after_undeclare():
-    """recv() returns None immediately on all calls after undeclare()."""
-    from bubbaloop_sdk.subscriber import TypedSubscriber
-
-    mock_session = MagicMock()
-    mock_session.declare_subscriber.return_value = MagicMock()
-    sub = TypedSubscriber(mock_session, "test/topic")
-    sub.undeclare()
-    # First call consumes the sentinel; second must not block.
-    assert sub.recv(timeout=1.0) is None
-    assert sub.recv(timeout=1.0) is None
-
-
 def test_raw_subscriber_declares_on_topic():
     """RawSubscriber declares a zenoh subscriber on the given topic."""
     from bubbaloop_sdk.subscriber import RawSubscriber
@@ -1096,28 +893,6 @@ def test_raw_subscriber_declares_on_topic():
     mock_session.declare_subscriber.return_value = MagicMock()
     RawSubscriber(mock_session, "test/topic")
     mock_session.declare_subscriber.assert_called_once_with("test/topic")
-
-
-def test_typed_subscriber_drops_samples_after_undeclare():
-    """Samples arriving after undeclare() are not enqueued."""
-    from bubbaloop_sdk.subscriber import TypedSubscriber
-
-    mock_session = MagicMock()
-    captured_handler = []
-
-    def fake_declare(topic, handler):
-        captured_handler.append(handler)
-        return MagicMock()
-
-    mock_session.declare_subscriber.side_effect = fake_declare
-    sub = TypedSubscriber(mock_session, "test/topic")
-    sub.undeclare()
-
-    fake_sample = MagicMock()
-    fake_sample.payload.to_bytes.return_value = b"\xff"
-    captured_handler[0](fake_sample)  # arrives after undeclare
-
-    assert sub.recv(timeout=0.1) is None  # no message — only closed state
 
 
 def test_raw_subscriber_undeclare_calls_sub_undeclare():
