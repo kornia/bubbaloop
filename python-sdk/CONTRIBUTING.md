@@ -69,7 +69,7 @@ python-sdk/
   bubbaloop_sdk/
     __init__.py         # Public API surface
     context.py          # NodeContext — main entry point
-    subscriber.py       # TypedSubscriber, RawSubscriber, Callback*, Async*
+    subscriber.py       # ProtoSubscriber, RawSubscriber, Callback*, Async*, AsyncQueryable
     publisher.py        # JsonPublisher, ProtoPublisher
     node.py             # run_node() helper
     health.py           # Health heartbeat (used internally by run_node)
@@ -77,5 +77,5 @@ python-sdk/
     get_sample.py       # get_sample() one-shot helper
     decode_sample.py    # ProtoDecoder
   tests/
-    test_context.py     # 48 unit tests (no real Zenoh required)
+    test_context.py     # 68 unit tests (no real Zenoh required)
 ```

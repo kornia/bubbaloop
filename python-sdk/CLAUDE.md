@@ -11,7 +11,7 @@ python-sdk/
     __init__.py       # Public API — edit when adding new public names
     context.py        # NodeContext: connect(), topic(), publishers, subscribers, queryables
     publisher.py      # JsonPublisher, ProtoPublisher (wraps session.declare_publisher)
-    subscriber.py     # TypedSubscriber, RawSubscriber, Callback*, Async*, AsyncQueryable
+    subscriber.py     # ProtoSubscriber, RawSubscriber, Callback*, Async*, AsyncQueryable
     node.py           # run_node() — CLI arg parsing + health heartbeat + lifecycle
     health.py         # start_health_heartbeat() — publishes 'ok' every 5s
     discover.py       # discover_nodes() — GET bubbaloop/**/health
@@ -64,29 +64,30 @@ cd python-sdk
 - Include `Args:`, `Returns:`, and `Raises:` sections when applicable
 
 ```python
-class TypedSubscriber:
-    """Blocking subscriber with optional timeout.
+class CallbackSubscriber:
+    """Event-driven subscriber that calls a handler on each received message.
 
-    Internally queue-backed: Zenoh delivers raw bytes via a callback into a
-    ``queue.Queue``. Decoding happens in ``recv()`` on the consumer thread.
+    The handler is invoked from Zenoh's internal callback thread. Keep
+    handlers fast; use ``subscriber_callback_async`` for slow work (I/O,
+    DB writes, HTTP calls).
 
     Args:
         session: Active Zenoh session.
         topic: Key expression to subscribe to.
+        handler: Callable invoked with each decoded message.
         msg_class: Protobuf message class for decoding, or None for raw bytes.
     """
 
-    def __init__(self, session: zenoh.Session, topic: str, msg_class=None): ...
+    def __init__(
+        self,
+        session: zenoh.Session,
+        topic: str,
+        handler: Callable,
+        msg_class=None,
+    ): ...
 
-def recv(self, timeout: float | None = None) -> bytes | None:
-    """Block until the next message arrives.
-
-    Args:
-        timeout: Max seconds to wait. None blocks indefinitely.
-
-    Returns:
-        Decoded message, raw bytes, or None on timeout/close.
-    """
+    def undeclare(self) -> None:
+        """Undeclare the Zenoh subscriber and release resources."""
 ```
 
 **String formatting:**
@@ -115,7 +116,7 @@ def recv(self, timeout: float | None = None) -> bytes | None:
 **`undeclare()` discipline:**
 - Every subscriber, callback subscriber, and queryable must be undeclared when done
 - `AsyncQueryable` and `*Async` subscribers own a `ThreadPoolExecutor` — GC alone is not enough, always call `undeclare()`
-- Blocking subscribers (`TypedSubscriber`, `RawSubscriber`) are undeclared via `undeclare()` too
+- Blocking subscribers (`RawSubscriber`) are undeclared via `undeclare()` too
 
 ## Testing
 
@@ -153,6 +154,6 @@ assert event.wait(timeout=2.0), "handler not called within 2s"
 - `B904` — always `raise Foo from err` inside `except` blocks, never bare `raise Foo(...)`
 - `F401` in `__init__.py` is suppressed by ruff config (re-exports are intentional) — do NOT add `# noqa` comments there
 - `CallbackSubscriber` and `RawCallbackSubscriber` do NOT own an executor — `undeclare()` only calls `_sub.undeclare()`; the `_async` variants do own an executor and shut it down in `undeclare()`
-- `TypedSubscriber` and `RawSubscriber` are iterable (`for msg in sub`) but iteration blocks forever — always prefer `recv(timeout=...)` in shutdown-aware loops
+- `ProtoSubscriber` and `RawSubscriber` are iterable (`for msg in sub`); iteration raises `StopIteration` on exception via `_BaseSubscriber.__next__` — prefer `recv(timeout=...)` in shutdown-aware loops to avoid blocking indefinitely
 - `run_node()` reads `config.yaml` by default; override with `-c path/config.yaml`. The `name` field in config sets `instance_name` for health/schema topics — collisions happen if two instances share the same name
 - Health topic format: `bubbaloop/global/{machine_id}/{instance_name}/health` — ensure consumer patterns match exactly

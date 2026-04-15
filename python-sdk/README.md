@@ -56,16 +56,15 @@ pub.undeclare()
 ctx.close()
 ```
 
-### Proto subscriber
+### Auto-decode subscriber
 
 ```python
 from bubbaloop_sdk import NodeContext
-from my_protos_pb2 import SensorData
 
 ctx = NodeContext.connect()
-sub = ctx.subscriber("sensor/data", SensorData)
+sub = ctx.subscribe("sensor/data")
 
-for msg in sub:
+for msg in sub:   # auto-decoded: proto, dict, or bytes
     print(f"value: {msg.value}")
 ```
 
@@ -139,8 +138,6 @@ qbl.undeclare()   # call when done to release the thread pool
 | `ctx.publisher_raw(suffix, local=False)` | Declared raw publisher (no encoding) |
 | `ctx.subscribe(suffix, local=False)` | Auto-decode subscriber (proto/json/bytes) |
 | `ctx.subscribe_raw(suffix, local=False)` | Raw bytes subscriber |
-| `ctx.subscriber(suffix, msg_class=None)` | TypedSubscriber (queue-backed, timeout support) |
-| `ctx.subscriber_raw(key_expr)` | Raw sample subscriber (no topic prefix) |
 | `ctx.is_shutdown()` | True after SIGINT/SIGTERM |
 | `ctx.wait_shutdown()` | Block until shutdown |
 | `ctx.close()` | Close the Zenoh session |
