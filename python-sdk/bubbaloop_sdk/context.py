@@ -196,15 +196,19 @@ class NodeContext:
     # Callback Subscribers
     # ------------------------------------------------------------------
 
-    def subscriber_callback(self, suffix: str, handler, msg_class=None) -> CallbackSubscriber:
+    def subscriber_callback(self, suffix: str, handler) -> CallbackSubscriber:
         """Callback subscriber at ``topic(suffix)``.
 
-        ``handler`` is called from Zenoh's internal thread each time a sample
-        arrives. For slow handlers (I/O, DB), use ``subscriber_callback_async()``.
+        ``handler`` receives auto-decoded messages (proto, dict, or bytes).
+        Called from Zenoh's internal thread. For slow handlers, use
+        ``subscriber_callback_async()``.
         """
+        from .schema_registry import SchemaRegistry
         from .subscriber import CallbackSubscriber
 
-        return CallbackSubscriber(self.session, self.topic(suffix), handler, msg_class)
+        if not hasattr(self, "_schema_registry"):
+            self._schema_registry = SchemaRegistry(self.session)
+        return CallbackSubscriber(self.session, self.topic(suffix), handler, self._schema_registry)
 
     def subscriber_raw_callback(self, key_expr: str, handler) -> RawCallbackSubscriber:
         """Callback subscriber at a literal key expression.
@@ -216,17 +220,22 @@ class NodeContext:
         return RawCallbackSubscriber(self.session, key_expr, handler)
 
     def subscriber_callback_async(
-        self, suffix: str, handler, msg_class=None, max_workers: int = 4
+        self, suffix: str, handler, max_workers: int = 4
     ) -> CallbackSubscriberAsync:
         """Callback subscriber at ``topic(suffix)`` with handler in a thread pool.
 
-        Use when ``handler`` does slow work (database writes, hardware I/O, network
-        calls). Zenoh's internal thread is freed immediately; the handler runs in a
+        ``handler`` receives auto-decoded messages (proto, dict, or bytes).
+        Zenoh's internal thread is freed immediately; the handler runs in a
         ``ThreadPoolExecutor`` with ``max_workers`` threads.
         """
+        from .schema_registry import SchemaRegistry
         from .subscriber import CallbackSubscriberAsync
 
-        return CallbackSubscriberAsync(self.session, self.topic(suffix), handler, msg_class, max_workers)
+        if not hasattr(self, "_schema_registry"):
+            self._schema_registry = SchemaRegistry(self.session)
+        return CallbackSubscriberAsync(
+            self.session, self.topic(suffix), handler, self._schema_registry, max_workers
+        )
 
     def subscriber_raw_callback_async(self, key_expr: str, handler, max_workers: int = 4) -> RawCallbackSubscriberAsync:
         """Raw callback subscriber at a literal key expression with handler in a thread pool."""
