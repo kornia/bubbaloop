@@ -3,84 +3,9 @@
 from __future__ import annotations
 
 import concurrent.futures
-import queue
 import threading
-import time
 
 import zenoh
-
-# Sentinel object pushed into a queue to unblock recv() on undeclare().
-_CLOSED = object()
-# Max time a blocked recv() waits before re-checking _closed. Keeps all
-# concurrent callers responsive to undeclare() within this many seconds.
-_POLL_INTERVAL = 0.05
-
-
-class TypedSubscriber:
-    """Blocking subscriber with optional timeout. Iterates with ``for msg in sub``.
-
-    Internally queue-backed: Zenoh delivers raw payload bytes via a callback into a
-    ``queue.Queue``. Decoding (``msg_class.FromString``) happens in ``recv()`` on the
-    consumer thread, not in Zenoh's internal thread::
-
-        while not ctx.is_shutdown():
-            msg = sub.recv(timeout=5.0)
-            if msg is None:
-                continue
-            process(msg)
-
-    Without a timeout, ``recv()`` blocks until a message arrives or ``undeclare()``
-    is called (which pushes a sentinel to unblock any waiting ``recv()``).
-    """
-
-    def __init__(self, session: zenoh.Session, topic: str, msg_class=None):
-        self._queue: queue.Queue = queue.Queue()
-        self._msg_class = msg_class
-        self._closed = threading.Event()
-
-        def _on_sample(sample: zenoh.Sample) -> None:
-            if not self._closed.is_set():
-                self._queue.put(bytes(sample.payload.to_bytes()))
-
-        self._sub = session.declare_subscriber(topic, _on_sample)
-
-    def recv(self, timeout: float | None = None):
-        """Block until the next message arrives. Returns ``None`` on timeout or close.
-
-        Polls in ``_POLL_INTERVAL``-second slices so that all concurrent callers
-        observe ``_closed`` within that window after ``undeclare()`` is called.
-        """
-        deadline = None if timeout is None else time.monotonic() + timeout
-        while not self._closed.is_set():
-            wait = _POLL_INTERVAL if deadline is None else min(_POLL_INTERVAL, deadline - time.monotonic())
-            if wait <= 0:
-                return None
-            try:
-                payload = self._queue.get(timeout=wait)
-            except queue.Empty:
-                continue
-            if payload is _CLOSED:
-                self._closed.set()
-                return None
-            if self._msg_class is not None and hasattr(self._msg_class, "FromString"):
-                return self._msg_class.FromString(payload)
-            return payload
-        return None
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        msg = self.recv()
-        if msg is None:
-            raise StopIteration
-        return msg
-
-    def undeclare(self) -> None:
-        """Undeclare the subscriber and unblock any waiting ``recv()``."""
-        self._closed.set()
-        self._sub.undeclare()
-        self._queue.put(_CLOSED)
 
 
 class _BaseSubscriber:
@@ -141,7 +66,6 @@ class ProtoSubscriber(_BaseSubscriber):
 
     def recv(self):
         """Block until next message and return the decoded proto object."""
-        # NOTE: this Subscriber is new and does not yet implement timeouts or close handling.
         sample = self._sub.recv()
         return self._registry.decode(sample)
 
