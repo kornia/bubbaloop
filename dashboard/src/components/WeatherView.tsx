@@ -1,11 +1,10 @@
 import { useCallback, useState, useEffect } from 'react';
 import { Sample, IntoZBytes } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload, extractMachineId, getEncodingInfo, tryDecodeJsonPayload } from '../lib/zenoh';
+import { encode as cborEncode } from 'cbor-x';
+import { getSamplePayload, extractMachineId, getEncodingInfo, tryDecodeJsonPayload, tryDecodeCborPayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
-import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 import { useFleetContext } from '../contexts/FleetContext';
-import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
 
 // Local interfaces matching the protobuf schema shapes (decoded via SchemaRegistry)
@@ -117,8 +116,6 @@ export function WeatherViewPanel({
   dragHandleProps,
 }: WeatherViewPanelProps) {
   const { machines, selectedMachineId } = useFleetContext();
-  const { registry, discoverForTopic } = useSchemaRegistry();
-  const schemaReady = useSchemaReady();
   // Get session from context for publishing
   const { getSession } = useZenohSubscriptionContext();
   // Store weather data per machine with last update timestamp
@@ -139,108 +136,56 @@ export function WeatherViewPanel({
   const hourlyTopic = '**/weather/hourly';
   const dailyTopic = '**/weather/daily';
 
+  // Decode a weather sample via encoding-first: CBOR → JSON → give up.
+  function decodeWeather<T>(sample: Sample): { machineId: string; data: T } | null {
+    const payload = getSamplePayload(sample);
+    const topic = sample.keyexpr().toString();
+    const machineId = extractMachineId(topic) ?? 'unknown';
+    const encodingInfo = getEncodingInfo(sample);
+    const decoded =
+      tryDecodeCborPayload(payload, encodingInfo) ??
+      tryDecodeJsonPayload(payload, encodingInfo);
+    if (!decoded) return null;
+    return { machineId, data: decoded as T };
+  }
+
   // Handle current weather samples
   const handleCurrentSample = useCallback((sample: Sample) => {
     try {
-      const payload = getSamplePayload(sample);
-      const topic = sample.keyexpr().toString();
-      const machineId = extractMachineId(topic) ?? 'unknown';
-      const encodingInfo = getEncodingInfo(sample);
-
-      // JSON-encoded samples (new nodes with explicit encoding)
-      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
-      if (jsonData) {
-        const data = jsonData as CurrentWeather;
-        setCurrentMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
-        return;
-      }
-
-      const result = registry.decode('bubbaloop.weather.v1.CurrentWeather', payload);
-      if (result) {
-        const data = result.data as unknown as CurrentWeather;
-        setCurrentMap(prev => {
-          const next = new Map(prev);
-          next.set(machineId, { data, lastUpdate: Date.now() });
-          return next;
-        });
-      } else {
-        discoverForTopic(topic);
-      }
+      const res = decodeWeather<CurrentWeather>(sample);
+      if (!res) return;
+      setCurrentMap(prev => { const next = new Map(prev); next.set(res.machineId, { data: res.data, lastUpdate: Date.now() }); return next; });
     } catch (e) {
       console.error('[WeatherView] Failed to decode current weather:', e);
     }
-  }, [registry, discoverForTopic]);
+  }, []);
 
   // Handle hourly forecast samples
   const handleHourlySample = useCallback((sample: Sample) => {
     try {
-      const payload = getSamplePayload(sample);
-      const topic = sample.keyexpr().toString();
-      const machineId = extractMachineId(topic) ?? 'unknown';
-      const encodingInfo = getEncodingInfo(sample);
-
-      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
-      if (jsonData) {
-        const data = jsonData as HourlyForecast;
-        setHourlyMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
-        return;
-      }
-
-      const result = registry.decode('bubbaloop.weather.v1.HourlyForecast', payload);
-      if (result) {
-        const data = result.data as unknown as HourlyForecast;
-        setHourlyMap(prev => {
-          const next = new Map(prev);
-          next.set(machineId, { data, lastUpdate: Date.now() });
-          return next;
-        });
-      } else {
-        discoverForTopic(topic);
-      }
+      const res = decodeWeather<HourlyForecast>(sample);
+      if (!res) return;
+      setHourlyMap(prev => { const next = new Map(prev); next.set(res.machineId, { data: res.data, lastUpdate: Date.now() }); return next; });
     } catch (e) {
       console.error('[WeatherView] Failed to decode hourly forecast:', e);
     }
-  }, [registry, discoverForTopic]);
+  }, []);
 
   // Handle daily forecast samples
   const handleDailySample = useCallback((sample: Sample) => {
     try {
-      const payload = getSamplePayload(sample);
-      const topic = sample.keyexpr().toString();
-      const machineId = extractMachineId(topic) ?? 'unknown';
-      const encodingInfo = getEncodingInfo(sample);
-
-      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
-      if (jsonData) {
-        const data = jsonData as DailyForecast;
-        setDailyMap(prev => { const next = new Map(prev); next.set(machineId, { data, lastUpdate: Date.now() }); return next; });
-        return;
-      }
-
-      const result = registry.decode('bubbaloop.weather.v1.DailyForecast', payload);
-      if (result) {
-        const data = result.data as unknown as DailyForecast;
-        setDailyMap(prev => {
-          const next = new Map(prev);
-          next.set(machineId, { data, lastUpdate: Date.now() });
-          return next;
-        });
-      } else {
-        discoverForTopic(topic);
-      }
+      const res = decodeWeather<DailyForecast>(sample);
+      if (!res) return;
+      setDailyMap(prev => { const next = new Map(prev); next.set(res.machineId, { data: res.data, lastUpdate: Date.now() }); return next; });
     } catch (e) {
       console.error('[WeatherView] Failed to decode daily forecast:', e);
     }
-  }, [registry, discoverForTopic]);
+  }, []);
 
-  // Subscribe to all three topics.
-  // For samples with explicit encoding, decoding works immediately. Legacy samples (no
-  // encoding) still need schemas loaded first. Gate on schemaReady for backward compat:
-  // when schemaReady is false, pass undefined so the subscription stays active for topic
-  // discovery but samples are not processed until schemas arrive.
-  const { messageCount: currentCount } = useZenohSubscription(currentTopic, schemaReady ? handleCurrentSample : undefined);
-  const { messageCount: hourlyCount } = useZenohSubscription(hourlyTopic, schemaReady ? handleHourlySample : undefined);
-  const { messageCount: dailyCount } = useZenohSubscription(dailyTopic, schemaReady ? handleDailySample : undefined);
+  // Subscribe to all three topics. CBOR/JSON decodes on first sample — no gating needed.
+  const { messageCount: currentCount } = useZenohSubscription(currentTopic, handleCurrentSample);
+  const { messageCount: hourlyCount } = useZenohSubscription(hourlyTopic, handleHourlySample);
+  const { messageCount: dailyCount } = useZenohSubscription(dailyTopic, handleDailySample);
 
   const totalMessages = currentCount + hourlyCount + dailyCount;
 
@@ -304,19 +249,12 @@ export function WeatherViewPanel({
     setLocationUpdateStatus('idle');
 
     try {
-      // Encode the location config message using SchemaRegistry
-      const locType = registry.lookupType('bubbaloop.weather.v1.LocationConfig');
-      if (!locType) {
-        console.error('[WeatherView] LocationConfig schema not loaded');
-        setLocationUpdateStatus('error');
-        setIsSendingLocation(false);
-        return;
-      }
-      const payload = locType.encode(locType.create({
+      // Encode the location config message as CBOR (snake_case keys match node types).
+      const payload = cborEncode({
         latitude: lat,
         longitude: lon,
         timezone: '',
-      })).finish();
+      });
 
       // Publish to the config topic using vanilla Zenoh format
       const configKey = 'weather/config/location';
@@ -340,7 +278,7 @@ export function WeatherViewPanel({
     } finally {
       setIsSendingLocation(false);
     }
-  }, [getSession, editLatitude, editLongitude, registry]);
+  }, [getSession, editLatitude, editLongitude]);
 
   const renderCurrentWeather = (weather: CurrentWeather) => {
     const desc = getWeatherDescription(weather.weatherCode);

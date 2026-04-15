@@ -5,6 +5,7 @@ pub mod agent_client;
 pub mod agent_setup;
 pub mod daemon;
 pub mod daemon_client;
+pub mod dataflow;
 pub mod debug;
 pub mod doctor;
 pub mod launch;
@@ -18,6 +19,7 @@ pub mod zenoh_session;
 
 pub use agent::AgentCommand;
 pub use daemon::DaemonCommand;
+pub use dataflow::DataflowCommand;
 pub use debug::{DebugCommand, DebugError};
 pub use login::{LoginCommand, LogoutCommand};
 pub use marketplace::MarketplaceCommand;

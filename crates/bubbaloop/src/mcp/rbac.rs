@@ -68,7 +68,8 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "list_constraints"
         | "get_belief"
         | "list_alerts"
-        | "list_world_state" => Tier::Viewer,
+        | "list_world_state"
+        | "dataflow" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
         "start_node" | "stop_node" | "restart_node" | "get_node_config" | "send_command"

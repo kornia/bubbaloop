@@ -6,7 +6,6 @@ import {
 } from "./lib/zenoh";
 import { ZenohSubscriptionProvider } from "./contexts/ZenohSubscriptionContext";
 import { FleetProvider } from "./contexts/FleetContext";
-import { SchemaRegistryProvider } from "./contexts/SchemaRegistryContext";
 import { NodeDiscoveryProvider } from "./contexts/NodeDiscoveryContext";
 import { Dashboard } from "./components/Dashboard";
 import { FleetBar } from "./components/FleetBar";
@@ -302,23 +301,21 @@ export default function App() {
       {session ? (
         <FleetProvider>
           <NodeDiscoveryProvider session={session}>
-            <SchemaRegistryProvider session={session}>
-              <ZenohSubscriptionProvider session={session}>
-                <FleetBar />
-                {currentView === "dashboard" ? (
-                  <Dashboard
-                    cameras={DEFAULT_CAMERAS}
-                    availableTopics={availableTopics}
-                  />
-                ) : (
-                  <MeshView
-                    availableTopics={availableTopics}
-                    zenohEndpoint={ZENOH_ENDPOINT}
-                    connectionStatus={status}
-                  />
-                )}
-              </ZenohSubscriptionProvider>
-            </SchemaRegistryProvider>
+            <ZenohSubscriptionProvider session={session}>
+              <FleetBar />
+              {currentView === "dashboard" ? (
+                <Dashboard
+                  cameras={DEFAULT_CAMERAS}
+                  availableTopics={availableTopics}
+                />
+              ) : (
+                <MeshView
+                  availableTopics={availableTopics}
+                  zenohEndpoint={ZENOH_ENDPOINT}
+                  connectionStatus={status}
+                />
+              )}
+            </ZenohSubscriptionProvider>
           </NodeDiscoveryProvider>
         </FleetProvider>
       ) : (

@@ -43,6 +43,14 @@ pub(crate) struct InstallNodeRequest {
     source: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub(crate) struct DataflowParams {
+    /// If true, include topics that were declared but have never fired (ever_fired=false).
+    /// Default false — only currently-live, actually-firing edges are shown.
+    #[serde(default)]
+    include_declared_but_unused: bool,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct DiscoverCapabilitiesParams {
     /// Filter by capability type: "sensor", "actuator", "processor", "gateway". Omit for all.
@@ -531,6 +539,37 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
                 e
             ))])),
         }
+    }
+
+    #[tool(
+        description = "Reconstruct the runtime dataflow DAG by querying every node's CBOR-encoded `manifest` queryable. Returns nodes (instance + role + machine_id + node_kind + started_at_ns) and edges (publisher_instance → subscriber_instance per topic). Edge inference uses per-topic liveness: by default only `still_live && ever_fired` topics produce edges, so the graph reflects what is *actually firing right now*. Set `include_declared_but_unused=true` to also include topics that were declared but have never received/emitted a sample. Surfaces orphan_inputs (subscribers with no producer) and unconsumed_outputs (publishers with no subscriber). Single source of truth for who-feeds-whom — no config grepping required."
+    )]
+    async fn dataflow(
+        &self,
+        Parameters(params): Parameters<DataflowParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!(
+            "[MCP] tool=dataflow include_declared_but_unused={}",
+            params.include_declared_but_unused
+        );
+        let payload = match self
+            .platform
+            .query_zenoh_raw("bubbaloop/**/manifest", std::time::Duration::from_secs(2))
+            .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Error: {}",
+                    e
+                ))]))
+            }
+        };
+
+        let graph = build_dataflow_graph(&payload, params.include_declared_but_unused);
+        let body = serde_json::to_string_pretty(&graph)
+            .unwrap_or_else(|_| "{\"error\":\"serialize\"}".to_string());
+        Ok(CallToolResult::success(vec![Content::text(body)]))
     }
 
     #[tool(
@@ -1349,5 +1388,370 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
                 e
             ))])),
         }
+    }
+}
+
+// ── Dataflow graph reconstruction ──────────────────────────────────
+//
+// The `dataflow` MCP tool fetches every node's CBOR-encoded
+// `manifest` queryable, decodes it, and assembles a single
+// graph: `nodes` (one per live instance) plus `edges` (one per
+// publisher→subscriber match on absolute topic suffix). Edge
+// inference uses per-topic liveness — by default only `still_live &&
+// ever_fired` topics participate, so the agent sees the live DAG
+// rather than a config-derived snapshot.
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
+struct IoEntry {
+    topic: String,
+    #[serde(default)]
+    ever_fired: bool,
+    #[serde(default = "default_true")]
+    still_live: bool,
+    #[serde(default)]
+    declared_at_ns: u64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct WireManifest {
+    instance_name: String,
+    machine_id: String,
+    #[serde(default = "default_role")]
+    role: String,
+    #[serde(default)]
+    inputs: Vec<IoEntry>,
+    #[serde(default)]
+    outputs: Vec<IoEntry>,
+    #[serde(default)]
+    schema_version: u32,
+    #[serde(default)]
+    started_at_ns: u64,
+    #[serde(default = "default_kind")]
+    node_kind: String,
+}
+
+fn default_role() -> String {
+    "unknown".to_string()
+}
+
+fn default_kind() -> String {
+    "unknown".to_string()
+}
+
+fn entry_active(e: &IoEntry, include_declared_but_unused: bool) -> bool {
+    if include_declared_but_unused {
+        e.still_live
+    } else {
+        e.still_live && e.ever_fired
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DataflowNode {
+    instance: String,
+    role: String,
+    machine_id: String,
+    node_kind: String,
+    started_at_ns: u64,
+    schema_version: u32,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DataflowEdge {
+    from_instance: String,
+    to_instance: String,
+    topic: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DataflowDangling {
+    instance: String,
+    topic: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DataflowGraph {
+    nodes: Vec<DataflowNode>,
+    edges: Vec<DataflowEdge>,
+    orphan_inputs: Vec<DataflowDangling>,
+    unconsumed_outputs: Vec<DataflowDangling>,
+}
+
+/// Build a dataflow graph from raw `(key, cbor_payload)` pairs returned
+/// by querying `bubbaloop/**/manifest`. Replies that fail to decode are
+/// dropped silently — the agent gets a partial graph rather than a hard
+/// error, matching the behavior of `discover_nodes`. Edge inference
+/// uses `entry_active` so by default only live, actually-firing topics
+/// show up.
+fn build_dataflow_graph(
+    replies: &[(String, Vec<u8>)],
+    include_declared_but_unused: bool,
+) -> DataflowGraph {
+    let mut manifests: Vec<WireManifest> = Vec::new();
+    for (key, payload) in replies {
+        match ciborium::from_reader::<WireManifest, _>(&payload[..]) {
+            Ok(m) => manifests.push(m),
+            Err(e) => {
+                log::debug!(
+                    "[dataflow] dropping undecodable manifest from {}: {}",
+                    key,
+                    e
+                );
+            }
+        }
+    }
+    // Dedup by (machine_id, instance_name) — the same node can answer
+    // through multiple peers; keep the first reply per identity.
+    manifests
+        .sort_by(|a, b| (&a.machine_id, &a.instance_name).cmp(&(&b.machine_id, &b.instance_name)));
+    manifests.dedup_by(|a, b| a.machine_id == b.machine_id && a.instance_name == b.instance_name);
+
+    let nodes: Vec<DataflowNode> = manifests
+        .iter()
+        .map(|m| DataflowNode {
+            instance: m.instance_name.clone(),
+            role: m.role.clone(),
+            machine_id: m.machine_id.clone(),
+            node_kind: m.node_kind.clone(),
+            started_at_ns: m.started_at_ns,
+            schema_version: m.schema_version,
+        })
+        .collect();
+
+    let mut edges: Vec<DataflowEdge> = Vec::new();
+    let mut produced: std::collections::HashSet<String> = Default::default();
+    for producer in &manifests {
+        for out in producer
+            .outputs
+            .iter()
+            .filter(|e| entry_active(e, include_declared_but_unused))
+        {
+            produced.insert(out.topic.clone());
+            for consumer in &manifests {
+                if consumer
+                    .inputs
+                    .iter()
+                    .any(|i| entry_active(i, include_declared_but_unused) && i.topic == out.topic)
+                {
+                    edges.push(DataflowEdge {
+                        from_instance: producer.instance_name.clone(),
+                        to_instance: consumer.instance_name.clone(),
+                        topic: out.topic.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    let mut orphan_inputs = Vec::new();
+    for m in &manifests {
+        for inp in m
+            .inputs
+            .iter()
+            .filter(|e| entry_active(e, include_declared_but_unused))
+        {
+            if !produced.contains(&inp.topic) {
+                orphan_inputs.push(DataflowDangling {
+                    instance: m.instance_name.clone(),
+                    topic: inp.topic.clone(),
+                });
+            }
+        }
+    }
+
+    let mut unconsumed_outputs = Vec::new();
+    for m in &manifests {
+        for out in m
+            .outputs
+            .iter()
+            .filter(|e| entry_active(e, include_declared_but_unused))
+        {
+            let any_consumer = manifests.iter().any(|c| {
+                c.inputs
+                    .iter()
+                    .any(|i| entry_active(i, include_declared_but_unused) && i.topic == out.topic)
+            });
+            if !any_consumer {
+                unconsumed_outputs.push(DataflowDangling {
+                    instance: m.instance_name.clone(),
+                    topic: out.topic.clone(),
+                });
+            }
+        }
+    }
+
+    DataflowGraph {
+        nodes,
+        edges,
+        orphan_inputs,
+        unconsumed_outputs,
+    }
+}
+
+#[cfg(test)]
+mod dataflow_tests {
+    use super::*;
+
+    fn cbor(m: &serde_json::Value) -> Vec<u8> {
+        let mut buf = Vec::new();
+        ciborium::into_writer(m, &mut buf).unwrap();
+        buf
+    }
+
+    /// Helper: build an active (still_live && ever_fired) IoEntry JSON value.
+    fn io(topic: &str) -> serde_json::Value {
+        serde_json::json!({
+            "topic": topic,
+            "ever_fired": true,
+            "still_live": true,
+            "declared_at_ns": 1u64,
+        })
+    }
+
+    /// Helper: declared-but-never-fired IoEntry.
+    fn io_idle(topic: &str) -> serde_json::Value {
+        serde_json::json!({
+            "topic": topic,
+            "ever_fired": false,
+            "still_live": true,
+            "declared_at_ns": 1u64,
+        })
+    }
+
+    /// Helper: undeclared / torn-down IoEntry.
+    fn io_dead(topic: &str) -> serde_json::Value {
+        serde_json::json!({
+            "topic": topic,
+            "ever_fired": true,
+            "still_live": false,
+            "declared_at_ns": 1u64,
+        })
+    }
+
+    #[test]
+    fn builds_simple_pipeline_graph() {
+        let cam = cbor(&serde_json::json!({
+            "instance_name": "cam",
+            "machine_id": "m1",
+            "role": "source",
+            "inputs": [],
+            "outputs": [io("cam/raw")],
+            "schema_version": 2,
+            "started_at_ns": 1u64,
+            "node_kind": "rust",
+        }));
+        let det = cbor(&serde_json::json!({
+            "instance_name": "det",
+            "machine_id": "m1",
+            "role": "processor",
+            "inputs": [io("cam/raw")],
+            "outputs": [io("det/boxes")],
+            "schema_version": 2,
+            "started_at_ns": 2u64,
+            "node_kind": "python",
+        }));
+        let g = build_dataflow_graph(&[("k1".into(), cam), ("k2".into(), det)], false);
+        assert_eq!(g.nodes.len(), 2);
+        assert_eq!(g.edges.len(), 1);
+        assert_eq!(g.edges[0].from_instance, "cam");
+        assert_eq!(g.edges[0].to_instance, "det");
+        assert_eq!(g.edges[0].topic, "cam/raw");
+        assert_eq!(g.unconsumed_outputs.len(), 1);
+        assert_eq!(g.unconsumed_outputs[0].topic, "det/boxes");
+        assert!(g.orphan_inputs.is_empty());
+    }
+
+    #[test]
+    fn flags_orphan_input() {
+        let det = cbor(&serde_json::json!({
+            "instance_name": "det",
+            "machine_id": "m1",
+            "role": "processor",
+            "inputs": [io("ghost/raw")],
+            "outputs": [],
+            "schema_version": 2,
+            "started_at_ns": 1u64,
+            "node_kind": "python",
+        }));
+        let g = build_dataflow_graph(&[("k".into(), det)], false);
+        assert_eq!(g.orphan_inputs.len(), 1);
+        assert_eq!(g.orphan_inputs[0].topic, "ghost/raw");
+    }
+
+    #[test]
+    fn dedupes_repeat_replies() {
+        let cam = cbor(&serde_json::json!({
+            "instance_name": "cam",
+            "machine_id": "m1",
+            "role": "source",
+            "outputs": [io("cam/raw")],
+            "schema_version": 2,
+        }));
+        let g = build_dataflow_graph(&[("k1".into(), cam.clone()), ("k2".into(), cam)], false);
+        assert_eq!(g.nodes.len(), 1);
+    }
+
+    #[test]
+    fn drops_undecodable_payloads() {
+        let g = build_dataflow_graph(&[("k".into(), vec![0xff, 0xff, 0xff])], false);
+        assert!(g.nodes.is_empty());
+    }
+
+    #[test]
+    fn undeclared_entries_produce_no_edges_by_default() {
+        // cam tore down cam/raw; det still subscribes. No edge should appear.
+        let cam = cbor(&serde_json::json!({
+            "instance_name": "cam",
+            "machine_id": "m1",
+            "role": "source",
+            "outputs": [io_dead("cam/raw")],
+            "schema_version": 2,
+        }));
+        let det = cbor(&serde_json::json!({
+            "instance_name": "det",
+            "machine_id": "m1",
+            "role": "processor",
+            "inputs": [io("cam/raw")],
+            "schema_version": 2,
+        }));
+        let g = build_dataflow_graph(&[("k1".into(), cam), ("k2".into(), det)], false);
+        assert!(g.edges.is_empty());
+        // det's input is orphaned since cam's output is no longer live.
+        assert_eq!(g.orphan_inputs.len(), 1);
+        assert_eq!(g.orphan_inputs[0].topic, "cam/raw");
+    }
+
+    #[test]
+    fn declared_but_never_fired_hidden_by_default_but_visible_when_opted_in() {
+        // cam declared cam/raw but never called put(). det declared a
+        // subscriber but never received anything.
+        let cam = cbor(&serde_json::json!({
+            "instance_name": "cam",
+            "machine_id": "m1",
+            "role": "source",
+            "outputs": [io_idle("cam/raw")],
+            "schema_version": 2,
+        }));
+        let det = cbor(&serde_json::json!({
+            "instance_name": "det",
+            "machine_id": "m1",
+            "role": "processor",
+            "inputs": [io_idle("cam/raw")],
+            "schema_version": 2,
+        }));
+        // Default: no edges (nothing ever fired).
+        let g = build_dataflow_graph(
+            &[("k1".into(), cam.clone()), ("k2".into(), det.clone())],
+            false,
+        );
+        assert!(g.edges.is_empty());
+        // Opt-in: edge is surfaced so operators can spot wired-but-idle pipelines.
+        let g2 = build_dataflow_graph(&[("k1".into(), cam), ("k2".into(), det)], true);
+        assert_eq!(g2.edges.len(), 1);
+        assert_eq!(g2.edges[0].topic, "cam/raw");
     }
 }

@@ -127,7 +127,10 @@ class {{node_name_pascal}}Node:
         # Track node start time for health reporting
         self._start_time = time.time()
 
-        # Setup publisher with scoped topic
+        # Setup publisher with scoped topic.
+        # ctx.publisher_cbor("data") (or publisher_json) auto-prefixes with instance_name →
+        #   bubbaloop/global/{machine_id}/{node_name}/data
+        # Use ctx.publisher_cbor_absolute("upstream_node/cmd") for cross-node control topics.
         publish_suffix = self.config["publish_topic"]
         publish_topic = f"{self._topic_prefix}/{publish_suffix}"
         self.publisher = self.session.declare_publisher(publish_topic)
@@ -187,11 +190,13 @@ class {{node_name_pascal}}Node:
         self._liveliness_token = self.session.liveliness().declare_token(liveliness_key)
         logger.info(f"Liveliness token: {liveliness_key}")
 
-        # Setup subscriber (optional)
+        # Setup subscriber (optional).
+        # subscribe() takes an ABSOLUTE key — pass the upstream node's full topic suffix
+        # including its instance name, e.g. "tapo_terrace_embedder/embeddings".
         self.subscriber = None
         if self.config.get("subscribe_topic"):
             self.subscriber = self.session.declare_subscriber(
-                self.config["subscribe_topic"],
+                self.config["subscribe_topic"],  # absolute key — no instance prefix added
                 self._on_message,
             )
             logger.info(f"Subscribed to: {self.config['subscribe_topic']}")

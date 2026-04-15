@@ -22,6 +22,7 @@ import yaml
 
 from .context import NodeContext
 from .health import start_health_heartbeat
+from .manifest import start_manifest_queryable
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,6 +48,7 @@ def run_node(node_class) -> None:
         config = yaml.safe_load(f) or {}
 
     instance_name = config.get("name", node_class.name)
+    role = config.get("role", "unknown")
 
     log = logging.getLogger(instance_name)
     log.info("Starting (type=%s, config=%s)", node_class.name, args.config)
@@ -56,6 +58,14 @@ def run_node(node_class) -> None:
     start_health_heartbeat(ctx.session, ctx.machine_id, instance_name, ctx._shutdown)
     log.info("Health heartbeat: bubbaloop/global/%s/%s/health", ctx.machine_id, instance_name)
 
+    # Dataflow manifest queryable — kept alive for the lifetime of the
+    # process. The handle is held in a local so Zenoh keeps it declared
+    # until ctx.close() runs.
+    started_at_ns = time.time_ns()
+    _manifest_q = start_manifest_queryable(
+        ctx, role=role, started_at_ns=started_at_ns, node_kind="python"
+    )
+
     node = node_class(ctx, config)
     log.info("Initialized. Running…")
     try:
@@ -63,5 +73,10 @@ def run_node(node_class) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if _manifest_q is not None:
+            try:
+                _manifest_q.undeclare()
+            except Exception:
+                pass
         ctx.close()
         log.info("Shutdown complete")

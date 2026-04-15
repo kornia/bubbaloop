@@ -50,14 +50,8 @@ pub enum NodeError {
     #[error("failed to open Zenoh session: {0}")]
     ZenohSession(#[source] zenoh::Error),
 
-    #[error("failed to declare schema queryable: {0}")]
-    SchemaQueryable(#[source] zenoh::Error),
-
     #[error("get_sample timed out waiting for a message on '{topic}'")]
     GetSampleTimeout { topic: String },
-
-    #[error("protobuf decode failed: {0}")]
-    Decode(String),
 
     #[error("CBOR encode failed: {0}")]
     CborEncode(String),

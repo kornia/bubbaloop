@@ -20,8 +20,8 @@
 use argh::FromArgs;
 use bubbaloop::cli::launch::LaunchCommand;
 use bubbaloop::cli::{
-    AgentCommand, DaemonCommand, DebugCommand, LoginCommand, LogoutCommand, MarketplaceCommand,
-    NodeCommand, UpCommand,
+    AgentCommand, DaemonCommand, DataflowCommand, DebugCommand, LoginCommand, LogoutCommand,
+    MarketplaceCommand, NodeCommand, UpCommand,
 };
 
 /// Bubbaloop - AI-native orchestration for Physical AI
@@ -50,6 +50,7 @@ enum Command {
     Marketplace(MarketplaceCommand),
     Debug(DebugCommand),
     Up(UpCommand),
+    Dataflow(DataflowCommand),
     InitTls(InitTlsArgs),
 }
 
@@ -434,6 +435,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.run()
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        }
+        Some(Command::Dataflow(cmd)) => {
+            init_logger("warn,zenoh=warn");
+            cmd.run().await?;
         }
         Some(Command::InitTls(args)) => {
             let cert_dir = args.output_dir.unwrap_or_else(|| {

@@ -396,7 +396,134 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════
-printf "\n${CYAN}── PHASE 9: Gemini CLI Review ──${NC}\n"
+printf "\n${CYAN}── PHASE 9: Orphan Topic Lint ──${NC}\n"
+# ══════════════════════════════════════════════════════════════════════
+
+check_orphan_topics() {
+    # Requires a running daemon; skips gracefully if none is reachable.
+    python3 - <<'PYEOF'
+import sys
+import time
+import collections
+
+try:
+    import zenoh
+except ImportError:
+    print("  SKIP  zenoh Python not available")
+    sys.exit(0)
+
+conf = zenoh.Config()
+conf.insert_json5("mode", '"client"')
+conf.insert_json5("connect/endpoints", '["tcp/127.0.0.1:7447"]')
+conf.insert_json5("scouting/multicast/enabled", "false")
+conf.insert_json5("scouting/gossip/enabled", "false")
+
+try:
+    session = zenoh.open(conf)
+except Exception as e:
+    print(f"  SKIP  no daemon reachable ({e})")
+    sys.exit(0)
+
+seen_keys = []
+
+def on_sample(sample):
+    seen_keys.append(str(sample.key_expr))
+
+try:
+    sub = session.declare_subscriber("bubbaloop/global/**", on_sample)
+    time.sleep(6)
+    sub.undeclare()
+finally:
+    session.close()
+
+# Group keys by instance_name (4th path component: bubbaloop/global/{machine}/{instance}/...)
+buckets = collections.defaultdict(list)
+for key in seen_keys:
+    parts = key.split("/")
+    # bubbaloop / global / machine_id / instance_name / ...
+    if len(parts) >= 4:
+        bucket = "/".join(parts[:4])  # bubbaloop/global/{machine}/{instance}
+        buckets[bucket].append(key)
+
+orphans = []
+for bucket, keys in buckets.items():
+    has_health = any(k.endswith("/health") for k in keys)
+    if not has_health:
+        orphans.append((bucket, keys))
+
+if not orphans:
+    print(f"  PASS  {len(buckets)} instance bucket(s) seen, all have /health")
+else:
+    print(f"  FAIL  {len(orphans)} orphan bucket(s) — data topics with no /health (likely missing instance_name prefix):")
+    for bucket, keys in orphans:
+        print(f"    bucket: {bucket}")
+        for k in keys[:5]:
+            print(f"      {k}")
+        if len(keys) > 5:
+            print(f"      ... ({len(keys) - 5} more)")
+
+# --- second pass: cross-check live instance names against nodes.json registry ---
+import json as _json
+import pathlib as _pathlib
+
+nodes_json = _pathlib.Path.home() / ".bubbaloop" / "nodes.json"
+if nodes_json.exists():
+    try:
+        registry_data = _json.loads(nodes_json.read_text())
+        # nodes.json may be {"nodes": [...]} or a flat list/dict of entries
+        if isinstance(registry_data, dict) and "nodes" in registry_data:
+            entries = registry_data["nodes"]
+        elif isinstance(registry_data, list):
+            entries = registry_data
+        elif isinstance(registry_data, dict):
+            entries = list(registry_data.values())
+        else:
+            entries = []
+        registered_names = set()
+        for entry in entries:
+            if isinstance(entry, dict):
+                raw = entry.get("name_override") or entry.get("name") or entry.get("instance_name")
+                if raw:
+                    # Normalize hyphens to underscores to match topic sanitization
+                    registered_names.add(raw.replace("-", "_"))
+        # Extract live instance names (4th path component)
+        live_instance_names = set()
+        for bucket in buckets:
+            parts = bucket.split("/")
+            if len(parts) >= 4:
+                live_instance_names.add(parts[3])
+        # Filter out well-known non-node buckets (daemon, health, etc.)
+        skip_names = {"daemon", "health", "agent"}
+        unregistered = [
+            name for name in live_instance_names
+            if name not in registered_names and name not in skip_names
+        ]
+        if unregistered:
+            print(f"  WARN  {len(unregistered)} unregistered instance(s) — live but not in nodes.json (possible typo in name: field):")
+            for name in sorted(unregistered):
+                print(f"    unregistered instance: {name}")
+        else:
+            print(f"  PASS  all {len(live_instance_names)} live instance(s) match nodes.json registry")
+    except Exception as e:
+        print(f"  SKIP  registry cross-check failed: {e}")
+else:
+    print("  SKIP  ~/.bubbaloop/nodes.json not found, skipping registry cross-check")
+
+if orphans:
+    sys.exit(1)
+sys.exit(0)
+PYEOF
+}
+
+step "Orphan topic lint (6s live Zenoh sniff)"
+if check_orphan_topics; then
+    : # pass already printed by the Python script
+else
+    FAILURES=$((FAILURES + 1))
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+printf "\n${CYAN}── PHASE 10: Gemini CLI Review ──${NC}\n"
 # ══════════════════════════════════════════════════════════════════════
 
 if $GEMINI; then

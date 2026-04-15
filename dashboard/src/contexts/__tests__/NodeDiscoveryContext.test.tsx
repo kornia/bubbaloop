@@ -69,9 +69,24 @@ vi.mock('../FleetContext', () => ({
   })),
 }));
 
-// Mock proto/daemon
-vi.mock('../../proto/daemon', () => ({
-  decodeNodeList: mockDecodeNodeList,
+// Mock cbor-x: decode the daemon "nodes" list payload via our test helper, throw on
+// anything else so the JSON fallback path is exercised for manifest payloads.
+vi.mock('cbor-x', () => ({
+  decode: vi.fn((data: Uint8Array) => {
+    // Node list fixture payload is always [1,2,3] in createNodeListPayload()
+    if (data && data.length === 3 && data[0] === 1 && data[1] === 2 && data[2] === 3) {
+      const decoded = mockDecodeNodeList();
+      if (!decoded) throw new Error('mock returned null');
+      // Rewrite to the real wire shape the context expects.
+      // Real decodeNodeListFromPayload reads obj.nodes + obj.machine_id.
+      return {
+        nodes: decoded.nodes,
+        machine_id: decoded.machineId,
+      };
+    }
+    throw new Error('not cbor');
+  }),
+  encode: vi.fn(),
 }));
 
 // Mock lib/zenoh

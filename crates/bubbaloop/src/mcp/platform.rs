@@ -72,6 +72,15 @@ pub trait PlatformOperations: Send + Sync + 'static {
         key_expr: &str,
     ) -> impl std::future::Future<Output = PlatformResult<String>> + Send;
 
+    /// Query a Zenoh key expression and return raw `(key, payload_bytes)`
+    /// pairs for every reply, with a configurable timeout. Used by the
+    /// `dataflow` MCP tool to fetch CBOR-encoded dataflow manifests.
+    fn query_zenoh_raw(
+        &self,
+        key_expr: &str,
+        timeout: std::time::Duration,
+    ) -> impl std::future::Future<Output = PlatformResult<Vec<(String, Vec<u8>)>>> + Send;
+
     /// Send a Zenoh query with a payload (e.g., for node commands).
     ///
     /// Returns the collected reply strings.

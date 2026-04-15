@@ -101,6 +101,16 @@ impl PlatformOperations for MockPlatform {
         Ok(format!("mock: query {}", key_expr))
     }
 
+    async fn query_zenoh_raw(
+        &self,
+        _key_expr: &str,
+        _timeout: std::time::Duration,
+    ) -> PlatformResult<Vec<(String, Vec<u8>)>> {
+        // MockPlatform has no live Zenoh session; tests that need
+        // dataflow behavior should layer their own fixture on top.
+        Ok(Vec::new())
+    }
+
     async fn send_zenoh_query(
         &self,
         key_expr: &str,

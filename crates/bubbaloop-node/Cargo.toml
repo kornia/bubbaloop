@@ -6,8 +6,7 @@ description = "Batteries-included SDK for writing bubbaloop nodes"
 license = "Apache-2.0"
 
 [dependencies]
-bubbaloop-schemas = { path = "../bubbaloop-schemas" }
-zenoh = { version = "1.7", features = ["shared-memory", "unstable"] }
+zenoh = { version = "1.8", features = ["shared-memory", "unstable"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -19,9 +18,6 @@ ctrlc = "3.4"
 anyhow = "1"
 thiserror = "2.0"
 hostname = "0.4"
-prost = "0.14"
-prost-types = "0.14"
-prost-reflect = { version = "0.14", features = ["serde"] }
 async-trait = "0.1"
 ciborium = "0.2"
 

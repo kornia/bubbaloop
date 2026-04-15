@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Bubbaloop Node SDK for Python"
 requires-python = ">=3.9"
 dependencies = [
-    "eclipse-zenoh>=1.7,<2",
-    "protobuf>=4.0",
+    "eclipse-zenoh>=1.8,<2",
+    "cbor2>=5.0",
 ]
 
 [project.optional-dependencies]

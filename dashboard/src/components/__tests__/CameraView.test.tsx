@@ -36,12 +36,6 @@ vi.mock('../../hooks/useZenohSubscription', () => ({
   useZenohSubscription: vi.fn(() => ({ messageCount: 0, fps: 0, instantFps: 0 })),
 }));
 
-const _schemaReadyState = vi.hoisted(() => ({ ready: false }));
-
-vi.mock('../../hooks/useSchemaReady', () => ({
-  useSchemaReady: vi.fn(() => _schemaReadyState.ready),
-}));
-
 vi.mock('../../contexts/FleetContext', () => ({
   useFleetContext: vi.fn(() => ({
     machines: [],
@@ -52,18 +46,6 @@ vi.mock('../../contexts/FleetContext', () => ({
     setSelectedMachineId: vi.fn(),
   })),
   FleetProvider: ({ children }: { children: React.ReactNode }) => children,
-}));
-
-vi.mock('../../contexts/SchemaRegistryContext', () => ({
-  useSchemaRegistry: vi.fn(() => ({
-    registry: { lookupType: vi.fn(() => null), tryDecodeForTopic: vi.fn(() => null) },
-    loading: false,
-    error: null,
-    refresh: vi.fn(),
-    decode: vi.fn(() => null),
-    discoverForTopic: vi.fn(),
-    schemaVersion: 0,
-  })),
 }));
 
 vi.mock('../../contexts/ZenohSubscriptionContext', () => ({
@@ -91,6 +73,9 @@ vi.mock('../../lib/subscription-manager', () => ({
 
 vi.mock('../../lib/zenoh', () => ({
   getSamplePayload: vi.fn(() => new Uint8Array()),
+  getEncodingInfo: vi.fn(() => ({ id: 0 })),
+  hasExplicitEncoding: vi.fn(() => false),
+  EncodingPredefined: { APPLICATION_CBOR: 8, APPLICATION_OCTET_STREAM: 3 },
   extractMachineId: vi.fn(() => null),
 }));
 
@@ -114,7 +99,6 @@ describe('CameraView', () => {
     vi.clearAllMocks();
     _h264State.isSupported = true;
     _h264State.initResolves = true;
-    _schemaReadyState.ready = false;
   });
 
   it('renders canvas element and CAMERA badge in header', () => {
@@ -126,8 +110,6 @@ describe('CameraView', () => {
   });
 
   it('shows "Initializing decoder..." while decoder is not yet ready', () => {
-    // The decoder init is async, so initially isReady = false
-    // We make init hang to keep the loading state visible
     _h264State.initResolves = false;
 
     render(<CameraView {...defaultProps} />);
@@ -146,7 +128,6 @@ describe('CameraView', () => {
   });
 
   it('shows INIT status when not ready, LIVE when ready', async () => {
-    // Init hangs so it stays in INIT
     _h264State.initResolves = false;
 
     render(<CameraView {...defaultProps} />);
@@ -156,7 +137,6 @@ describe('CameraView', () => {
   });
 
   it('shows LIVE status when decoder init resolves', async () => {
-    // Init resolves immediately
     _h264State.initResolves = true;
 
     render(<CameraView {...defaultProps} />);
@@ -181,7 +161,6 @@ describe('CameraView', () => {
 
     const select = document.querySelector('select.topic-select') as HTMLSelectElement;
     expect(select).toBeInTheDocument();
-    // Only topics whose display ends with '/compressed' should appear
     const options = select.querySelectorAll('option');
     const optionTexts = Array.from(options).map(o => o.textContent);
     expect(optionTexts).toContain('bubbaloop/m1/camera/entrance/compressed');
@@ -229,12 +208,9 @@ describe('CameraView', () => {
     render(<CameraView {...defaultProps} />);
 
     const infoBtn = screen.getByTitle('Show metadata');
-    // Initially no info panel visible (no metadata yet, so panel won't show even if toggled)
     fireEvent.click(infoBtn);
-    // The info button should have the 'active' class after click
     expect(infoBtn.classList.contains('active')).toBe(true);
 
-    // Click again to toggle off
     fireEvent.click(infoBtn);
     expect(infoBtn.classList.contains('active')).toBe(false);
   });
@@ -254,7 +230,6 @@ describe('CameraView', () => {
       />
     );
 
-    // Should auto-detect and call onTopicChange
     expect(onTopicChange).toHaveBeenCalledTimes(1);
     expect(onTopicChange).toHaveBeenCalledWith(
       expect.stringContaining('/**')
@@ -281,24 +256,9 @@ describe('CameraView', () => {
     expect(screen.getByTitle('Drag to reorder')).toBeInTheDocument();
   });
 
-  it('does not pass handleSample when schemas are not ready', () => {
-    _schemaReadyState.ready = false;
-
+  it('passes handleSample to subscription unconditionally (no schema gating)', () => {
     render(<CameraView {...defaultProps} />);
 
-    // useZenohSubscription should be called with undefined callback
-    const mockSub = vi.mocked(useZenohSubscription);
-    const lastCall = mockSub.mock.calls[mockSub.mock.calls.length - 1];
-    expect(lastCall[0]).toBe(defaultProps.topic);
-    expect(lastCall[1]).toBeUndefined();
-  });
-
-  it('passes handleSample when schemas are ready', () => {
-    _schemaReadyState.ready = true;
-
-    render(<CameraView {...defaultProps} />);
-
-    // useZenohSubscription should be called with a function callback
     const mockSub = vi.mocked(useZenohSubscription);
     const lastCall = mockSub.mock.calls[mockSub.mock.calls.length - 1];
     expect(lastCall[0]).toBe(defaultProps.topic);

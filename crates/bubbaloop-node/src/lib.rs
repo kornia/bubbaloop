@@ -1,8 +1,8 @@
 //! Batteries-included SDK for writing bubbaloop nodes.
 //!
-//! Extracts ~300 lines of identical scaffolding (Zenoh session, health heartbeat,
-//! schema queryable, config loading, signal handling, shutdown) into a single crate.
-//! Node authors implement the `Node` trait and call `run_node::<MyNode>().await`.
+//! Extracts scaffolding (Zenoh session, health heartbeat, config loading,
+//! signal handling, shutdown) into a single crate. Node authors implement
+//! the `Node` trait and call `run_node::<MyNode>().await`.
 //!
 //! # Example
 //!
@@ -15,7 +15,6 @@
 //! impl Node for MySensor {
 //!     type Config = MyConfig;
 //!     fn name() -> &'static str { "my-sensor" }
-//!     fn descriptor() -> &'static [u8] { DESCRIPTOR }
 //!     async fn init(ctx: &NodeContext, config: &MyConfig) -> anyhow::Result<Self> { /* ... */ }
 //!     async fn run(self, ctx: NodeContext) -> anyhow::Result<()> { /* ... */ }
 //! }
@@ -29,34 +28,29 @@
 mod config;
 mod context;
 pub mod discover;
+pub mod envelope;
 pub mod error;
 pub mod get_sample;
 mod health;
-pub mod proto_decoder;
+pub mod manifest;
 pub mod publisher;
-mod schema;
-pub mod schemas;
 mod shutdown;
 pub mod subscriber;
 mod zenoh_session;
 
 pub use context::NodeContext;
 pub use discover::{discover_nodes, NodeInfo};
+pub use envelope::{Envelope, Header};
 pub use error::NodeError;
 pub use get_sample::get_sample;
-pub use proto_decoder::ProtoDecoder;
-pub use publisher::{
-    CborPublisher, CborPublisherShm, JsonPublisher, ProtoPublisher, RawPublisher,
-};
-pub use subscriber::{RawSubscriber, TypedSubscriber};
-
-pub use schemas::MessageTypeName;
+pub use manifest::{Manifest, Role, MANIFEST_SCHEMA_VERSION};
+pub use publisher::{CborPublisher, CborPublisherShm, JsonPublisher, RawPublisher};
+pub use subscriber::{decode_envelope_bytes, CborSubscriber, RawSubscriber};
 
 // Re-exports so nodes don't need to add these deps directly.
 pub use anyhow;
 pub use async_trait;
 pub use log;
-pub use prost;
 pub use serde_json;
 pub use tokio;
 pub use zenoh;
@@ -72,9 +66,6 @@ pub trait Node: Send + Sync + 'static {
     /// Node name used for topic construction. Must match the `name` field in `node.yaml`.
     fn name() -> &'static str;
 
-    /// Protobuf `FileDescriptorSet` bytes for schema registration.
-    fn descriptor() -> &'static [u8];
-
     /// Called once after Zenoh session and config are ready.
     async fn init(ctx: &NodeContext, config: &Self::Config) -> anyhow::Result<Self>
     where
@@ -82,7 +73,6 @@ pub trait Node: Send + Sync + 'static {
 
     /// Main loop. Must select on `ctx.shutdown_rx` for graceful exit.
     async fn run(self, ctx: NodeContext) -> anyhow::Result<()>;
-
 }
 
 #[derive(argh::FromArgs)]
@@ -104,13 +94,16 @@ fn default_config_path() -> PathBuf {
 /// Run a node with the SDK runtime.
 ///
 /// Entry point for `main()`. Handles logging, CLI args, config, Zenoh session,
-/// schema queryable, health heartbeat, and shutdown.
+/// health heartbeat, and shutdown.
 pub async fn run_node<N: Node>() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args: SdkArgs = argh::from_env();
 
     let instance_name = config::extract_name(&args.config).unwrap_or_else(|| N::name().to_string());
+    let role = config::extract_role(&args.config)
+        .map(|s| manifest::Role::from_str_lossy(&s))
+        .unwrap_or(manifest::Role::Unknown);
     let node_config: N::Config = config::load_config(&args.config)?;
     log::info!(
         "{} (instance={}): config loaded from {}",
@@ -131,18 +124,34 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
     let (shutdown_tx, _) = shutdown::setup_shutdown()?;
     let session = zenoh_session::open_zenoh_session(&args.endpoint).await?;
 
-    let _schema_queryable = schema::declare_schema_queryable(
-        &session,
-        &machine_id,
-        &instance_name,
-        N::descriptor(),
-    )
-    .await?;
-
     let _health_handle = health::spawn_health_heartbeat(
         session.clone(),
         &machine_id,
         &instance_name,
+        shutdown_tx.subscribe(),
+    )
+    .await?;
+
+    let inputs = std::sync::Arc::new(std::sync::Mutex::new(
+        std::collections::BTreeMap::<String, manifest::Liveness>::new(),
+    ));
+    let outputs = std::sync::Arc::new(std::sync::Mutex::new(
+        std::collections::BTreeMap::<String, manifest::Liveness>::new(),
+    ));
+    let started_at_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+
+    let _manifest_handle = manifest::spawn_manifest_queryable(
+        session.clone(),
+        machine_id.clone(),
+        instance_name.clone(),
+        role,
+        started_at_ns,
+        "rust",
+        inputs.clone(),
+        outputs.clone(),
         shutdown_tx.subscribe(),
     )
     .await?;
@@ -152,6 +161,8 @@ pub async fn run_node<N: Node>() -> anyhow::Result<()> {
         machine_id,
         instance_name,
         shutdown_rx: shutdown_tx.subscribe(),
+        outputs,
+        inputs,
     };
 
     let node = N::init(&ctx, &node_config).await?;

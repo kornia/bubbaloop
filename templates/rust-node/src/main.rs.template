@@ -36,7 +36,13 @@ impl Node for {{node_name_pascal}}Node {
     }
 
     async fn init(ctx: &NodeContext, config: &Config) -> Result<Self> {
-        let topic = ctx.topic(&format!("{}/{}", Self::name(), config.publish_topic));
+        // ctx.publisher_cbor(suffix) auto-scopes with instance_name:
+        //   bubbaloop/global/{machine_id}/{instance_name}/{suffix}
+        // Use ctx.publisher_cbor_absolute(suffix) for cross-node control topics (e.g. "daemon/nodes").
+        //
+        // ctx.subscribe(absolute_suffix) is ABSOLUTE by default — pass the upstream node's
+        // full topic suffix, e.g. ctx.subscribe("tapo_terrace_embedder/embeddings").
+        let topic = ctx.topic(&config.publish_topic);
         let publisher = ctx
             .session
             .declare_publisher(&topic)

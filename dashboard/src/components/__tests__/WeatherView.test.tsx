@@ -8,12 +8,6 @@ vi.mock('../../hooks/useZenohSubscription', () => ({
   useAllTopicStats: vi.fn(() => new Map()),
 }));
 
-const _schemaReadyState = vi.hoisted(() => ({ ready: false }));
-
-vi.mock('../../hooks/useSchemaReady', () => ({
-  useSchemaReady: vi.fn(() => _schemaReadyState.ready),
-}));
-
 vi.mock('../../contexts/FleetContext', () => ({
   useFleetContext: vi.fn(() => ({
     machines: [],
@@ -24,18 +18,6 @@ vi.mock('../../contexts/FleetContext', () => ({
     setSelectedMachineId: vi.fn(),
   })),
   FleetProvider: ({ children }: { children: React.ReactNode }) => children,
-}));
-
-vi.mock('../../contexts/SchemaRegistryContext', () => ({
-  useSchemaRegistry: vi.fn(() => ({
-    registry: { lookupType: vi.fn(() => null), tryDecodeForTopic: vi.fn(() => null), decode: vi.fn(() => null) },
-    loading: false,
-    error: null,
-    refresh: vi.fn(),
-    decode: vi.fn(() => null),
-    discoverForTopic: vi.fn(),
-    schemaVersion: 0,
-  })),
 }));
 
 vi.mock('../../contexts/ZenohSubscriptionContext', () => ({
@@ -73,7 +55,6 @@ import { useZenohSubscription } from '../../hooks/useZenohSubscription';
 describe('WeatherViewPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    _schemaReadyState.ready = false;
   });
 
   it('renders WEATHER badge in header', () => {
@@ -100,7 +81,6 @@ describe('WeatherViewPanel', () => {
     fireEvent.click(editBtn);
     expect(screen.getByLabelText('Latitude:')).toBeInTheDocument();
     expect(screen.getByLabelText('Longitude:')).toBeInTheDocument();
-    // The button text "Update Location" and the section label "Update Location" both exist
     expect(screen.getByRole('button', { name: 'Update Location' })).toBeInTheDocument();
   });
 
@@ -109,28 +89,13 @@ describe('WeatherViewPanel', () => {
     expect(screen.getByText('weather/current, weather/hourly, weather/daily')).toBeInTheDocument();
   });
 
-  describe('schema-ready gating', () => {
-    it('does not pass callbacks when schemas are not ready', () => {
-      _schemaReadyState.ready = false;
-      render(<WeatherViewPanel />);
+  it('passes callbacks to all 3 subscriptions unconditionally (no schema gating)', () => {
+    render(<WeatherViewPanel />);
 
-      const mockSub = vi.mocked(useZenohSubscription);
-      // WeatherView creates 3 subscriptions (current, hourly, daily)
-      expect(mockSub.mock.calls.length).toBe(3);
-      for (const call of mockSub.mock.calls) {
-        expect(call[1]).toBeUndefined();
-      }
-    });
-
-    it('passes callbacks when schemas are ready', () => {
-      _schemaReadyState.ready = true;
-      render(<WeatherViewPanel />);
-
-      const mockSub = vi.mocked(useZenohSubscription);
-      expect(mockSub.mock.calls.length).toBe(3);
-      for (const call of mockSub.mock.calls) {
-        expect(typeof call[1]).toBe('function');
-      }
-    });
+    const mockSub = vi.mocked(useZenohSubscription);
+    expect(mockSub.mock.calls.length).toBe(3);
+    for (const call of mockSub.mock.calls) {
+      expect(typeof call[1]).toBe('function');
+    }
   });
 });

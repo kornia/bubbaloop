@@ -7,24 +7,33 @@ heartbeat, config loading, and shutdown handling.
 """
 
 from .context import NodeContext
-from .decode_sample import ProtoDecoder
 from .discover import NodeInfo, discover_nodes
 from .get_sample import GetSampleTimeout, get_sample
-from .publisher import JsonPublisher, ProtoPublisher, RawPublisher
-from .subscriber import ProtoSubscriber, RawSubscriber
+from .manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    build_manifest,
+    manifest_topic,
+    start_manifest_queryable,
+)
+from .publisher import CborPublisher, JsonPublisher, RawPublisher
+from .subscriber import CborSubscriber, Envelope, RawSubscriber
 from .node import run_node
 
 __all__ = [
+    "CborPublisher",
+    "CborSubscriber",
+    "Envelope",
     "GetSampleTimeout",
     "JsonPublisher",
+    "MANIFEST_SCHEMA_VERSION",
     "NodeContext",
     "NodeInfo",
-    "ProtoDecoder",
-    "ProtoPublisher",
-    "ProtoSubscriber",
     "RawPublisher",
     "RawSubscriber",
+    "build_manifest",
     "discover_nodes",
     "get_sample",
+    "manifest_topic",
     "run_node",
+    "start_manifest_queryable",
 ]

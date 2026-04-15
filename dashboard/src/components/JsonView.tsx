@@ -1,16 +1,31 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { Sample, Reply, ReplyError } from '@eclipse-zenoh/zenoh-ts';
+import { decode as cborDecode } from 'cbor-x';
 import { getSamplePayload, getEncodingInfo, hasExplicitEncoding, EncodingPredefined, EncodingInfo } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
 import { useZenohSubscriptionContext } from '../contexts/ZenohSubscriptionContext';
 import { useFleetContext } from '../contexts/FleetContext';
-import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
-import { decodeNodeList, decodeNodeEvent } from '../proto/daemon';
-import { SchemaRegistry } from '../lib/schema-registry';
 import { Duration } from 'typed-duration';
 import JsonView from 'react18-json-view';
 import 'react18-json-view/src/style.css';
+
+// Detect the SDK provenance envelope shape `{header, body}` so the JsonView
+// can label the row "CBOR (enveloped)". The full envelope is still rendered
+// (header + body) — react18-json-view renders nested objects collapsed by
+// default so the header expands on demand.
+function isProvenanceEnvelope(decoded: unknown): boolean {
+  if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) return false;
+  const obj = decoded as Record<string, unknown>;
+  const keys = Object.keys(obj);
+  return (
+    keys.length === 2 &&
+    keys.includes('header') &&
+    keys.includes('body') &&
+    obj.header !== null &&
+    typeof obj.header === 'object'
+  );
+}
 
 // Convert BigInt values to strings for JSON serialization
 function bigIntToString(obj: unknown): unknown {
@@ -49,18 +64,40 @@ function summarizeLargeFields(data: Record<string, unknown>): Record<string, unk
   return result;
 }
 
-// Try to decode payload using encoding metadata first, then schema registry, then built-in decoders
+// Try to decode payload. Encoding-first: CBOR → JSON → sniff fallback.
 function decodePayload(
   payload: Uint8Array,
-  topic: string,
-  registry?: SchemaRegistry,
+  _topic: string,
   encoding?: EncodingInfo,
 ): { data: unknown; schema: string; schemaSource: SchemaSourceType; error?: string } {
   const text = new TextDecoder().decode(payload);
 
   // 0. Encoding-first: if encoding metadata is present and meaningful, use it directly
   if (encoding && hasExplicitEncoding(encoding)) {
-    // APPLICATION_JSON variants — skip all other decode attempts
+    // APPLICATION_CBOR — decode with cbor-x
+    if (encoding.id === EncodingPredefined.APPLICATION_CBOR) {
+      try {
+        const decoded = cborDecode(payload);
+        const isEnvelope = isProvenanceEnvelope(decoded);
+        const data = decoded && typeof decoded === 'object' && !Array.isArray(decoded)
+          ? summarizeLargeFields(decoded as Record<string, unknown>)
+          : decoded;
+        return {
+          data: bigIntToString(data),
+          schema: isEnvelope ? 'CBOR (enveloped)' : 'CBOR',
+          schemaSource: 'builtin',
+        };
+      } catch (e) {
+        return {
+          data: { _error: 'Invalid CBOR despite APPLICATION_CBOR encoding', _detail: e instanceof Error ? e.message : String(e) },
+          schema: 'CBOR',
+          schemaSource: 'raw',
+          error: 'Failed to decode CBOR',
+        };
+      }
+    }
+
+    // APPLICATION_JSON / TEXT_JSON / TEXT_JSON5 — parse as JSON
     if (
       encoding.id === EncodingPredefined.APPLICATION_JSON ||
       encoding.id === EncodingPredefined.TEXT_JSON ||
@@ -73,19 +110,9 @@ function decodePayload(
         return { data: { _error: 'Invalid JSON despite APPLICATION_JSON encoding', _raw: text.slice(0, 200) }, schema: 'JSON', schemaSource: 'raw', error: 'Failed to parse JSON' };
       }
     }
-
-    // APPLICATION_PROTOBUF with schema suffix — try SchemaRegistry by type name
-    if (encoding.id === EncodingPredefined.APPLICATION_PROTOBUF && encoding.schema && registry) {
-      const result = registry.decode(encoding.schema, payload);
-      if (result) {
-        const data = summarizeLargeFields(result.data);
-        return { data, schema: result.typeName, schemaSource: 'dynamic' };
-      }
-      // Schema not loaded yet — fall through to dynamic discovery below
-    }
   }
 
-  // 1. Try JSON sniff (covers no-encoding case and protobuf fallback)
+  // 1. No encoding hint — sniff JSON first (plain text health pings, legacy payloads)
   try {
     const parsed = JSON.parse(text);
     return { data: parsed, schema: 'JSON', schemaSource: 'builtin' };
@@ -93,36 +120,30 @@ function decodePayload(
     // Not JSON, continue
   }
 
-  // 2. Dynamic SchemaRegistry — consolidated decode chain
-  if (registry) {
-    const result = registry.tryDecodeForTopic(topic, payload);
-    if (result) {
-      const data = summarizeLargeFields(result.data);
-      return { data, schema: result.typeName, schemaSource: 'dynamic' };
+  // 2. Sniff CBOR (self-describing)
+  try {
+    const decoded = cborDecode(payload);
+    if (decoded !== undefined) {
+      const isEnvelope = isProvenanceEnvelope(decoded);
+      const data = decoded && typeof decoded === 'object' && !Array.isArray(decoded)
+        ? summarizeLargeFields(decoded as Record<string, unknown>)
+        : decoded;
+      return {
+        data: bigIntToString(data),
+        schema: isEnvelope ? 'CBOR (enveloped)' : 'CBOR',
+        schemaSource: 'builtin',
+      };
     }
+  } catch {
+    // Not CBOR
   }
 
-  // 3. Built-in decoders as fallback (when SchemaRegistry is not yet loaded)
-  if (topic.includes('daemon/nodes')) {
-    const msg = decodeNodeList(payload);
-    if (msg) {
-      return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeList', schemaSource: 'builtin' };
-    }
-  }
-  if (topic.includes('daemon/events')) {
-    const msg = decodeNodeEvent(payload);
-    if (msg) {
-      return { data: bigIntToString(msg), schema: 'bubbaloop.daemon.v1.NodeEvent', schemaSource: 'builtin' };
-    }
-  }
-
-  // 4. Plain text messages (health heartbeats, simple string payloads)
-  // Try this as last resort before hex fallback
+  // 3. Plain text messages (health heartbeats, simple string payloads)
   if (payload.length < 200 && /^[\x20-\x7e]+$/.test(text)) {
     return { data: { message: text }, schema: 'Text', schemaSource: 'builtin' };
   }
 
-  // 5. Show raw data preview
+  // 4. Show raw data preview
   const preview = payload.slice(0, 100);
   const hex = Array.from(preview).map(b => b.toString(16).padStart(2, '0')).join(' ');
   return {
@@ -157,7 +178,6 @@ export function RawDataViewPanel({
   dragHandleProps,
 }: RawDataViewPanelProps) {
   const { machines } = useFleetContext();
-  const { registry, refresh: refreshSchemas, discoverForTopic, schemaVersion } = useSchemaRegistry();
   const [jsonData, setJsonData] = useState<unknown>(null);
   const [schemaName, setSchemaName] = useState<string | null>(null);
   const [schemaSource, setSchemaSource] = useState<SchemaSourceType>('raw');
@@ -197,38 +217,18 @@ export function RawDataViewPanel({
       // Buffer payload for retry
       lastPayloadRef.current = { payload, topic: sampleTopic };
 
-      const result = decodePayload(payload, sampleTopic, registry, encodingInfo);
+      const result = decodePayload(payload, sampleTopic, encodingInfo);
 
       pendingDataRef.current = { data: result.data, schema: result.schema, source: result.schemaSource, error: result.error || null };
       lastUpdateRef.current = Date.now();
-
-      // Trigger schema discovery for undecoded binary payloads
-      if (result.schemaSource === 'raw') {
-        discoverForTopic(sampleTopic);
-      }
     } catch (e) {
       console.error('[RawDataView] Failed to process sample:', e);
       pendingDataRef.current = { data: null, schema: 'Error', source: 'raw', error: e instanceof Error ? e.message : 'Failed to process sample' };
     }
-  }, [registry, discoverForTopic]);
-
-  // Re-decode last payload when schemaVersion changes
-  useEffect(() => {
-    if (schemaVersion === 0 || !lastPayloadRef.current) return;
-    const { payload, topic } = lastPayloadRef.current;
-    const result = decodePayload(payload, topic, registry);
-    pendingDataRef.current = { data: result.data, schema: result.schema, source: result.schemaSource, error: result.error || null };
-  }, [schemaVersion, registry]);
+  }, []);
 
   // Subscribe to topic (works for non-daemon topics)
   useZenohSubscription(topic, handleSample);
-
-  // Auto-discover schemas for new topics
-  useEffect(() => {
-    if (topic) {
-      discoverForTopic(topic);
-    }
-  }, [topic, discoverForTopic]);
 
   // For daemon topics, also poll via GET since the bridge drops larger
   // subscription payloads but GET queries work reliably
@@ -256,7 +256,8 @@ export function RawDataViewPanel({
               const replyResult = replyItem.result();
               if (replyResult instanceof ReplyError) continue;
               const payload = getSamplePayload(replyResult as Sample);
-              const result = decodePayload(payload, topic, registry);
+              const encodingInfo = getEncodingInfo(replyResult as Sample);
+              const result = decodePayload(payload, topic, encodingInfo);
               setJsonData(result.data);
               setSchemaName(result.schema);
               setSchemaSource(result.schemaSource);
@@ -272,7 +273,7 @@ export function RawDataViewPanel({
 
     poll();
     return () => { mounted = false; if (timer) clearTimeout(timer); };
-  }, [topic, getSession, registry]);
+  }, [topic, getSession]);
 
   // Handle topic change from dropdown
   const handleTopicSelect = (newTopic: string) => {
@@ -306,12 +307,6 @@ export function RawDataViewPanel({
           <MachineBadge machines={machines} />
         </div>
         <div className="panel-stats">
-          <button className="icon-btn" onClick={refreshSchemas} title="Refresh schemas">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M1 4v6h6M23 20v-6h-6" />
-              <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
-            </svg>
-          </button>
           {onRemove && (
             <button className="icon-btn danger" onClick={onRemove} title="Remove panel">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

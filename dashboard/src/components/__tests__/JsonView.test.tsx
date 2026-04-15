@@ -15,9 +15,6 @@ vi.mock('../../hooks/useZenohSubscription', () => ({
   useZenohSubscription: vi.fn(() => ({ messageCount: 0, fps: 0, instantFps: 0 })),
 }));
 
-// JsonView does NOT use useSchemaReady — no mock needed.
-// It has its own fallback decode chain (JSON → schema → built-in → text → hex).
-
 const mockFleetContext = {
   machines: [],
   reportMachines: vi.fn(),
@@ -30,23 +27,6 @@ const mockFleetContext = {
 vi.mock('../../contexts/FleetContext', () => ({
   useFleetContext: vi.fn(() => mockFleetContext),
   FleetProvider: ({ children }: { children: React.ReactNode }) => children,
-}));
-
-const mockSchemaRegistry = {
-  registry: {
-    lookupType: vi.fn(() => null),
-    tryDecodeForTopic: vi.fn(() => null),
-  },
-  loading: false,
-  error: null,
-  refresh: vi.fn(),
-  decode: vi.fn(() => null),
-  discoverForTopic: vi.fn(),
-  schemaVersion: 0,
-};
-
-vi.mock('../../contexts/SchemaRegistryContext', () => ({
-  useSchemaRegistry: vi.fn(() => mockSchemaRegistry),
 }));
 
 vi.mock('../../contexts/ZenohSubscriptionContext', () => ({
@@ -70,12 +50,15 @@ vi.mock('../../contexts/ZenohSubscriptionContext', () => ({
 
 vi.mock('../../lib/zenoh', () => ({
   getSamplePayload: vi.fn(() => new Uint8Array()),
+  getEncodingInfo: vi.fn(() => ({ id: 0 })),
+  hasExplicitEncoding: vi.fn(() => false),
+  EncodingPredefined: {
+    APPLICATION_CBOR: 8,
+    APPLICATION_JSON: 5,
+    TEXT_JSON: 6,
+    TEXT_JSON5: 11,
+  },
   extractMachineId: vi.fn(() => null),
-}));
-
-vi.mock('../../proto/daemon', () => ({
-  decodeNodeList: vi.fn(() => null),
-  decodeNodeEvent: vi.fn(() => null),
 }));
 
 vi.mock('../MachineBadge', () => ({
@@ -117,23 +100,16 @@ describe('RawDataViewPanel', () => {
   });
 
   it('shows schema name badge when schemaName is set', () => {
-    // We need to simulate schemaName being set.
-    // The component gets schemaName from internal state after decoding.
-    // Since it starts with null, the badge shows "RAW DATA".
-    // This is the initial state test.
     render(<RawDataViewPanel {...defaultProps} />);
 
-    // Initially shows RAW DATA
     const badge = document.querySelector('.panel-type-badge');
     expect(badge).toBeInTheDocument();
     expect(badge?.textContent).toBe('RAW DATA');
   });
 
   it('shows schema source badges correctly (dynamic/built-in/raw)', () => {
-    // When no schemaName or schemaName is binary/null, no source badge shown
     render(<RawDataViewPanel {...defaultProps} />);
 
-    // No schema source badge when schemaName is null (shows RAW DATA)
     const sourceBadge = document.querySelector('.schema-source-badge');
     expect(sourceBadge).not.toBeInTheDocument();
   });
@@ -151,7 +127,6 @@ describe('RawDataViewPanel', () => {
 
     const options = select.querySelectorAll('option');
     const optionTexts = Array.from(options).map(o => o.textContent);
-    // First option is the placeholder
     expect(optionTexts).toContain('-- Select topic --');
     expect(optionTexts).toContain('bubbaloop/m1/weather/current');
     expect(optionTexts).toContain('bubbaloop/m1/daemon/nodes');
@@ -171,16 +146,6 @@ describe('RawDataViewPanel', () => {
     render(<RawDataViewPanel {...defaultProps} />);
 
     expect(screen.queryByTitle('Remove panel')).not.toBeInTheDocument();
-  });
-
-  it('refresh schemas button exists and calls refresh', () => {
-    render(<RawDataViewPanel {...defaultProps} />);
-
-    const refreshBtn = screen.getByTitle('Refresh schemas');
-    expect(refreshBtn).toBeInTheDocument();
-
-    fireEvent.click(refreshBtn);
-    expect(mockSchemaRegistry.refresh).toHaveBeenCalledTimes(1);
   });
 
   it('renders drag handle when dragHandleProps provided', () => {
@@ -217,12 +182,7 @@ describe('RawDataViewPanel', () => {
     expect(onTopicChange).toHaveBeenCalledWith('weather-raw-key');
   });
 
-  it('always passes callback regardless of schema readiness (has own fallback chain)', () => {
-    // JsonView uses tryDecodeForTopic which has its own fallback:
-    // JSON → SchemaRegistry → built-in decoders → plain text → hex
-    // So it does NOT gate on useSchemaReady — it always processes samples.
-    mockSchemaRegistry.schemaVersion = 0;
-
+  it('passes callback to subscription', () => {
     render(<RawDataViewPanel topic="some/topic/**" />);
 
     const mockSub = vi.mocked(useZenohSubscription);

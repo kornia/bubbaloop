@@ -163,6 +163,30 @@ impl PlatformOperations for DaemonPlatform {
         Ok(zenoh_get_text(&self.session, key_expr).await)
     }
 
+    async fn query_zenoh_raw(
+        &self,
+        key_expr: &str,
+        timeout: std::time::Duration,
+    ) -> PlatformResult<Vec<(String, Vec<u8>)>> {
+        let replies = self
+            .session
+            .get(key_expr)
+            .target(zenoh::query::QueryTarget::All)
+            .consolidation(zenoh::query::ConsolidationMode::None)
+            .timeout(timeout)
+            .await
+            .map_err(|e| PlatformError::Internal(format!("zenoh get failed: {e}")))?;
+        let mut out = Vec::new();
+        while let Ok(reply) = replies.recv_async().await {
+            if let Ok(sample) = reply.result() {
+                let key = sample.key_expr().to_string();
+                let bytes = sample.payload().to_bytes().to_vec();
+                out.push((key, bytes));
+            }
+        }
+        Ok(out)
+    }
+
     async fn send_zenoh_query(
         &self,
         key_expr: &str,
