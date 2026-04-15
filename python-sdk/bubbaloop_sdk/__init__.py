@@ -20,7 +20,6 @@ from .subscriber import (
     RawCallbackSubscriber,
     RawCallbackSubscriberAsync,
     RawSubscriber,
-    TypedSubscriber,
 )
 
 __all__ = [

@@ -33,7 +33,6 @@ if TYPE_CHECKING:
         RawCallbackSubscriber,
         RawCallbackSubscriberAsync,
         RawSubscriber,
-        TypedSubscriber,
     )
 
 
@@ -152,20 +151,6 @@ class NodeContext:
     # ------------------------------------------------------------------
     # Subscribers
     # ------------------------------------------------------------------
-
-    def subscriber(self, suffix: str, msg_class=None) -> TypedSubscriber:
-        """Declare a typed subscriber. Blocks on ``recv()``."""
-        from .subscriber import TypedSubscriber
-
-        return TypedSubscriber(self.session, self.topic(suffix), msg_class)
-
-    def subscriber_raw(self, key_expr: str) -> RawSubscriber:
-        """Declare a raw subscriber with a literal key expression."""
-        from .subscriber import RawSubscriber
-
-        return RawSubscriber(self.session, key_expr)
-
-    # NOTE: next 2 functions are new. Talk to Edgar to understand them.
 
     def subscribe(self, suffix: str, local: bool = False) -> ProtoSubscriber:
         """Declare a subscriber that auto-decodes every message by its encoding.
