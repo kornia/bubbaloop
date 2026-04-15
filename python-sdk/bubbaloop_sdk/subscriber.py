@@ -213,7 +213,7 @@ class RawCallbackSubscriber(_BaseSubscriber):
             self._executor.shutdown(wait=False, cancel_futures=True)
 
 
-class AsyncQueryable:
+class Queryable:
     """Queryable that responds to Zenoh GET requests.
 
     ``handler`` receives a ``zenoh.Query`` and must call ``query.reply()`` to respond.

@@ -26,9 +26,9 @@ import zenoh
 if TYPE_CHECKING:
     from .publisher import JsonPublisher, ProtoPublisher, RawPublisher
     from .subscriber import (
-        AsyncQueryable,
         CallbackSubscriber,
         ProtoSubscriber,
+        Queryable,
         RawCallbackSubscriber,
         RawSubscriber,
     )
@@ -226,7 +226,7 @@ class NodeContext:
     # Queryables
     # ------------------------------------------------------------------
 
-    def queryable(self, suffix: str, handler, max_workers: int | None = None) -> AsyncQueryable:
+    def queryable(self, suffix: str, handler, max_workers: int | None = None) -> Queryable:
         """Declare a queryable at ``topic(suffix)``.
 
         ``handler`` receives a ``zenoh.Query``. Use the standard zenoh API to reply::
@@ -242,11 +242,11 @@ class NodeContext:
 
         Call ``undeclare()`` on the returned queryable when done.
         """
-        from .subscriber import AsyncQueryable
+        from .subscriber import Queryable
 
-        return AsyncQueryable(self.session, self.topic(suffix), handler, max_workers)
+        return Queryable(self.session, self.topic(suffix), handler, max_workers)
 
-    def queryable_raw(self, key_expr: str, handler, max_workers: int | None = None) -> AsyncQueryable:
+    def queryable_raw(self, key_expr: str, handler, max_workers: int | None = None) -> Queryable:
         """Declare a queryable at a literal key expression (no topic prefix).
 
         Use for wildcard queryables or when the ``bubbaloop/global/{machine_id}/``
@@ -257,9 +257,9 @@ class NodeContext:
 
         Call ``undeclare()`` on the returned queryable when done.
         """
-        from .subscriber import AsyncQueryable
+        from .subscriber import Queryable
 
-        return AsyncQueryable(self.session, key_expr, handler, max_workers)
+        return Queryable(self.session, key_expr, handler, max_workers)
 
     # ------------------------------------------------------------------
     # Cleanup

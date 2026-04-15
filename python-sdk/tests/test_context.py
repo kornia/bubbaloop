@@ -114,9 +114,9 @@ def test_import_callback_subscribers_with_workers():
 
 
 def test_import_async_queryable():
-    from bubbaloop_sdk import AsyncQueryable
+    from bubbaloop_sdk import Queryable
 
-    assert AsyncQueryable is not None
+    assert Queryable is not None
 
 
 def test_import_run_node():
@@ -306,7 +306,7 @@ def test_raw_callback_subscriber_with_workers_drops_after_undeclare():
 
 def test_async_queryable_drops_after_undeclare():
     """Queries arriving after undeclare() are silently dropped (thread pool mode)."""
-    from bubbaloop_sdk.subscriber import AsyncQueryable
+    from bubbaloop_sdk.subscriber import Queryable
 
     mock_session = MagicMock()
     captured_wrapper = []
@@ -323,7 +323,7 @@ def test_async_queryable_drops_after_undeclare():
         received.append(query)
         called.set()
 
-    aq = AsyncQueryable(mock_session, "test/topic", handler, max_workers=4)
+    aq = Queryable(mock_session, "test/topic", handler, max_workers=4)
     aq.undeclare()
 
     fake_query = MagicMock()
@@ -634,13 +634,13 @@ def test_queryable_raw_uses_literal_key_expr():
 
 
 def test_queryable_returns_async_queryable():
-    """queryable() returns AsyncQueryable."""
-    from bubbaloop_sdk.subscriber import AsyncQueryable
+    """queryable() returns Queryable."""
+    from bubbaloop_sdk.subscriber import Queryable
 
     ctx = _make_context("bot")
     result = ctx.queryable("command", lambda q: None)
     try:
-        assert isinstance(result, AsyncQueryable)
+        assert isinstance(result, Queryable)
     finally:
         result.undeclare()
 
@@ -698,13 +698,13 @@ def test_queryable_with_workers_wraps_handler_in_executor():
 
 
 def test_queryable_with_workers_returns_async_queryable():
-    """queryable(max_workers=4) returns AsyncQueryable."""
-    from bubbaloop_sdk.subscriber import AsyncQueryable
+    """queryable(max_workers=4) returns Queryable."""
+    from bubbaloop_sdk.subscriber import Queryable
 
     ctx = _make_context("bot")
     qbl = ctx.queryable("command", lambda q: None, max_workers=4)
     try:
-        assert isinstance(qbl, AsyncQueryable)
+        assert isinstance(qbl, Queryable)
     finally:
         qbl.undeclare()
 
@@ -753,13 +753,13 @@ def test_queryable_raw_with_workers_wraps_handler_in_executor():
 
 
 def test_async_queryable_undeclare():
-    """AsyncQueryable.undeclare() undeclares queryable then shuts executor."""
-    from bubbaloop_sdk.subscriber import AsyncQueryable
+    """Queryable.undeclare() undeclares queryable then shuts executor."""
+    from bubbaloop_sdk.subscriber import Queryable
 
     mock_session = MagicMock()
     mock_qbl = MagicMock()
     mock_session.declare_queryable.return_value = mock_qbl
-    aq = AsyncQueryable(mock_session, "test/topic", lambda q: None)
+    aq = Queryable(mock_session, "test/topic", lambda q: None)
     aq.undeclare()
     mock_qbl.undeclare.assert_called_once()
 

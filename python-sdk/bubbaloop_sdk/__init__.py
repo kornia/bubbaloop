@@ -13,15 +13,14 @@ from .get_sample import GetSampleTimeout, get_sample
 from .node import run_node
 from .publisher import JsonPublisher, ProtoPublisher, RawPublisher
 from .subscriber import (
-    AsyncQueryable,
     CallbackSubscriber,
     ProtoSubscriber,
+    Queryable,
     RawCallbackSubscriber,
     RawSubscriber,
 )
 
 __all__ = [
-    "AsyncQueryable",
     "CallbackSubscriber",
     "GetSampleTimeout",
     "JsonPublisher",
@@ -30,6 +29,7 @@ __all__ = [
     "ProtoDecoder",
     "ProtoPublisher",
     "ProtoSubscriber",
+    "Queryable",
     "RawCallbackSubscriber",
     "RawPublisher",
     "RawSubscriber",
