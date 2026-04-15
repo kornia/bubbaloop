@@ -151,6 +151,11 @@ export function CameraView({
         return;
       }
 
+      // SDK wraps CBOR payloads in an outer {header, body} Envelope; unwrap if present.
+      if (msg && typeof msg === 'object' && 'body' in msg && msg.body && typeof msg.body === 'object') {
+        msg = msg.body;
+      }
+
       const format: string = msg.format ?? '';
       const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data ?? []);
       const rawHeader = msg.header;
