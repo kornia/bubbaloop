@@ -50,20 +50,12 @@ fn strip_topic_prefix(key: &str, machine_id: &str) -> Option<String> {
 }
 
 pub(crate) fn build_default_schema_uri(
-    instance_name: &str,
-    machine_id: &str,
+    _instance_name: &str,
+    _machine_id: &str,
     topic_suffix: &str,
     schema_version: u32,
 ) -> String {
-    let instance = if instance_name.is_empty() {
-        machine_id
-    } else {
-        instance_name
-    };
-    format!(
-        "bubbaloop://{}/{}@v{}",
-        instance, topic_suffix, schema_version
-    )
+    format!("bubbaloop://{}@v{}", topic_suffix, schema_version)
 }
 
 fn now_ns() -> u64 {
@@ -149,7 +141,8 @@ impl NodeContext {
         }
     }
 
-    /// Compose `bubbaloop://{instance}/{topic_suffix}@v{schema_version}`.
+    /// Compose `bubbaloop://{topic_suffix}@v{schema_version}` (topic_suffix already
+    /// contains the instance prefix via `declare_output`).
     pub(crate) fn default_schema_uri(&self, topic_suffix: &str, schema_version: u32) -> String {
         build_default_schema_uri(
             &self.instance_name,
@@ -165,7 +158,7 @@ impl NodeContext {
     ///
     /// Wraps every payload in the SDK's `{header, body}` provenance envelope
     /// (identical shape to CBOR). Default `schema_uri` is
-    /// `bubbaloop://{instance}/{instance}/{suffix}@v1`.
+    /// `bubbaloop://{instance}/{suffix}@v1`.
     pub async fn publisher_json(&self, suffix: &str) -> Result<crate::publisher::JsonPublisher> {
         self.publisher_json_with_schema(suffix, None, 1).await
     }
@@ -470,14 +463,14 @@ mod tests {
     }
 
     #[test]
-    fn default_schema_uri_shape_with_instance() {
+    fn default_schema_uri_uses_topic_suffix() {
         let uri = super::build_default_schema_uri("emb", "bot", "emb/embeddings", 1);
-        assert_eq!(uri, "bubbaloop://emb/emb/embeddings@v1");
+        assert_eq!(uri, "bubbaloop://emb/embeddings@v1");
     }
 
     #[test]
-    fn default_schema_uri_falls_back_to_machine_id_when_instance_empty() {
+    fn default_schema_uri_versioned() {
         let uri = super::build_default_schema_uri("", "bot", "emb/x", 2);
-        assert_eq!(uri, "bubbaloop://bot/emb/x@v2");
+        assert_eq!(uri, "bubbaloop://emb/x@v2");
     }
 }
