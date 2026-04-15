@@ -226,7 +226,7 @@ class NodeContext:
     # Queryables
     # ------------------------------------------------------------------
 
-    def queryable(self, suffix: str, handler) -> zenoh.Queryable:
+    def queryable(self, suffix: str, handler, max_workers: int | None = None) -> AsyncQueryable:
         """Declare a queryable at ``topic(suffix)``.
 
         ``handler`` receives a ``zenoh.Query``. Use the standard zenoh API to reply::
@@ -237,51 +237,25 @@ class NodeContext:
 
             qbl = ctx.queryable("command", on_command)
 
-        **Important:** do NOT pass ``complete=True`` — it blocks wildcard queries
-        like ``bubbaloop/**/schema`` used by the dashboard.
-
-        For slow handlers, use ``queryable_async()``.
+        By default the handler runs on Zenoh's internal thread. Pass
+        ``max_workers`` to run the handler in a thread pool instead.
 
         Call ``undeclare()`` on the returned queryable when done.
-        """
-        return self.session.declare_queryable(self.topic(suffix), handler)
-
-    def queryable_raw(self, key_expr: str, handler) -> zenoh.Queryable:
-        """Declare a queryable at a literal key expression (no topic prefix).
-
-        Use for wildcard queryables or when the ``bubbaloop/{scope}/{machine_id}/``
-        prefix does not apply (e.g. ``bubbaloop/**/schema`` for multi-schema serving).
-
-        Call ``undeclare()`` on the returned queryable when done.
-        """
-        return self.session.declare_queryable(key_expr, handler)
-
-    def queryable_async(self, suffix: str, handler, max_workers: int = 4) -> AsyncQueryable:
-        """Declare a queryable at ``topic(suffix)`` with handler in a thread pool.
-
-        Use when the handler does slow work. Zenoh's internal thread is freed
-        immediately; the handler runs in a ``ThreadPoolExecutor``::
-
-            def on_db_query(query: zenoh.Query) -> None:
-                rows = db.fetch(query.payload.to_string())  # slow
-                query.reply(query.key_expr, json.dumps(rows).encode())
-
-            qbl = ctx.queryable_async("device_data", on_db_query)
-            # call qbl.undeclare() when done to release threads
-
-        **Threading contract:** multiple invocations may run concurrently.
-        Protect shared state with locks.
         """
         from .subscriber import AsyncQueryable
 
         return AsyncQueryable(self.session, self.topic(suffix), handler, max_workers)
 
-    def queryable_raw_async(self, key_expr: str, handler, max_workers: int = 4) -> AsyncQueryable:
-        """Declare a queryable at a literal key expression with handler in a thread pool.
+    def queryable_raw(self, key_expr: str, handler, max_workers: int | None = None) -> AsyncQueryable:
+        """Declare a queryable at a literal key expression (no topic prefix).
 
-        Same as ``queryable_async()`` but uses a literal key expression without the
-        ``bubbaloop/{scope}/{machine_id}/`` prefix. Use for wildcard queryables.
-        Call ``undeclare()`` on the returned object when done to release threads.
+        Use for wildcard queryables or when the ``bubbaloop/global/{machine_id}/``
+        prefix does not apply (e.g. ``bubbaloop/**/schema`` for multi-schema serving).
+
+        By default the handler runs on Zenoh's internal thread. Pass
+        ``max_workers`` to run the handler in a thread pool instead.
+
+        Call ``undeclare()`` on the returned queryable when done.
         """
         from .subscriber import AsyncQueryable
 

@@ -305,7 +305,7 @@ def test_raw_callback_subscriber_with_workers_drops_after_undeclare():
 
 
 def test_async_queryable_drops_after_undeclare():
-    """Queries arriving after undeclare() are silently dropped."""
+    """Queries arriving after undeclare() are silently dropped (thread pool mode)."""
     from bubbaloop_sdk.subscriber import AsyncQueryable
 
     mock_session = MagicMock()
@@ -323,7 +323,7 @@ def test_async_queryable_drops_after_undeclare():
         received.append(query)
         called.set()
 
-    aq = AsyncQueryable(mock_session, "test/topic", handler)
+    aq = AsyncQueryable(mock_session, "test/topic", handler, max_workers=4)
     aq.undeclare()
 
     fake_query = MagicMock()
@@ -610,8 +610,12 @@ def test_queryable_uses_topic_prefix():
     def handler(q):
         pass
 
-    ctx.queryable("command", handler)
-    ctx.session.declare_queryable.assert_called_once_with("bubbaloop/global/bot/command", handler)
+    qbl = ctx.queryable("command", handler)
+    try:
+        called_topic = ctx.session.declare_queryable.call_args[0][0]
+        assert called_topic == "bubbaloop/global/bot/command"
+    finally:
+        qbl.undeclare()
 
 
 def test_queryable_raw_uses_literal_key_expr():
@@ -621,32 +625,39 @@ def test_queryable_raw_uses_literal_key_expr():
     def handler(q):
         pass
 
-    ctx.queryable_raw("bubbaloop/**/schema", handler)
-    ctx.session.declare_queryable.assert_called_once_with("bubbaloop/**/schema", handler)
+    qbl = ctx.queryable_raw("bubbaloop/**/schema", handler)
+    try:
+        called_topic = ctx.session.declare_queryable.call_args[0][0]
+        assert called_topic == "bubbaloop/**/schema"
+    finally:
+        qbl.undeclare()
 
 
-def test_queryable_returns_zenoh_queryable():
-    """queryable() returns whatever session.declare_queryable returns."""
+def test_queryable_returns_async_queryable():
+    """queryable() returns AsyncQueryable."""
+    from bubbaloop_sdk.subscriber import AsyncQueryable
+
     ctx = _make_context("bot")
-    mock_qbl = MagicMock()
-    ctx.session.declare_queryable.return_value = mock_qbl
     result = ctx.queryable("command", lambda q: None)
-    assert result is mock_qbl
+    try:
+        assert isinstance(result, AsyncQueryable)
+    finally:
+        result.undeclare()
 
 
 # ---------------------------------------------------------------------------
-# NodeContext.queryable_async() and queryable_raw_async()
+# NodeContext.queryable(max_workers) and queryable_raw(max_workers)
 # ---------------------------------------------------------------------------
 
 
-def test_queryable_async_uses_topic_prefix():
-    """queryable_async() declares at topic(suffix)."""
+def test_queryable_with_workers_uses_topic_prefix():
+    """queryable(max_workers=4) declares at topic(suffix)."""
     ctx = _make_context("bot")
 
     def handler(q):
         pass
 
-    qbl = ctx.queryable_async("command", handler)
+    qbl = ctx.queryable("command", handler, max_workers=4)
     try:
         called_topic = ctx.session.declare_queryable.call_args[0][0]
         assert called_topic == "bubbaloop/global/bot/command"
@@ -654,8 +665,8 @@ def test_queryable_async_uses_topic_prefix():
         qbl.undeclare()
 
 
-def test_queryable_async_wraps_handler_in_executor():
-    """queryable_async() wraps handler so Zenoh thread is freed."""
+def test_queryable_with_workers_wraps_handler_in_executor():
+    """queryable(max_workers=4) wraps handler so Zenoh thread is freed."""
     import threading
 
     ctx = _make_context("bot")
@@ -674,7 +685,7 @@ def test_queryable_async_wraps_handler_in_executor():
         received.append(query)
         event.set()
 
-    qbl = ctx.queryable_async("command", slow_handler)
+    qbl = ctx.queryable("command", slow_handler, max_workers=4)
 
     try:
         fake_query = MagicMock()
@@ -686,22 +697,22 @@ def test_queryable_async_wraps_handler_in_executor():
         qbl.undeclare()
 
 
-def test_queryable_async_returns_async_queryable():
-    """queryable_async() returns AsyncQueryable (not a bare zenoh.Queryable)."""
+def test_queryable_with_workers_returns_async_queryable():
+    """queryable(max_workers=4) returns AsyncQueryable."""
     from bubbaloop_sdk.subscriber import AsyncQueryable
 
     ctx = _make_context("bot")
-    qbl = ctx.queryable_async("command", lambda q: None)
+    qbl = ctx.queryable("command", lambda q: None, max_workers=4)
     try:
         assert isinstance(qbl, AsyncQueryable)
     finally:
         qbl.undeclare()
 
 
-def test_queryable_raw_async_uses_literal_key_expr():
-    """queryable_raw_async() declares at the literal key expression."""
+def test_queryable_raw_with_workers_uses_literal_key_expr():
+    """queryable_raw(max_workers=4) declares at the literal key expression."""
     ctx = _make_context("bot")
-    qbl = ctx.queryable_raw_async("bubbaloop/**/schema", lambda q: None)
+    qbl = ctx.queryable_raw("bubbaloop/**/schema", lambda q: None, max_workers=4)
     try:
         called_topic = ctx.session.declare_queryable.call_args[0][0]
         assert called_topic == "bubbaloop/**/schema"
@@ -709,8 +720,8 @@ def test_queryable_raw_async_uses_literal_key_expr():
         qbl.undeclare()
 
 
-def test_queryable_raw_async_wraps_handler_in_executor():
-    """queryable_raw_async() wraps handler in thread pool."""
+def test_queryable_raw_with_workers_wraps_handler_in_executor():
+    """queryable_raw(max_workers=4) wraps handler in thread pool."""
     import threading
 
     ctx = _make_context("bot")
@@ -729,7 +740,7 @@ def test_queryable_raw_async_wraps_handler_in_executor():
         received.append(query)
         event.set()
 
-    qbl = ctx.queryable_raw_async("bubbaloop/**/schema", handler)
+    qbl = ctx.queryable_raw("bubbaloop/**/schema", handler, max_workers=4)
 
     try:
         fake_query = MagicMock()

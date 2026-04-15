@@ -214,26 +214,25 @@ class RawCallbackSubscriber(_BaseSubscriber):
 
 
 class AsyncQueryable:
-    """Wrapper around ``zenoh.Queryable`` that runs the handler in a ``ThreadPoolExecutor``.
+    """Queryable that responds to Zenoh GET requests.
 
-    **Use this (via ``ctx.queryable_async()``) when your queryable handler does slow work**
-    (database reads, hardware access, network calls). Zenoh uses a single internal thread
-    for all callbacks — a slow handler blocks ALL other subscribers and queryables on the
-    same session. ``AsyncQueryable`` fixes this by submitting the handler to a thread pool
-    immediately and returning, freeing Zenoh's thread::
+    ``handler`` receives a ``zenoh.Query`` and must call ``query.reply()`` to respond.
 
-        def on_db_query(query: zenoh.Query) -> None:
-            rows = db.fetch(query.payload.to_string())   # slow
-            query.reply(query.key_expr, json.dumps(rows).encode())
+    By default the handler runs on Zenoh's internal thread (fast path). Pass
+    ``max_workers`` to run the handler in a ``ThreadPoolExecutor`` instead —
+    use this when the handler does slow work (DB reads, hardware access, HTTP calls).
 
-        qbl = ctx.queryable_async("device_data", on_db_query)
-        # qbl.undeclare() when done — shuts down Zenoh queryable AND thread pool
+    **Important:** do NOT pass ``complete=True`` to the underlying queryable —
+    it blocks wildcard queries like ``bubbaloop/**/schema`` used by the dashboard.
 
-    **Threading contract:** multiple invocations of ``handler`` may run concurrently
-    if queries arrive faster than the handler processes them. Protect shared state
-    with locks.
+    Args:
+        session: Active Zenoh session.
+        key_expr: Key expression to declare the queryable on.
+        handler: Callable invoked with each ``zenoh.Query``.
+        max_workers: If None (default), handler runs on Zenoh's thread. If int,
+            handler runs in a ThreadPoolExecutor with that many threads.
 
-    Call ``undeclare()`` when done to stop receiving queries and release the thread pool.
+    Call ``undeclare()`` when done to stop receiving queries.
     """
 
     def __init__(
@@ -241,27 +240,35 @@ class AsyncQueryable:
         session: zenoh.Session,
         key_expr: str,
         handler: Callable[[zenoh.Query], None],
-        max_workers: int = 4,
+        max_workers: int | None = None,
     ):
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        self._closing = threading.Event()
+        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._closing: threading.Event | None = None
         self._undeclared = False
 
-        def _wrap(query: zenoh.Query) -> None:
-            if self._closing.is_set():
-                return
-            try:
-                self._executor.submit(handler, query)
-            except RuntimeError:
-                pass  # executor already shut down — drop the query
+        if max_workers is not None:
+            self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+            self._closing = threading.Event()
 
-        self._qbl = session.declare_queryable(key_expr, _wrap)
+            def _wrap(query: zenoh.Query) -> None:
+                if self._closing.is_set():  # type: ignore[union-attr]
+                    return
+                try:
+                    self._executor.submit(handler, query)  # type: ignore[union-attr]
+                except RuntimeError:
+                    pass  # executor already shut down — drop the query
+
+            self._qbl = session.declare_queryable(key_expr, _wrap)
+        else:
+            self._qbl = session.declare_queryable(key_expr, handler)
 
     def undeclare(self) -> None:
-        """Undeclare the queryable and shutdown the thread pool. Idempotent."""
+        """Undeclare the queryable and shutdown the thread pool (if any). Idempotent."""
         if self._undeclared:
             return
         self._undeclared = True
-        self._closing.set()
-        self._qbl.undeclare()  # stop Zenoh callbacks first
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        if self._closing is not None:
+            self._closing.set()
+        self._qbl.undeclare()
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
