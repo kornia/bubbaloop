@@ -136,7 +136,7 @@ class CallbackSubscriber(_BaseSubscriber):
                 if self._closing.is_set():  # type: ignore[union-attr]
                     return
                 try:
-                    self._executor.submit(handler, registry.decode(sample))  # type: ignore[union-attr]
+                    self._executor.submit(lambda s=sample: handler(registry.decode(s)))  # type: ignore[union-attr]
                 except RuntimeError:
                     pass  # executor already shut down — drop the message
 

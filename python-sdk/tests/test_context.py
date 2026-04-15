@@ -106,13 +106,6 @@ def test_import_callback_subscribers():
     assert RawCallbackSubscriber is not None
 
 
-def test_import_callback_subscribers_with_workers():
-    from bubbaloop_sdk import CallbackSubscriber, RawCallbackSubscriber
-
-    assert CallbackSubscriber is not None
-    assert RawCallbackSubscriber is not None
-
-
 def test_import_async_queryable():
     from bubbaloop_sdk import Queryable
 

@@ -19,7 +19,8 @@ import os
 import signal
 import socket
 import threading
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import zenoh
 
@@ -194,7 +195,9 @@ class NodeContext:
     # Callback Subscribers
     # ------------------------------------------------------------------
 
-    def subscriber_callback(self, suffix: str, handler, max_workers: int | None = None) -> CallbackSubscriber:
+    def subscriber_callback(
+        self, suffix: str, handler: Callable[[Any], None], max_workers: int | None = None
+    ) -> CallbackSubscriber:
         """Callback subscriber at ``topic(suffix)`` with auto-decode.
 
         ``handler`` receives auto-decoded messages (proto, dict, or bytes).
@@ -210,7 +213,9 @@ class NodeContext:
             self._schema_registry = SchemaRegistry(self.session)
         return CallbackSubscriber(self.session, self.topic(suffix), handler, self._schema_registry, max_workers)
 
-    def subscriber_raw_callback(self, key_expr: str, handler, max_workers: int | None = None) -> RawCallbackSubscriber:
+    def subscriber_raw_callback(
+        self, key_expr: str, handler: Callable[[zenoh.Sample], None], max_workers: int | None = None
+    ) -> RawCallbackSubscriber:
         """Callback subscriber at a literal key expression.
 
         ``handler`` receives raw ``zenoh.Sample`` objects.
@@ -226,7 +231,9 @@ class NodeContext:
     # Queryables
     # ------------------------------------------------------------------
 
-    def queryable(self, suffix: str, handler, max_workers: int | None = None) -> Queryable:
+    def queryable(
+        self, suffix: str, handler: Callable[[zenoh.Query], None], max_workers: int | None = None
+    ) -> Queryable:
         """Declare a queryable at ``topic(suffix)``.
 
         ``handler`` receives a ``zenoh.Query``. Use the standard zenoh API to reply::
@@ -246,7 +253,9 @@ class NodeContext:
 
         return Queryable(self.session, self.topic(suffix), handler, max_workers)
 
-    def queryable_raw(self, key_expr: str, handler, max_workers: int | None = None) -> Queryable:
+    def queryable_raw(
+        self, key_expr: str, handler: Callable[[zenoh.Query], None], max_workers: int | None = None
+    ) -> Queryable:
         """Declare a queryable at a literal key expression (no topic prefix).
 
         Use for wildcard queryables or when the ``bubbaloop/global/{machine_id}/``
