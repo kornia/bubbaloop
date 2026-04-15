@@ -262,13 +262,12 @@ def test_callback_subscriber_async_drops_after_undeclare():
         received.append(msg)
         called.set()
 
-    sub = CallbackSubscriberAsync(mock_session, "test/topic", handler)
+    sub = CallbackSubscriberAsync(mock_session, "test/topic", handler, MagicMock())
     sub.undeclare()
 
     # Simulate a late-arriving Zenoh callback after undeclare.
     # _closing is already set so _wrap returns early — handler is never submitted.
     fake_sample = MagicMock()
-    fake_sample.payload.to_bytes.return_value = b"\xff"
     captured_handler[0](fake_sample)  # must not raise
 
     # Give the executor no chance to run (it's shut down); assert immediately.
@@ -339,8 +338,8 @@ def test_async_queryable_drops_after_undeclare():
 # ---------------------------------------------------------------------------
 
 
-def test_callback_subscriber_calls_handler_with_bytes():
-    """Handler receives raw bytes when no msg_class provided."""
+def test_callback_subscriber_calls_handler_with_decoded():
+    """Handler receives whatever registry.decode() returns."""
     from bubbaloop_sdk.subscriber import CallbackSubscriber
 
     mock_session = MagicMock()
@@ -351,19 +350,23 @@ def test_callback_subscriber_calls_handler_with_bytes():
         return MagicMock()
 
     mock_session.declare_subscriber.side_effect = fake_declare
+
+    mock_registry = MagicMock()
+    mock_registry.decode.return_value = {"temperature": 22.5}
+
     received = []
-    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: received.append(msg))
+    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: received.append(msg), mock_registry)
 
     fake_sample = MagicMock()
-    fake_sample.payload.to_bytes.return_value = b"\xde\xad"
     captured_handler[0](fake_sample)
 
-    assert received == [b"\xde\xad"]
+    assert received == [{"temperature": 22.5}]
+    mock_registry.decode.assert_called_once_with(fake_sample)
     sub.undeclare()
 
 
-def test_callback_subscriber_decodes_proto():
-    """Handler receives decoded proto when msg_class provided."""
+def test_callback_subscriber_passes_sample_to_registry():
+    """CallbackSubscriber passes the zenoh.Sample to registry.decode()."""
     from bubbaloop_sdk.subscriber import CallbackSubscriber
 
     mock_session = MagicMock()
@@ -375,17 +378,17 @@ def test_callback_subscriber_decodes_proto():
 
     mock_session.declare_subscriber.side_effect = fake_declare
 
-    fake_msg_class = MagicMock()
-    fake_msg_class.FromString.return_value = "decoded_proto"
+    mock_registry = MagicMock()
+    mock_registry.decode.return_value = "decoded_proto"
+
     received = []
-    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: received.append(msg), msg_class=fake_msg_class)
+    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: received.append(msg), mock_registry)
 
     fake_sample = MagicMock()
-    fake_sample.payload.to_bytes.return_value = b"\x01"
     captured_handler[0](fake_sample)
 
     assert received == ["decoded_proto"]
-    fake_msg_class.FromString.assert_called_once_with(b"\x01")
+    mock_registry.decode.assert_called_once_with(fake_sample)
     sub.undeclare()
 
 
@@ -396,7 +399,7 @@ def test_callback_subscriber_undeclare():
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
-    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: None)
+    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: None, MagicMock())
     sub.undeclare()
     mock_sub.undeclare.assert_called_once()
 
@@ -446,7 +449,7 @@ def test_callback_subscriber_undeclare_is_idempotent():
 
     mock_session = MagicMock()
     mock_session.declare_subscriber.return_value = MagicMock()
-    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: None)
+    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: None, MagicMock())
     sub.undeclare()
     sub.undeclare()  # second call is a no-op
     mock_session.declare_subscriber.return_value.undeclare.assert_called_once()
@@ -459,7 +462,7 @@ def test_callback_subscriber_async_undeclare_is_idempotent():
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
-    sub = CallbackSubscriberAsync(mock_session, "test/topic", lambda msg: None)
+    sub = CallbackSubscriberAsync(mock_session, "test/topic", lambda msg: None, MagicMock())
     sub.undeclare()
     sub.undeclare()  # second call is a no-op
     mock_sub.undeclare.assert_called_once()
@@ -484,6 +487,10 @@ def test_callback_subscriber_async_calls_handler_in_thread_pool():
         return MagicMock()
 
     mock_session.declare_subscriber.side_effect = fake_declare
+
+    mock_registry = MagicMock()
+    mock_registry.decode.return_value = b"\xca\xfe"
+
     received = []
     event = threading.Event()
 
@@ -491,10 +498,9 @@ def test_callback_subscriber_async_calls_handler_in_thread_pool():
         received.append(msg)
         event.set()
 
-    sub = CallbackSubscriberAsync(mock_session, "test/topic", slow_handler)
+    sub = CallbackSubscriberAsync(mock_session, "test/topic", slow_handler, mock_registry)
 
     fake_sample = MagicMock()
-    fake_sample.payload.to_bytes.return_value = b"\xca\xfe"
     captured_handler[0](fake_sample)
 
     assert event.wait(timeout=2.0), "handler was not called within 2s"
@@ -502,8 +508,8 @@ def test_callback_subscriber_async_calls_handler_in_thread_pool():
     sub.undeclare()
 
 
-def test_callback_subscriber_async_decodes_proto():
-    """Handler receives decoded proto when msg_class provided."""
+def test_callback_subscriber_async_passes_sample_to_registry():
+    """CallbackSubscriberAsync passes the zenoh.Sample to registry.decode()."""
     import threading
 
     from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
@@ -517,8 +523,8 @@ def test_callback_subscriber_async_decodes_proto():
 
     mock_session.declare_subscriber.side_effect = fake_declare
 
-    fake_msg_class = MagicMock()
-    fake_msg_class.FromString.return_value = "decoded"
+    mock_registry = MagicMock()
+    mock_registry.decode.return_value = "decoded"
     received = []
     event = threading.Event()
 
@@ -526,14 +532,14 @@ def test_callback_subscriber_async_decodes_proto():
         received.append(msg)
         event.set()
 
-    sub = CallbackSubscriberAsync(mock_session, "test/topic", handler, msg_class=fake_msg_class)
+    sub = CallbackSubscriberAsync(mock_session, "test/topic", handler, mock_registry)
 
     fake_sample = MagicMock()
-    fake_sample.payload.to_bytes.return_value = b"\x01"
     captured_handler[0](fake_sample)
 
     assert event.wait(timeout=2.0)
     assert received == ["decoded"]
+    mock_registry.decode.assert_called_once_with(fake_sample)
     sub.undeclare()
 
 
@@ -575,7 +581,7 @@ def test_callback_subscriber_async_undeclare():
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
-    sub = CallbackSubscriberAsync(mock_session, "test/topic", lambda msg: None)
+    sub = CallbackSubscriberAsync(mock_session, "test/topic", lambda msg: None, MagicMock())
     sub.undeclare()
     mock_sub.undeclare.assert_called_once()
 
@@ -755,6 +761,7 @@ def test_async_queryable_undeclare():
 def test_subscriber_callback_uses_topic_prefix():
     """subscriber_callback() declares at topic(suffix)."""
     ctx = _make_context("bot")
+    ctx._schema_registry = MagicMock()
     ctx.subscriber_callback("sensor/data", lambda msg: None)
     called_topic = ctx.session.declare_subscriber.call_args[0][0]
     assert called_topic == "bubbaloop/global/bot/sensor/data"
@@ -771,6 +778,7 @@ def test_subscriber_raw_callback_uses_literal_key_expr():
 def test_subscriber_callback_async_uses_topic_prefix():
     """subscriber_callback_async() declares at topic(suffix)."""
     ctx = _make_context("bot")
+    ctx._schema_registry = MagicMock()
     sub = ctx.subscriber_callback_async("sensor/data", lambda msg: None)
     try:
         called_topic = ctx.session.declare_subscriber.call_args[0][0]
