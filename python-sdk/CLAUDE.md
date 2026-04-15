@@ -67,9 +67,9 @@ cd python-sdk
 class CallbackSubscriber:
     """Event-driven subscriber that calls a handler on each received message.
 
-    The handler is invoked from Zenoh's internal callback thread. Keep
-    handlers fast; use ``subscriber_callback_async`` for slow work (I/O,
-    DB writes, HTTP calls).
+    The handler is invoked from Zenoh's internal callback thread by default.
+    Pass ``max_workers`` to run the handler in a thread pool instead — use
+    this for slow work (I/O, DB writes, HTTP calls).
 
     Args:
         session: Active Zenoh session.
@@ -110,8 +110,8 @@ class CallbackSubscriber:
 **Threading — critical:**
 - Zenoh uses **one internal thread** for ALL callbacks and queryables on a session
 - A slow handler blocks every other subscriber/queryable until it returns
-- Use `_async` variants (`subscriber_callback_async`, `queryable_async`) for any handler that does I/O, DB access, or hardware calls
-- Shutdown order for `_async` variants: undeclare Zenoh subscriber FIRST, then `executor.shutdown()` — reversing this causes `RuntimeError: cannot schedule new futures after shutdown`
+- Pass `max_workers=N` to `subscriber_callback` / `subscriber_raw_callback` or use `queryable_async` for any handler that does I/O, DB access, or hardware calls
+- Shutdown order for thread-pool variants: undeclare Zenoh subscriber FIRST, then `executor.shutdown()` — reversing this causes `RuntimeError: cannot schedule new futures after shutdown`
 
 **`undeclare()` discipline:**
 - Every subscriber, callback subscriber, and queryable must be undeclared when done
@@ -153,7 +153,7 @@ assert event.wait(timeout=2.0), "handler not called within 2s"
 
 - `B904` — always `raise Foo from err` inside `except` blocks, never bare `raise Foo(...)`
 - `F401` in `__init__.py` is suppressed by ruff config (re-exports are intentional) — do NOT add `# noqa` comments there
-- `CallbackSubscriber` and `RawCallbackSubscriber` do NOT own an executor — `undeclare()` only calls `_sub.undeclare()`; the `_async` variants do own an executor and shut it down in `undeclare()`
+- `CallbackSubscriber` and `RawCallbackSubscriber` without `max_workers` do NOT own an executor — `undeclare()` only calls `_sub.undeclare()`; with `max_workers` they own a `ThreadPoolExecutor` and shut it down in `undeclare()`
 - `ProtoSubscriber` and `RawSubscriber` are iterable (`for msg in sub`); iteration raises `StopIteration` on exception via `_BaseSubscriber.__next__` — prefer `recv(timeout=...)` in shutdown-aware loops to avoid blocking indefinitely
 - `run_node()` reads `config.yaml` by default; override with `-c path/config.yaml`. The `name` field in config sets `instance_name` for health/schema topics — collisions happen if two instances share the same name
 - Health topic format: `bubbaloop/global/{machine_id}/{instance_name}/health` — ensure consumer patterns match exactly

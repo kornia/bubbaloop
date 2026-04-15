@@ -84,12 +84,11 @@ sub.undeclare()
 ctx.close()
 ```
 
-Use `subscriber_callback_async` when the handler does slow work (DB writes,
-HTTP calls) — it runs the handler in a thread pool and returns immediately,
-freeing Zenoh's internal thread:
+Pass `max_workers` when the handler does slow work (DB writes, HTTP calls) —
+the handler runs in a thread pool, freeing Zenoh's internal thread:
 
 ```python
-sub = ctx.subscriber_callback_async("sensor/data", on_sensor)
+sub = ctx.subscriber_callback("sensor/data", on_sensor, max_workers=4)
 ```
 
 ### Queryable (respond to get requests)
@@ -143,15 +142,13 @@ qbl.undeclare()   # call when done to release the thread pool
 
 #### Callback subscribers (event-driven)
 
-Handler is called from Zenoh's internal thread. Keep handlers fast; use `_async`
-variants for slow work.
+Handler runs on Zenoh's internal thread by default. Pass `max_workers` to
+run the handler in a thread pool instead (for slow work).
 
 | Method | Description |
 |---|---|
-| `ctx.subscriber_callback(suffix, handler)` | Decoded message to handler |
-| `ctx.subscriber_raw_callback(key_expr, handler)` | Raw `zenoh.Sample` to handler |
-| `ctx.subscriber_callback_async(suffix, handler, max_workers=4)` | Handler in thread pool |
-| `ctx.subscriber_raw_callback_async(key_expr, handler, max_workers=4)` | Raw sample; handler in thread pool |
+| `ctx.subscriber_callback(suffix, handler, max_workers=None)` | Auto-decoded message to handler |
+| `ctx.subscriber_raw_callback(key_expr, handler, max_workers=None)` | Raw `zenoh.Sample` to handler |
 
 #### Queryables
 
