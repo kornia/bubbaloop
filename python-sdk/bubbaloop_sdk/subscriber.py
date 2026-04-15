@@ -94,39 +94,20 @@ class RawSubscriber(_BaseSubscriber):
 class CallbackSubscriber(_BaseSubscriber):
     """Callback-based subscriber — Zenoh calls ``handler`` from its internal thread.
 
-    No loop required from the caller. Callbacks are invoked **serially** on Zenoh's
-    single internal thread per session — if your handler is slow it will delay every
-    other subscriber and queryable on the same session. Use ``subscriber_callback_async()``
-    for slow work.
-
-    ``handler`` receives a decoded message (``msg_class.FromString(payload)``) if
-    ``msg_class`` is provided, or raw ``bytes`` otherwise.
+    ``handler`` receives a decoded message: protobuf object, ``dict`` (JSON),
+    or raw ``bytes`` — determined automatically by the sample's encoding header
+    via the shared :class:`~bubbaloop_sdk.schema_registry.SchemaRegistry`.
 
     **Threading contract:** ``handler`` runs on Zenoh's internal thread.
-    Protect shared state with a lock if accessed from other threads::
-
-        lock = threading.Lock()
-        last_value = None
-
-        def on_msg(msg):
-            nonlocal last_value
-            with lock:
-                last_value = msg
-
-        sub = ctx.subscriber_callback("sensor/data", on_msg, SensorData)
+    Protect shared state with a lock if accessed from other threads.
 
     Call ``undeclare()`` when done to stop receiving samples.
     """
 
-    def __init__(self, session: zenoh.Session, topic: str, handler, msg_class=None):
-        def _wrap(sample: zenoh.Sample) -> None:
-            payload = bytes(sample.payload.to_bytes())
-            if msg_class is not None and hasattr(msg_class, "FromString"):
-                handler(msg_class.FromString(payload))
-            else:
-                handler(payload)
-
-        self._sub = session.declare_subscriber(topic, _wrap)
+    def __init__(self, session: zenoh.Session, topic: str, handler, registry):
+        self._sub = session.declare_subscriber(
+            topic, lambda sample: handler(registry.decode(sample))
+        )
         self._undeclared = False
 
 
@@ -149,42 +130,24 @@ class RawCallbackSubscriber(_BaseSubscriber):
 class CallbackSubscriberAsync(_BaseSubscriber):
     """Callback subscriber that runs ``handler`` in a ``ThreadPoolExecutor``.
 
-    **Use this when your handler does slow work** (database writes, hardware reads,
-    HTTP calls). Zenoh uses a single internal thread for all callbacks — if a handler
-    blocks, ALL other subscribers and queryables on the same session are delayed
-    until it returns. ``CallbackSubscriberAsync`` fixes this by submitting the
-    handler to a thread pool immediately and returning, freeing Zenoh's thread::
+    ``handler`` receives auto-decoded messages (proto, dict, or bytes).
+    Zenoh's internal thread is freed instantly; the handler runs in a thread pool.
 
-        # PROBLEM: on_insert blocks Zenoh's thread for 200ms per message
-        sub = ctx.subscriber_callback("data", on_insert)
-
-        # SOLUTION: handler runs in thread pool, Zenoh thread is free instantly
-        sub = ctx.subscriber_callback_async("data", on_insert)
-
-    **Threading contract:** multiple invocations of ``handler`` may run concurrently
-    if messages arrive faster than the handler processes them. Protect shared state
-    with locks.
+    **Threading contract:** multiple invocations of ``handler`` may run concurrently.
+    Protect shared state with locks.
 
     Call ``undeclare()`` when done to stop receiving samples.
     """
 
-    def __init__(self, session: zenoh.Session, topic: str, handler, msg_class=None, max_workers: int = 4):
+    def __init__(self, session: zenoh.Session, topic: str, handler, registry, max_workers: int = 4):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         self._closing = threading.Event()
 
         def _wrap(sample: zenoh.Sample) -> None:
             if self._closing.is_set():
                 return
-            payload = bytes(sample.payload.to_bytes())
-
-            def _decode_and_call():
-                if msg_class is not None and hasattr(msg_class, "FromString"):
-                    handler(msg_class.FromString(payload))
-                else:
-                    handler(payload)
-
             try:
-                self._executor.submit(_decode_and_call)
+                self._executor.submit(handler, registry.decode(sample))
             except RuntimeError:
                 pass  # executor already shut down — drop the message
 
