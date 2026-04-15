@@ -568,6 +568,31 @@ def test_raw_callback_subscriber_undeclare():
     mock_sub.undeclare.assert_called_once()
 
 
+def test_callback_subscriber_undeclare_is_idempotent():
+    """undeclare() can be called twice without error."""
+    from bubbaloop_sdk.subscriber import CallbackSubscriber
+
+    mock_session = MagicMock()
+    mock_session.declare_subscriber.return_value = MagicMock()
+    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: None)
+    sub.undeclare()
+    sub.undeclare()  # second call is a no-op
+    mock_session.declare_subscriber.return_value.undeclare.assert_called_once()
+
+
+def test_callback_subscriber_async_undeclare_is_idempotent():
+    """undeclare() can be called twice without error."""
+    from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+
+    mock_session = MagicMock()
+    mock_sub = MagicMock()
+    mock_session.declare_subscriber.return_value = mock_sub
+    sub = CallbackSubscriberAsync(mock_session, "test/topic", lambda msg: None)
+    sub.undeclare()
+    sub.undeclare()  # second call is a no-op
+    mock_sub.undeclare.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # CallbackSubscriberAsync
 # ---------------------------------------------------------------------------

@@ -91,7 +91,7 @@ class RawSubscriber(_BaseSubscriber):
         return bytes(sample.payload)
 
 
-class CallbackSubscriber:
+class CallbackSubscriber(_BaseSubscriber):
     """Callback-based subscriber — Zenoh calls ``handler`` from its internal thread.
 
     No loop required from the caller. Callbacks are invoked **serially** on Zenoh's
@@ -127,13 +127,10 @@ class CallbackSubscriber:
                 handler(payload)
 
         self._sub = session.declare_subscriber(topic, _wrap)
-
-    def undeclare(self) -> None:
-        """Undeclare the subscriber and stop receiving samples."""
-        self._sub.undeclare()
+        self._undeclared = False
 
 
-class RawCallbackSubscriber:
+class RawCallbackSubscriber(_BaseSubscriber):
     """Callback-based subscriber that passes raw ``zenoh.Sample`` to the handler.
 
     Use when you need access to the full sample metadata (key_expr, encoding,
@@ -146,13 +143,10 @@ class RawCallbackSubscriber:
 
     def __init__(self, session: zenoh.Session, key_expr: str, handler):
         self._sub = session.declare_subscriber(key_expr, handler)
-
-    def undeclare(self) -> None:
-        """Undeclare the subscriber and stop receiving samples."""
-        self._sub.undeclare()
+        self._undeclared = False
 
 
-class CallbackSubscriberAsync:
+class CallbackSubscriberAsync(_BaseSubscriber):
     """Callback subscriber that runs ``handler`` in a ``ThreadPoolExecutor``.
 
     **Use this when your handler does slow work** (database writes, hardware reads,
@@ -195,15 +189,18 @@ class CallbackSubscriberAsync:
                 pass  # executor already shut down — drop the message
 
         self._sub = session.declare_subscriber(topic, _wrap)
+        self._undeclared = False
 
     def undeclare(self) -> None:
-        """Undeclare the subscriber and shutdown the thread pool."""
+        """Undeclare the subscriber and shutdown the thread pool. Idempotent."""
+        if self._undeclared:
+            return
         self._closing.set()
-        self._sub.undeclare()  # stop Zenoh callbacks first
+        super().undeclare()
         self._executor.shutdown(wait=False, cancel_futures=True)
 
 
-class RawCallbackSubscriberAsync:
+class RawCallbackSubscriberAsync(_BaseSubscriber):
     """Raw callback subscriber that runs ``handler`` in a ``ThreadPoolExecutor``.
 
     Same as ``CallbackSubscriberAsync`` but passes raw ``zenoh.Sample`` objects.
@@ -225,11 +222,14 @@ class RawCallbackSubscriberAsync:
                 pass  # executor already shut down — drop the message
 
         self._sub = session.declare_subscriber(key_expr, _wrap)
+        self._undeclared = False
 
     def undeclare(self) -> None:
-        """Undeclare the subscriber and shutdown the thread pool."""
+        """Undeclare the subscriber and shutdown the thread pool. Idempotent."""
+        if self._undeclared:
+            return
         self._closing.set()
-        self._sub.undeclare()  # stop Zenoh callbacks first
+        super().undeclare()
         self._executor.shutdown(wait=False, cancel_futures=True)
 
 
@@ -259,6 +259,7 @@ class AsyncQueryable:
     def __init__(self, session: zenoh.Session, key_expr: str, handler, max_workers: int = 4):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         self._closing = threading.Event()
+        self._undeclared = False
 
         def _wrap(query) -> None:
             if self._closing.is_set():
@@ -271,7 +272,10 @@ class AsyncQueryable:
         self._qbl = session.declare_queryable(key_expr, _wrap)
 
     def undeclare(self) -> None:
-        """Undeclare the queryable and shutdown the thread pool."""
+        """Undeclare the queryable and shutdown the thread pool. Idempotent."""
+        if self._undeclared:
+            return
+        self._undeclared = True
         self._closing.set()
         self._qbl.undeclare()  # stop Zenoh callbacks first
         self._executor.shutdown(wait=False, cancel_futures=True)
