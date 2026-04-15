@@ -72,14 +72,13 @@ for msg in sub:   # auto-decoded: proto, dict, or bytes
 
 ```python
 from bubbaloop_sdk import NodeContext
-from my_protos_pb2 import SensorData
 
 ctx = NodeContext.connect()
 
-def on_sensor(msg: SensorData):
+def on_sensor(msg):
     print(f"received: {msg.value}")
 
-sub = ctx.subscriber_callback("sensor/data", on_sensor, SensorData)
+sub = ctx.subscriber_callback("sensor/data", on_sensor)
 ctx.wait_shutdown()   # block until SIGINT/SIGTERM
 sub.undeclare()
 ctx.close()
@@ -90,7 +89,7 @@ HTTP calls) — it runs the handler in a thread pool and returns immediately,
 freeing Zenoh's internal thread:
 
 ```python
-sub = ctx.subscriber_callback_async("sensor/data", on_sensor, SensorData)
+sub = ctx.subscriber_callback_async("sensor/data", on_sensor)
 ```
 
 ### Queryable (respond to get requests)
@@ -149,9 +148,9 @@ variants for slow work.
 
 | Method | Description |
 |---|---|
-| `ctx.subscriber_callback(suffix, handler, msg_class=None)` | Decoded message to handler |
+| `ctx.subscriber_callback(suffix, handler)` | Decoded message to handler |
 | `ctx.subscriber_raw_callback(key_expr, handler)` | Raw `zenoh.Sample` to handler |
-| `ctx.subscriber_callback_async(suffix, handler, msg_class=None, max_workers=4)` | Handler in thread pool |
+| `ctx.subscriber_callback_async(suffix, handler, max_workers=4)` | Handler in thread pool |
 | `ctx.subscriber_raw_callback_async(key_expr, handler, max_workers=4)` | Raw sample; handler in thread pool |
 
 #### Queryables

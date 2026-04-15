@@ -75,7 +75,7 @@ class CallbackSubscriber:
         session: Active Zenoh session.
         topic: Key expression to subscribe to.
         handler: Callable invoked with each decoded message.
-        msg_class: Protobuf message class for decoding, or None for raw bytes.
+        registry: SchemaRegistry for auto-decoding samples by encoding header.
     """
 
     def __init__(
@@ -83,7 +83,7 @@ class CallbackSubscriber:
         session: zenoh.Session,
         topic: str,
         handler: Callable,
-        msg_class=None,
+        registry,
     ): ...
 
     def undeclare(self) -> None:
