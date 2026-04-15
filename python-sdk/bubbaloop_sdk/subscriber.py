@@ -105,9 +105,7 @@ class CallbackSubscriber(_BaseSubscriber):
     """
 
     def __init__(self, session: zenoh.Session, topic: str, handler, registry):
-        self._sub = session.declare_subscriber(
-            topic, lambda sample: handler(registry.decode(sample))
-        )
+        self._sub = session.declare_subscriber(topic, lambda sample: handler(registry.decode(sample)))
         self._undeclared = False
 
 

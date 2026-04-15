@@ -219,9 +219,7 @@ class NodeContext:
 
         return RawCallbackSubscriber(self.session, key_expr, handler)
 
-    def subscriber_callback_async(
-        self, suffix: str, handler, max_workers: int = 4
-    ) -> CallbackSubscriberAsync:
+    def subscriber_callback_async(self, suffix: str, handler, max_workers: int = 4) -> CallbackSubscriberAsync:
         """Callback subscriber at ``topic(suffix)`` with handler in a thread pool.
 
         ``handler`` receives auto-decoded messages (proto, dict, or bytes).
@@ -233,9 +231,7 @@ class NodeContext:
 
         if not hasattr(self, "_schema_registry"):
             self._schema_registry = SchemaRegistry(self.session)
-        return CallbackSubscriberAsync(
-            self.session, self.topic(suffix), handler, self._schema_registry, max_workers
-        )
+        return CallbackSubscriberAsync(self.session, self.topic(suffix), handler, self._schema_registry, max_workers)
 
     def subscriber_raw_callback_async(self, key_expr: str, handler, max_workers: int = 4) -> RawCallbackSubscriberAsync:
         """Raw callback subscriber at a literal key expression with handler in a thread pool."""
