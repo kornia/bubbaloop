@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import concurrent.futures
 import threading
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import zenoh
+
+if TYPE_CHECKING:
+    from .schema_registry import SchemaRegistry
 
 
 class _BaseSubscriber:
@@ -60,7 +65,7 @@ class ProtoSubscriber(_BaseSubscriber):
             tensor = torch.frombuffer(msg.data, dtype=torch.uint8)
     """
 
-    def __init__(self, session: zenoh.Session, topic: str, registry):
+    def __init__(self, session: zenoh.Session, topic: str, registry: SchemaRegistry):
         super().__init__(session, topic)
         self._registry = registry
 
@@ -104,7 +109,7 @@ class CallbackSubscriber(_BaseSubscriber):
     Call ``undeclare()`` when done to stop receiving samples.
     """
 
-    def __init__(self, session: zenoh.Session, topic: str, handler, registry):
+    def __init__(self, session: zenoh.Session, topic: str, handler: Callable[[Any], None], registry: SchemaRegistry):
         self._sub = session.declare_subscriber(topic, lambda sample: handler(registry.decode(sample)))
         self._undeclared = False
 
@@ -120,7 +125,7 @@ class RawCallbackSubscriber(_BaseSubscriber):
     Call ``undeclare()`` when done to stop receiving samples.
     """
 
-    def __init__(self, session: zenoh.Session, key_expr: str, handler):
+    def __init__(self, session: zenoh.Session, key_expr: str, handler: Callable[[zenoh.Sample], None]):
         self._sub = session.declare_subscriber(key_expr, handler)
         self._undeclared = False
 
@@ -137,7 +142,14 @@ class CallbackSubscriberAsync(_BaseSubscriber):
     Call ``undeclare()`` when done to stop receiving samples.
     """
 
-    def __init__(self, session: zenoh.Session, topic: str, handler, registry, max_workers: int = 4):
+    def __init__(
+        self,
+        session: zenoh.Session,
+        topic: str,
+        handler: Callable[[Any], None],
+        registry: SchemaRegistry,
+        max_workers: int = 4,
+    ):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         self._closing = threading.Event()
 
@@ -170,7 +182,13 @@ class RawCallbackSubscriberAsync(_BaseSubscriber):
     Call ``undeclare()`` when done to stop receiving samples.
     """
 
-    def __init__(self, session: zenoh.Session, key_expr: str, handler, max_workers: int = 4):
+    def __init__(
+        self,
+        session: zenoh.Session,
+        key_expr: str,
+        handler: Callable[[zenoh.Sample], None],
+        max_workers: int = 4,
+    ):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         self._closing = threading.Event()
 
@@ -217,12 +235,18 @@ class AsyncQueryable:
     Call ``undeclare()`` when done to stop receiving queries and release the thread pool.
     """
 
-    def __init__(self, session: zenoh.Session, key_expr: str, handler, max_workers: int = 4):
+    def __init__(
+        self,
+        session: zenoh.Session,
+        key_expr: str,
+        handler: Callable[[zenoh.Query], None],
+        max_workers: int = 4,
+    ):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
         self._closing = threading.Event()
         self._undeclared = False
 
-        def _wrap(query) -> None:
+        def _wrap(query: zenoh.Query) -> None:
             if self._closing.is_set():
                 return
             try:
