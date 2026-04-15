@@ -106,11 +106,11 @@ def test_import_callback_subscribers():
     assert RawCallbackSubscriber is not None
 
 
-def test_import_callback_subscribers_async():
-    from bubbaloop_sdk import CallbackSubscriberAsync, RawCallbackSubscriberAsync
+def test_import_callback_subscribers_with_workers():
+    from bubbaloop_sdk import CallbackSubscriber, RawCallbackSubscriber
 
-    assert CallbackSubscriberAsync is not None
-    assert RawCallbackSubscriberAsync is not None
+    assert CallbackSubscriber is not None
+    assert RawCallbackSubscriber is not None
 
 
 def test_import_async_queryable():
@@ -239,13 +239,13 @@ def test_raw_subscriber_undeclare_is_idempotent():
 
 
 # ---------------------------------------------------------------------------
-# CallbackSubscriberAsync / RawCallbackSubscriberAsync — _closing flag
+# CallbackSubscriber(max_workers=4) / RawCallbackSubscriber(max_workers=4) — _closing flag
 # ---------------------------------------------------------------------------
 
 
-def test_callback_subscriber_async_drops_after_undeclare():
+def test_callback_subscriber_with_workers_drops_after_undeclare():
     """Callbacks arriving after undeclare() are silently dropped."""
-    from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+    from bubbaloop_sdk.subscriber import CallbackSubscriber
 
     mock_session = MagicMock()
     captured_handler = []
@@ -262,7 +262,7 @@ def test_callback_subscriber_async_drops_after_undeclare():
         received.append(msg)
         called.set()
 
-    sub = CallbackSubscriberAsync(mock_session, "test/topic", handler, MagicMock())
+    sub = CallbackSubscriber(mock_session, "test/topic", handler, MagicMock(), max_workers=4)
     sub.undeclare()
 
     # Simulate a late-arriving Zenoh callback after undeclare.
@@ -275,9 +275,9 @@ def test_callback_subscriber_async_drops_after_undeclare():
     assert received == []
 
 
-def test_raw_callback_subscriber_async_drops_after_undeclare():
+def test_raw_callback_subscriber_with_workers_drops_after_undeclare():
     """Callbacks arriving after undeclare() are silently dropped."""
-    from bubbaloop_sdk.subscriber import RawCallbackSubscriberAsync
+    from bubbaloop_sdk.subscriber import RawCallbackSubscriber
 
     mock_session = MagicMock()
     captured_handler = []
@@ -294,7 +294,7 @@ def test_raw_callback_subscriber_async_drops_after_undeclare():
         received.append(sample)
         called.set()
 
-    sub = RawCallbackSubscriberAsync(mock_session, "test/**", handler)
+    sub = RawCallbackSubscriber(mock_session, "test/**", handler, max_workers=4)
     sub.undeclare()
 
     fake_sample = MagicMock()
@@ -455,29 +455,29 @@ def test_callback_subscriber_undeclare_is_idempotent():
     mock_session.declare_subscriber.return_value.undeclare.assert_called_once()
 
 
-def test_callback_subscriber_async_undeclare_is_idempotent():
+def test_callback_subscriber_with_workers_undeclare_is_idempotent():
     """undeclare() can be called twice without error."""
-    from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+    from bubbaloop_sdk.subscriber import CallbackSubscriber
 
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
-    sub = CallbackSubscriberAsync(mock_session, "test/topic", lambda msg: None, MagicMock())
+    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: None, MagicMock(), max_workers=4)
     sub.undeclare()
     sub.undeclare()  # second call is a no-op
     mock_sub.undeclare.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# CallbackSubscriberAsync
+# CallbackSubscriber with max_workers (thread pool mode)
 # ---------------------------------------------------------------------------
 
 
-def test_callback_subscriber_async_calls_handler_in_thread_pool():
-    """Handler is called asynchronously via thread pool."""
+def test_callback_subscriber_with_workers_calls_handler_in_thread_pool():
+    """Handler is called asynchronously via thread pool when max_workers is set."""
     import threading
 
-    from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+    from bubbaloop_sdk.subscriber import CallbackSubscriber
 
     mock_session = MagicMock()
     captured_handler = []
@@ -498,7 +498,7 @@ def test_callback_subscriber_async_calls_handler_in_thread_pool():
         received.append(msg)
         event.set()
 
-    sub = CallbackSubscriberAsync(mock_session, "test/topic", slow_handler, mock_registry)
+    sub = CallbackSubscriber(mock_session, "test/topic", slow_handler, mock_registry, max_workers=4)
 
     fake_sample = MagicMock()
     captured_handler[0](fake_sample)
@@ -508,11 +508,11 @@ def test_callback_subscriber_async_calls_handler_in_thread_pool():
     sub.undeclare()
 
 
-def test_callback_subscriber_async_passes_sample_to_registry():
-    """CallbackSubscriberAsync passes the zenoh.Sample to registry.decode()."""
+def test_callback_subscriber_with_workers_passes_sample_to_registry():
+    """CallbackSubscriber with max_workers passes the zenoh.Sample to registry.decode()."""
     import threading
 
-    from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+    from bubbaloop_sdk.subscriber import CallbackSubscriber
 
     mock_session = MagicMock()
     captured_handler = []
@@ -532,7 +532,7 @@ def test_callback_subscriber_async_passes_sample_to_registry():
         received.append(msg)
         event.set()
 
-    sub = CallbackSubscriberAsync(mock_session, "test/topic", handler, mock_registry)
+    sub = CallbackSubscriber(mock_session, "test/topic", handler, mock_registry, max_workers=4)
 
     fake_sample = MagicMock()
     captured_handler[0](fake_sample)
@@ -543,11 +543,11 @@ def test_callback_subscriber_async_passes_sample_to_registry():
     sub.undeclare()
 
 
-def test_raw_callback_subscriber_async_passes_sample():
-    """RawCallbackSubscriberAsync handler receives raw zenoh.Sample."""
+def test_raw_callback_subscriber_with_workers_passes_sample():
+    """RawCallbackSubscriber with max_workers handler receives raw zenoh.Sample."""
     import threading
 
-    from bubbaloop_sdk.subscriber import RawCallbackSubscriberAsync
+    from bubbaloop_sdk.subscriber import RawCallbackSubscriber
 
     mock_session = MagicMock()
     captured_handler = []
@@ -564,7 +564,7 @@ def test_raw_callback_subscriber_async_passes_sample():
         received.append(sample)
         event.set()
 
-    sub = RawCallbackSubscriberAsync(mock_session, "test/**", handler)
+    sub = RawCallbackSubscriber(mock_session, "test/**", handler, max_workers=4)
 
     fake_sample = MagicMock()
     captured_handler[0](fake_sample)
@@ -574,26 +574,26 @@ def test_raw_callback_subscriber_async_passes_sample():
     sub.undeclare()
 
 
-def test_callback_subscriber_async_undeclare():
+def test_callback_subscriber_with_workers_undeclare():
     """undeclare() shuts down executor and undeclares underlying sub."""
-    from bubbaloop_sdk.subscriber import CallbackSubscriberAsync
+    from bubbaloop_sdk.subscriber import CallbackSubscriber
 
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
-    sub = CallbackSubscriberAsync(mock_session, "test/topic", lambda msg: None, MagicMock())
+    sub = CallbackSubscriber(mock_session, "test/topic", lambda msg: None, MagicMock(), max_workers=4)
     sub.undeclare()
     mock_sub.undeclare.assert_called_once()
 
 
-def test_raw_callback_subscriber_async_undeclare():
+def test_raw_callback_subscriber_with_workers_undeclare():
     """undeclare() shuts down executor and undeclares underlying sub."""
-    from bubbaloop_sdk.subscriber import RawCallbackSubscriberAsync
+    from bubbaloop_sdk.subscriber import RawCallbackSubscriber
 
     mock_session = MagicMock()
     mock_sub = MagicMock()
     mock_session.declare_subscriber.return_value = mock_sub
-    sub = RawCallbackSubscriberAsync(mock_session, "test/**", lambda s: None)
+    sub = RawCallbackSubscriber(mock_session, "test/**", lambda s: None, max_workers=4)
     sub.undeclare()
     mock_sub.undeclare.assert_called_once()
 
@@ -775,11 +775,11 @@ def test_subscriber_raw_callback_uses_literal_key_expr():
     assert called_topic == "bubbaloop/**/health"
 
 
-def test_subscriber_callback_async_uses_topic_prefix():
-    """subscriber_callback_async() declares at topic(suffix)."""
+def test_subscriber_callback_with_workers_uses_topic_prefix():
+    """subscriber_callback() with max_workers declares at topic(suffix)."""
     ctx = _make_context("bot")
     ctx._schema_registry = MagicMock()
-    sub = ctx.subscriber_callback_async("sensor/data", lambda msg: None)
+    sub = ctx.subscriber_callback("sensor/data", lambda msg: None, max_workers=4)
     try:
         called_topic = ctx.session.declare_subscriber.call_args[0][0]
         assert called_topic == "bubbaloop/global/bot/sensor/data"
@@ -787,10 +787,10 @@ def test_subscriber_callback_async_uses_topic_prefix():
         sub.undeclare()
 
 
-def test_subscriber_raw_callback_async_uses_literal_key_expr():
-    """subscriber_raw_callback_async() declares at literal key expression."""
+def test_subscriber_raw_callback_with_workers_uses_literal_key_expr():
+    """subscriber_raw_callback() with max_workers declares at literal key expression."""
     ctx = _make_context("bot")
-    sub = ctx.subscriber_raw_callback_async("bubbaloop/**/health", lambda s: None)
+    sub = ctx.subscriber_raw_callback("bubbaloop/**/health", lambda s: None, max_workers=4)
     try:
         called_topic = ctx.session.declare_subscriber.call_args[0][0]
         assert called_topic == "bubbaloop/**/health"
