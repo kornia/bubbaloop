@@ -15,17 +15,14 @@ from .publisher import JsonPublisher, ProtoPublisher, RawPublisher
 from .subscriber import (
     AsyncQueryable,
     CallbackSubscriber,
-    CallbackSubscriberAsync,
     ProtoSubscriber,
     RawCallbackSubscriber,
-    RawCallbackSubscriberAsync,
     RawSubscriber,
 )
 
 __all__ = [
     "AsyncQueryable",
     "CallbackSubscriber",
-    "CallbackSubscriberAsync",
     "GetSampleTimeout",
     "JsonPublisher",
     "NodeContext",
@@ -34,7 +31,6 @@ __all__ = [
     "ProtoPublisher",
     "ProtoSubscriber",
     "RawCallbackSubscriber",
-    "RawCallbackSubscriberAsync",
     "RawPublisher",
     "RawSubscriber",
     "discover_nodes",

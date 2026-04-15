@@ -28,10 +28,8 @@ if TYPE_CHECKING:
     from .subscriber import (
         AsyncQueryable,
         CallbackSubscriber,
-        CallbackSubscriberAsync,
         ProtoSubscriber,
         RawCallbackSubscriber,
-        RawCallbackSubscriberAsync,
         RawSubscriber,
     )
 
@@ -196,48 +194,33 @@ class NodeContext:
     # Callback Subscribers
     # ------------------------------------------------------------------
 
-    def subscriber_callback(self, suffix: str, handler) -> CallbackSubscriber:
-        """Callback subscriber at ``topic(suffix)``.
+    def subscriber_callback(self, suffix: str, handler, max_workers: int | None = None) -> CallbackSubscriber:
+        """Callback subscriber at ``topic(suffix)`` with auto-decode.
 
         ``handler`` receives auto-decoded messages (proto, dict, or bytes).
-        Called from Zenoh's internal thread. For slow handlers, use
-        ``subscriber_callback_async()``.
+
+        By default the handler runs on Zenoh's internal thread (fast path).
+        Pass ``max_workers`` to run the handler in a thread pool instead —
+        use this when the handler does slow work (DB writes, HTTP calls).
         """
         from .schema_registry import SchemaRegistry
         from .subscriber import CallbackSubscriber
 
         if not hasattr(self, "_schema_registry"):
             self._schema_registry = SchemaRegistry(self.session)
-        return CallbackSubscriber(self.session, self.topic(suffix), handler, self._schema_registry)
+        return CallbackSubscriber(self.session, self.topic(suffix), handler, self._schema_registry, max_workers)
 
-    def subscriber_raw_callback(self, key_expr: str, handler) -> RawCallbackSubscriber:
+    def subscriber_raw_callback(self, key_expr: str, handler, max_workers: int | None = None) -> RawCallbackSubscriber:
         """Callback subscriber at a literal key expression.
 
-        ``handler`` receives raw ``zenoh.Sample`` objects from Zenoh's internal thread.
+        ``handler`` receives raw ``zenoh.Sample`` objects.
+
+        By default the handler runs on Zenoh's internal thread. Pass
+        ``max_workers`` to run the handler in a thread pool instead.
         """
         from .subscriber import RawCallbackSubscriber
 
-        return RawCallbackSubscriber(self.session, key_expr, handler)
-
-    def subscriber_callback_async(self, suffix: str, handler, max_workers: int = 4) -> CallbackSubscriberAsync:
-        """Callback subscriber at ``topic(suffix)`` with handler in a thread pool.
-
-        ``handler`` receives auto-decoded messages (proto, dict, or bytes).
-        Zenoh's internal thread is freed immediately; the handler runs in a
-        ``ThreadPoolExecutor`` with ``max_workers`` threads.
-        """
-        from .schema_registry import SchemaRegistry
-        from .subscriber import CallbackSubscriberAsync
-
-        if not hasattr(self, "_schema_registry"):
-            self._schema_registry = SchemaRegistry(self.session)
-        return CallbackSubscriberAsync(self.session, self.topic(suffix), handler, self._schema_registry, max_workers)
-
-    def subscriber_raw_callback_async(self, key_expr: str, handler, max_workers: int = 4) -> RawCallbackSubscriberAsync:
-        """Raw callback subscriber at a literal key expression with handler in a thread pool."""
-        from .subscriber import RawCallbackSubscriberAsync
-
-        return RawCallbackSubscriberAsync(self.session, key_expr, handler, max_workers)
+        return RawCallbackSubscriber(self.session, key_expr, handler, max_workers)
 
     # ------------------------------------------------------------------
     # Queryables

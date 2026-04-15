@@ -97,47 +97,22 @@ class RawSubscriber(_BaseSubscriber):
 
 
 class CallbackSubscriber(_BaseSubscriber):
-    """Callback-based subscriber — Zenoh calls ``handler`` from its internal thread.
+    """Callback-based subscriber with auto-decode via SchemaRegistry.
 
     ``handler`` receives a decoded message: protobuf object, ``dict`` (JSON),
-    or raw ``bytes`` — determined automatically by the sample's encoding header
-    via the shared :class:`~bubbaloop_sdk.schema_registry.SchemaRegistry`.
+    or raw ``bytes`` — determined automatically by the sample's encoding header.
 
-    **Threading contract:** ``handler`` runs on Zenoh's internal thread.
-    Protect shared state with a lock if accessed from other threads.
+    By default the handler runs on Zenoh's internal thread (fast path). Pass
+    ``max_workers`` to run the handler in a ``ThreadPoolExecutor`` instead —
+    use this when the handler does slow work (DB writes, HTTP calls, hardware I/O).
 
-    Call ``undeclare()`` when done to stop receiving samples.
-    """
-
-    def __init__(self, session: zenoh.Session, topic: str, handler: Callable[[Any], None], registry: SchemaRegistry):
-        self._sub = session.declare_subscriber(topic, lambda sample: handler(registry.decode(sample)))
-        self._undeclared = False
-
-
-class RawCallbackSubscriber(_BaseSubscriber):
-    """Callback-based subscriber that passes raw ``zenoh.Sample`` to the handler.
-
-    Use when you need access to the full sample metadata (key_expr, encoding,
-    timestamp). Handler is called **serially** on Zenoh's internal thread.
-
-    For slow handlers, use ``ctx.subscriber_raw_callback_async()`` instead.
-
-    Call ``undeclare()`` when done to stop receiving samples.
-    """
-
-    def __init__(self, session: zenoh.Session, key_expr: str, handler: Callable[[zenoh.Sample], None]):
-        self._sub = session.declare_subscriber(key_expr, handler)
-        self._undeclared = False
-
-
-class CallbackSubscriberAsync(_BaseSubscriber):
-    """Callback subscriber that runs ``handler`` in a ``ThreadPoolExecutor``.
-
-    ``handler`` receives auto-decoded messages (proto, dict, or bytes).
-    Zenoh's internal thread is freed instantly; the handler runs in a thread pool.
-
-    **Threading contract:** multiple invocations of ``handler`` may run concurrently.
-    Protect shared state with locks.
+    Args:
+        session: Active Zenoh session.
+        topic: Key expression to subscribe to.
+        handler: Callable invoked with each decoded message.
+        registry: SchemaRegistry for auto-decoding samples by encoding header.
+        max_workers: If None (default), handler runs on Zenoh's thread. If int,
+            handler runs in a ThreadPoolExecutor with that many threads.
 
     Call ``undeclare()`` when done to stop receiving samples.
     """
@@ -148,36 +123,54 @@ class CallbackSubscriberAsync(_BaseSubscriber):
         topic: str,
         handler: Callable[[Any], None],
         registry: SchemaRegistry,
-        max_workers: int = 4,
+        max_workers: int | None = None,
     ):
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        self._closing = threading.Event()
+        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._closing: threading.Event | None = None
 
-        def _wrap(sample: zenoh.Sample) -> None:
-            if self._closing.is_set():
-                return
-            try:
-                self._executor.submit(handler, registry.decode(sample))
-            except RuntimeError:
-                pass  # executor already shut down — drop the message
+        if max_workers is not None:
+            self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+            self._closing = threading.Event()
 
-        self._sub = session.declare_subscriber(topic, _wrap)
+            def _wrap(sample: zenoh.Sample) -> None:
+                if self._closing.is_set():  # type: ignore[union-attr]
+                    return
+                try:
+                    self._executor.submit(handler, registry.decode(sample))  # type: ignore[union-attr]
+                except RuntimeError:
+                    pass  # executor already shut down — drop the message
+
+            self._sub = session.declare_subscriber(topic, _wrap)
+        else:
+            self._sub = session.declare_subscriber(topic, lambda sample: handler(registry.decode(sample)))
         self._undeclared = False
 
     def undeclare(self) -> None:
-        """Undeclare the subscriber and shutdown the thread pool. Idempotent."""
+        """Undeclare the subscriber and shutdown the thread pool (if any). Idempotent."""
         if self._undeclared:
             return
-        self._closing.set()
+        if self._closing is not None:
+            self._closing.set()
         super().undeclare()
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
 
 
-class RawCallbackSubscriberAsync(_BaseSubscriber):
-    """Raw callback subscriber that runs ``handler`` in a ``ThreadPoolExecutor``.
+class RawCallbackSubscriber(_BaseSubscriber):
+    """Callback-based subscriber that passes raw ``zenoh.Sample`` to the handler.
 
-    Same as ``CallbackSubscriberAsync`` but passes raw ``zenoh.Sample`` objects.
-    Use when you need sample metadata AND your handler does slow work.
+    Use when you need access to the full sample metadata (key_expr, encoding,
+    timestamp).
+
+    By default the handler runs on Zenoh's internal thread. Pass ``max_workers``
+    to run the handler in a ``ThreadPoolExecutor`` instead.
+
+    Args:
+        session: Active Zenoh session.
+        key_expr: Literal key expression to subscribe to.
+        handler: Callable invoked with each ``zenoh.Sample``.
+        max_workers: If None (default), handler runs on Zenoh's thread. If int,
+            handler runs in a ThreadPoolExecutor with that many threads.
 
     Call ``undeclare()`` when done to stop receiving samples.
     """
@@ -187,29 +180,37 @@ class RawCallbackSubscriberAsync(_BaseSubscriber):
         session: zenoh.Session,
         key_expr: str,
         handler: Callable[[zenoh.Sample], None],
-        max_workers: int = 4,
+        max_workers: int | None = None,
     ):
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        self._closing = threading.Event()
+        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._closing: threading.Event | None = None
 
-        def _wrap(sample: zenoh.Sample) -> None:
-            if self._closing.is_set():
-                return
-            try:
-                self._executor.submit(handler, sample)
-            except RuntimeError:
-                pass  # executor already shut down — drop the message
+        if max_workers is not None:
+            self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+            self._closing = threading.Event()
 
-        self._sub = session.declare_subscriber(key_expr, _wrap)
+            def _wrap(sample: zenoh.Sample) -> None:
+                if self._closing.is_set():  # type: ignore[union-attr]
+                    return
+                try:
+                    self._executor.submit(handler, sample)  # type: ignore[union-attr]
+                except RuntimeError:
+                    pass  # executor already shut down — drop the message
+
+            self._sub = session.declare_subscriber(key_expr, _wrap)
+        else:
+            self._sub = session.declare_subscriber(key_expr, handler)
         self._undeclared = False
 
     def undeclare(self) -> None:
-        """Undeclare the subscriber and shutdown the thread pool. Idempotent."""
+        """Undeclare the subscriber and shutdown the thread pool (if any). Idempotent."""
         if self._undeclared:
             return
-        self._closing.set()
+        if self._closing is not None:
+            self._closing.set()
         super().undeclare()
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
 
 
 class AsyncQueryable:
