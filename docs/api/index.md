@@ -118,25 +118,13 @@ Protobuf code is generated for:
 | Rust | `crates/*/src/proto/` | `prost` |
 | TypeScript | `dashboard/src/proto/` | `protobuf-ts` |
 
-### Regenerating
-
-To regenerate protobuf code:
-
-```bash
-# Rust
-pixi run build
-
-# TypeScript
-cd dashboard && npm run proto
-```
-
 ## Wire Format
 
-Messages are serialized using standard protobuf binary format:
+Messages are serialized using CBOR:
 
-- Efficient binary encoding
-- Cross-language compatibility
-- Forward/backward compatibility for added fields
+- Efficient binary encoding (no code generation needed)
+- Cross-language compatibility via standard CBOR libraries
+- Self-describing via `schema_uri` in the envelope header
 
 ## Next Steps
 
