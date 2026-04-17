@@ -32,7 +32,8 @@ except ImportError:
         return factory.GetPrototype(descriptor)
 
 
-from google.protobuf import descriptor_pb2, descriptor_pool, message_factory as _message_factory
+from google.protobuf import descriptor_pb2, descriptor_pool
+from google.protobuf import message_factory as _message_factory
 from google.protobuf.json_format import MessageToDict
 
 

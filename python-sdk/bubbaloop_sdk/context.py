@@ -13,12 +13,26 @@ Usage::
         msg = sub.recv()   # auto-decoded: dict, proto, or bytes
 """
 
+from __future__ import annotations
+
 import os
 import signal
 import socket
 import threading
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import zenoh
+
+if TYPE_CHECKING:
+    from .publisher import JsonPublisher, ProtoPublisher, RawPublisher
+    from .subscriber import (
+        CallbackSubscriber,
+        ProtoSubscriber,
+        Queryable,
+        RawCallbackSubscriber,
+        RawSubscriber,
+    )
 
 
 def _hostname() -> str:
@@ -49,7 +63,7 @@ class NodeContext:
         cls,
         endpoint: str | None = None,
         instance_name: str | None = None,
-    ) -> "NodeContext":
+    ) -> NodeContext:
         """Connect to a Zenoh router and return a ready NodeContext.
 
         Endpoint resolution: ``endpoint`` arg → ``BUBBALOOP_ZENOH_ENDPOINT`` env
@@ -109,18 +123,20 @@ class NodeContext:
     # Publishers
     # ------------------------------------------------------------------
 
-    def publisher_json(self, suffix: str) -> "JsonPublisher":
+    def publisher_json(self, suffix: str) -> JsonPublisher:
         """Declare a JSON publisher at ``topic(suffix)``."""
         from .publisher import JsonPublisher
+
         return JsonPublisher._declare(self.session, self.topic(suffix))
 
-    def publisher_proto(self, suffix: str, msg_class=None) -> "ProtoPublisher":
+    def publisher_proto(self, suffix: str, msg_class: type | None = None) -> ProtoPublisher:
         """Declare a protobuf publisher at ``topic(suffix)``."""
         from .publisher import ProtoPublisher
+
         type_name = msg_class.DESCRIPTOR.full_name if msg_class is not None else None
         return ProtoPublisher._declare(self.session, self.topic(suffix), type_name)
 
-    def publisher_raw(self, suffix: str, local: bool = False) -> "RawPublisher":
+    def publisher_raw(self, suffix: str, local: bool = False) -> RawPublisher:
         """Declare a raw publisher with no encoding.
 
         When ``local=True``, publishes to ``local/{machine_id}/{suffix}`` with
@@ -128,13 +144,14 @@ class NodeContext:
         SHM buffer instead of dropping frames. Never crosses the bridge.
         """
         from .publisher import RawPublisher
+
         return RawPublisher._declare(self.session, self._resolve_topic(suffix, local), local=local)
 
     # ------------------------------------------------------------------
     # Subscribers
     # ------------------------------------------------------------------
 
-    def subscribe(self, suffix: str, local: bool = False) -> "ProtoSubscriber":
+    def subscribe(self, suffix: str, local: bool = False) -> ProtoSubscriber:
         """Declare a subscriber that auto-decodes every message by its encoding.
 
         - ``application/protobuf;<TypeName>`` → decoded proto object (schema fetched on demand)
@@ -157,11 +174,12 @@ class NodeContext:
         """
         from .schema_registry import SchemaRegistry
         from .subscriber import ProtoSubscriber
-        if not hasattr(self, '_schema_registry'):
+
+        if not hasattr(self, "_schema_registry"):
             self._schema_registry = SchemaRegistry(self.session)
         return ProtoSubscriber(self.session, self._resolve_topic(suffix, local), self._schema_registry)
 
-    def subscribe_raw(self, suffix: str, local: bool = False) -> "RawSubscriber":
+    def subscribe_raw(self, suffix: str, local: bool = False) -> RawSubscriber:
         """Declare a subscriber that yields raw ``bytes`` with no decoding.
 
         Use when you need direct access to the payload — e.g. to pass to
@@ -170,7 +188,87 @@ class NodeContext:
         When ``local=True``, subscribes to the SHM-only local topic.
         """
         from .subscriber import RawSubscriber
+
         return RawSubscriber(self.session, self._resolve_topic(suffix, local))
+
+    # ------------------------------------------------------------------
+    # Callback Subscribers
+    # ------------------------------------------------------------------
+
+    def subscriber_callback(
+        self, suffix: str, handler: Callable[[Any], None], max_workers: int | None = None
+    ) -> CallbackSubscriber:
+        """Callback subscriber at ``topic(suffix)`` with auto-decode.
+
+        ``handler`` receives auto-decoded messages (proto, dict, or bytes).
+
+        By default the handler runs on Zenoh's internal thread (fast path).
+        Pass ``max_workers`` to run the handler in a thread pool instead —
+        use this when the handler does slow work (DB writes, HTTP calls).
+        """
+        from .schema_registry import SchemaRegistry
+        from .subscriber import CallbackSubscriber
+
+        if not hasattr(self, "_schema_registry"):
+            self._schema_registry = SchemaRegistry(self.session)
+        return CallbackSubscriber(self.session, self.topic(suffix), handler, self._schema_registry, max_workers)
+
+    def subscriber_raw_callback(
+        self, key_expr: str, handler: Callable[[zenoh.Sample], None], max_workers: int | None = None
+    ) -> RawCallbackSubscriber:
+        """Callback subscriber at a literal key expression.
+
+        ``handler`` receives raw ``zenoh.Sample`` objects.
+
+        By default the handler runs on Zenoh's internal thread. Pass
+        ``max_workers`` to run the handler in a thread pool instead.
+        """
+        from .subscriber import RawCallbackSubscriber
+
+        return RawCallbackSubscriber(self.session, key_expr, handler, max_workers)
+
+    # ------------------------------------------------------------------
+    # Queryables
+    # ------------------------------------------------------------------
+
+    def queryable(
+        self, suffix: str, handler: Callable[[zenoh.Query], None], max_workers: int | None = None
+    ) -> Queryable:
+        """Declare a queryable at ``topic(suffix)``.
+
+        ``handler`` receives a ``zenoh.Query``. Use the standard zenoh API to reply::
+
+            def on_command(query: zenoh.Query) -> None:
+                result = process(query.payload.to_string())
+                query.reply(query.key_expr, json.dumps(result).encode())
+
+            qbl = ctx.queryable("command", on_command)
+
+        By default the handler runs on Zenoh's internal thread. Pass
+        ``max_workers`` to run the handler in a thread pool instead.
+
+        Call ``undeclare()`` on the returned queryable when done.
+        """
+        from .subscriber import Queryable
+
+        return Queryable(self.session, self.topic(suffix), handler, max_workers)
+
+    def queryable_raw(
+        self, key_expr: str, handler: Callable[[zenoh.Query], None], max_workers: int | None = None
+    ) -> Queryable:
+        """Declare a queryable at a literal key expression (no topic prefix).
+
+        Use for wildcard queryables or when the ``bubbaloop/global/{machine_id}/``
+        prefix does not apply (e.g. ``bubbaloop/**/schema`` for multi-schema serving).
+
+        By default the handler runs on Zenoh's internal thread. Pass
+        ``max_workers`` to run the handler in a thread pool instead.
+
+        Call ``undeclare()`` on the returned queryable when done.
+        """
+        from .subscriber import Queryable
+
+        return Queryable(self.session, key_expr, handler, max_workers)
 
     # ------------------------------------------------------------------
     # Cleanup

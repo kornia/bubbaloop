@@ -1,7 +1,7 @@
 # bubbaloop-sdk (Python)
 
-Pure Python wrapper over `zenoh-python` with the same API surface as the Rust Node SDK.
-No compilation required — installable directly from the git repository.
+Pure Python wrapper over `zenoh-python`. Synchronous API — no asyncio required.
+No compilation needed; install directly from the git repository.
 
 ## Install
 
@@ -18,7 +18,24 @@ pip install -e ".[dev]"
 
 ## Quick start
 
-### Protobuf node
+### Publish JSON
+
+```python
+import time
+from bubbaloop_sdk import NodeContext
+
+ctx = NodeContext.connect()
+pub = ctx.publisher_json("weather/current")
+
+while not ctx.is_shutdown():
+    pub.put({"temperature": 22.5, "humidity": 60})
+    time.sleep(1.0)
+
+pub.undeclare()
+ctx.close()
+```
+
+### Publish protobuf
 
 ```python
 import time
@@ -39,46 +56,63 @@ pub.undeclare()
 ctx.close()
 ```
 
-### JSON node
+### Auto-decode subscriber
 
 ```python
-import time
 from bubbaloop_sdk import NodeContext
 
 ctx = NodeContext.connect()
-pub = ctx.publisher_json("weather/current")
+sub = ctx.subscribe("sensor/data")
 
-while not ctx.is_shutdown():
-    pub.put({"temperature": 22.5, "humidity": 60})
-    time.sleep(1.0)
+for msg in sub:   # auto-decoded: proto, dict, or bytes
+    print(msg)
+```
 
-pub.undeclare()
+### Callback subscriber (event-driven, no loop needed)
+
+```python
+from bubbaloop_sdk import NodeContext
+
+ctx = NodeContext.connect()
+
+def on_sensor(msg):
+    print(f"received: {msg}")  # proto, dict, or bytes depending on encoding
+
+sub = ctx.subscriber_callback("sensor/data", on_sensor)
+ctx.wait_shutdown()   # block until SIGINT/SIGTERM
+sub.undeclare()
 ctx.close()
 ```
 
-### Proto subscriber
+Pass `max_workers` when the handler does slow work (DB writes, HTTP calls) —
+the handler runs in a thread pool, freeing Zenoh's internal thread:
 
 ```python
-from bubbaloop_sdk import NodeContext
-from my_protos_pb2 import SensorData
-
-ctx = NodeContext.connect()
-sub = ctx.subscriber("sensor/data", SensorData)
-
-for msg in sub:
-    print(f"value: {msg.value}")
+sub = ctx.subscriber_callback("sensor/data", on_sensor, max_workers=4)
 ```
 
-### Schema queryable (protobuf nodes)
+### Queryable (respond to get requests)
 
 ```python
-from bubbaloop_sdk.schema import declare_schema_queryable
-from my_protos_pb2 import SensorData
+import json
+from bubbaloop_sdk import NodeContext
 
-# Declare once — keeps the queryable alive while the reference is held
-schema_qbl = declare_schema_queryable(
-    ctx.session, ctx.machine_id, "my-node", SensorData
-)
+ctx = NodeContext.connect()
+
+def on_query(query):
+    query.reply(query.key_expr, json.dumps({"status": "ok"}).encode())
+
+qbl = ctx.queryable("status", on_query)
+ctx.wait_shutdown()
+qbl.undeclare()
+ctx.close()
+```
+
+Pass `max_workers` when the handler does slow work:
+
+```python
+qbl = ctx.queryable("status", on_query, max_workers=4)
+qbl.undeclare()   # call when done to release the thread pool
 ```
 
 ## Configuration
@@ -88,13 +122,7 @@ schema_qbl = declare_schema_queryable(
 | `BUBBALOOP_ZENOH_ENDPOINT` | `tcp/127.0.0.1:7447` | Zenoh router endpoint |
 | `BUBBALOOP_MACHINE_ID` | hostname (sanitized) | Machine identifier |
 
-## Requirements
-
-- Python 3.9+
-- `eclipse-zenoh >= 1.7, < 2`
-- `protobuf >= 4.0`
-
-## API
+## API reference
 
 ### `NodeContext`
 
@@ -105,13 +133,33 @@ schema_qbl = declare_schema_queryable(
 | `ctx.local_topic(suffix)` | Build `bubbaloop/local/{machine_id}/{suffix}` (SHM-only) |
 | `ctx.publisher_proto(suffix, msg_class)` | Declared protobuf publisher |
 | `ctx.publisher_json(suffix)` | Declared JSON publisher |
-| `ctx.subscriber(suffix, msg_class=None)` | Proto subscriber (iterable) |
-| `ctx.subscriber_raw(key_expr)` | Raw sample subscriber (no topic prefix) |
+| `ctx.publisher_raw(suffix, local=False)` | Declared raw publisher (no encoding) |
+| `ctx.subscribe(suffix, local=False)` | Auto-decode subscriber (proto/json/bytes) |
+| `ctx.subscribe_raw(suffix, local=False)` | Raw bytes subscriber |
 | `ctx.is_shutdown()` | True after SIGINT/SIGTERM |
 | `ctx.wait_shutdown()` | Block until shutdown |
 | `ctx.close()` | Close the Zenoh session |
 
-### `ProtoPublisher` / `JsonPublisher`
+#### Callback subscribers (event-driven)
+
+Handler runs on Zenoh's internal thread by default. Pass `max_workers` to
+run the handler in a thread pool instead (for slow work).
+
+| Method | Description |
+|---|---|
+| `ctx.subscriber_callback(suffix, handler, max_workers=None)` | Auto-decoded message to handler |
+| `ctx.subscriber_raw_callback(key_expr, handler, max_workers=None)` | Raw `zenoh.Sample` to handler |
+
+#### Queryables
+
+Do **not** pass `complete=True` — it blocks wildcard queries used by the dashboard.
+
+| Method | Description |
+|---|---|
+| `ctx.queryable(suffix, handler, max_workers=None)` | Queryable at `topic(suffix)` |
+| `ctx.queryable_raw(key_expr, handler, max_workers=None)` | Queryable at literal key expression |
+
+#### Publishers
 
 | Method | Description |
 |---|---|
@@ -120,5 +168,10 @@ schema_qbl = declare_schema_queryable(
 
 ### `ProtoSubscriber` / `RawSubscriber`
 
-Both support `for` iteration.  `RawSubscriber` also exposes `recv()` for
-direct use and yields `zenoh.Sample` objects directly.
+Both support `for` iteration. `RawSubscriber` yields `bytes` directly.
+
+## Requirements
+
+- Python 3.10+
+- `eclipse-zenoh >= 1.7, < 2`
+- `protobuf >= 4.0`
