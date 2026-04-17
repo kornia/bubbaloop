@@ -65,7 +65,7 @@ ctx = NodeContext.connect()
 sub = ctx.subscribe("sensor/data")
 
 for msg in sub:   # auto-decoded: proto, dict, or bytes
-    print(f"value: {msg.value}")
+    print(msg)
 ```
 
 ### Callback subscriber (event-driven, no loop needed)
@@ -76,7 +76,7 @@ from bubbaloop_sdk import NodeContext
 ctx = NodeContext.connect()
 
 def on_sensor(msg):
-    print(f"received: {msg.value}")
+    print(f"received: {msg}")  # proto, dict, or bytes depending on encoding
 
 sub = ctx.subscriber_callback("sensor/data", on_sensor)
 ctx.wait_shutdown()   # block until SIGINT/SIGTERM
@@ -108,10 +108,10 @@ qbl.undeclare()
 ctx.close()
 ```
 
-Use `queryable_async` when the handler does slow work:
+Pass `max_workers` when the handler does slow work:
 
 ```python
-qbl = ctx.queryable_async("status", on_query)
+qbl = ctx.queryable("status", on_query, max_workers=4)
 qbl.undeclare()   # call when done to release the thread pool
 ```
 
@@ -156,10 +156,8 @@ Do **not** pass `complete=True` — it blocks wildcard queries used by the dashb
 
 | Method | Description |
 |---|---|
-| `ctx.queryable(suffix, handler)` | Handler at `topic(suffix)` |
-| `ctx.queryable_raw(key_expr, handler)` | Handler at literal key expression |
-| `ctx.queryable_async(suffix, handler, max_workers=4)` | Handler in thread pool |
-| `ctx.queryable_raw_async(key_expr, handler, max_workers=4)` | Raw key; handler in thread pool |
+| `ctx.queryable(suffix, handler, max_workers=None)` | Queryable at `topic(suffix)` |
+| `ctx.queryable_raw(key_expr, handler, max_workers=None)` | Queryable at literal key expression |
 
 #### Publishers
 

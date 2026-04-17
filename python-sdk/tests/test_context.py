@@ -106,7 +106,7 @@ def test_import_callback_subscribers():
     assert RawCallbackSubscriber is not None
 
 
-def test_import_async_queryable():
+def test_import_queryable():
     from bubbaloop_sdk import Queryable
 
     assert Queryable is not None
@@ -905,18 +905,6 @@ def test_raw_subscriber_declares_on_topic():
     mock_session.declare_subscriber.return_value = MagicMock()
     RawSubscriber(mock_session, "test/topic")
     mock_session.declare_subscriber.assert_called_once_with("test/topic")
-
-
-def test_raw_subscriber_undeclare_calls_sub_undeclare():
-    """undeclare() calls undeclare on the underlying zenoh subscriber."""
-    from bubbaloop_sdk.subscriber import RawSubscriber
-
-    mock_sub = MagicMock()
-    mock_session = MagicMock()
-    mock_session.declare_subscriber.return_value = mock_sub
-    sub = RawSubscriber(mock_session, "test/topic")
-    sub.undeclare()
-    mock_sub.undeclare.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

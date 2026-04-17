@@ -11,7 +11,7 @@ python-sdk/
     __init__.py       # Public API — edit when adding new public names
     context.py        # NodeContext: connect(), topic(), publishers, subscribers, queryables
     publisher.py      # JsonPublisher, ProtoPublisher (wraps session.declare_publisher)
-    subscriber.py     # ProtoSubscriber, RawSubscriber, Callback*, Async*, AsyncQueryable
+    subscriber.py     # ProtoSubscriber, RawSubscriber, CallbackSubscriber, RawCallbackSubscriber, Queryable
     node.py           # run_node() — CLI arg parsing + health heartbeat + lifecycle
     health.py         # start_health_heartbeat() — publishes 'ok' every 5s
     discover.py       # discover_nodes() — GET bubbaloop/**/health
@@ -110,12 +110,12 @@ class CallbackSubscriber:
 **Threading — critical:**
 - Zenoh uses **one internal thread** for ALL callbacks and queryables on a session
 - A slow handler blocks every other subscriber/queryable until it returns
-- Pass `max_workers=N` to `subscriber_callback` / `subscriber_raw_callback` or use `queryable_async` for any handler that does I/O, DB access, or hardware calls
+- Pass `max_workers=N` to `subscriber_callback` / `subscriber_raw_callback` / `queryable` / `queryable_raw` for any handler that does I/O, DB access, or hardware calls
 - Shutdown order for thread-pool variants: undeclare Zenoh subscriber FIRST, then `executor.shutdown()` — reversing this causes `RuntimeError: cannot schedule new futures after shutdown`
 
 **`undeclare()` discipline:**
 - Every subscriber, callback subscriber, and queryable must be undeclared when done
-- `AsyncQueryable` and `*Async` subscribers own a `ThreadPoolExecutor` — GC alone is not enough, always call `undeclare()`
+- `Queryable`, `CallbackSubscriber`, and `RawCallbackSubscriber` with `max_workers` own a `ThreadPoolExecutor` — GC alone is not enough, always call `undeclare()`
 - Blocking subscribers (`RawSubscriber`) are undeclared via `undeclare()` too
 
 ## Testing

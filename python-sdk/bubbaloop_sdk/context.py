@@ -129,7 +129,7 @@ class NodeContext:
 
         return JsonPublisher._declare(self.session, self.topic(suffix))
 
-    def publisher_proto(self, suffix: str, msg_class=None) -> ProtoPublisher:
+    def publisher_proto(self, suffix: str, msg_class: type | None = None) -> ProtoPublisher:
         """Declare a protobuf publisher at ``topic(suffix)``."""
         from .publisher import ProtoPublisher
 

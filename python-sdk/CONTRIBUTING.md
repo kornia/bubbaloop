@@ -69,7 +69,7 @@ python-sdk/
   bubbaloop_sdk/
     __init__.py         # Public API surface
     context.py          # NodeContext — main entry point
-    subscriber.py       # ProtoSubscriber, RawSubscriber, Callback*, Async*, AsyncQueryable
+    subscriber.py       # ProtoSubscriber, RawSubscriber, CallbackSubscriber, RawCallbackSubscriber, Queryable
     publisher.py        # JsonPublisher, ProtoPublisher
     node.py             # run_node() helper
     health.py           # Health heartbeat (used internally by run_node)
