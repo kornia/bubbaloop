@@ -167,7 +167,7 @@ impl DaemonClient {
             command,
             auth_token: self.auth_token.clone(),
         };
-        let payload = serde_json::to_vec(&cmd)
+        let payload = gateway::to_cbor(&cmd)
             .map_err(|e| DaemonClientError::Request(format!("Serialize error: {}", e)))?;
         self.session
             .put(&cmd_topic, payload)
@@ -190,7 +190,7 @@ impl DaemonClient {
                     match result {
                         Ok(sample) => {
                             let bytes = sample.payload().to_bytes();
-                            if let Ok(event) = serde_json::from_slice::<DaemonEvent>(&bytes) {
+                            if let Ok(event) = gateway::from_cbor::<DaemonEvent>(&bytes) {
                                 if event.id != correlation_id {
                                     continue;
                                 }
@@ -245,7 +245,7 @@ impl DaemonClient {
                     Ok(reply) => {
                         if let Ok(sample) = reply.into_result() {
                             let bytes = sample.payload().to_bytes();
-                            return serde_json::from_slice::<DaemonManifest>(&bytes).map_err(|e| {
+                            return gateway::from_cbor::<DaemonManifest>(&bytes).map_err(|e| {
                                 DaemonClientError::Request(format!("Invalid manifest: {}", e))
                             });
                         }

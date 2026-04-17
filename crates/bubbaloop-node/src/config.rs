@@ -25,6 +25,14 @@ pub fn extract_name(path: &Path) -> Option<String> {
     value.get("name")?.as_str().map(|s| s.to_string())
 }
 
+/// Extract the `role` field (e.g. `source`, `processor`, `sink`) from
+/// the YAML config, if present. Used by the dataflow manifest queryable.
+pub fn extract_role(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
+    value.get("role")?.as_str().map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,5 +89,21 @@ mod tests {
     #[test]
     fn test_extract_name_missing_file() {
         assert_eq!(extract_name(Path::new("/nonexistent.yaml")), None);
+    }
+
+    #[test]
+    fn test_extract_role_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(&path, "name: x\nrole: processor\n").unwrap();
+        assert_eq!(extract_role(&path), Some("processor".to_string()));
+    }
+
+    #[test]
+    fn test_extract_role_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(&path, "name: x\n").unwrap();
+        assert_eq!(extract_role(&path), None);
     }
 }

@@ -19,8 +19,8 @@ import {
   type ReactNode,
 } from "react";
 import { Session, Reply, ReplyError, Sample } from "@eclipse-zenoh/zenoh-ts";
+import { decode as cborDecode } from "cbor-x";
 import { useFleetContext } from "./FleetContext";
-import { decodeNodeList } from "../proto/daemon";
 import { getSamplePayload } from "../lib/zenoh";
 import { Duration } from "typed-duration";
 
@@ -162,55 +162,117 @@ function manifestOnlyNode(manifest: NodeManifest, now: number): DiscoveredNode {
 }
 
 /**
- * Decode a NodeList from a Zenoh reply payload.
- * Tries JSON first (new daemon), falls back to protobuf (old daemon for backward compat).
+ * Wire shape for NodeList (matches Rust `NodeListJson` — snake_case fields).
+ * Emitted as CBOR on Zenoh by the daemon; same struct serializes as JSON on HTTP/MCP.
  */
-function decodeNodeListFromPayload(data: Uint8Array): ReturnType<typeof decodeNodeList> {
-  // Try JSON first — new daemon sends APPLICATION_JSON
+interface NodeListWire {
+  nodes: Array<Record<string, unknown>>;
+  timestamp_ms: number;
+  machine_id: string;
+}
+
+interface NodeStateWire {
+  name: string;
+  path: string;
+  status: number;
+  installed: boolean;
+  autostartEnabled: boolean;
+  version: string;
+  description: string;
+  nodeType: string;
+  isBuilt: boolean;
+  buildOutput: string[];
+  machineId: string;
+  machineHostname: string;
+  machineIps: string[];
+  baseNode: string;
+  configPath: string;
+  config: string;
+}
+
+interface DecodedNodeList {
+  nodes: NodeStateWire[];
+  machineId: string;
+}
+
+function mapNodeWire(n: Record<string, unknown>): NodeStateWire {
+  return {
+    name: (n.name as string) ?? '',
+    path: (n.path as string) ?? '',
+    status: typeof n.status === 'number' ? n.status : 0,
+    installed: (n.installed as boolean) ?? false,
+    autostartEnabled: (n.autostart_enabled as boolean) ?? (n.autostartEnabled as boolean) ?? false,
+    version: (n.version as string) ?? '',
+    description: (n.description as string) ?? '',
+    nodeType: (n.node_type as string) ?? (n.nodeType as string) ?? '',
+    isBuilt: (n.is_built as boolean) ?? (n.isBuilt as boolean) ?? false,
+    buildOutput: Array.isArray(n.build_output) ? (n.build_output as string[]) : Array.isArray(n.buildOutput) ? (n.buildOutput as string[]) : [],
+    machineId: (n.machine_id as string) ?? (n.machineId as string) ?? '',
+    machineHostname: (n.machine_hostname as string) ?? (n.machineHostname as string) ?? '',
+    machineIps: Array.isArray(n.machine_ips) ? (n.machine_ips as string[]) : Array.isArray(n.machineIps) ? (n.machineIps as string[]) : [],
+    baseNode: (n.base_node as string) ?? (n.baseNode as string) ?? '',
+    configPath: (n.config_path as string) ?? (n.configPath as string) ?? (n.config_override as string) ?? '',
+    config: typeof n.config === 'string' ? n.config : '',
+  };
+}
+
+/**
+ * Decode a NodeList from a Zenoh reply payload.
+ * Tries CBOR first (new daemon), falls back to JSON for tests / old caches.
+ */
+function decodeNodeListFromPayload(data: Uint8Array): DecodedNodeList | null {
+  // CBOR first — daemon emits APPLICATION_CBOR
   try {
-    const text = new TextDecoder().decode(data);
-    const obj = JSON.parse(text);
+    const obj = cborDecode(data) as NodeListWire | undefined;
     if (obj && typeof obj === 'object' && Array.isArray(obj.nodes)) {
-      // Shape matches NodeList JSON representation
-      const nodes = (obj.nodes as Record<string, unknown>[]).map((n) => ({
-        name: (n.name as string) ?? '',
-        path: (n.path as string) ?? '',
-        status: typeof n.status === 'number' ? n.status : 0,
-        statusName: '',
-        installed: (n.installed as boolean) ?? false,
-        autostartEnabled: (n.autostart_enabled as boolean) ?? (n.autostartEnabled as boolean) ?? false,
-        version: (n.version as string) ?? '',
-        description: (n.description as string) ?? '',
-        nodeType: (n.node_type as string) ?? (n.nodeType as string) ?? '',
-        isBuilt: (n.is_built as boolean) ?? (n.isBuilt as boolean) ?? false,
-        lastUpdatedMs: 0n,
-        buildOutput: Array.isArray(n.build_output) ? (n.build_output as string[]) : Array.isArray(n.buildOutput) ? (n.buildOutput as string[]) : [],
-        machineId: (n.machine_id as string) ?? (n.machineId as string) ?? '',
-        machineHostname: (n.machine_hostname as string) ?? (n.machineHostname as string) ?? '',
-        machineIps: Array.isArray(n.machine_ips) ? (n.machine_ips as string[]) : Array.isArray(n.machineIps) ? (n.machineIps as string[]) : [],
-        baseNode: (n.base_node as string) ?? (n.baseNode as string) ?? '',
-        configPath: (n.config_path as string) ?? (n.configPath as string) ?? (n.config_override as string) ?? '',
-        config: typeof n.config === 'string' ? n.config : '',
-      }));
       return {
-        nodes,
-        timestampMs: 0n,
-        machineId: (obj.machine_id as string) ?? (obj.machineId as string) ?? '',
+        nodes: obj.nodes.map(mapNodeWire),
+        machineId: obj.machine_id ?? '',
       };
     }
   } catch {
-    // Not JSON, fall through to protobuf
+    // Not CBOR, try JSON
   }
 
-  // Fallback: try protobuf (old daemon)
-  return decodeNodeList(data);
-}
-
-/** Parse a JSON payload into a NodeManifest, returning null on failure. */
-function parseManifest(data: Uint8Array): NodeManifest | null {
   try {
     const text = new TextDecoder().decode(data);
-    const obj = JSON.parse(text);
+    const obj = JSON.parse(text) as NodeListWire;
+    if (obj && typeof obj === 'object' && Array.isArray(obj.nodes)) {
+      return {
+        nodes: obj.nodes.map(mapNodeWire),
+        machineId: obj.machine_id ?? '',
+      };
+    }
+  } catch {
+    // Not JSON either
+  }
+
+  return null;
+}
+
+/** Parse a CBOR or JSON payload into a NodeManifest, returning null on failure. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseManifest(data: Uint8Array): NodeManifest | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let obj: any = null;
+  // Try CBOR first — daemon emits APPLICATION_CBOR
+  try {
+    const decoded = cborDecode(data);
+    if (decoded && typeof decoded === "object") {
+      obj = decoded;
+    }
+  } catch {
+    // fall through
+  }
+  if (!obj) {
+    try {
+      const text = new TextDecoder().decode(data);
+      obj = JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+  try {
     if (!obj || typeof obj !== "object" || !obj.name) return null;
     return {
       name: obj.name ?? "",
@@ -329,8 +391,8 @@ export function NodeDiscoveryProvider({
               machine_hostname: n.machineHostname,
               machine_ips: n.machineIps || [],
               base_node: n.baseNode || "",
-              config_path: ((n as unknown) as Record<string, unknown>).configPath as string ?? "",
-              config: (((n as unknown) as Record<string, unknown>).config as string) ?? "",
+              config_path: n.configPath ?? "",
+              config: n.config ?? "",
               discoveredVia: "daemon" as const,
               stale: false,
               lastSeen: Date.now(),

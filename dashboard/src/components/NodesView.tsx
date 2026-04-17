@@ -7,6 +7,7 @@ import {
 } from "../contexts/NodeDiscoveryContext";
 import { Duration } from "typed-duration";
 import { Reply, ReplyError } from "@eclipse-zenoh/zenoh-ts";
+import { encode as cborEncode, decode as cborDecode } from "cbor-x";
 
 // Drag handle props type
 interface DragHandleProps {
@@ -77,7 +78,7 @@ export function NodesViewPanel({
   } | null>(null);
 
   // Execute command via Zenoh query
-  // Helper: send a JSON command to the daemon and return the parsed result.
+  // Helper: send a CBOR command to the daemon and return the parsed result.
   const sendDaemonCommand = useCallback(
     async (
       nodeName: string,
@@ -87,15 +88,13 @@ export function NodesViewPanel({
       const session = getSession();
       if (!session) throw new Error("Not connected to Zenoh");
 
-      const payload = new TextEncoder().encode(
-        JSON.stringify({
-          command,
-          node_name: nodeName,
-          request_id: crypto.randomUUID(),
-          target_machine: targetMachineId,
-          timestamp_ms: Date.now(),
-        }),
-      );
+      const payload = cborEncode({
+        command,
+        node_name: nodeName,
+        request_id: crypto.randomUUID(),
+        target_machine: targetMachineId,
+        timestamp_ms: Date.now(),
+      });
 
       const receiver = await session.get("bubbaloop/global/**/daemon/command", {
         payload,
@@ -117,7 +116,7 @@ export function NodesViewPanel({
             ?.payload?.()?.toBytes?.();
           if (bytes) {
             try {
-              const obj = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+              const obj = cborDecode(bytes) as Record<string, unknown>;
               return {
                 success: (obj.success as boolean) ?? false,
                 message: (obj.message as string) ?? "",

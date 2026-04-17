@@ -7,6 +7,7 @@ Physical AI orchestration built on Zenoh. Single binary: CLI + daemon + MCP serv
 - **ARCHITECTURE.md** — Layer model, node contract, security, open-core boundary
 - **ROADMAP.md** — Implementation phases (YAML skills, agent, SQLite memory, scheduling)
 - **CONTRIBUTING.md** — Agentic workflows, agent tiers, validation, two-critic loop
+- **docs/concepts/dataflow.md** — Provenance envelope, manifest queryable, `bubbaloop dataflow` CLI + MCP tool (how the SDK answers "what's wired, what's flowing")
 
 ## Structure
 
@@ -144,6 +145,22 @@ cargo test --features test-harness --test integration_mcp  # 47 integration test
 - PlatformOperations trait for clean daemon/MCP separation
 - `test-harness` feature enables integration tests with MockPlatform
 - Daemon hosts agent runtime (multi-agent Zenoh gateway) + MCP server
+
+### Topic naming (auto-scoped)
+
+Every `ctx.topic(suffix)` / `ctx.local_topic(suffix)` call auto-prefixes with `instance_name`:
+
+```
+bubbaloop/{global|local}/{machine_id}/{instance_name}/{suffix}
+```
+
+- **Publishers** (`publisher_*(suffix)`) auto-scope: `ctx.publisher_json("data")` → `bubbaloop/global/{machine_id}/{instance_name}/data`. Use `publisher_*_absolute(suffix)` only for explicit cross-node control topics (e.g. daemon broadcast channels).
+- **Subscribers** (`subscribe(absolute_suffix)`) are **absolute by default** — pass the upstream node's full topic suffix including its instance name, e.g. `ctx.subscribe("tapo_terrace_embedder/embeddings")`.
+- **Asymmetry rationale**: publishers own their outputs (auto-scope makes sense), subscribers consume upstream (absolute avoids silent self-scoping bugs).
+- **Three roles** (`spec.role:` in `node.yaml v2`): `source` (raw sensor), `processor` (derived signal), `sink` (actuator/store). Processors inherit their source's instance prefix: `tapo_terrace_embedder` derives from `tapo_terrace`.
+- **Instance-naming convention**: `<source>[_<purpose>]` — e.g. `tapo_terrace`, `tapo_terrace_embedder`, `tapo_terrace_detector`.
+- **`bubbaloop-nodes-official` layout** (future restructure, not yet done): group directories by role — `sources/`, `processors/`, `sinks/`.
+- Every node served by the SDK exposes `{instance}/manifest` (CBOR queryable) listing its live `inputs`/`outputs` (each with per-topic `{ever_fired, still_live, declared_at_ns}` liveness) + `role`; `bubbaloop dataflow` (and the `dataflow` MCP tool) reconstruct the full DAG from these — no config grepping required. Default edge inference requires `still_live && ever_fired`; pass `include_declared_but_unused=true` to see wired-but-idle pipes.
 
 ## DO / DON'T
 

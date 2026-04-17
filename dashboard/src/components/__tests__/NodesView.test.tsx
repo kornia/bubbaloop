@@ -52,25 +52,6 @@ vi.mock('../../contexts/NodeDiscoveryContext', () => ({
   NodeDiscoveryProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-vi.mock('../../proto/daemon', () => ({
-  decodeNodeList: vi.fn(() => null),
-  decodeNodeEvent: vi.fn(() => null),
-  NodeCommandProto: { create: vi.fn(), encode: vi.fn(() => ({ finish: () => new Uint8Array() })) },
-  CommandResultProto: { decode: vi.fn(() => ({ success: true, message: 'ok' })) },
-  CommandType: {
-    COMMAND_TYPE_START: 1,
-    COMMAND_TYPE_STOP: 2,
-    COMMAND_TYPE_RESTART: 3,
-    COMMAND_TYPE_INSTALL: 4,
-    COMMAND_TYPE_UNINSTALL: 5,
-    COMMAND_TYPE_BUILD: 6,
-    COMMAND_TYPE_CLEAN: 7,
-    COMMAND_TYPE_ENABLE_AUTOSTART: 8,
-    COMMAND_TYPE_DISABLE_AUTOSTART: 9,
-    COMMAND_TYPE_GET_LOGS: 10,
-  },
-}));
-
 vi.mock('../../lib/zenoh', () => ({
   getSamplePayload: vi.fn(() => new Uint8Array([1, 2, 3])),
   extractMachineId: vi.fn(() => null),

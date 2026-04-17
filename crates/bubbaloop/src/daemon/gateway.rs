@@ -1,10 +1,30 @@
 //! Gateway wire format and topic builders for daemon Zenoh messaging.
 //!
-//! The Gateway is a convention (topic pair + JSON schema), not a process.
+//! The Gateway is a convention (topic pair + serde schema), not a process.
 //! Messages flow through Zenoh pub/sub between CLI clients and the daemon.
 //! Mirrors the agent gateway pattern (`agent/gateway.rs`).
+//!
+//! **Wire format:** CBOR on Zenoh (`APPLICATION_CBOR`, id=8). The same serde
+//! structs are reused for JSON on HTTP/MCP responses — one type, two encodings.
 
 use serde::{Deserialize, Serialize};
+
+/// Encode a serde value into CBOR bytes via `ciborium`.
+///
+/// Helper that centralises the `Vec<u8>` buffer + `ciborium::into_writer` call
+/// used by every daemon Zenoh publish site.
+pub fn to_cbor<T: Serialize>(value: &T) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
+    let mut buf = Vec::new();
+    ciborium::into_writer(value, &mut buf)?;
+    Ok(buf)
+}
+
+/// Decode a CBOR byte slice into a serde value.
+pub fn from_cbor<T: for<'de> Deserialize<'de>>(
+    bytes: &[u8],
+) -> Result<T, ciborium::de::Error<std::io::Error>> {
+    ciborium::from_reader(bytes)
+}
 
 // ── Command (CLI → Daemon) ──────────────────────────────────────
 
@@ -246,8 +266,30 @@ pub struct NodeCommandJson {
     #[serde(default)]
     pub target_machine: String,
     /// Command issue time (milliseconds since epoch).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_ms_lenient")]
     pub timestamp_ms: i64,
+}
+
+/// Accept timestamp_ms as integer or float (JS `Date.now()` encodes as CBOR float).
+fn deserialize_ms_lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    use serde::de::{self, Visitor};
+    struct V;
+    impl Visitor<'_> for V {
+        type Value = i64;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("integer or float milliseconds")
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<i64, E> {
+            Ok(v)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<i64, E> {
+            Ok(v as i64)
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<i64, E> {
+            Ok(v as i64)
+        }
+    }
+    d.deserialize_any(V)
 }
 
 /// JSON-serializable reply from the command queryable.

@@ -180,10 +180,10 @@ async fn run_daemon_gateway(
                                     agent_count: 0, // TODO: get from agent runtime
                                     mcp_port: manifest_port,
                                 };
-                                let payload = serde_json::to_vec(&manifest).unwrap_or_default();
+                                let payload = gateway::to_cbor(&manifest).unwrap_or_default();
                                 let _ = query
                                     .reply(&manifest_key, payload)
-                                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                                    .encoding(zenoh::bytes::Encoding::APPLICATION_CBOR)
                                     .await;
                             }
                             Err(_) => break,
@@ -225,11 +225,11 @@ async fn run_daemon_gateway(
                             match result {
                                 Ok(query) => {
                                     let node_list = nodes_nm.get_node_list().await;
-                                    let json_list = gateway::NodeListJson::from_proto(&node_list);
-                                    if let Ok(buf) = serde_json::to_vec(&json_list) {
+                                    let wire_list = gateway::NodeListJson::from_proto(&node_list);
+                                    if let Ok(buf) = gateway::to_cbor(&wire_list) {
                                         let _ = query
                                             .reply(&nodes_key, buf)
-                                            .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                                            .encoding(zenoh::bytes::Encoding::APPLICATION_CBOR)
                                             .await;
                                     }
                                 }
@@ -283,20 +283,20 @@ async fn run_daemon_gateway(
                                                 responding_machine: cmd_queryable_machine_id.clone(),
                                                 timestamp_ms: util::now_ms(),
                                             };
-                                            if let Ok(buf) = serde_json::to_vec(&err) {
+                                            if let Ok(buf) = gateway::to_cbor(&err) {
                                                 let _ = query
                                                     .reply(&cmd_queryable_key, buf)
-                                                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                                                    .encoding(zenoh::bytes::Encoding::APPLICATION_CBOR)
                                                     .await;
                                             }
                                             continue;
                                         }};
                                     }
 
-                                    let cmd = match serde_json::from_slice::<gateway::NodeCommandJson>(&payload) {
+                                    let cmd = match gateway::from_cbor::<gateway::NodeCommandJson>(&payload) {
                                         Ok(c) => c,
                                         Err(e) => {
-                                            log::warn!("[Gateway] Invalid NodeCommandJson: {}", e);
+                                            log::warn!("[Gateway] Invalid NodeCommand CBOR: {}", e);
                                             reply_err!(String::new(), format!("Invalid command payload: {}", e));
                                         }
                                     };
@@ -361,10 +361,10 @@ async fn run_daemon_gateway(
                                         },
                                     };
 
-                                    if let Ok(buf) = serde_json::to_vec(&cmd_result) {
+                                    if let Ok(buf) = gateway::to_cbor(&cmd_result) {
                                         let _ = query
                                             .reply(&cmd_queryable_key, buf)
-                                            .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                                            .encoding(zenoh::bytes::Encoding::APPLICATION_CBOR)
                                             .await;
                                     }
                                 }
@@ -394,7 +394,7 @@ async fn run_daemon_gateway(
 
     let publisher = session
         .declare_publisher(&evt_topic)
-        .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+        .encoding(zenoh::bytes::Encoding::APPLICATION_CBOR)
         .await
         .map_err(|e| -> Box<dyn std::error::Error> {
             format!("Failed to declare events publisher: {}", e).into()
@@ -413,7 +413,7 @@ async fn run_daemon_gateway(
                 match result {
                     Ok(sample) => {
                         let payload = sample.payload().to_bytes().to_vec();
-                        match serde_json::from_slice::<gateway::DaemonCommand>(&payload) {
+                        match gateway::from_cbor::<gateway::DaemonCommand>(&payload) {
                             Ok(cmd) => {
                                 // Validate auth token before dispatching
                                 let token_valid = match &cmd.auth_token {
@@ -430,7 +430,7 @@ async fn run_daemon_gateway(
                                         gateway::DaemonEvent::done(&cmd.id),
                                     ];
                                     for event in reject_events {
-                                        if let Ok(bytes) = serde_json::to_vec(&event) {
+                                        if let Ok(bytes) = gateway::to_cbor(&event) {
                                             if let Err(e) = publisher.put(bytes).await {
                                                 log::warn!("[Gateway] Failed to publish reject event: {}", e);
                                             }
@@ -447,7 +447,7 @@ async fn run_daemon_gateway(
                                     &machine_id,
                                 ).await;
                                 for event in events {
-                                    if let Ok(bytes) = serde_json::to_vec(&event) {
+                                    if let Ok(bytes) = gateway::to_cbor(&event) {
                                         if let Err(e) = publisher.put(bytes).await {
                                             log::warn!("[Gateway] Failed to publish event: {}", e);
                                         }

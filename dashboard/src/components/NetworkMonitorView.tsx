@@ -1,10 +1,8 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
-import { getSamplePayload, extractMachineId, getEncodingInfo, tryDecodeJsonPayload } from '../lib/zenoh';
+import { getSamplePayload, extractMachineId, getEncodingInfo, tryDecodeJsonPayload, tryDecodeCborPayload } from '../lib/zenoh';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
-import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useFleetContext } from '../contexts/FleetContext';
-import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
 
 // Local interfaces for decoded network status (SchemaRegistry returns enums as strings)
@@ -132,8 +130,6 @@ export function NetworkMonitorViewPanel({
   dragHandleProps,
 }: NetworkMonitorViewPanelProps) {
   const { machines, selectedMachineId } = useFleetContext();
-  const { registry, discoverForTopic } = useSchemaRegistry();
-  const schemaReady = useSchemaReady();
   const [statusMap, setStatusMap] = useState<Map<string, MachineNetworkStatus>>(new Map());
   const statusMapRef = useRef(statusMap);
   statusMapRef.current = statusMap;
@@ -154,24 +150,6 @@ export function NetworkMonitorViewPanel({
   // Match any machine/scope via ** wildcard (vanilla Zenoh format)
   const networkTopic = '**/network-monitor/status';
 
-  const tryDecode = useCallback((payload: Uint8Array, topic: string, machineId: string) => {
-    let result = registry.decode('bubbaloop.network_monitor.v1.NetworkStatus', payload);
-    if (!result) {
-      result = registry.tryDecodeForTopic(topic, payload);
-    }
-    if (result) {
-      const raw = result.data;
-      const checks = ((raw.checks as Record<string, unknown>[]) ?? []).map(toHealthCheck);
-      const summary = raw.summary as Summary | undefined;
-      const status: NetworkStatus = { checks, summary };
-      const base = pendingRef.current ?? new Map(statusMapRef.current);
-      base.set(machineId, { status, lastUpdate: Date.now() });
-      pendingRef.current = base;
-      return true;
-    }
-    return false;
-  }, [registry]);
-
   const handleSample = useCallback((sample: Sample) => {
     try {
       const payload = getSamplePayload(sample);
@@ -179,34 +157,26 @@ export function NetworkMonitorViewPanel({
       const machineId = extractMachineId(topic) ?? 'unknown';
       const encodingInfo = getEncodingInfo(sample);
 
-      // JSON-encoded samples (new nodes with explicit encoding) — decode directly
-      const jsonData = tryDecodeJsonPayload(payload, encodingInfo);
-      if (jsonData) {
-        const raw = jsonData as Record<string, unknown>;
-        const checks = ((raw.checks as Record<string, unknown>[]) ?? []).map(toHealthCheck);
-        const summary = raw.summary as Summary | undefined;
-        const status: NetworkStatus = { checks, summary };
-        const base = pendingRef.current ?? new Map(statusMapRef.current);
-        base.set(machineId, { status, lastUpdate: Date.now() });
-        pendingRef.current = base;
-        return;
-      }
+      // Encoding-first: CBOR → JSON.
+      const decoded =
+        tryDecodeCborPayload(payload, encodingInfo) ??
+        tryDecodeJsonPayload(payload, encodingInfo);
+      if (!decoded) return;
 
-      if (!tryDecode(payload, topic, machineId)) {
-        // Schema not loaded yet — trigger discovery
-        discoverForTopic(topic);
-      }
+      const raw = decoded as Record<string, unknown>;
+      const checks = ((raw.checks as Record<string, unknown>[]) ?? []).map(toHealthCheck);
+      const summary = raw.summary as Summary | undefined;
+      const status: NetworkStatus = { checks, summary };
+      const base = pendingRef.current ?? new Map(statusMapRef.current);
+      base.set(machineId, { status, lastUpdate: Date.now() });
+      pendingRef.current = base;
     } catch (e) {
       console.error('[NetworkMonitor] Failed to decode:', e);
     }
-  }, [tryDecode, discoverForTopic]);
+  }, []);
 
-  // Subscribe to network monitor topic.
-  // For samples with explicit encoding, decoding works immediately. Legacy samples (no
-  // encoding) still need schemas loaded first. Gate on schemaReady for backward compat:
-  // when schemaReady is false, pass undefined so the subscription stays active for topic
-  // discovery but samples are not processed until schemas arrive.
-  const { messageCount } = useZenohSubscription(networkTopic, schemaReady ? handleSample : undefined);
+  // Subscribe to network monitor topic. CBOR/JSON decodes on first sample — no gating needed.
+  const { messageCount } = useZenohSubscription(networkTopic, handleSample);
 
   // Filter entries by selectedMachineId if set
   const visibleEntries = Array.from(statusMap.entries()).filter(([machineId]) =>

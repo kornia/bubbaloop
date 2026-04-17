@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractMachineId, getSamplePayload, normalizeKeyExpr } from '../zenoh';
+import { extractMachineId, getSamplePayload, normalizeKeyExpr, unwrapCborEnvelope } from '../zenoh';
 import type { Sample } from '@eclipse-zenoh/zenoh-ts';
 
 describe('extractMachineId', () => {
@@ -303,5 +303,41 @@ describe('normalizeKeyExpr: additional vanilla zenoh patterns', () => {
     const result = normalizeKeyExpr(key);
     expect(result.display).toBe('staging/test01/sensor/temperature');
     expect(result.raw).toBe(key);
+  });
+});
+
+describe('unwrapCborEnvelope', () => {
+  it('unwraps a {header, body} envelope to body', () => {
+    const env = {
+      header: { schema_uri: 'bubbaloop://x/v1', source_instance: 'cam', monotonic_seq: 0, ts_ns: 1 },
+      body: { width: 640, height: 480 },
+    };
+    expect(unwrapCborEnvelope(env)).toEqual({ width: 640, height: 480 });
+  });
+
+  it('passes through non-enveloped object unchanged', () => {
+    const v = { width: 640, height: 480 };
+    expect(unwrapCborEnvelope(v)).toBe(v);
+  });
+
+  it('does not unwrap if extra keys are present', () => {
+    const v = { header: {}, body: {}, extra: 1 };
+    expect(unwrapCborEnvelope(v)).toBe(v);
+  });
+
+  it('does not unwrap if header is not an object', () => {
+    const v = { header: 'oops', body: { x: 1 } };
+    expect(unwrapCborEnvelope(v)).toBe(v);
+  });
+
+  it('passes through arrays unchanged', () => {
+    const v = [1, 2, 3];
+    expect(unwrapCborEnvelope(v)).toBe(v);
+  });
+
+  it('passes through primitives unchanged', () => {
+    expect(unwrapCborEnvelope(42)).toBe(42);
+    expect(unwrapCborEnvelope('hello')).toBe('hello');
+    expect(unwrapCborEnvelope(null)).toBe(null);
   });
 });

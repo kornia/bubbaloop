@@ -158,6 +158,8 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
             println!("[5/6] Checking Zenoh data plane...");
         }
         results.extend(checks::check_node_subscriptions().await);
+        results.extend(checks::check_dataflow_compliance().await);
+        results.extend(checks::check_static_compliance().await);
 
         if !json {
             println!();

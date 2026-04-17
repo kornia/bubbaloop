@@ -2,13 +2,12 @@
  * Custom render utility that wraps components with all required providers.
  *
  * Mirrors the production provider hierarchy:
- *   FleetProvider > SchemaRegistryProvider > ZenohSubscriptionProvider
+ *   FleetProvider > ZenohSubscriptionProvider
  */
 
 import React from 'react';
 import { render, type RenderOptions } from '@testing-library/react';
 import { FleetProvider } from '../contexts/FleetContext';
-import { SchemaRegistryProvider } from '../contexts/SchemaRegistryContext';
 import { ZenohSubscriptionProvider } from '../contexts/ZenohSubscriptionContext';
 
 interface CustomRenderOptions extends Omit<RenderOptions, 'wrapper'> {
@@ -18,8 +17,8 @@ interface CustomRenderOptions extends Omit<RenderOptions, 'wrapper'> {
 }
 
 /**
- * Renders a component wrapped with FleetProvider, SchemaRegistryProvider,
- * and ZenohSubscriptionProvider — matching the production provider hierarchy.
+ * Renders a component wrapped with FleetProvider and ZenohSubscriptionProvider
+ * — matching the production provider hierarchy.
  */
 export function renderWithProviders(
   ui: React.ReactElement,
@@ -30,11 +29,9 @@ export function renderWithProviders(
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (
       <FleetProvider>
-        <SchemaRegistryProvider session={session}>
-          <ZenohSubscriptionProvider session={session}>
-            {children}
-          </ZenohSubscriptionProvider>
-        </SchemaRegistryProvider>
+        <ZenohSubscriptionProvider session={session}>
+          {children}
+        </ZenohSubscriptionProvider>
       </FleetProvider>
     );
   }

@@ -341,6 +341,214 @@ pub async fn check_node_subscriptions() -> Vec<DiagnosticResult> {
     results
 }
 
+/// Check dataflow compliance: every Running node in the daemon registry should
+/// answer the manifest queryable. Nodes that don't answer are either dead or
+/// non-compliant (pre-SDK or hand-rolled without the manifest contract).
+pub async fn check_dataflow_compliance() -> Vec<DiagnosticResult> {
+    use std::time::Duration;
+    use zenoh::query::{ConsolidationMode, QueryTarget};
+
+    let mut results = Vec::new();
+
+    let client = match crate::cli::daemon_client::DaemonClient::connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            results.push(DiagnosticResult::fail(
+                "Dataflow compliance",
+                &format!("cannot connect to daemon: {e}"),
+                "Start the daemon: systemctl --user start bubbaloop-daemon",
+            ));
+            return results;
+        }
+    };
+    let list_json = match client.list_nodes().await {
+        Ok(s) => s,
+        Err(e) => {
+            results.push(DiagnosticResult::fail(
+                "Dataflow compliance",
+                &format!("list_nodes failed: {e}"),
+                "Check daemon logs",
+            ));
+            return results;
+        }
+    };
+    let parsed: Vec<crate::mcp::platform::NodeInfo> = match serde_json::from_str(&list_json) {
+        Ok(v) => v,
+        Err(e) => {
+            results.push(DiagnosticResult::fail(
+                "Dataflow compliance",
+                &format!("could not parse node list: {e}"),
+                "Daemon returned unexpected JSON",
+            ));
+            return results;
+        }
+    };
+    let running: Vec<String> = parsed
+        .iter()
+        .filter(|n| n.status.eq_ignore_ascii_case("running"))
+        .map(|n| n.name.clone())
+        .collect();
+
+    let session = match crate::cli::zenoh_session::create_zenoh_session(None).await {
+        Ok(s) => s,
+        Err(e) => {
+            results.push(DiagnosticResult::fail(
+                "Dataflow compliance",
+                &format!("could not open zenoh session: {e}"),
+                "Check zenohd is running and BUBBALOOP_ZENOH_ENDPOINT is correct",
+            ));
+            return results;
+        }
+    };
+    let replies = match session
+        .get("bubbaloop/**/manifest")
+        .target(QueryTarget::All)
+        .consolidation(ConsolidationMode::None)
+        .timeout(Duration::from_secs(2))
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            results.push(DiagnosticResult::fail(
+                "Dataflow compliance",
+                &format!("manifest query failed: {e}"),
+                "Check zenohd and bubbaloop dataflow output",
+            ));
+            return results;
+        }
+    };
+
+    #[derive(serde::Deserialize)]
+    struct Probe {
+        instance_name: String,
+    }
+    let mut responders: Vec<String> = Vec::new();
+    while let Ok(reply) = replies.recv_async().await {
+        if let Ok(sample) = reply.result() {
+            let bytes = sample.payload().to_bytes();
+            if let Ok(p) = ciborium::from_reader::<Probe, _>(&bytes[..]) {
+                responders.push(p.instance_name);
+            }
+        }
+    }
+
+    let registered = running.len();
+    let answered = responders.len();
+    if registered == 0 {
+        results.push(DiagnosticResult::pass(
+            "Dataflow compliance",
+            "no running nodes registered (nothing to check)",
+        ));
+    } else if answered >= registered {
+        results.push(DiagnosticResult::pass_with_details(
+            "Dataflow compliance",
+            &format!("{answered}/{registered} nodes expose the manifest queryable"),
+            serde_json::json!({
+                "registered_running": running,
+                "manifest_responders": responders,
+            }),
+        ));
+    } else {
+        results.push(DiagnosticResult::fail(
+            "Dataflow compliance",
+            &format!(
+                "{answered}/{registered} running nodes expose the manifest queryable — some are non-compliant or dead"
+            ),
+            "Run `bubbaloop dataflow --json` to see which instances responded. Non-SDK nodes must be upgraded to bubbaloop-node / bubbaloop-sdk to expose the manifest contract.",
+        ));
+    }
+
+    results
+}
+
+/// Static compliance check: scan the node registry on disk and flag any node
+/// that does not depend on the SDK (bubbaloop-node for Rust, bubbaloop-sdk for
+/// Python). Non-SDK nodes won't expose the manifest queryable when started.
+pub async fn check_static_compliance() -> Vec<DiagnosticResult> {
+    let mut results = Vec::new();
+
+    let registry_path = match std::env::var("HOME") {
+        Ok(h) => std::path::PathBuf::from(h).join(".bubbaloop/nodes.json"),
+        Err(_) => return results,
+    };
+    let raw = match std::fs::read_to_string(&registry_path) {
+        Ok(s) => s,
+        Err(_) => return results,
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return results,
+    };
+    let Some(nodes) = parsed.get("nodes").and_then(|v| v.as_array()) else {
+        return results;
+    };
+
+    let mut non_compliant: Vec<String> = Vec::new();
+    let mut missing_path: Vec<String> = Vec::new();
+    let mut seen_paths = std::collections::HashSet::new();
+
+    for entry in nodes {
+        let path = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let name = entry
+            .get("name_override")
+            .and_then(|v| v.as_str())
+            .unwrap_or(path);
+        if path.is_empty() || !seen_paths.insert(path.to_string()) {
+            continue;
+        }
+        let p = std::path::Path::new(path);
+        if !p.exists() {
+            missing_path.push(name.to_string());
+            continue;
+        }
+        let cargo = std::fs::read_to_string(p.join("Cargo.toml")).ok();
+        let pixi = std::fs::read_to_string(p.join("pixi.toml")).ok();
+        let pyproject = std::fs::read_to_string(p.join("pyproject.toml")).ok();
+        let has_rust_sdk = cargo
+            .as_deref()
+            .is_some_and(|s| s.contains("bubbaloop-node"));
+        let has_py_sdk = pixi
+            .as_deref()
+            .is_some_and(|s| s.contains("bubbaloop-sdk") || s.contains("bubbaloop_sdk"))
+            || pyproject
+                .as_deref()
+                .is_some_and(|s| s.contains("bubbaloop-sdk") || s.contains("bubbaloop_sdk"));
+        if !has_rust_sdk && !has_py_sdk {
+            non_compliant.push(name.to_string());
+        }
+    }
+
+    if !missing_path.is_empty() {
+        results.push(DiagnosticResult::fail(
+            "Static compliance: missing paths",
+            &format!(
+                "{} registered nodes have missing source paths: {}",
+                missing_path.len(),
+                missing_path.join(", ")
+            ),
+            "Remove stale entries: bubbaloop node remove <name>",
+        ));
+    }
+    if non_compliant.is_empty() {
+        results.push(DiagnosticResult::pass(
+            "Static compliance",
+            "all registered nodes depend on bubbaloop-node or bubbaloop-sdk",
+        ));
+    } else {
+        results.push(DiagnosticResult::fail(
+            "Static compliance",
+            &format!(
+                "{} nodes do not depend on the SDK (no manifest when started): {}",
+                non_compliant.len(),
+                non_compliant.join(", ")
+            ),
+            "Port to bubbaloop-node (Rust) or bubbaloop-sdk (Python) to expose the manifest contract.",
+        ));
+    }
+
+    results
+}
+
 /// Check security posture of the deployment
 pub async fn check_security() -> Vec<DiagnosticResult> {
     let mut results = Vec::new();

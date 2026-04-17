@@ -56,7 +56,19 @@ pub async fn open_zenoh_session(endpoint: &Option<String>) -> Result<Arc<zenoh::
             key: "transport/shared_memory/enabled",
             source: e,
         })?;
-    log::info!("Zenoh SHM transport enabled");
+    // Default message_size_threshold is 3072 B; messages below that fall back to
+    // non-SHM transport silently. Lower to 1 so ALL messages become candidates for
+    // SHM transport. This matches zenoh's own tests/shm.rs verification setup.
+    config
+        .insert_json5(
+            "transport/shared_memory/transport_optimization/message_size_threshold",
+            "1",
+        )
+        .map_err(|e| NodeError::ZenohConfig {
+            key: "transport/shared_memory/transport_optimization/message_size_threshold",
+            source: e,
+        })?;
+    log::info!("Zenoh SHM transport enabled (message_size_threshold=1)");
 
     let session = zenoh::open(config).await.map_err(NodeError::ZenohSession)?;
 

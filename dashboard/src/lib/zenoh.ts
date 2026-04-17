@@ -1,5 +1,26 @@
 import { Session, Config, Subscriber, Sample, Encoding } from '@eclipse-zenoh/zenoh-ts';
-import { snakeToCamel } from './schema-registry';
+import { decode as cborDecode } from 'cbor-x';
+
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Recursively convert snake_case keys to camelCase.
+ * Nodes publish snake_case; dashboard normalizes.
+ * Only matches `_[a-z]` so fields like `temperature_2m` stay intact.
+ * Drops `__proto__`/`constructor`/`prototype` keys to avoid prototype pollution.
+ */
+export function snakeToCamel(obj: unknown): unknown {
+  if (obj === null || obj === undefined || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(snakeToCamel);
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    if (DANGEROUS_KEYS.has(key)) continue;
+    const camelKey = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    if (DANGEROUS_KEYS.has(camelKey)) continue;
+    result[camelKey] = snakeToCamel(value);
+  }
+  return result;
+}
 
 /**
  * Numeric encoding IDs matching Zenoh's predefined encodings.
@@ -263,15 +284,79 @@ export function getSamplePayload(sample: Sample): Uint8Array {
 /**
  * Try to decode a JSON-encoded Zenoh payload with snakeToCamel key conversion.
  * Returns the decoded object if the sample has explicit JSON encoding and parses
- * successfully, or null otherwise (caller should fall through to protobuf path).
+ * successfully, or null otherwise (caller should fall through to other paths).
  */
+/**
+ * Try to decode a CBOR-encoded Zenoh payload with snakeToCamel key conversion.
+ * Returns the decoded object if the sample has APPLICATION_CBOR encoding and decodes
+ * successfully, or null otherwise (caller should fall through to other paths).
+ */
+/**
+ * Detect the SDK provenance envelope `{header, body}` and return the inner
+ * body. Returns the original value unchanged for non-enveloped payloads.
+ *
+ * Defensive: requires exactly the two keys `header` and `body` (otherwise a
+ * user payload that happens to define a `header` field would be misread as
+ * an envelope).
+ */
+export function unwrapCborEnvelope(value: unknown): unknown {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value)
+  ) {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj);
+    if (
+      keys.length === 2 &&
+      keys.includes('header') &&
+      keys.includes('body') &&
+      obj.header !== null &&
+      typeof obj.header === 'object'
+    ) {
+      return obj.body;
+    }
+  }
+  return value;
+}
+
+export function tryDecodeCborPayload(payload: Uint8Array, encodingInfo: EncodingInfo): unknown | null {
+  if (!hasExplicitEncoding(encodingInfo)) return null;
+  if (encodingInfo.id !== EncodingPredefined.APPLICATION_CBOR) return null;
+  try {
+    const decoded = cborDecode(payload);
+    // SDK CBOR payloads are wrapped in `{header, body}` for provenance.
+    // Specialized views (camera, telemetry, weather, network) want the body.
+    return snakeToCamel(unwrapCborEnvelope(decoded));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Unwrap a JSON `{header, body}` provenance envelope. Same shape as the
+ * CBOR envelope. Returns the inner body if the payload matches, otherwise
+ * returns the original value unchanged. Shares its detection heuristic
+ * with `unwrapCborEnvelope` so both edges look identical to views.
+ */
+export function unwrapJsonEnvelope(value: unknown): unknown {
+  return unwrapCborEnvelope(value);
+}
+
+/** Like `unwrapJsonEnvelope` but also reports whether an unwrap happened. */
+export function unwrapJsonEnvelopeWithFlag(value: unknown): { body: unknown; wasEnveloped: boolean } {
+  const unwrapped = unwrapCborEnvelope(value);
+  return { body: unwrapped, wasEnveloped: unwrapped !== value };
+}
+
 export function tryDecodeJsonPayload(payload: Uint8Array, encodingInfo: EncodingInfo): unknown | null {
   if (!hasExplicitEncoding(encodingInfo)) return null;
   if (encodingInfo.id !== EncodingPredefined.APPLICATION_JSON &&
-      encodingInfo.id !== EncodingPredefined.TEXT_JSON) return null;
+      encodingInfo.id !== EncodingPredefined.TEXT_JSON &&
+      encodingInfo.id !== EncodingPredefined.TEXT_JSON5) return null;
   try {
     const text = new TextDecoder().decode(payload);
-    return snakeToCamel(JSON.parse(text));
+    return snakeToCamel(unwrapJsonEnvelope(JSON.parse(text)));
   } catch {
     return null;
   }

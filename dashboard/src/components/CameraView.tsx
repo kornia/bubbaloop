@@ -1,14 +1,12 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { Sample } from '@eclipse-zenoh/zenoh-ts';
 import { getSamplePayload, getEncodingInfo, hasExplicitEncoding, EncodingPredefined } from '../lib/zenoh';
+import { decode as cborDecode } from 'cbor-x';
 import { useZenohSubscription } from '../hooks/useZenohSubscription';
-import { useSchemaReady } from '../hooks/useSchemaReady';
 import { useFleetContext } from '../contexts/FleetContext';
-import { useSchemaRegistry } from '../contexts/SchemaRegistryContext';
 import { MachineBadge } from './MachineBadge';
 import { H264Decoder } from '../lib/h264-decoder';
 import { normalizeTopicPattern } from '../lib/subscription-manager';
-import Long from 'long';
 
 // Local interface for camera metadata display
 interface CameraMeta {
@@ -22,11 +20,15 @@ interface CameraMeta {
   dataSize: number;
 }
 
-// Convert protobufjs Long to BigInt
-function toLongBigInt(value: Long | number | undefined | null): bigint {
+// Convert any numeric-ish timestamp value to BigInt.
+// CBOR decodes u64 to BigInt directly; number/string are also supported for safety.
+function toBigInt(value: unknown): bigint {
   if (value === undefined || value === null) return 0n;
-  if (typeof value === 'number') return BigInt(value);
-  if (Long.isLong(value)) return BigInt(value.toString());
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') return BigInt(Math.trunc(value));
+  if (typeof value === 'string') {
+    try { return BigInt(value); } catch { return 0n; }
+  }
   return 0n;
 }
 
@@ -122,62 +124,46 @@ export function CameraView({
     };
   }, [cameraName, handleFrame]);
 
-  // Get SchemaRegistry for dynamic decoding
-  const { registry, discoverForTopic } = useSchemaRegistry();
-  const schemaReady = useSchemaReady();
-
-  // Handle incoming samples from Zenoh
+  // Handle incoming samples from Zenoh. Camera frames are CBOR-only.
   const handleSample = useCallback((sample: Sample) => {
     const decoder = decoderRef.current;
     if (!decoder) return;
 
     try {
       const payload = getSamplePayload(sample);
-      const sampleTopic = sample.keyexpr().toString();
       const encodingInfo = getEncodingInfo(sample);
 
-      // If sample has an explicit encoding that is NOT protobuf, skip (CameraView
-      // only handles protobuf CompressedImage or unencoded binary).
+      // Only accept CBOR or opaque bytes. Anything else (JSON, text) is not a frame.
       if (
         hasExplicitEncoding(encodingInfo) &&
-        encodingInfo.id !== EncodingPredefined.APPLICATION_PROTOBUF &&
+        encodingInfo.id !== EncodingPredefined.APPLICATION_CBOR &&
         encodingInfo.id !== EncodingPredefined.APPLICATION_OCTET_STREAM
       ) {
         return;
       }
 
-      // Use SchemaRegistry to look up CompressedImage type and decode directly.
-      // This preserves raw bytes (no base64 roundtrip) for H264 decoding.
-      // When encoding carries a schema suffix, try it directly; otherwise fall back to
-      // well-known type name lookup.
-      const typeName = (encodingInfo.id === EncodingPredefined.APPLICATION_PROTOBUF && encodingInfo.schema)
-        ? encodingInfo.schema
-        : 'bubbaloop.camera.v1.CompressedImage';
-
-      const msgType = registry.lookupType(typeName);
-      if (!msgType) {
-        // Schema not yet available — trigger discovery for node-specific schemas.
-        // Only gate on schemaReady for legacy nodes (no explicit encoding); nodes
-        // with APPLICATION_PROTOBUF encoding trigger on-demand fetch instead.
-        if (!hasExplicitEncoding(encodingInfo)) {
-          console.warn(`[CameraView] CompressedImage schema NOT found. Topic: ${sampleTopic}. Triggering discovery...`);
-          discoverForTopic(sampleTopic);
-        } else {
-          // Has explicit protobuf encoding but type not cached yet — discover async
-          discoverForTopic(sampleTopic);
-        }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let msg: any;
+      try {
+        msg = cborDecode(payload);
+      } catch {
+        console.error('[CameraView] CBOR decode failed');
         return;
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const msg = msgType.decode(payload) as any;
+      // SDK wraps CBOR payloads in an outer {header, body} Envelope; unwrap if present.
+      if (msg && typeof msg === 'object' && 'body' in msg && msg.body && typeof msg.body === 'object') {
+        msg = msg.body;
+      }
+
       const format: string = msg.format ?? '';
       const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data ?? []);
-      const header = msg.header ? {
-        acqTime: toLongBigInt(msg.header.acqTime),
-        pubTime: toLongBigInt(msg.header.pubTime),
-        sequence: msg.header.sequence ?? 0,
-        frameId: msg.header.frameId ?? '',
+      const rawHeader = msg.header;
+      const header = rawHeader ? {
+        acqTime: toBigInt(rawHeader.acq_time ?? rawHeader.acqTime),
+        pubTime: toBigInt(rawHeader.pub_time ?? rawHeader.pubTime),
+        sequence: rawHeader.sequence ?? 0,
+        frameId: rawHeader.frame_id ?? rawHeader.frameId ?? '',
       } : undefined;
 
       // Store latest metadata in ref (no re-render)
@@ -201,7 +187,7 @@ export function CameraView({
     } catch (e) {
       console.error('[CameraView] Failed to process sample:', e);
     }
-  }, [registry, discoverForTopic]);
+  }, []);
 
   // Auto-detect correct topic from discovered topics.
   // Priority: 1) exact name match, 2) first camera/*/compressed topic found.
@@ -234,13 +220,8 @@ export function CameraView({
     onTopicChange(newTopic);
   }, [availableTopics, cameraName, onTopicChange]);
 
-  // Subscribe to camera topic.
-  // Gate on schemaReady for backward compat with legacy nodes (no explicit encoding).
-  // When schemaReady is false, pass undefined so the subscription stays active for
-  // topic discovery but samples are not processed until schemas arrive.
-  // Nodes with explicit APPLICATION_PROTOBUF encoding will also benefit from gating
-  // since schema discovery happens on first sample via discoverForTopic().
-  useZenohSubscription(topic, schemaReady ? handleSample : undefined);
+  // Subscribe to camera topic. Frames are CBOR-encoded — no schema registry needed.
+  useZenohSubscription(topic, handleSample);
 
   // Periodically update metadata state when info panel is visible
   useEffect(() => {

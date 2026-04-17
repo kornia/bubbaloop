@@ -7,12 +7,6 @@ vi.mock('../../hooks/useZenohSubscription', () => ({
   useAllTopicStats: vi.fn(() => new Map()),
 }));
 
-const _schemaReadyState = vi.hoisted(() => ({ ready: false }));
-
-vi.mock('../../hooks/useSchemaReady', () => ({
-  useSchemaReady: vi.fn(() => _schemaReadyState.ready),
-}));
-
 vi.mock('../../contexts/FleetContext', () => ({
   useFleetContext: vi.fn(() => ({
     machines: [],
@@ -23,18 +17,6 @@ vi.mock('../../contexts/FleetContext', () => ({
     setSelectedMachineId: vi.fn(),
   })),
   FleetProvider: ({ children }: { children: React.ReactNode }) => children,
-}));
-
-vi.mock('../../contexts/SchemaRegistryContext', () => ({
-  useSchemaRegistry: vi.fn(() => ({
-    registry: { lookupType: vi.fn(() => null), tryDecodeForTopic: vi.fn(() => null), decode: vi.fn(() => null) },
-    loading: false,
-    error: null,
-    refresh: vi.fn(),
-    decode: vi.fn(() => null),
-    discoverForTopic: vi.fn(),
-    schemaVersion: 0,
-  })),
 }));
 
 vi.mock('../../contexts/ZenohSubscriptionContext', () => ({
@@ -66,7 +48,6 @@ import { useZenohSubscription } from '../../hooks/useZenohSubscription';
 describe('SystemTelemetryViewPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    _schemaReadyState.ready = false;
   });
 
   it('renders TELEMETRY badge in header', () => {
@@ -97,23 +78,11 @@ describe('SystemTelemetryViewPanel', () => {
     expect(screen.queryByTitle('Remove panel')).not.toBeInTheDocument();
   });
 
-  describe('schema-ready gating', () => {
-    it('does not pass callback when schemas are not ready', () => {
-      _schemaReadyState.ready = false;
-      render(<SystemTelemetryViewPanel />);
+  it('passes callback to subscription unconditionally (no schema gating)', () => {
+    render(<SystemTelemetryViewPanel />);
 
-      const mockSub = vi.mocked(useZenohSubscription);
-      expect(mockSub).toHaveBeenCalledTimes(1);
-      expect(mockSub.mock.calls[0][1]).toBeUndefined();
-    });
-
-    it('passes callback when schemas are ready', () => {
-      _schemaReadyState.ready = true;
-      render(<SystemTelemetryViewPanel />);
-
-      const mockSub = vi.mocked(useZenohSubscription);
-      expect(mockSub).toHaveBeenCalledTimes(1);
-      expect(typeof mockSub.mock.calls[0][1]).toBe('function');
-    });
+    const mockSub = vi.mocked(useZenohSubscription);
+    expect(mockSub).toHaveBeenCalledTimes(1);
+    expect(typeof mockSub.mock.calls[0][1]).toBe('function');
   });
 });

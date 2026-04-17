@@ -1,5 +1,10 @@
 # {{node_name}} node configuration
 
+# Dataflow role — source | processor | sink | unknown.
+# Surfaced by the SDK's manifest queryable and used by `bubbaloop dataflow`
+# to label nodes in the DAG. Pick the one that best matches this node.
+role: source
+
 # Topic suffix for published data (full topic: bubbaloop/{scope}/{machine_id}/{{node_name}}/{suffix})
 # Valid characters: a-z, A-Z, 0-9, /, _, -, .
 publish_topic: output
