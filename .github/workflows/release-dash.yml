@@ -61,7 +61,7 @@ jobs:
           node-version: '20'
 
       - name: Build dashboard
-        run: cd dashboard && npm ci && npm run proto && npm run build
+        run: cd dashboard && npm ci && npm run build
 
       - name: Build bubbaloop-dash (Linux)
         if: matrix.use_pixi

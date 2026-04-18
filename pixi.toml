@@ -36,9 +36,8 @@ daemon = "RUST_LOG=info cargo run --bin bubbaloop --package bubbaloop --release 
 
 # Dashboard
 dashboard-install = "cd dashboard && npm install"
-dashboard-proto = { cmd = "cd dashboard && npm run proto", depends-on = ["dashboard-install"] }
-dashboard-build = { cmd = "cd dashboard && npm run build", depends-on = ["dashboard-proto"] }
-dashboard = { cmd = "cd dashboard && npm run dev", depends-on = ["dashboard-proto"] }
+dashboard-build = { cmd = "cd dashboard && npm run build", depends-on = ["dashboard-install"] }
+dashboard = { cmd = "cd dashboard && npm run dev", depends-on = ["dashboard-install"] }
 
 # Dashboard server (embedded)
 dash = { cmd = "RUST_LOG=info cargo run --bin bubbaloop-dash --package bubbaloop --features dashboard --release --", depends-on = ["dashboard-build"] }
