@@ -2,6 +2,8 @@
 
 Batteries-included framework for writing bubbaloop nodes. Reduces boilerplate from ~300 to ~50 lines.
 
+> **Parity invariant:** This Rust SDK and `python-sdk/` are peer APIs, not layered — every publisher/subscriber/context method added to one MUST have an equivalent in the other in the same PR (or a linked tracking issue). Names should match where possible. Where `zenoh-python` can't surface a knob that Rust exposes, the Python side collapses it to the simplest equivalent that preserves wire behavior. Example: Rust `publisher_cbor_shm(suffix, slot_count, slot_size)` ↔ Python `publisher_cbor(suffix, local=True)` — same `application/cbor` encoding and `CongestionControl::Block` on the wire; Python slot sizing is implicit because `zenoh-python` doesn't expose `ShmProvider`.
+
 ## Quick Start (Rust)
 
 ```rust

@@ -3,6 +3,8 @@
 Pure Python wrapper over `zenoh-python` with the same API surface as the Rust Node SDK.
 No compilation required — installable directly from the git repository.
 
+> **Parity invariant:** This SDK is a peer of `crates/bubbaloop-node/` (Rust), not a layer on top of it. Every publisher/subscriber/context method added to one SDK MUST have an equivalent in the other in the same PR. Where `zenoh-python` can't surface a knob that Rust exposes, the Python side collapses it to the simplest equivalent that preserves wire behavior. Example: Rust `publisher_cbor_shm(suffix, slot_count, slot_size)` ↔ Python `publisher_cbor(suffix, local=True)` — same `application/cbor` encoding and `CongestionControl.Block` on the wire; slot sizing is implicit because `zenoh-python` doesn't expose `ShmProvider`.
+
 ## Install
 
 ```bash

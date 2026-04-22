@@ -131,11 +131,21 @@ class CborPublisher(_BasePublisher):
     (wall-clock nanoseconds). Pre-encoded ``bytes``/``bytearray`` payloads
     bypass the envelope (they're treated as already-final wire bytes).
 
+    When ``local=True`` is passed to :meth:`_declare`, the publisher uses
+    ``congestion_control=CongestionControl.BLOCK`` so SHM frames are never
+    silently dropped when the subscriber is slow. The topic key must already
+    live under ``bubbaloop/local/...`` (callers are responsible for that —
+    see :meth:`NodeContext.publisher_cbor`).
+
     Usage::
 
         pub = ctx.publisher_cbor("sensor/data", schema_uri="bubbaloop://sensor/v1")
         pub.put({"temperature": 22.5, "humidity": 60})
         # On wire: {"header": {...}, "body": {"temperature": 22.5, ...}}
+
+        # SHM variant — BLOCK congestion control, local key space:
+        pub = ctx.publisher_cbor("rgbd", local=True, schema_uri="bubbaloop://rgbd/v1")
+        pub.put({"width": 1280, "height": 720, "data": frame_bytes})
     """
 
     def __init__(
@@ -156,8 +166,12 @@ class CborPublisher(_BasePublisher):
         topic: str,
         source_instance: str = "",
         schema_uri: str = "",
+        local: bool = False,
     ) -> "CborPublisher":
-        pub = session.declare_publisher(topic, encoding=_CBOR_ENCODING)
+        kwargs: dict[str, Any] = {"encoding": _CBOR_ENCODING}
+        if local:
+            kwargs["congestion_control"] = zenoh.CongestionControl.BLOCK
+        pub = session.declare_publisher(topic, **kwargs)
         return cls(pub, source_instance=source_instance, schema_uri=schema_uri)
 
     def put(self, value) -> None:

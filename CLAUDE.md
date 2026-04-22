@@ -72,6 +72,8 @@ bubbaloop-node = { git = "https://github.com/kornia/bubbaloop.git", branch = "ma
 bubbaloop-node-build = { git = "https://github.com/kornia/bubbaloop.git", branch = "main" }
 ```
 
+**Rust ↔ Python SDK parity (MUST hold):** `crates/bubbaloop-node/` (Rust) and `python-sdk/` (Python) are peer APIs, not layered — every publisher/subscriber/context method added to one MUST have an equivalent in the other in the same PR (or a linked tracking issue). Names should match where possible; where the underlying binding can't surface a knob, the Python side collapses it to the simplest equivalent that preserves wire behavior. Example: Rust `publisher_cbor_shm(suffix, slot_count, slot_size)` ↔ Python `publisher_cbor(suffix, local=True)` — `zenoh-python` doesn't expose `ShmProvider` so slot sizing is implicit, but encoding (`application/cbor`) and congestion control (`Block`) are identical on the wire.
+
 **Multi-instance support:** SDK reads `name` from config YAML at startup. Health and schema topics use this name, so `tapo_entrance` and `tapo_terrace` instances of the same binary get separate topics: `bubbaloop/global/host/tapo_entrance/health` vs `bubbaloop/global/host/tapo_terrace/health`.
 
 **Topic key spaces:** Two fixed key spaces replace the old `{scope}`:
