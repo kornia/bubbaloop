@@ -393,6 +393,7 @@ class NodeContext:
         suffix: str,
         schema_uri: str | None = None,
         schema_version: int = 1,
+        local: bool = False,
     ) -> "CborPublisher":
         """Declare a CBOR publisher at ``topic(suffix)`` (auto-scoped).
 
@@ -400,9 +401,17 @@ class NodeContext:
         ``schema_uri`` defaults to
         ``bubbaloop://{instance}/{instance}/{suffix}@v{schema_version}``; pass
         ``schema_uri=""`` to opt out (empty string is respected).
+
+        When ``local=True``, publishes to
+        ``bubbaloop/local/{machine_id}/{instance_name}/{suffix}`` with
+        ``CongestionControl.BLOCK`` — waits for the subscriber to release the
+        SHM buffer instead of silently dropping frames. Use for large binary
+        payloads (e.g. RGBD frames) consumed only by processes on the same
+        machine. Mirrors ``publisher_raw(local=True)`` behaviour for CBOR
+        publishers.
         """
         from .publisher import CborPublisher
-        key = self.topic(suffix)
+        key = self._resolve_topic(suffix, local)
         sfx = self._declare_output(key)
         uri = self._resolve_schema_uri(sfx or suffix, schema_uri, schema_version)
         pub = CborPublisher._declare(
@@ -410,6 +419,7 @@ class NodeContext:
             key,
             source_instance=self.instance_name or "",
             schema_uri=uri,
+            local=local,
         )
         self._wire_manifest_hooks(pub, sfx, is_input=False)
         return pub
@@ -462,14 +472,22 @@ class NodeContext:
         absolute_suffix: str,
         schema_uri: str | None = None,
         schema_version: int = 1,
+        local: bool = False,
     ) -> "CborPublisher":
         """Declare a CBOR publisher at the absolute key (no instance scoping).
 
         Wraps payloads in the same ``{header, body}`` envelope as
         :meth:`publisher_cbor`.
+
+        When ``local=True``, publishes to
+        ``bubbaloop/local/{machine_id}/{absolute_suffix}`` with
+        ``CongestionControl.BLOCK`` — same SHM + backpressure semantics as
+        :meth:`publisher_cbor` with ``local=True``, but without instance-name
+        scoping. Use for shared well-known bus topics consumed on the same
+        machine only.
         """
         from .publisher import CborPublisher
-        key = self.absolute_topic(absolute_suffix)
+        key = self._resolve_absolute_topic(absolute_suffix, local)
         sfx = self._declare_output(key)
         uri = self._resolve_schema_uri(sfx or absolute_suffix, schema_uri, schema_version)
         pub = CborPublisher._declare(
@@ -477,6 +495,7 @@ class NodeContext:
             key,
             source_instance=self.instance_name or "",
             schema_uri=uri,
+            local=local,
         )
         self._wire_manifest_hooks(pub, sfx, is_input=False)
         return pub

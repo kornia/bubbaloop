@@ -76,6 +76,7 @@ def test_publisher_cbor_absolute_uses_unscoped_key():
         "bubbaloop/global/bot/bus/x",
         source_instance="emb",
         schema_uri="bubbaloop://bus/v1",
+        local=False,
     )
 
 
