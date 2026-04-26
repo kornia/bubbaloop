@@ -4,7 +4,7 @@
 
 **Goal:** Acts 1+2-lite (basic NL Q&A about live frames) working end-to-end.
 
-**Architecture:** Bubbaloop agent (Rust, in-daemon) gains a `get_camera_frame` MCP tool that wraps the existing `get_sample.rs` helper and streams JPEG bytes back to Claude through a special image-bytes path in the dispatcher. The dashboard gains a 4-quadrant layout with a streaming chat panel that renders agent token deltas + inline tool-call cards + tool-result thumbnails. The jepa-tracker is tuned to fire on real motion. The jepa-video-embedder starts appending clip embeddings to `~/.bubbaloop/embeddings.jsonl` so the Act 3 history accumulates from Day 1.
+**Architecture:** Bubbaloop agent (Rust, in-daemon) gains a generic `get_node_sample` MCP tool that wraps the existing `get_sample.rs` helper and streams the latest sample bytes back to Claude — preserving the original Zenoh encoding. The dispatcher gets a special image-bytes path so JPEG/PNG payloads from camera nodes pass through unmodified to Claude vision. The same tool will work for depth nodes (returning RGBA + depth blob), GPIO nodes (returning JSON state), thermal sensors, etc. — cameras are not special. The dashboard gains a 4-quadrant layout with a streaming chat panel that renders agent token deltas + inline tool-call cards + tool-result thumbnails. The jepa-tracker is tuned to fire on real motion. The jepa-video-embedder starts appending clip embeddings to `~/.bubbaloop/embeddings.jsonl` so the Act 3 history accumulates from Day 1.
 
 **Tech Stack:** Rust (agent + MCP + daemon), Python (jepa-tracker, jepa-video-embedder), TypeScript + React + Vite (dashboard), Zenoh pub/sub, eclipse-zenoh-python, SQLite (already in agent world-state, will reuse pattern in Week 2 for map.db), Anthropic SDK (already wired via `agent/provider/claude.rs`).
 
@@ -456,7 +456,7 @@ NEVER text-truncated and is emitted as an Anthropic image content
 block (base64 data-URL → typed image block) so Claude vision can
 reason over it.
 
-Required for the get_camera_frame MCP tool (Task 4) and the
+Required for the get_node_sample MCP tool (Task 4) and the
 demo-mvp cold open."
 ```
 
@@ -466,9 +466,9 @@ We don't open the PR yet; the next task is the consumer of this and we want to v
 
 ---
 
-## Task 4: `get_camera_frame` MCP tool
+## Task 4: `get_node_sample` MCP tool (generic — works for cameras AND any other sensor node)
 
-**Goal:** A new MCP tool that the agent can call to retrieve a single JPEG frame from any camera node by name. Returns `ToolResult::Image`.
+**Goal:** A new MCP tool that the agent can call to retrieve the latest sample from any node's output topic, regardless of node type. For camera nodes the body decodes to JPEG bytes; for depth nodes, RGBA + depth; for GPIO sensors, JSON state. Cameras are not special — they're nodes with image-encoded outputs.
 
 **Files:**
 - Modify: `bubbaloop/crates/bubbaloop/src/mcp/tools.rs`
@@ -485,14 +485,30 @@ We don't open the PR yet; the next task is the consumer of this and we want to v
 In `crates/bubbaloop/src/mcp/platform.rs`, add:
 
 ```rust
+pub struct NodeSample {
+    /// Raw payload bytes from the Zenoh sample.
+    pub data: Vec<u8>,
+    /// Wire encoding string (e.g. "application/cbor", "application/json", "image/jpeg", "application/octet-stream").
+    pub encoding: String,
+    /// Source topic key.
+    pub topic: String,
+    /// ns timestamp from the sample (or now() if unavailable).
+    pub timestamp_ns: u64,
+}
+
 #[async_trait::async_trait]
 pub trait PlatformOperations {
     // ... existing methods ...
 
-    /// Pull one JPEG frame from a camera node's `compressed` topic.
-    /// Returns the raw JPEG bytes. Errors if the camera is unreachable
-    /// or the topic has no recent samples.
-    async fn get_camera_frame(&self, camera_name: &str) -> Result<Vec<u8>, PlatformError>;
+    /// Fetch the latest sample from a node's output topic. Generic across node types.
+    /// `output_name` selects which output (defaults to the node's primary output —
+    /// "compressed" for cameras, "raw" for raw sensors, etc.); the daemon resolves
+    /// the topic from the node manifest.
+    async fn get_node_sample(
+        &self,
+        node_name: &str,
+        output_name: Option<&str>,
+    ) -> Result<NodeSample, PlatformError>;
 }
 ```
 
@@ -501,37 +517,94 @@ pub trait PlatformOperations {
 In `crates/bubbaloop/src/mcp/daemon_platform.rs`:
 
 ```rust
-async fn get_camera_frame(&self, camera_name: &str) -> Result<Vec<u8>, PlatformError> {
+async fn get_node_sample(
+    &self,
+    node_name: &str,
+    output_name: Option<&str>,
+) -> Result<NodeSample, PlatformError> {
     use bubbaloop_node::get_sample::get_sample;
 
-    let topic = format!("bubbaloop/global/{}/{}/compressed", self.machine_id, camera_name);
+    // Resolve the output topic from the node manifest. Fall back to a sensible
+    // default per node type when output_name is None.
+    let topic = self.resolve_node_output_topic(node_name, output_name).await?;
 
     let sample = get_sample(&self.zenoh_session, &topic, std::time::Duration::from_secs(3))
         .await
-        .map_err(|e| PlatformError::CameraUnreachable {
-            camera: camera_name.to_string(),
+        .map_err(|e| PlatformError::NodeUnreachable {
+            node: node_name.to_string(),
             source: e.to_string(),
         })?;
 
-    // The CompressedImageCbor body is {header, body: {format, data}}.
-    // Decode the CBOR and extract the data bytes.
-    let envelope: serde_cbor::Value = serde_cbor::from_slice(sample.payload().to_bytes().as_ref())
-        .map_err(|e| PlatformError::DecodeError(e.to_string()))?;
+    let encoding = sample.encoding().to_string();
+    let data = sample.payload().to_bytes().to_vec();
+    let timestamp_ns = sample.timestamp().map(|t| t.get_time().0).unwrap_or_else(|| now_ns());
 
-    extract_jpeg_bytes_from_cbor_envelope(envelope)
-        .ok_or_else(|| PlatformError::DecodeError("no jpeg data in envelope".into()))
+    // For CBOR-wrapped image bodies (the common camera/compressed shape), unwrap
+    // to the inner JPEG bytes so the tool's caller (the agent dispatcher) can
+    // emit it as an Anthropic image content block. Other encodings pass through
+    // untouched.
+    if encoding.starts_with("application/cbor") {
+        if let Some((bytes, mime)) = unwrap_cbor_image_body(&data) {
+            return Ok(NodeSample {
+                data: bytes,
+                encoding: mime,
+                topic,
+                timestamp_ns,
+            });
+        }
+    }
+
+    Ok(NodeSample { data, encoding, topic, timestamp_ns })
 }
 
-fn extract_jpeg_bytes_from_cbor_envelope(envelope: serde_cbor::Value) -> Option<Vec<u8>> {
+async fn resolve_node_output_topic(
+    &self,
+    node_name: &str,
+    output_name: Option<&str>,
+) -> Result<String, PlatformError> {
+    // Read the node's manifest queryable at bubbaloop/global/{machine}/{instance}/manifest
+    // (or use the daemon's cached node-list with declared outputs).
+    // For Day 1 simplicity: hardcode known node-type → primary-output mappings,
+    // and let manifest-driven resolution land in Week 2 when map.db unifies sensor types.
+    let instance = self.instance_name_for_daemon_node(node_name).await?;
+    let suffix = match output_name {
+        Some(s) => s.to_string(),
+        None => self.default_output_for_node_type(&instance).await?,
+    };
+    Ok(format!("bubbaloop/global/{}/{}/{}", self.machine_id, instance, suffix))
+}
+
+async fn default_output_for_node_type(&self, instance: &str) -> Result<String, PlatformError> {
+    // Naive type-from-name heuristic for Day 1. Replaced in Week 2 by sensor-type
+    // lookup in map.db.
+    if instance.contains("camera") { Ok("compressed".into()) }
+    else if instance.contains("tracker") { Ok("blobs_overlay".into()) }
+    else { Ok("raw".into()) }
+}
+
+fn unwrap_cbor_image_body(cbor_bytes: &[u8]) -> Option<(Vec<u8>, String)> {
+    let envelope: serde_cbor::Value = serde_cbor::from_slice(cbor_bytes).ok()?;
     let map = if let serde_cbor::Value::Map(m) = envelope { m } else { return None };
     let body = map.iter().find_map(|(k, v)| {
         if matches!(k, serde_cbor::Value::Text(s) if s == "body") { Some(v.clone()) } else { None }
     })?;
     let body_map = if let serde_cbor::Value::Map(m) = body { m } else { return None };
-    let data = body_map.iter().find_map(|(k, v)| {
-        if matches!(k, serde_cbor::Value::Text(s) if s == "data") { Some(v.clone()) } else { None }
+    let encoding = body_map.iter().find_map(|(k, v)| {
+        if matches!(k, serde_cbor::Value::Text(s) if s == "encoding") {
+            if let serde_cbor::Value::Text(t) = v { Some(t.clone()) } else { None }
+        } else { None }
     })?;
-    if let serde_cbor::Value::Bytes(b) = data { Some(b) } else { None }
+    let data = body_map.iter().find_map(|(k, v)| {
+        if matches!(k, serde_cbor::Value::Text(s) if s == "data") {
+            if let serde_cbor::Value::Bytes(b) = v { Some(b.clone()) } else { None }
+        } else { None }
+    })?;
+    let mime = match encoding.as_str() {
+        "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        other => return Some((data, format!("application/octet-stream;hint={other}"))),
+    };
+    Some((data, mime.to_string()))
 }
 ```
 
@@ -542,25 +615,29 @@ Add `serde_cbor = "0.11"` to `Cargo.toml` if not present.
 In `crates/bubbaloop/src/mcp/mock_platform.rs`:
 
 ```rust
-async fn get_camera_frame(&self, camera_name: &str) -> Result<Vec<u8>, PlatformError> {
-    self.frames.lock().await.get(camera_name).cloned()
-        .ok_or_else(|| PlatformError::CameraUnreachable {
-            camera: camera_name.to_string(),
-            source: "no mock frame configured".into(),
+async fn get_node_sample(
+    &self,
+    node_name: &str,
+    _output_name: Option<&str>,
+) -> Result<NodeSample, PlatformError> {
+    self.samples.lock().await.get(node_name).cloned()
+        .ok_or_else(|| PlatformError::NodeUnreachable {
+            node: node_name.to_string(),
+            source: "no mock sample configured".into(),
         })
 }
 ```
 
-And expose a `set_mock_frame(camera, bytes)` helper for tests.
+And expose a `set_mock_sample(node_name, NodeSample)` helper for tests.
 
-- [ ] **Step 5: Add `PlatformError::CameraUnreachable` variant**
+- [ ] **Step 5: Add `PlatformError::NodeUnreachable` variant**
 
 In `platform.rs` or wherever `PlatformError` lives:
 
 ```rust
 pub enum PlatformError {
     // ... existing ...
-    CameraUnreachable { camera: String, source: String },
+    NodeUnreachable { node: String, source: String },
     DecodeError(String),
 }
 ```
@@ -571,24 +648,37 @@ In `crates/bubbaloop/src/mcp/tools.rs`, add a tool method:
 
 ```rust
 #[derive(Deserialize, JsonSchema)]
-pub struct GetCameraFrameArgs {
-    /// Camera node name (e.g. "tapo-terrace"). Returns one JPEG frame.
-    pub camera_name: String,
+pub struct GetNodeSampleArgs {
+    /// Daemon node name (e.g. "tapo-terrace", "oak-primary", "gpio-front-door").
+    pub node_name: String,
+    /// Optional named output. Omit to use the node's primary output
+    /// (cameras: "compressed", trackers: "blobs_overlay", raw sensors: "raw").
+    #[serde(default)]
+    pub output_name: Option<String>,
 }
 
 impl<P: PlatformOperations + Send + Sync> BubbaLoopMcpServer<P> {
-    #[tool(description = "Fetch one JPEG frame from a camera node. Returns image bytes.")]
-    pub async fn get_camera_frame(
+    #[tool(description = "Fetch the latest sample from a node's output topic. For camera nodes returns a JPEG frame; for depth nodes returns RGBA+depth bytes; for sensor nodes returns the latest reading. The agent should call this when it needs to perceive the current state of any node.")]
+    pub async fn get_node_sample(
         &self,
-        Parameters(args): Parameters<GetCameraFrameArgs>,
+        Parameters(args): Parameters<GetNodeSampleArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        log::info!("[MCP] tool=get_camera_frame camera={}", args.camera_name);
-        match self.platform.get_camera_frame(&args.camera_name).await {
-            Ok(bytes) => {
-                Ok(CallToolResult::success(vec![Content::image(
-                    base64::engine::general_purpose::STANDARD.encode(&bytes),
-                    "image/jpeg".to_string(),
-                )]))
+        log::info!("[MCP] tool=get_node_sample node={} output={:?}", args.node_name, args.output_name);
+        match self.platform.get_node_sample(&args.node_name, args.output_name.as_deref()).await {
+            Ok(sample) => {
+                if sample.encoding.starts_with("image/") {
+                    Ok(CallToolResult::success(vec![Content::image(
+                        base64::engine::general_purpose::STANDARD.encode(&sample.data),
+                        sample.encoding.clone(),
+                    )]))
+                } else {
+                    // Text-encodeable encodings (JSON, plain text) pass through.
+                    let text = match std::str::from_utf8(&sample.data) {
+                        Ok(s) => s.to_string(),
+                        Err(_) => format!("[binary data, {} bytes, encoding={}]", sample.data.len(), sample.encoding),
+                    };
+                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                }
             }
             Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
         }
@@ -596,11 +686,11 @@ impl<P: PlatformOperations + Send + Sync> BubbaLoopMcpServer<P> {
 }
 ```
 
-(Match the `rmcp` API surface for image content — see existing tool handlers in this file for the exact `Content::image(...)` constructor.)
+(Match the `rmcp` API surface for image and text content — see existing tool handlers in this file for the exact constructors.)
 
 - [ ] **Step 7: Add RBAC entry**
 
-In the same file, find the RBAC tier table and add `get_camera_frame` → `Operator` (Viewer is too restrictive; Admin is overkill).
+In the same file, find the RBAC tier table and add `get_node_sample` → `Operator` (Viewer is too restrictive; Admin is overkill).
 
 - [ ] **Step 8: Write the integration test**
 
@@ -608,14 +698,20 @@ Add to `crates/bubbaloop/tests/integration_mcp.rs` (or wherever existing integra
 
 ```rust
 #[tokio::test]
-async fn get_camera_frame_returns_image_content() {
+async fn get_node_sample_returns_image_content_for_camera_node() {
     let mock_jpeg: Vec<u8> = vec![0xff, 0xd8, 0xff, 0xe0, /* ... fake JPEG header ... */];
     let mock = MockPlatform::default();
-    mock.set_mock_frame("tapo-terrace", mock_jpeg.clone()).await;
+    mock.set_mock_sample("tapo-terrace", NodeSample {
+        data: mock_jpeg.clone(),
+        encoding: "image/jpeg".into(),
+        topic: "bubbaloop/global/host/tapo_terrace_camera/compressed".into(),
+        timestamp_ns: 0,
+    }).await;
 
     let server = BubbaLoopMcpServer::new(mock);
-    let result = server.get_camera_frame(Parameters(GetCameraFrameArgs {
-        camera_name: "tapo-terrace".into(),
+    let result = server.get_node_sample(Parameters(GetNodeSampleArgs {
+        node_name: "tapo-terrace".into(),
+        output_name: None,
     })).await.unwrap();
 
     let content = &result.content;
@@ -624,13 +720,33 @@ async fn get_camera_frame_returns_image_content() {
 }
 
 #[tokio::test]
-async fn get_camera_frame_unreachable_camera_errors() {
+async fn get_node_sample_unreachable_node_errors() {
     let mock = MockPlatform::default();
     let server = BubbaLoopMcpServer::new(mock);
-    let result = server.get_camera_frame(Parameters(GetCameraFrameArgs {
-        camera_name: "ghost-camera".into(),
+    let result = server.get_node_sample(Parameters(GetNodeSampleArgs {
+        node_name: "ghost-node".into(),
+        output_name: None,
     })).await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn get_node_sample_returns_text_for_json_node() {
+    let mock = MockPlatform::default();
+    mock.set_mock_sample("system-telemetry", NodeSample {
+        data: br#"{"cpu":42,"mem_mb":1024}"#.to_vec(),
+        encoding: "application/json".into(),
+        topic: "bubbaloop/global/host/system_telemetry/metrics".into(),
+        timestamp_ns: 0,
+    }).await;
+    let server = BubbaLoopMcpServer::new(mock);
+    let result = server.get_node_sample(Parameters(GetNodeSampleArgs {
+        node_name: "system-telemetry".into(),
+        output_name: None,
+    })).await.unwrap();
+    let content = &result.content;
+    assert_eq!(content.len(), 1);
+    assert!(matches!(content[0], Content::Text { .. }));
 }
 ```
 
@@ -659,21 +775,27 @@ echo "Live smoke deferred to Task 7 (integration dry-run)"
 
 ```bash
 git add crates/bubbaloop/src/mcp/ crates/bubbaloop/Cargo.toml Cargo.lock crates/bubbaloop/tests/integration_mcp.rs
-git commit -m "feat(mcp): add get_camera_frame tool
+git commit -m "feat(mcp): add get_node_sample generic tool
 
-Pulls one JPEG frame from a camera node's compressed topic via the
-existing get_sample.rs helper. Returns image content. RBAC: Operator+.
+Pulls the latest sample from any node's output topic. Cameras are not
+special — for an image-encoded body the tool returns image content;
+for JSON or other text-encodable bodies, text content; for opaque
+binary, a placeholder text. Auto-resolves the output topic per node
+type (cameras → compressed, trackers → blobs_overlay, raw sensors
+→ raw); takes an optional output_name override.
 
 Together with the prior commit (image-bytes special path in dispatch),
-the agent can now reason over live camera frames. This is the
-foundation for the cold open + Acts 1-2 of the demo."
+the agent can now reason over live frames from any sensor node — the
+'plug in any sensor' platform pitch made executable.
+
+RBAC: Operator+."
 ```
 
 ---
 
 ## Task 5: Spatial-Q&A system prompt for the agent
 
-**Goal:** The agent knows when to call `get_camera_frame`, what to do with the returned frame, and how to phrase grounded answers.
+**Goal:** The agent knows when to call `get_node_sample`, what to do with the returned frame, and how to phrase grounded answers.
 
 **Files:**
 - Modify: `bubbaloop/crates/bubbaloop/src/agent/prompt.rs`
@@ -692,19 +814,19 @@ In `prompt.rs`, after the existing tool-instructions section, append:
 fn spatial_reasoning_section() -> &'static str {
     r#"## Spatial reasoning
 
-You have access to the get_camera_frame tool which returns one current
+You have access to the get_node_sample tool which returns one current
 JPEG frame from a named camera node. You can SEE images using your
 vision capability — when a tool result is an image, reason over it
 directly.
 
 When the user asks a question about a physical space:
-- If the answer requires seeing what's there now: call get_camera_frame.
+- If the answer requires seeing what's there now: call get_node_sample.
 - If the answer is about a recently-cached frame, you can reuse it.
 - Reply in plain English. Don't describe the algorithm; describe the
   scene. ("Two metal chairs to the left of the café table" not
   "I detected high-confidence chair-class blobs in the image.")
 
-When the user asks "set up the map" or similar: call get_camera_frame
+When the user asks "set up the map" or similar: call get_node_sample
 on each running camera, identify rooms and landmarks visible in each,
 note any landmarks visible from multiple cameras (cross-camera
 anchors), and write the result with set_spatial_layout (this tool will
@@ -735,7 +857,7 @@ fn system_prompt_includes_spatial_reasoning_section() {
     let cfg = AgentConfig::default();
     let prompt = build_system_prompt(&cfg, None);
     assert!(prompt.contains("Spatial reasoning"));
-    assert!(prompt.contains("get_camera_frame"));
+    assert!(prompt.contains("get_node_sample"));
 }
 ```
 
@@ -753,7 +875,7 @@ Expected: pass.
 git add crates/bubbaloop/src/agent/prompt.rs
 git commit -m "feat(agent): spatial-reasoning system prompt section
 
-Tells the agent when to call get_camera_frame, how to phrase
+Tells the agent when to call get_node_sample, how to phrase
 answers (plain English about the scene, not the algorithm), and
 sketches the cold-open behavior (\"set up the map\")."
 ```
@@ -775,18 +897,18 @@ git push -u origin feat/agent-image-tool-results
 
 ```bash
 gh pr create --repo kornia/bubbaloop --base main --head feat/agent-image-tool-results \
-  --title "feat(agent): get_camera_frame MCP tool + image-bytes plumbing + spatial-reasoning prompt" \
+  --title "feat(agent): get_node_sample MCP tool + image-bytes plumbing + spatial-reasoning prompt" \
   --body "$(cat <<'EOF'
 ## Summary
 
-Three coupled changes that together let the agent call get_camera_frame
+Three coupled changes that together let the agent call get_node_sample
 on a camera node, receive JPEG bytes, and reason over them with Claude
 vision.
 
 - ToolResult::Image variant in agent dispatch — JPEGs no longer
   truncated by MAX_TOOL_RESULT_CHARS=4096; emitted as a typed image
   content block to Anthropic.
-- get_camera_frame MCP tool wraps get_sample.rs; returns image content.
+- get_node_sample MCP tool wraps get_sample.rs; returns image content.
 - Spatial-reasoning section in the system prompt tells the agent how
   to use the new tool.
 
@@ -1015,8 +1137,8 @@ describe("parseAgentEvent", () => {
   it("parses a tool-call event", () => {
     const raw = JSON.stringify({
       type: "tool_call",
-      tool_name: "get_camera_frame",
-      tool_args: { camera_name: "tapo-terrace" },
+      tool_name: "get_node_sample",
+      tool_args: { node_name: "tapo-terrace" },
       tool_call_id: "call_1",
     });
     const ev = parseAgentEvent(raw);
@@ -1145,15 +1267,15 @@ describe("ChatPanel", () => {
   it("renders a tool-call card with the tool name", () => {
     const events: AgentEvent[] = [
       { type: "turn_start" },
-      { type: "tool_call", toolName: "get_camera_frame", toolArgs: { camera_name: "tapo-terrace" }, toolCallId: "c1" },
+      { type: "tool_call", toolName: "get_node_sample", toolArgs: { node_name: "tapo-terrace" }, toolCallId: "c1" },
     ];
     render(<ChatPanel events={events} onSend={() => {}} />);
-    expect(screen.getByText(/get_camera_frame/)).toBeInTheDocument();
+    expect(screen.getByText(/get_node_sample/)).toBeInTheDocument();
   });
 
   it("renders an inline image thumbnail from a tool_result image event", () => {
     const events: AgentEvent[] = [
-      { type: "tool_call", toolName: "get_camera_frame", toolArgs: {}, toolCallId: "c1" },
+      { type: "tool_call", toolName: "get_node_sample", toolArgs: {}, toolCallId: "c1" },
       { type: "tool_result", toolCallId: "c1", contentType: "image", mediaType: "image/jpeg", dataB64: "AAAA" },
     ];
     render(<ChatPanel events={events} onSend={() => {}} />);
@@ -1714,7 +1836,7 @@ npm run dev
 In the chat panel:
 
 1. Type: *"What do you see right now?"*  
-   Expected: agent calls `get_camera_frame(camera_name="tapo-terrace")` → tool-call card with running spinner → tool-result with thumbnail → agent streams a description ("An outdoor terrace with…").
+   Expected: agent calls `get_node_sample(node_name="tapo-terrace")` → tool-call card with running spinner → tool-result with thumbnail → agent streams a description ("An outdoor terrace with…").
 
 2. Walk past the camera. Verify the TL camera quadrant overlay shows blobs.
 
@@ -1744,7 +1866,7 @@ git push
 
 ## Self-review
 
-- ✅ **Spec coverage:** Every Week 1 build-schedule item maps to a task: tracker tuning (Task 1), embedding buffer (Task 2), agent dispatch (Task 3), get_camera_frame (Task 4), system prompt (Task 5), agent PR (6), dashboard layout (7), chat panel (8a-c), live wiring (9), camera panel (10), dashboard PR (11), integration dry-run (12).
+- ✅ **Spec coverage:** Every Week 1 build-schedule item maps to a task: tracker tuning (Task 1), embedding buffer (Task 2), agent dispatch (Task 3), get_node_sample (Task 4), system prompt (Task 5), agent PR (6), dashboard layout (7), chat panel (8a-c), live wiring (9), camera panel (10), dashboard PR (11), integration dry-run (12).
 - ✅ **Placeholder scan:** No "TBD"s, no "fill in here"s. All code blocks complete.
 - ✅ **Type consistency:** `ToolResult::Image` used identically across Tasks 3 and 4. `AgentEvent` discriminated-union shape consistent in Task 8a (parser) and 8b (consumer).
 - ✅ **Scope check:** Week 1 is foundation only — explicitly excludes map.db, zones, alerts, retrieval (those are Week 2-3). Each PR is independently revertable.
