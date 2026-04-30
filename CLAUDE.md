@@ -237,3 +237,4 @@ Exception: views using encoding-first decode don't need gating.
 - `RawSubscriber` uses a 4-slot FIFO (not 256 like `TypedSubscriber`) — older frames are intentionally dropped when the consumer is slow. This is correct for video frames.
 - Python `ProtoSubscriber` auto-decodes via `SchemaRegistry` (queries `bubbaloop/**/schema`, 2s timeout). No `_pb2` imports needed — schema is fetched from the publishing node at runtime.
 - Python SDK subscribers use `_BaseSubscriber` for shared iterator protocol. Only override `recv()` in subclasses.
+- Detection-class-specific persistence (entities, world detections, zones, dwell, alerts, ...) lives in the `spatial-map` node, **not** in `daemon/`. Adding tables or MCP tools that interpret detection wire formats violates the open-core boundary — extend a node instead. Reference: `docs/superpowers/specs/2026-04-30-spatial-map-no-tracking-design.md`.
