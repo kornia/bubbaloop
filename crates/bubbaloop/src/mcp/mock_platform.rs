@@ -955,19 +955,19 @@ mod tests {
     #[test]
     fn rbac_all_viewer_tools_mapped() {
         let viewer_tools = [
-            "list_nodes",
-            "get_node_health",
-            "discover_nodes",
-            "get_node_manifest",
-            "list_commands",
-            "get_stream_info",
-            "get_system_status",
-            "get_machine_info",
-            "get_node_schema",
-            "discover_capabilities",
-            "list_jobs",
-            "list_missions",
-            "list_constraints",
+            "node_list",
+            "node_health",
+            "node_discover",
+            "node_manifest",
+            "node_commands",
+            "node_stream_info",
+            "system_status",
+            "machine_info",
+            "node_schema",
+            "capability_discover",
+            "job_list",
+            "mission_list",
+            "constraint_list",
         ];
         for tool in &viewer_tools {
             assert_eq!(
@@ -982,18 +982,18 @@ mod tests {
     #[test]
     fn rbac_all_operator_tools_mapped() {
         let operator_tools = [
-            "start_node",
-            "stop_node",
-            "restart_node",
-            "get_node_config",
-            "send_command",
-            "get_node_logs",
-            "enable_autostart",
-            "disable_autostart",
-            "delete_job",
-            "pause_mission",
-            "resume_mission",
-            "cancel_mission",
+            "node_start",
+            "node_stop",
+            "node_restart",
+            "node_config",
+            "node_command_send",
+            "node_logs",
+            "node_autostart_enable",
+            "node_autostart_disable",
+            "job_delete",
+            "mission_pause",
+            "mission_resume",
+            "mission_cancel",
         ];
         for tool in &operator_tools {
             assert_eq!(
@@ -1008,16 +1008,16 @@ mod tests {
     #[test]
     fn rbac_all_admin_tools_mapped() {
         let admin_tools = [
-            "query_zenoh",
-            "install_node",
-            "remove_node",
-            "build_node",
-            "uninstall_node",
-            "clean_node",
-            "clear_episodic_memory",
-            "register_alert",
-            "unregister_alert",
-            "register_constraint",
+            "zenoh_query",
+            "node_install",
+            "node_remove",
+            "node_build",
+            "node_uninstall",
+            "node_clean",
+            "memory_episodic_clear",
+            "alert_register",
+            "alert_unregister",
+            "constraint_register",
         ];
         for tool in &admin_tools {
             assert_eq!(
