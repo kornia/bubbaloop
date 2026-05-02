@@ -2,7 +2,7 @@
 description: List all Bubbaloop nodes with key health signals
 ---
 
-Call `list_nodes` on the `bubbaloop` MCP server.
+Call `node_list` on the `bubbaloop` MCP server.
 
 Render as a table: `name`, `status`, `health`, `type`, `installed`, `built`.
 

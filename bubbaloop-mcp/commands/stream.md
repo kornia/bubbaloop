@@ -3,7 +3,7 @@ description: Get the Zenoh topic and connection params for a node's data stream
 argument-hint: <node-name>
 ---
 
-Call `get_stream_info(node_name="$ARGUMENTS")` on the `bubbaloop` MCP server.
+Call `node_stream_info(node_name="$ARGUMENTS")` on the `bubbaloop` MCP server.
 
 Report the result as:
 

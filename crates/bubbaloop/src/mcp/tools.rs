@@ -219,6 +219,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_list",
         description = "List all registered nodes with their status, capabilities, and topics. Returns node name, status (running/stopped/etc), type, and whether it's built."
     )]
     async fn list_nodes(&self) -> Result<CallToolResult, rmcp::ErrorData> {
@@ -249,7 +250,10 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Get detailed health status of a specific node including uptime.")]
+    #[tool(
+        name = "node_health",
+        description = "Get detailed health status of a specific node including uptime."
+    )]
     async fn get_node_health(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
@@ -276,6 +280,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_config",
         description = "Get the current configuration of a node by querying its Zenoh config queryable."
     )]
     async fn get_node_config(
@@ -298,6 +303,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_manifest",
         description = "Get the full manifest for a node, including capabilities, published topics, commands, and hardware requirements."
     )]
     async fn get_node_manifest(
@@ -331,6 +337,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_commands",
         description = "List available commands for a specific node with their parameters and descriptions. Use this before send_command to discover what actions a node supports."
     )]
     async fn list_commands(
@@ -381,6 +388,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_command_send",
         description = "Send a command to a node's command queryable. The node must support the command — call list_commands first to see available commands. Example: node_name='rtsp-camera', command='capture_frame', params={\"resolution\": \"1080p\"}. Returns the command result or error."
     )]
     async fn send_command(
@@ -429,6 +437,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_start",
         description = "Start a stopped node via the daemon. The node must be installed and built."
     )]
     async fn start_node(
@@ -452,7 +461,10 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Stop a running node via the daemon.")]
+    #[tool(
+        name = "node_stop",
+        description = "Stop a running node via the daemon."
+    )]
     async fn stop_node(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
@@ -474,7 +486,10 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Restart a node (stop then start).")]
+    #[tool(
+        name = "node_restart",
+        description = "Restart a node (stop then start)."
+    )]
     async fn restart_node(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
@@ -496,7 +511,10 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Get the latest logs from a node's systemd service.")]
+    #[tool(
+        name = "node_logs",
+        description = "Get the latest logs from a node's systemd service."
+    )]
     async fn get_node_logs(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
@@ -519,6 +537,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "zenoh_query",
         description = "Query a Zenoh key expression (admin only). Key must start with 'bubbaloop/'. Returns up to 100 results."
     )]
     async fn query_zenoh(
@@ -542,6 +561,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "dataflow_graph",
         description = "Reconstruct the runtime dataflow DAG by querying every node's CBOR-encoded `manifest` queryable. Returns nodes (instance + role + machine_id + node_kind + started_at_ns) and edges (publisher_instance → subscriber_instance per topic). Edge inference uses per-topic liveness: by default only `still_live && ever_fired` topics produce edges, so the graph reflects what is *actually firing right now*. Set `include_declared_but_unused=true` to also include topics that were declared but have never received/emitted a sample. Surfaces orphan_inputs (subscribers with no producer) and unconsumed_outputs (publishers with no subscriber). Single source of truth for who-feeds-whom — no config grepping required."
     )]
     async fn dataflow(
@@ -573,6 +593,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_discover",
         description = "Discover all nodes across all machines by querying manifests. Returns a list of all self-describing nodes with their capabilities."
     )]
     async fn discover_nodes(&self) -> Result<CallToolResult, rmcp::ErrorData> {
@@ -587,6 +608,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "capability_discover",
         description = "Discover available node capabilities. Returns nodes grouped by capability type (sensor, actuator, processor, gateway). Optionally filter by a single capability type."
     )]
     async fn discover_capabilities(
@@ -656,6 +678,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Additional tools ───────────────────────────────────────────
 
     #[tool(
+        name = "node_stream_info",
         description = "Get Zenoh connection parameters for subscribing to a node's data stream. Returns topic pattern, encoding, and endpoint. Use this to set up streaming data access outside MCP."
     )]
     async fn get_stream_info(
@@ -678,6 +701,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "system_status",
         description = "Get overall system status including daemon health, node count, and Zenoh connection state."
     )]
     async fn get_system_status(&self) -> Result<CallToolResult, rmcp::ErrorData> {
@@ -706,6 +730,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "machine_info",
         description = "Get machine hardware and OS information: architecture, hostname, OS version."
     )]
     async fn get_machine_info(&self) -> Result<CallToolResult, rmcp::ErrorData> {
@@ -726,6 +751,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_build",
         description = "Trigger a build for a node. Builds the node's source code using its configured build command (Cargo, pixi, etc.). Admin only."
     )]
     async fn build_node(
@@ -750,6 +776,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_install",
         description = "Install a node from the marketplace, a local path, or GitHub repository. Accepts a marketplace name (e.g., 'rtsp-camera'), a local directory path (e.g., '/path/to/my-node'), or GitHub format (e.g., 'user/repo'). Downloads precompiled binaries when available, registers the node with the daemon, and creates the systemd service. Admin only."
     )]
     async fn install_node(
@@ -787,6 +814,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_remove",
         description = "Remove a registered node. Stops the node first if it is running, then removes it from the daemon registry. Admin only."
     )]
     async fn remove_node(
@@ -807,6 +835,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_uninstall",
         description = "Uninstall a node's systemd service. Stops the node if running and removes the systemd service file, but keeps the node registered. Admin only."
     )]
     async fn uninstall_node(
@@ -831,6 +860,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_clean",
         description = "Clean a node's build artifacts and cached data. Useful for forcing a rebuild. Admin only."
     )]
     async fn clean_node(
@@ -855,6 +885,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_autostart_enable",
         description = "Enable autostart for a node. The node's systemd service will start automatically on boot."
     )]
     async fn enable_autostart(
@@ -879,6 +910,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_autostart_disable",
         description = "Disable autostart for a node. The node's systemd service will no longer start automatically on boot."
     )]
     async fn disable_autostart(
@@ -903,6 +935,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "node_schema",
         description = "Get the protobuf schema of a node's data messages. Returns the schema in human-readable format if available."
     )]
     async fn get_node_schema(
@@ -929,6 +962,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Agent proposal tools ─────────────────────────────────────────
 
     #[tool(
+        name = "proposal_list",
         description = "List agent proposals awaiting human approval. Optionally filter by status: 'pending', 'approved', 'rejected'."
     )]
     async fn list_proposals(
@@ -946,6 +980,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "proposal_approve",
         description = "Approve a pending agent proposal. The proposed actions will be executed by the agent on its next heartbeat."
     )]
     async fn approve_proposal(
@@ -971,6 +1006,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "proposal_reject",
         description = "Reject a pending agent proposal. The proposed actions will be discarded."
     )]
     async fn reject_proposal(
@@ -998,6 +1034,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Memory admin tools ──────────────────────────────────────────
 
     #[tool(
+        name = "job_list",
         description = "List agent jobs with optional status filter. Returns all scheduled, running, completed, and failed jobs."
     )]
     async fn list_jobs(
@@ -1015,6 +1052,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "job_delete",
         description = "Delete a specific agent job by ID. Removes the job from the scheduler. Operator only."
     )]
     async fn delete_job(
@@ -1032,6 +1070,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "memory_episodic_clear",
         description = "Clear episodic memory logs older than the specified number of days. Removes NDJSON files and FTS5 index entries. Admin only."
     )]
     async fn clear_episodic_memory(
@@ -1058,6 +1097,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Context provider tools ────────────────────────────────────
 
     #[tool(
+        name = "context_configure",
         description = "Configure a context provider: a daemon background task that subscribes to a Zenoh topic pattern and writes extracted field values into world state. Required: mission_id, topic_pattern (e.g. 'bubbaloop/**/vision/detections'), world_state_key_template (e.g. '{label}.location'), value_field (JSON path to extract). Optional: filter (e.g. 'confidence>0.8'), min_interval_secs, max_age_secs, confidence_field. Use list_world_state to see results. Admin only."
     )]
     async fn configure_context(
@@ -1100,7 +1140,10 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
 
     // ── Mission lifecycle tools ─────────────────────────────────────
 
-    #[tool(description = "List all missions with their status, expiry, and resources.")]
+    #[tool(
+        name = "mission_list",
+        description = "List all missions with their status, expiry, and resources."
+    )]
     async fn list_missions(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=list_missions");
         match self.platform.list_missions().await {
@@ -1115,6 +1158,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "mission_pause",
         description = "Pause an active mission. The agent will stop working on it until resumed."
     )]
     async fn pause_mission(
@@ -1135,7 +1179,10 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Resume a paused mission. The agent will continue working on it.")]
+    #[tool(
+        name = "mission_resume",
+        description = "Resume a paused mission. The agent will continue working on it."
+    )]
     async fn resume_mission(
         &self,
         Parameters(req): Parameters<MissionIdRequest>,
@@ -1155,6 +1202,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "mission_cancel",
         description = "Cancel an active or paused mission. The agent will stop working on it permanently."
     )]
     async fn cancel_mission(
@@ -1178,6 +1226,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Reactive alert tools ────────────────────────────────────────
 
     #[tool(
+        name = "alert_register",
         description = "Register a reactive alert rule. When the world state matches the predicate, the agent's arousal spikes without an LLM call. Admin only."
     )]
     async fn register_alert(
@@ -1217,7 +1266,10 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Unregister a reactive alert rule by ID. Admin only.")]
+    #[tool(
+        name = "alert_unregister",
+        description = "Unregister a reactive alert rule by ID. Admin only."
+    )]
     async fn unregister_alert(
         &self,
         Parameters(req): Parameters<AlertIdRequest>,
@@ -1232,13 +1284,16 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "List reactive alert rules with full introspection. \
+    #[tool(
+        name = "alert_list",
+        description = "List reactive alert rules with full introspection. \
             Each entry includes predicate, debounce_secs, arousal_boost, description, \
             and `dangling_fields` — world-state keys the predicate references \
             that no registered context provider appears to produce. A non-empty \
             dangling_fields list is a red flag: the rule may never fire, or may \
             fire on stale/ghost values (see incident 2026-04-10). \
-            Optional mission_id filter.")]
+            Optional mission_id filter."
+    )]
     async fn list_alerts(
         &self,
         Parameters(req): Parameters<ListAlertsRequest>,
@@ -1260,6 +1315,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Constraint tools ────────────────────────────────────────────
 
     #[tool(
+        name = "constraint_register",
         description = "Register a safety constraint for a mission. Constraints are checked before any actuator command (fail-closed). Admin only."
     )]
     async fn register_constraint(
@@ -1287,7 +1343,10 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "List all safety constraints for a mission. Viewer only.")]
+    #[tool(
+        name = "constraint_list",
+        description = "List all safety constraints for a mission. Viewer only."
+    )]
     async fn list_constraints(
         &self,
         Parameters(req): Parameters<ListConstraintsRequest>,
@@ -1320,6 +1379,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Belief tools ──────────────────────────────────────────────────
 
     #[tool(
+        name = "belief_get",
         description = "Get a single belief by subject and predicate. Returns the belief as JSON or 'not found'."
     )]
     async fn get_belief(
@@ -1344,6 +1404,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "belief_update",
         description = "Create or update a belief about the world. Beliefs are durable assertions the agent holds (e.g. 'the dog eats at 08:00'). Operator only."
     )]
     async fn update_belief(
@@ -1375,6 +1436,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
+        name = "world_state_list",
         description = "List all world state entries. Returns the current world state snapshot as JSON."
     )]
     async fn list_world_state(&self) -> Result<CallToolResult, rmcp::ErrorData> {

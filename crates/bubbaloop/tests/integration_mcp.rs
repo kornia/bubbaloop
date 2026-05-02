@@ -159,15 +159,15 @@ async fn list_tools_returns_expected_tools() {
     let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
 
     // Verify key tools exist
-    assert!(tool_names.contains(&"list_nodes".to_string()));
-    assert!(tool_names.contains(&"get_system_status".to_string()));
-    assert!(tool_names.contains(&"get_machine_info".to_string()));
-    assert!(tool_names.contains(&"get_node_health".to_string()));
-    assert!(tool_names.contains(&"start_node".to_string()));
-    assert!(tool_names.contains(&"stop_node".to_string()));
-    assert!(tool_names.contains(&"query_zenoh".to_string()));
-    assert!(tool_names.contains(&"install_node".to_string()));
-    assert!(tool_names.contains(&"remove_node".to_string()));
+    assert!(tool_names.contains(&"node_list".to_string()));
+    assert!(tool_names.contains(&"system_status".to_string()));
+    assert!(tool_names.contains(&"machine_info".to_string()));
+    assert!(tool_names.contains(&"node_health".to_string()));
+    assert!(tool_names.contains(&"node_start".to_string()));
+    assert!(tool_names.contains(&"node_stop".to_string()));
+    assert!(tool_names.contains(&"zenoh_query".to_string()));
+    assert!(tool_names.contains(&"node_install".to_string()));
+    assert!(tool_names.contains(&"node_remove".to_string()));
 
     h.shutdown().await.unwrap();
 }
@@ -175,7 +175,7 @@ async fn list_tools_returns_expected_tools() {
 #[tokio::test]
 async fn list_nodes_default_mock() {
     let h = TestHarness::new().await;
-    let result = h.call("list_nodes").await.unwrap();
+    let result = h.call("node_list").await.unwrap();
     let json = result_json(&result);
 
     let nodes = json.as_array().expect("expected array");
@@ -193,7 +193,7 @@ async fn list_nodes_default_mock() {
 #[tokio::test]
 async fn list_nodes_empty() {
     let h = TestHarness::with_mock(mock_with_nodes(vec![])).await;
-    let result = h.call("list_nodes").await.unwrap();
+    let result = h.call("node_list").await.unwrap();
     let json = result_json(&result);
 
     let nodes = json.as_array().expect("expected array");
@@ -223,7 +223,7 @@ async fn list_nodes_multiple() {
         },
     ];
     let h = TestHarness::with_mock(mock_with_nodes(nodes)).await;
-    let result = h.call("list_nodes").await.unwrap();
+    let result = h.call("node_list").await.unwrap();
     let json = result_json(&result);
 
     let arr = json.as_array().expect("expected array");
@@ -236,9 +236,9 @@ async fn list_nodes_multiple() {
 }
 
 #[tokio::test]
-async fn get_system_status() {
+async fn system_status() {
     let h = TestHarness::new().await;
-    let result = h.call("get_system_status").await.unwrap();
+    let result = h.call("system_status").await.unwrap();
     let json = result_json(&result);
 
     assert_eq!(json["scope"], "global");
@@ -254,7 +254,7 @@ async fn get_system_status() {
 #[tokio::test]
 async fn get_system_status_no_nodes() {
     let h = TestHarness::with_mock(mock_with_nodes(vec![])).await;
-    let result = h.call("get_system_status").await.unwrap();
+    let result = h.call("system_status").await.unwrap();
     let json = result_json(&result);
 
     assert_eq!(json["nodes_total"], 0);
@@ -265,9 +265,9 @@ async fn get_system_status_no_nodes() {
 }
 
 #[tokio::test]
-async fn get_machine_info() {
+async fn machine_info() {
     let h = TestHarness::new().await;
-    let result = h.call("get_machine_info").await.unwrap();
+    let result = h.call("machine_info").await.unwrap();
     let json = result_json(&result);
 
     assert_eq!(json["machine_id"], "test-machine");
@@ -284,10 +284,7 @@ async fn get_machine_info() {
 async fn get_node_health_existing() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args(
-            "get_node_health",
-            serde_json::json!({"node_name": "test-node"}),
-        )
+        .call_with_args("node_health", serde_json::json!({"node_name": "test-node"}))
         .await
         .unwrap();
     let json = result_json(&result);
@@ -303,7 +300,7 @@ async fn get_node_health_missing() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "get_node_health",
+            "node_health",
             serde_json::json!({"node_name": "nonexistent"}),
         )
         .await
@@ -324,7 +321,7 @@ async fn get_node_health_invalid_name() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "get_node_health",
+            "node_health",
             serde_json::json!({"node_name": "../etc/passwd"}),
         )
         .await
@@ -347,7 +344,7 @@ async fn get_node_health_invalid_name() {
 async fn start_node_existing() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args("start_node", serde_json::json!({"node_name": "test-node"}))
+        .call_with_args("node_start", serde_json::json!({"node_name": "test-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -361,7 +358,7 @@ async fn start_node_existing() {
 async fn stop_node_existing() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args("stop_node", serde_json::json!({"node_name": "test-node"}))
+        .call_with_args("node_stop", serde_json::json!({"node_name": "test-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -376,7 +373,7 @@ async fn restart_node_existing() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "restart_node",
+            "node_restart",
             serde_json::json!({"node_name": "test-node"}),
         )
         .await
@@ -389,11 +386,11 @@ async fn restart_node_existing() {
 }
 
 #[tokio::test]
-async fn get_stream_info() {
+async fn node_stream_info() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "get_stream_info",
+            "node_stream_info",
             serde_json::json!({"node_name": "test-node"}),
         )
         .await
@@ -408,9 +405,9 @@ async fn get_stream_info() {
 }
 
 #[tokio::test]
-async fn discover_nodes() {
+async fn node_discover() {
     let h = TestHarness::new().await;
-    let result = h.call("discover_nodes").await.unwrap();
+    let result = h.call("node_discover").await.unwrap();
     let text = result_text(&result);
 
     // MockPlatform returns "mock: query bubbaloop/**/manifest"
@@ -425,7 +422,7 @@ async fn query_zenoh_valid() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "query_zenoh",
+            "zenoh_query",
             serde_json::json!({"key_expr": "bubbaloop/local/jetson1/openmeteo/status"}),
         )
         .await
@@ -443,7 +440,7 @@ async fn send_command_existing_node() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "send_command",
+            "node_command_send",
             serde_json::json!({
                 "node_name": "test-node",
                 "command": "capture_frame",
@@ -468,7 +465,7 @@ async fn send_command_existing_node() {
 async fn build_node_existing() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args("build_node", serde_json::json!({"node_name": "test-node"}))
+        .call_with_args("node_build", serde_json::json!({"node_name": "test-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -482,10 +479,7 @@ async fn build_node_existing() {
 async fn get_node_logs_existing() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args(
-            "get_node_logs",
-            serde_json::json!({"node_name": "test-node"}),
-        )
+        .call_with_args("node_logs", serde_json::json!({"node_name": "test-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -503,7 +497,7 @@ async fn get_node_logs_existing() {
 async fn start_node_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args("start_node", serde_json::json!({"node_name": "ghost-node"}))
+        .call_with_args("node_start", serde_json::json!({"node_name": "ghost-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -521,7 +515,7 @@ async fn start_node_nonexistent() {
 async fn stop_node_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args("stop_node", serde_json::json!({"node_name": "ghost-node"}))
+        .call_with_args("node_stop", serde_json::json!({"node_name": "ghost-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -540,7 +534,7 @@ async fn restart_node_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "restart_node",
+            "node_restart",
             serde_json::json!({"node_name": "ghost-node"}),
         )
         .await
@@ -560,7 +554,7 @@ async fn restart_node_nonexistent() {
 async fn build_node_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args("build_node", serde_json::json!({"node_name": "ghost-node"}))
+        .call_with_args("node_build", serde_json::json!({"node_name": "ghost-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -579,7 +573,7 @@ async fn query_zenoh_invalid_key() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "query_zenoh",
+            "zenoh_query",
             serde_json::json!({"key_expr": "other/not-bubbaloop/path"}),
         )
         .await
@@ -600,7 +594,7 @@ async fn query_zenoh_wildcard_only_rejected() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "query_zenoh",
+            "zenoh_query",
             serde_json::json!({"key_expr": "bubbaloop/**"}),
         )
         .await
@@ -621,10 +615,7 @@ async fn get_node_config_missing_config() {
     // Default mock has "test-node" but no config for it
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args(
-            "get_node_config",
-            serde_json::json!({"node_name": "test-node"}),
-        )
+        .call_with_args("node_config", serde_json::json!({"node_name": "test-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -643,14 +634,14 @@ async fn get_node_manifest_existing() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "get_node_manifest",
+            "node_manifest",
             serde_json::json!({"node_name": "test-node"}),
         )
         .await
         .unwrap();
     let text = result_text(&result);
 
-    // get_node_manifest now reads from cached manifests via get_manifests()
+    // node_manifest now reads from cached manifests via get_manifests()
     assert!(
         text.contains("test-node") && text.contains("sensor"),
         "Expected manifest with node name and capability in: {}",
@@ -665,14 +656,14 @@ async fn list_commands_no_commands_available() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "list_commands",
+            "node_commands",
             serde_json::json!({"node_name": "test-node"}),
         )
         .await
         .unwrap();
     let text = result_text(&result);
 
-    // MockPlatform returns non-JSON manifest, so list_commands parses nothing
+    // MockPlatform returns non-JSON manifest, so node_commands parses nothing
     assert!(
         text.contains("No commands available"),
         "Expected 'No commands available' when manifest has no commands in: {}",
@@ -682,14 +673,14 @@ async fn list_commands_no_commands_available() {
     h.shutdown().await.unwrap();
 }
 
-// ── install_node tests ──────────────────────────────────────────────────
+// ── node_install tests ──────────────────────────────────────────────────
 
 #[tokio::test]
 async fn install_node_valid_source() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "install_node",
+            "node_install",
             serde_json::json!({"source": "/path/to/my-node"}),
         )
         .await
@@ -710,7 +701,7 @@ async fn install_node_github_shorthand() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "install_node",
+            "node_install",
             serde_json::json!({"source": "kornia/bubbaloop-nodes-official"}),
         )
         .await
@@ -730,7 +721,7 @@ async fn install_node_github_shorthand() {
 async fn install_node_empty_source_rejected() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args("install_node", serde_json::json!({"source": ""}))
+        .call_with_args("node_install", serde_json::json!({"source": ""}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -750,7 +741,7 @@ async fn install_node_shell_metacharacters_rejected() {
 
     for bad_source in &["foo;rm -rf /", "foo|bar", "foo&bar"] {
         let result = h
-            .call_with_args("install_node", serde_json::json!({"source": bad_source}))
+            .call_with_args("node_install", serde_json::json!({"source": bad_source}))
             .await
             .unwrap();
         let text = result_text(&result);
@@ -766,7 +757,7 @@ async fn install_node_shell_metacharacters_rejected() {
     h.shutdown().await.unwrap();
 }
 
-// ── remove_node tests ───────────────────────────────────────────────────
+// ── node_remove tests ───────────────────────────────────────────────────
 
 #[tokio::test]
 async fn remove_node_existing() {
@@ -774,7 +765,7 @@ async fn remove_node_existing() {
 
     // Default mock has "test-node" — remove it
     let result = h
-        .call_with_args("remove_node", serde_json::json!({"node_name": "test-node"}))
+        .call_with_args("node_remove", serde_json::json!({"node_name": "test-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -786,7 +777,7 @@ async fn remove_node_existing() {
     );
 
     // Verify node is actually gone from the mock
-    let list_result = h.call("list_nodes").await.unwrap();
+    let list_result = h.call("node_list").await.unwrap();
     let json = result_json(&list_result);
     let nodes = json.as_array().expect("expected array");
     assert!(nodes.is_empty(), "Expected no nodes after removal");
@@ -799,7 +790,7 @@ async fn remove_node_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "remove_node",
+            "node_remove",
             serde_json::json!({"node_name": "no-such-node"}),
         )
         .await
@@ -820,7 +811,7 @@ async fn remove_node_invalid_name_rejected() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "remove_node",
+            "node_remove",
             serde_json::json!({"node_name": "../etc/passwd"}),
         )
         .await
@@ -838,14 +829,14 @@ async fn remove_node_invalid_name_rejected() {
     h.shutdown().await.unwrap();
 }
 
-// ── uninstall_node tests ─────────────────────────────────────────────
+// ── node_uninstall tests ─────────────────────────────────────────────
 
 #[tokio::test]
 async fn uninstall_node_existing() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "uninstall_node",
+            "node_uninstall",
             serde_json::json!({"node_name": "test-node"}),
         )
         .await
@@ -862,7 +853,7 @@ async fn uninstall_node_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "uninstall_node",
+            "node_uninstall",
             serde_json::json!({"node_name": "ghost-node"}),
         )
         .await
@@ -883,7 +874,7 @@ async fn uninstall_node_invalid_name_rejected() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "uninstall_node",
+            "node_uninstall",
             serde_json::json!({"node_name": "../etc/passwd"}),
         )
         .await
@@ -899,13 +890,13 @@ async fn uninstall_node_invalid_name_rejected() {
     h.shutdown().await.unwrap();
 }
 
-// ── clean_node tests ─────────────────────────────────────────────────
+// ── node_clean tests ─────────────────────────────────────────────────
 
 #[tokio::test]
 async fn clean_node_existing() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args("clean_node", serde_json::json!({"node_name": "test-node"}))
+        .call_with_args("node_clean", serde_json::json!({"node_name": "test-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -919,7 +910,7 @@ async fn clean_node_existing() {
 async fn clean_node_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args("clean_node", serde_json::json!({"node_name": "ghost-node"}))
+        .call_with_args("node_clean", serde_json::json!({"node_name": "ghost-node"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -933,14 +924,14 @@ async fn clean_node_nonexistent() {
     h.shutdown().await.unwrap();
 }
 
-// ── enable_autostart tests ───────────────────────────────────────────
+// ── node_autostart_enable tests ───────────────────────────────────────────
 
 #[tokio::test]
 async fn enable_autostart_existing() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "enable_autostart",
+            "node_autostart_enable",
             serde_json::json!({"node_name": "test-node"}),
         )
         .await
@@ -957,7 +948,7 @@ async fn enable_autostart_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "enable_autostart",
+            "node_autostart_enable",
             serde_json::json!({"node_name": "ghost-node"}),
         )
         .await
@@ -973,14 +964,14 @@ async fn enable_autostart_nonexistent() {
     h.shutdown().await.unwrap();
 }
 
-// ── disable_autostart tests ──────────────────────────────────────────
+// ── node_autostart_disable tests ──────────────────────────────────────────
 
 #[tokio::test]
 async fn disable_autostart_existing() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "disable_autostart",
+            "node_autostart_disable",
             serde_json::json!({"node_name": "test-node"}),
         )
         .await
@@ -997,7 +988,7 @@ async fn disable_autostart_nonexistent() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "disable_autostart",
+            "node_autostart_disable",
             serde_json::json!({"node_name": "ghost-node"}),
         )
         .await
@@ -1013,13 +1004,13 @@ async fn disable_autostart_nonexistent() {
     h.shutdown().await.unwrap();
 }
 
-// ── install_node marketplace routing tests ───────────────────────────
+// ── node_install marketplace routing tests ───────────────────────────
 
 #[tokio::test]
 async fn install_node_marketplace_name() {
     let h = TestHarness::new().await;
     let result = h
-        .call_with_args("install_node", serde_json::json!({"source": "rtsp-camera"}))
+        .call_with_args("node_install", serde_json::json!({"source": "rtsp-camera"}))
         .await
         .unwrap();
     let text = result_text(&result);
@@ -1039,14 +1030,14 @@ async fn install_node_path_still_works() {
     let h = TestHarness::new().await;
     let result = h
         .call_with_args(
-            "install_node",
+            "node_install",
             serde_json::json!({"source": "/path/to/my-node"}),
         )
         .await
         .unwrap();
     let text = result_text(&result);
 
-    // MockPlatform.install_node returns "mock: installed node from /path/to/my-node"
+    // MockPlatform.node_install returns "mock: installed node from /path/to/my-node"
     assert!(
         text.contains("installed") && text.contains("/path/to/my-node"),
         "Expected path install for absolute path in: {}",
@@ -1066,23 +1057,23 @@ async fn list_tools_includes_new_tools() {
     let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
 
     assert!(
-        tool_names.contains(&"uninstall_node".to_string()),
-        "Missing uninstall_node in: {:?}",
+        tool_names.contains(&"node_uninstall".to_string()),
+        "Missing node_uninstall in: {:?}",
         tool_names
     );
     assert!(
-        tool_names.contains(&"clean_node".to_string()),
-        "Missing clean_node in: {:?}",
+        tool_names.contains(&"node_clean".to_string()),
+        "Missing node_clean in: {:?}",
         tool_names
     );
     assert!(
-        tool_names.contains(&"enable_autostart".to_string()),
-        "Missing enable_autostart in: {:?}",
+        tool_names.contains(&"node_autostart_enable".to_string()),
+        "Missing node_autostart_enable in: {:?}",
         tool_names
     );
     assert!(
-        tool_names.contains(&"disable_autostart".to_string()),
-        "Missing disable_autostart in: {:?}",
+        tool_names.contains(&"node_autostart_disable".to_string()),
+        "Missing node_autostart_disable in: {:?}",
         tool_names
     );
 

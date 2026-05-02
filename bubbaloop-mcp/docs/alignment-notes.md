@@ -22,7 +22,7 @@ These items live in `crates/bubbaloop/src/mcp/` and are out of scope for the plu
 
 | # | Gap | Where to fix |
 |---|---|---|
-| 1 | **Tool naming inconsistency.** Mixed `verb_noun` (`list_nodes`), `verb_noun_noun` (`get_node_health`), and noun-first (`query_zenoh`). GitHub uses `noun_verb` namespacing (`issues_get`, `repos_search`). | `crates/bubbaloop/src/mcp/tools.rs` — rename via `#[tool(name = "node_list")]` etc. |
+| ~~1~~ | **(CLOSED in feat/mcp-tool-rename) Tool naming inconsistency.** Mixed `verb_noun` (`list_nodes`), `verb_noun_noun` (`get_node_health`), and noun-first (`query_zenoh`). GitHub uses `noun_verb` namespacing (`issues_get`, `repos_search`). | `crates/bubbaloop/src/mcp/tools.rs` — rename via `#[tool(name = "node_list")]` etc. |
 | 2 | **No `ToolAnnotations`.** GitHub sets `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` on every tool so clients can auto-distinguish safe from destructive ops. | `crates/bubbaloop/src/mcp/tools.rs` — add annotations to each `#[tool]` declaration |
 | 3 | **No toolset grouping / opt-in.** GitHub MCP exposes `--toolsets repos,issues` and a `dynamic` mode that gates tools behind `enable_toolset`. All 42 bubbaloop tools are always visible, which inflates client context. | `crates/bubbaloop/src/mcp/mod.rs` — gate `list_tools` output on a per-toolset env var or token claim |
 | 4 | **RBAC tier hardcoded to Admin.** `let caller_tier = rbac::Tier::Admin;` with `TODO(phase-3)`. | `crates/bubbaloop/src/mcp/mod.rs:143` — encode tier in token format and parse in `call_tool` |
