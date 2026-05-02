@@ -1,0 +1,22 @@
+{
+  "name": "bubbaloop",
+  "owner": {
+    "name": "Edgar Riba",
+    "email": "edgar.riba@gmail.com",
+    "url": "https://github.com/kornia/bubbaloop"
+  },
+  "metadata": {
+    "description": "Bubbaloop plugin marketplace — control sensor nodes from Claude Code and other MCP clients",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "bubbaloop",
+      "source": "./",
+      "description": "Control Bubbaloop sensor nodes via MCP — node lifecycle, missions, beliefs, scheduled tasks",
+      "version": "0.1.0",
+      "category": "iot",
+      "tags": ["robotics", "iot", "zenoh", "mcp", "sensors", "rtsp"]
+    }
+  ]
+}

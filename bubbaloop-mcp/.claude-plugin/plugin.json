@@ -1,0 +1,23 @@
+{
+  "name": "bubbaloop",
+  "version": "0.1.0",
+  "description": "Control Bubbaloop — a multi-agent skill runtime for physical sensor nodes — directly from any MCP client. Wraps the bubbaloop daemon's MCP server (42 tools across Viewer/Operator/Admin RBAC tiers) with curated slash commands and a subagent for node lifecycle, mission management, and Zenoh stream introspection.",
+  "author": {
+    "name": "Edgar Riba",
+    "email": "edgar.riba@gmail.com",
+    "url": "https://github.com/kornia/bubbaloop"
+  },
+  "homepage": "https://github.com/kornia/bubbaloop",
+  "repository": "https://github.com/kornia/bubbaloop",
+  "license": "Apache-2.0",
+  "keywords": [
+    "robotics",
+    "iot",
+    "zenoh",
+    "mcp",
+    "sensors",
+    "rtsp",
+    "agent",
+    "edge"
+  ]
+}
