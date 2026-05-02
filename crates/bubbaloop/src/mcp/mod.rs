@@ -103,24 +103,24 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
             server_info: Implementation::from_build_env(),
             instructions: Some(
                 "Bubbaloop skill runtime for AI agents. Controls physical sensor nodes via MCP.\n\n\
-                 **Discovery:** list_nodes, get_node_health, get_node_schema, get_stream_info, discover_capabilities\n\
-                 **Lifecycle:** start_node, stop_node, restart_node, build_node, install_node, remove_node, uninstall_node, clean_node\n\
-                 **Autostart:** enable_autostart, disable_autostart\n\
-                 **Data:** send_command, get_stream_info (returns Zenoh topic for streaming)\n\
-                 **Config:** get_node_config, get_node_manifest, list_commands\n\
-                 **Proposals:** list_proposals, approve_proposal, reject_proposal\n\
-                 **Memory:** list_jobs, delete_job, clear_episodic_memory\n\
-                 **Beliefs:** update_belief, get_belief — durable agent beliefs (subject+predicate model, e.g. subject='front_door_camera' predicate='is_reliable')\n\
-                 **World State:** list_world_state — live sensor-derived key/value snapshot\n\
-                 **Context Providers:** configure_context — wire a Zenoh topic pattern to world state (daemon background task)\n\
-                 **Missions:** list_missions, pause_mission, resume_mission, cancel_mission — YAML-file-driven goals (~/.bubbaloop/agents/{id}/missions/)\n\
-                 **Constraints:** register_constraint, list_constraints — per-mission safety limits (workspace/max_velocity/forbidden_zone/max_force)\n\
-                 **Alerts:** register_alert, unregister_alert, list_alerts — reactive rules that spike arousal when world state matches (list_alerts surfaces dangling world-state refs)\n\
-                 **System:** get_system_status, get_machine_info, query_zenoh, discover_nodes\n\n\
-                 install_node accepts marketplace names (e.g., 'rtsp-camera'), local paths, or GitHub 'user/repo' format.\n\
-                 Use discover_capabilities to find nodes by capability (sensor, actuator, processor, gateway).\n\
-                 Use get_node_manifest for full node details including topics, commands, and requirements.\n\
-                 Streaming data flows through Zenoh (not MCP). Use get_stream_info to get Zenoh connection params.\n\
+                 **Discovery:** node_list, node_health, node_schema, node_stream_info, capability_discover\n\
+                 **Lifecycle:** node_start, node_stop, node_restart, node_build, node_install, node_remove, node_uninstall, node_clean\n\
+                 **Autostart:** node_autostart_enable, node_autostart_disable\n\
+                 **Data:** node_command_send, node_stream_info (returns Zenoh topic for streaming)\n\
+                 **Config:** node_config, node_manifest, node_commands\n\
+                 **Proposals:** proposal_list, proposal_approve, proposal_reject\n\
+                 **Memory:** job_list, job_delete, memory_episodic_clear\n\
+                 **Beliefs:** belief_update, belief_get — durable agent beliefs (subject+predicate model, e.g. subject='front_door_camera' predicate='is_reliable')\n\
+                 **World State:** world_state_list — live sensor-derived key/value snapshot\n\
+                 **Context Providers:** context_configure — wire a Zenoh topic pattern to world state (daemon background task)\n\
+                 **Missions:** mission_list, mission_pause, mission_resume, mission_cancel — YAML-file-driven goals (~/.bubbaloop/agents/{id}/missions/)\n\
+                 **Constraints:** constraint_register, constraint_list — per-mission safety limits (workspace/max_velocity/forbidden_zone/max_force)\n\
+                 **Alerts:** alert_register, alert_unregister, alert_list — reactive rules that spike arousal when world state matches (alert_list surfaces dangling world-state refs)\n\
+                 **System:** system_status, machine_info, zenoh_query, node_discover\n\n\
+                 node_install accepts marketplace names (e.g., 'rtsp-camera'), local paths, or GitHub 'user/repo' format.\n\
+                 Use capability_discover to find nodes by capability (sensor, actuator, processor, gateway).\n\
+                 Use node_manifest for full node details including topics, commands, and requirements.\n\
+                 Streaming data flows through Zenoh (not MCP). Use node_stream_info to get Zenoh connection params.\n\
                  Missions are created by dropping a YAML file into ~/.bubbaloop/agents/{id}/missions/ — the daemon picks them up automatically.\n\
                  Constraint params_json format: workspace={\"x\":[-1,1],\"y\":[-1,1],\"z\":[0,2]}, max_velocity=1.5, forbidden_zone={\"center\":[0,0,0],\"radius\":0.3}, max_force=50.0\n\
                  Auth: Bearer token required (see ~/.bubbaloop/mcp-token)."
@@ -239,7 +239,7 @@ pub async fn run_mcp_server(
     let health_manager = node_manager.clone();
 
     // HTTP MCP lives under the daemon's shutdown. Forward `shutdown_rx` so
-    // `configure_context` can spawn context providers live and still tear them
+    // `context_configure` can spawn context providers live and still tear them
     // down cleanly on daemon shutdown.
     let platform = Arc::new(platform::DaemonPlatform::new(
         node_manager,

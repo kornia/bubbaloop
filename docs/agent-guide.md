@@ -255,7 +255,7 @@ Inbox — `AgentMessage` (CLI → Daemon):
 Outbox — `AgentEvent` (Daemon → CLI):
 ```json
 {"id": "uuid", "type": "delta", "text": "token..."}
-{"id": "uuid", "type": "tool", "text": "get_system_status", "input": "{\"name\":\"cam1\"}"}
+{"id": "uuid", "type": "tool", "text": "system_status", "input": "{\"name\":\"cam1\"}"}
 {"id": "uuid", "type": "tool_result", "text": "..."}
 {"id": "uuid", "type": "error", "text": "API error: 429"}
 {"id": "uuid", "type": "system", "text": "context: 3 world state entries, 2 memory episodes"}
@@ -285,11 +285,11 @@ Because the gateway is a Zenoh convention (not hardcoded to the CLI), you can bu
 
 ## Quick Start Workflow
 
-1. `list_nodes` → see all nodes with status
-2. `get_node_health` → get details for a specific node
-3. `get_node_schema` → understand its data format
-4. `get_stream_info` → get Zenoh topic for live data
-5. `send_command` → trigger actions on the node
+1. `node_list` → see all nodes with status
+2. `node_health` → get details for a specific node
+3. `node_schema` → understand its data format
+4. `node_stream_info` → get Zenoh topic for live data
+5. `node_command_send` → trigger actions on the node
 6. `schedule_task` → automate recurring agent jobs
 
 ## Architecture: Dual-Plane Model
@@ -297,7 +297,7 @@ Because the gateway is a Zenoh convention (not hardcoded to the CLI), you can bu
 **MCP** = control plane (tool calls, JSON responses, max ~100 req/s)
 **Zenoh** = data plane (sensor streams, protobuf, 1000s msg/s)
 
-Never route streaming data through MCP. Use `get_stream_info` to get Zenoh connection params for direct subscription.
+Never route streaming data through MCP. Use `node_stream_info` to get Zenoh connection params for direct subscription.
 
 ### Why Two Planes?
 
@@ -309,7 +309,7 @@ Never route streaming data through MCP. Use `get_stream_info` to get Zenoh conne
 
 ### Discovery Tools
 
-#### `list_nodes`
+#### `node_list`
 
 **Tier:** Viewer (read-only)
 
@@ -333,14 +333,14 @@ List all registered nodes with their status, capabilities, and topics.
 
 **Example workflow:**
 ```
-Agent: list_nodes
+Agent: node_list
 → Get overview of all nodes
 → Pick interesting ones for detailed inspection
 ```
 
 ---
 
-#### `get_node_health`
+#### `node_health`
 
 **Tier:** Viewer
 
@@ -371,7 +371,7 @@ Get detailed health status of a specific node including uptime and resource usag
 
 ---
 
-#### `discover_nodes`
+#### `node_discover`
 
 **Tier:** Viewer
 
@@ -388,7 +388,7 @@ Discover all nodes across all machines by querying manifests on `bubbaloop/**/ma
 
 ---
 
-#### `get_node_manifest`
+#### `node_manifest`
 
 **Tier:** Viewer
 
@@ -416,11 +416,11 @@ Get the manifest (self-description) of a node including its capabilities, publis
 
 ---
 
-#### `list_commands`
+#### `node_commands`
 
 **Tier:** Viewer
 
-List available commands for a specific node with their parameters and descriptions. Use this before `send_command` to discover what actions a node supports.
+List available commands for a specific node with their parameters and descriptions. Use this before `node_command_send` to discover what actions a node supports.
 
 **Parameters:**
 - `node_name` (string, required): Name of the node
@@ -446,7 +446,7 @@ List available commands for a specific node with their parameters and descriptio
 
 ---
 
-#### `get_node_schema`
+#### `node_schema`
 
 **Tier:** Viewer
 
@@ -472,7 +472,7 @@ message VideoFrame {
 
 ---
 
-#### `get_stream_info`
+#### `node_stream_info`
 
 **Tier:** Viewer
 
@@ -497,7 +497,7 @@ Get Zenoh connection parameters for subscribing to a node's data stream. Returns
 
 ### Lifecycle Tools
 
-#### `start_node`
+#### `node_start`
 
 **Tier:** Operator
 
@@ -508,11 +508,11 @@ Start a stopped node via the daemon. The node must be installed and built.
 
 **Returns:** Success or error message.
 
-**Example:** `start_node(node_name="rtsp-camera")`
+**Example:** `node_start(node_name="rtsp-camera")`
 
 ---
 
-#### `stop_node`
+#### `node_stop`
 
 **Tier:** Operator
 
@@ -525,7 +525,7 @@ Stop a running node via the daemon.
 
 ---
 
-#### `restart_node`
+#### `node_restart`
 
 **Tier:** Operator
 
@@ -538,7 +538,7 @@ Restart a node (stop then start).
 
 ---
 
-#### `build_node`
+#### `node_build`
 
 **Tier:** Admin
 
@@ -549,17 +549,17 @@ Trigger a build for a node. Builds the node's source code using its configured b
 
 **Returns:** Success or error message.
 
-**Note:** Builds can take several minutes. Check logs with `get_node_logs` to monitor progress.
+**Note:** Builds can take several minutes. Check logs with `node_logs` to monitor progress.
 
 ---
 
 ### Data & Command Tools
 
-#### `send_command`
+#### `node_command_send`
 
 **Tier:** Operator
 
-Send a command to a node's command queryable. The node must support the command — call `list_commands` first to see available commands.
+Send a command to a node's command queryable. The node must support the command — call `node_commands` first to see available commands.
 
 **Parameters:**
 - `node_name` (string, required): Name of the node
@@ -587,7 +587,7 @@ Send a command to a node's command queryable. The node must support the command 
 
 ---
 
-#### `get_node_config`
+#### `node_config`
 
 **Tier:** Operator
 
@@ -609,7 +609,7 @@ Get the current configuration of a node by querying its Zenoh config queryable.
 
 ---
 
-#### `get_node_logs`
+#### `node_logs`
 
 **Tier:** Operator
 
@@ -657,7 +657,7 @@ Schedule a task for the agent to execute later. Supports one-off and recurring t
 
 ---
 
-#### `list_jobs`
+#### `job_list`
 
 **Tier:** Viewer
 
@@ -668,7 +668,7 @@ List scheduled jobs. Optionally filter by status.
 
 ---
 
-#### `delete_job`
+#### `job_delete`
 
 **Tier:** Operator
 
@@ -714,13 +714,13 @@ Remove matching entries from episodic memory search index. Use for PII removal, 
 Create a proposal for human approval before executing a risky action. Use for destructive operations like removing nodes or changing configs.
 
 **Parameters:**
-- `skill` (string, required): The tool or action category (e.g., "restart_node", "remove_node")
+- `skill` (string, required): The tool or action category (e.g., "node_restart", "node_remove")
 - `description` (string, required): Human-readable description of what will happen
 - `actions` (string, required): JSON array of tool calls to execute if approved
 
 ---
 
-#### `list_proposals`
+#### `proposal_list`
 
 **Tier:** Viewer
 
@@ -733,7 +733,7 @@ List proposals for human-in-the-loop approval.
 
 ### System Tools
 
-#### `get_system_status`
+#### `system_status`
 
 **Tier:** Viewer
 
@@ -757,7 +757,7 @@ Get overall system status including daemon health, node count, and Zenoh connect
 
 ---
 
-#### `get_machine_info`
+#### `machine_info`
 
 **Tier:** Viewer
 
@@ -777,7 +777,7 @@ Get machine hardware and OS information: architecture, hostname, OS version.
 
 ---
 
-#### `query_zenoh`
+#### `zenoh_query`
 
 **Tier:** Admin
 
@@ -862,9 +862,9 @@ Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to e
 
 | Tier | Access Level | MCP Tools |
 |------|--------------|-----------|
-| **Viewer** (18) | Read-only monitoring | `list_nodes`, `get_node_health`, `get_node_schema`, `get_stream_info`, `get_system_status`, `get_machine_info`, `discover_nodes`, `get_node_manifest`, `list_commands`, `discover_capabilities`, `list_proposals`, `list_jobs`, `get_system_telemetry`, `get_telemetry_history`, `list_missions`, `list_constraints`, `get_belief`, `list_world_state` |
-| **Operator** (15) | Day-to-day operations | `start_node`, `stop_node`, `restart_node`, `get_node_config`, `send_command`, `get_node_logs`, `enable_autostart`, `disable_autostart`, `approve_proposal`, `reject_proposal`, `delete_job`, `pause_mission`, `resume_mission`, `cancel_mission`, `update_belief` |
-| **Admin** (12) | System modification | `install_node`, `remove_node`, `build_node`, `query_zenoh`, `uninstall_node`, `clean_node`, `clear_episodic_memory`, `update_telemetry_config`, `configure_context`, `register_alert`, `unregister_alert`, `register_constraint` |
+| **Viewer** (18) | Read-only monitoring | `node_list`, `node_health`, `node_schema`, `node_stream_info`, `system_status`, `machine_info`, `node_discover`, `node_manifest`, `node_commands`, `capability_discover`, `proposal_list`, `job_list`, `telemetry_get`, `telemetry_history`, `mission_list`, `constraint_list`, `belief_get`, `world_state_list` |
+| **Operator** (15) | Day-to-day operations | `node_start`, `node_stop`, `node_restart`, `node_config`, `node_command_send`, `node_logs`, `node_autostart_enable`, `node_autostart_disable`, `proposal_approve`, `proposal_reject`, `job_delete`, `mission_pause`, `mission_resume`, `mission_cancel`, `belief_update` |
+| **Admin** (12) | System modification | `node_install`, `node_remove`, `node_build`, `zenoh_query`, `node_uninstall`, `node_clean`, `memory_episodic_clear`, `telemetry_config_update`, `context_configure`, `alert_register`, `alert_unregister`, `constraint_register` |
 
 The tier counts (18+15+12=45) include 3 telemetry tools that are mapped in both the MCP server and the agent dispatch. The MCP server exposes 42 unique tools.
 
@@ -930,11 +930,11 @@ A node is a self-describing sensor/actuator capability. Each node:
 ### Node Discovery Pattern
 
 ```
-1. list_nodes                    # Get names and status
-2. get_node_manifest             # Understand capabilities
-3. list_commands                 # See available actions
-4. get_node_schema               # Decode data format
-5. get_stream_info               # Get Zenoh topic for streaming
+1. node_list                    # Get names and status
+2. node_manifest             # Understand capabilities
+3. node_commands                 # See available actions
+4. node_schema               # Decode data format
+5. node_stream_info               # Get Zenoh topic for streaming
 ```
 
 ---
@@ -961,10 +961,10 @@ schedule_task(prompt="Check all node health", cron_schedule="*/15 * * * *", recu
 
 ### Best Practices
 
-- Use `list_jobs` to monitor job status
-- Use `delete_job` to cancel recurring jobs
+- Use `job_list` to monitor job status
+- Use `job_delete` to cancel recurring jobs
 - Jobs survive daemon restarts (persisted in SQLite)
-- Failed jobs retry automatically — check `list_jobs(status="failed")` for stuck jobs
+- Failed jobs retry automatically — check `job_list(status="failed")` for stuck jobs
 
 ---
 
@@ -1001,28 +1001,28 @@ All tool errors return success responses with error text (MCP pattern):
 ### Discovery Workflow
 
 Always discover before acting:
-1. `list_nodes` → Get overview
-2. `get_node_health` → Check specific node status
-3. `list_commands` → See available actions
-4. `send_command` → Execute action
+1. `node_list` → Get overview
+2. `node_health` → Check specific node status
+3. `node_commands` → See available actions
+4. `node_command_send` → Execute action
 
 ### Streaming Data
 
 - **Never** poll with repeated tool calls (violates MCP rate limits)
-- **Always** use `get_stream_info` → subscribe to Zenoh topic directly
+- **Always** use `node_stream_info` → subscribe to Zenoh topic directly
 - MCP is for control plane, Zenoh is for data plane
 
 ### Automation
 
 - Use `schedule_task` with cron for recurring monitoring (runs in daemon, not via MCP calls)
 - Scheduled jobs are more efficient than polling loops
-- Check `list_jobs` to monitor scheduled job status
+- Check `job_list` to monitor scheduled job status
 
 ### System Health
 
-- Check `get_system_status` before bulk operations
-- Use `get_node_logs` to diagnose failures
-- Use `list_jobs(status="failed")` to find stuck jobs
+- Check `system_status` before bulk operations
+- Use `node_logs` to diagnose failures
+- Use `job_list(status="failed")` to find stuck jobs
 
 ### Performance
 
@@ -1036,7 +1036,7 @@ Always discover before acting:
 
 ### Multi-Machine Deployments
 
-Use `discover_nodes` to find all nodes across the fleet. Trigger patterns like `bubbaloop/**/sensor/temperature` will match across all machines in the Zenoh network.
+Use `node_discover` to find all nodes across the fleet. Trigger patterns like `bubbaloop/**/sensor/temperature` will match across all machines in the Zenoh network.
 
 ### Zenoh Key Structure
 
@@ -1050,8 +1050,8 @@ bubbaloop/global/{machine_id}/{node_name}/{topic}
 
 ### Protobuf Decoding
 
-1. Get schema: `get_node_schema(node_name="...")`
-2. Subscribe to Zenoh topic (from `get_stream_info`)
+1. Get schema: `node_schema(node_name="...")`
+2. Subscribe to Zenoh topic (from `node_stream_info`)
 3. Decode bytes with protobuf library (Python: `protobuf`, Rust: `prost`)
 
 ---
@@ -1060,7 +1060,7 @@ bubbaloop/global/{machine_id}/{node_name}/{topic}
 
 ### "No response from node (is it running?)"
 
-Check node status with `get_node_health`. If stopped, use `start_node`. If unhealthy, check `get_node_logs`.
+Check node status with `node_health`. If stopped, use `node_start`. If unhealthy, check `node_logs`.
 
 ### "Permission denied: tool requires admin tier"
 
@@ -1086,19 +1086,19 @@ HTTP transport limits: 100 burst, 1/sec sustained. Space out requests or use Zen
 
 ```
 # Discovery
-list_nodes → get_node_health → get_node_manifest → list_commands
+node_list → node_health → node_manifest → node_commands
 
 # Control
-start_node / stop_node / restart_node / send_command
+node_start / node_stop / node_restart / node_command_send
 
 # Scheduling
-schedule_task → list_jobs → delete_job
+schedule_task → job_list → job_delete
 
 # Data
-get_stream_info → (subscribe to Zenoh topic externally)
+node_stream_info → (subscribe to Zenoh topic externally)
 
 # Health
-get_system_status → get_node_logs
+system_status → node_logs
 ```
 
 ### Tool Count by Tier
@@ -1109,7 +1109,7 @@ get_system_status → get_node_logs
 
 - `memory_search`, `memory_forget`, `schedule_task`, `create_proposal`, `read_file`, `write_file`, `run_command`, `publish_to_topic`
 
-Note: `get_system_telemetry`, `get_telemetry_history`, and `update_telemetry_config` are available via both the MCP server and the agent dispatch.
+Note: `telemetry_get`, `telemetry_history`, and `telemetry_config_update` are available via both the MCP server and the agent dispatch.
 
 ### Key Paths
 
@@ -1123,16 +1123,16 @@ Note: `get_system_telemetry`, `get_telemetry_history`, and `update_telemetry_con
 ## Example: Temperature Monitoring Flow
 
 ```
-1. list_nodes
+1. node_list
    → Find "temperature-sensor" node
 
-2. get_node_health(node_name="temperature-sensor")
+2. node_health(node_name="temperature-sensor")
    → Verify it's running and healthy
 
-3. get_node_schema(node_name="temperature-sensor")
+3. node_schema(node_name="temperature-sensor")
    → Understand data format (protobuf schema)
 
-4. get_stream_info(node_name="temperature-sensor")
+4. node_stream_info(node_name="temperature-sensor")
    → Get Zenoh topic: "bubbaloop/global/nvidia_orin00/temperature-sensor/reading"
 
 5. schedule_task(
@@ -1142,7 +1142,7 @@ Note: `get_system_telemetry`, `get_telemetry_history`, and `update_telemetry_con
    )
    → Automate monitoring every 15 minutes
 
-6. list_jobs()
+6. job_list()
    → Verify job is scheduled and check results
 ```
 

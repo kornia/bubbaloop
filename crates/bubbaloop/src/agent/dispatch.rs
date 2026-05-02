@@ -118,7 +118,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
         vec![
             // ── No-parameter tools ──────────────────────────────────
             ToolDefinition {
-                name: "list_nodes".to_string(),
+                name: "node_list".to_string(),
                 description: "List all registered nodes with their status, capabilities, \
                     and topics. Returns node name, status (running/stopped/etc), type, \
                     and whether it's built."
@@ -126,21 +126,21 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 input_schema: empty_object.clone(),
             },
             ToolDefinition {
-                name: "discover_nodes".to_string(),
+                name: "node_discover".to_string(),
                 description: "Discover all nodes across all machines by querying manifests. \
                     Returns a list of all self-describing nodes with their capabilities."
                     .to_string(),
                 input_schema: empty_object.clone(),
             },
             ToolDefinition {
-                name: "get_system_status".to_string(),
+                name: "system_status".to_string(),
                 description: "Get overall system status including daemon health, node count, \
                     and Zenoh connection state."
                     .to_string(),
                 input_schema: empty_object.clone(),
             },
             ToolDefinition {
-                name: "get_machine_info".to_string(),
+                name: "machine_info".to_string(),
                 description: "Get machine hardware and OS information: architecture, \
                     hostname, OS version."
                     .to_string(),
@@ -148,97 +148,97 @@ impl<P: PlatformOperations> Dispatcher<P> {
             },
             // ── Single node_name tools ──────────────────────────────
             ToolDefinition {
-                name: "get_node_health".to_string(),
+                name: "node_health".to_string(),
                 description: "Get detailed health status of a specific node including uptime."
                     .to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "get_node_config".to_string(),
+                name: "node_config".to_string(),
                 description: "Get the current configuration of a node by querying its \
                     Zenoh config queryable."
                     .to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "get_node_manifest".to_string(),
+                name: "node_manifest".to_string(),
                 description: "Get the full manifest for a node, including capabilities, \
                     published topics, commands, and hardware requirements."
                     .to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "list_commands".to_string(),
+                name: "node_commands".to_string(),
                 description: "List available commands for a specific node with their \
                     parameters and descriptions."
                     .to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "start_node".to_string(),
+                name: "node_start".to_string(),
                 description: "Start a stopped node via the daemon. Use when a node should be running but isn't — after a crash, reboot, or user request.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "stop_node".to_string(),
+                name: "node_stop".to_string(),
                 description: "Stop a running node via the daemon. Use when a node needs to go offline for maintenance or is misbehaving.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "restart_node".to_string(),
+                name: "node_restart".to_string(),
                 description: "Restart a node (stop then start). First fix to try when a node is unhealthy or stuck. Check health after to confirm recovery.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "get_node_logs".to_string(),
+                name: "node_logs".to_string(),
                 description: "Get the latest logs from a node's systemd service. Use to diagnose why a node crashed or is unhealthy. Check before restarting to understand root cause.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "build_node".to_string(),
+                name: "node_build".to_string(),
                 description: "Trigger a build for a node. Admin only.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "remove_node".to_string(),
+                name: "node_remove".to_string(),
                 description: "Remove a registered node. Admin only. Destructive — node must be reinstalled to use again. Stop first if running.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "uninstall_node".to_string(),
+                name: "node_uninstall".to_string(),
                 description: "Uninstall a node's systemd service. Admin only.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "clean_node".to_string(),
+                name: "node_clean".to_string(),
                 description: "Clean a node's build artifacts. Admin only.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "enable_autostart".to_string(),
+                name: "node_autostart_enable".to_string(),
                 description: "Enable autostart for a node.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "disable_autostart".to_string(),
+                name: "node_autostart_disable".to_string(),
                 description: "Disable autostart for a node.".to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "get_stream_info".to_string(),
+                name: "node_stream_info".to_string(),
                 description: "Get Zenoh connection parameters for a node's data stream."
                     .to_string(),
                 input_schema: node_name_schema.clone(),
             },
             ToolDefinition {
-                name: "get_node_schema".to_string(),
+                name: "node_schema".to_string(),
                 description: "Get the protobuf schema of a node's data messages.".to_string(),
                 input_schema: node_name_schema,
             },
             // ── Custom-parameter tools ──────────────────────────────
             ToolDefinition {
-                name: "send_command".to_string(),
-                description: "Send a command to a node's command queryable. Use list_commands first to discover available commands.".to_string(),
+                name: "node_command_send".to_string(),
+                description: "Send a command to a node's command queryable. Use node_commands first to discover available commands.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -250,7 +250,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 }),
             },
             ToolDefinition {
-                name: "query_zenoh".to_string(),
+                name: "zenoh_query".to_string(),
                 description: "Query a Zenoh key expression (admin only).".to_string(),
                 input_schema: json!({
                     "type": "object",
@@ -261,7 +261,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 }),
             },
             ToolDefinition {
-                name: "install_node".to_string(),
+                name: "node_install".to_string(),
                 description: "Install a node from marketplace, local path, or GitHub. Admin only. Marketplace names are simple (e.g., 'rtsp-camera'). After installing, build and start separately."
                     .to_string(),
                 input_schema: json!({
@@ -273,7 +273,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 }),
             },
             ToolDefinition {
-                name: "discover_capabilities".to_string(),
+                name: "capability_discover".to_string(),
                 description: "Discover available node capabilities grouped by type.".to_string(),
                 input_schema: json!({
                     "type": "object",
@@ -310,7 +310,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 }),
             },
             ToolDefinition {
-                name: "list_jobs".to_string(),
+                name: "job_list".to_string(),
                 description: "List scheduled jobs. Optionally filter by status: pending, running, \
                     completed, failed, dead_letter."
                     .to_string(),
@@ -326,8 +326,8 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 }),
             },
             ToolDefinition {
-                name: "delete_job".to_string(),
-                description: "Delete a scheduled job by ID. Use list_jobs to find job IDs.".to_string(),
+                name: "job_delete".to_string(),
+                description: "Delete a scheduled job by ID. Use job_list to find job IDs.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -350,7 +350,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                     "properties": {
                         "skill": {
                             "type": "string",
-                            "description": "The tool or action category (e.g., 'restart_node', 'remove_node')"
+                            "description": "The tool or action category (e.g., 'node_restart', 'node_remove')"
                         },
                         "description": {
                             "type": "string",
@@ -365,7 +365,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 }),
             },
             ToolDefinition {
-                name: "list_proposals".to_string(),
+                name: "proposal_list".to_string(),
                 description: "List proposals for human-in-the-loop approval. Optionally filter \
                     by status: pending, approved, rejected, expired."
                     .to_string(),
@@ -382,7 +382,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             },
             // ── World state, context providers & reactive alerts ──
             ToolDefinition {
-                name: "list_world_state".to_string(),
+                name: "world_state_list".to_string(),
                 description: "List all live world state entries. World state is the agent's \
                     live, key/value snapshot of sensor-derived facts (e.g. motion.level, \
                     detected.label) populated by context providers. Use this to see the \
@@ -395,7 +395,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 }),
             },
             ToolDefinition {
-                name: "configure_context".to_string(),
+                name: "context_configure".to_string(),
                 description: "Wire a Zenoh topic pattern to world state. The daemon starts a \
                     background task that watches the topic and writes extracted values into \
                     world state keys, making them visible to the agent's heartbeat and reactive \
@@ -446,10 +446,10 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 }),
             },
             ToolDefinition {
-                name: "register_alert".to_string(),
+                name: "alert_register".to_string(),
                 description: "Register a reactive alert rule. When world state matches the \
                     predicate, the agent's arousal spikes, shortening the heartbeat interval \
-                    and making the agent react faster. Combine with configure_context to wire \
+                    and making the agent react faster. Combine with context_configure to wire \
                     a sensor topic into world state first, then write a predicate over that key."
                     .to_string(),
                 input_schema: json!({
@@ -480,7 +480,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 }),
             },
             ToolDefinition {
-                name: "unregister_alert".to_string(),
+                name: "alert_unregister".to_string(),
                 description: "Unregister a reactive alert rule by its ID.".to_string(),
                 input_schema: json!({
                     "type": "object",
@@ -597,14 +597,14 @@ impl<P: PlatformOperations> Dispatcher<P> {
             },
             // ── Telemetry watchdog tools ───────────────────────────────
             ToolDefinition {
-                name: "get_system_telemetry".to_string(),
+                name: "telemetry_get".to_string(),
                 description: "Get current system resource telemetry: memory, CPU, disk usage, \
                     watchdog alert level, and top processes by memory consumption."
                     .to_string(),
                 input_schema: empty_object.clone(),
             },
             ToolDefinition {
-                name: "get_telemetry_history".to_string(),
+                name: "telemetry_history".to_string(),
                 description: "Query historical system telemetry for trend analysis. Returns \
                     downsampled time series. Use to detect memory leaks or resource degradation."
                     .to_string(),
@@ -620,7 +620,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 }),
             },
             ToolDefinition {
-                name: "update_telemetry_config".to_string(),
+                name: "telemetry_config_update".to_string(),
                 description: "Update telemetry watchdog thresholds at runtime. Only provided \
                     fields are changed. Guardrails prevent unsafe values."
                     .to_string(),
@@ -667,64 +667,64 @@ impl<P: PlatformOperations> Dispatcher<P> {
     /// Dispatch a tool call by name, returning a `ContentBlock::ToolResult`.
     pub async fn call_tool(&self, tool_use_id: &str, name: &str, input: &Value) -> ContentBlock {
         let result = match name {
-            "list_nodes" => self.handle_list_nodes().await,
-            "discover_nodes" => self.handle_discover_nodes().await,
-            "get_system_status" => self.handle_get_system_status().await,
-            "get_machine_info" => self.handle_get_machine_info(),
-            "get_node_health" => self.handle_get_node_health(input).await,
-            "get_node_config" => self.handle_get_node_config(input).await,
-            "get_node_manifest" => self.handle_get_node_manifest(input).await,
-            "list_commands" => self.handle_list_commands(input).await,
-            "start_node" => self.handle_node_command(input, NodeCommand::Start).await,
-            "stop_node" => self.handle_node_command(input, NodeCommand::Stop).await,
-            "restart_node" => self.handle_node_command(input, NodeCommand::Restart).await,
-            "get_node_logs" => self.handle_node_command(input, NodeCommand::GetLogs).await,
-            "build_node" => self.handle_node_command(input, NodeCommand::Build).await,
-            "remove_node" => self.handle_remove_node(input).await,
-            "uninstall_node" => {
+            "node_list" => self.handle_list_nodes().await,
+            "node_discover" => self.handle_discover_nodes().await,
+            "system_status" => self.handle_get_system_status().await,
+            "machine_info" => self.handle_get_machine_info(),
+            "node_health" => self.handle_get_node_health(input).await,
+            "node_config" => self.handle_get_node_config(input).await,
+            "node_manifest" => self.handle_get_node_manifest(input).await,
+            "node_commands" => self.handle_list_commands(input).await,
+            "node_start" => self.handle_node_command(input, NodeCommand::Start).await,
+            "node_stop" => self.handle_node_command(input, NodeCommand::Stop).await,
+            "node_restart" => self.handle_node_command(input, NodeCommand::Restart).await,
+            "node_logs" => self.handle_node_command(input, NodeCommand::GetLogs).await,
+            "node_build" => self.handle_node_command(input, NodeCommand::Build).await,
+            "node_remove" => self.handle_remove_node(input).await,
+            "node_uninstall" => {
                 self.handle_node_command(input, NodeCommand::Uninstall)
                     .await
             }
-            "clean_node" => self.handle_node_command(input, NodeCommand::Clean).await,
-            "enable_autostart" => {
+            "node_clean" => self.handle_node_command(input, NodeCommand::Clean).await,
+            "node_autostart_enable" => {
                 self.handle_node_command(input, NodeCommand::EnableAutostart)
                     .await
             }
-            "disable_autostart" => {
+            "node_autostart_disable" => {
                 self.handle_node_command(input, NodeCommand::DisableAutostart)
                     .await
             }
-            "get_stream_info" => self.handle_get_stream_info(input).await,
-            "get_node_schema" => self.handle_get_node_schema(input).await,
-            "send_command" => self.handle_send_command(input).await,
-            "query_zenoh" => self.handle_query_zenoh(input).await,
-            "install_node" => self.handle_install_node(input).await,
-            "discover_capabilities" => self.handle_discover_capabilities(input).await,
+            "node_stream_info" => self.handle_get_stream_info(input).await,
+            "node_schema" => self.handle_get_node_schema(input).await,
+            "node_command_send" => self.handle_send_command(input).await,
+            "zenoh_query" => self.handle_query_zenoh(input).await,
+            "node_install" => self.handle_install_node(input).await,
+            "capability_discover" => self.handle_discover_capabilities(input).await,
             "read_file" => self.handle_read_file(input).await,
             "write_file" => self.handle_write_file(input).await,
             "run_command" => self.handle_run_command(input).await,
             "memory_search" => self.handle_memory_search(input).await,
             "memory_forget" => self.handle_memory_forget(input).await,
             "schedule_task" => self.handle_schedule_task(input).await,
-            "list_jobs" => self.handle_list_jobs(input).await,
-            "delete_job" => self.handle_delete_job(input).await,
+            "job_list" => self.handle_list_jobs(input).await,
+            "job_delete" => self.handle_delete_job(input).await,
             "create_proposal" => self.handle_create_proposal(input).await,
-            "list_proposals" => self.handle_list_proposals(input).await,
-            "list_world_state" => self.handle_list_world_state().await,
-            "configure_context" => self.handle_configure_context(input).await,
-            "register_alert" => self.handle_register_alert(input).await,
-            "unregister_alert" => self.handle_unregister_alert(input).await,
-            "get_system_telemetry" => self.handle_get_system_telemetry().await,
-            "get_telemetry_history" => self.handle_get_telemetry_history(input).await,
-            "update_telemetry_config" => self.handle_update_telemetry_config(input).await,
+            "proposal_list" => self.handle_list_proposals(input).await,
+            "world_state_list" => self.handle_list_world_state().await,
+            "context_configure" => self.handle_configure_context(input).await,
+            "alert_register" => self.handle_register_alert(input).await,
+            "alert_unregister" => self.handle_unregister_alert(input).await,
+            "telemetry_get" => self.handle_get_system_telemetry().await,
+            "telemetry_history" => self.handle_get_telemetry_history(input).await,
+            "telemetry_config_update" => self.handle_update_telemetry_config(input).await,
             "publish_to_topic" => self.handle_publish_to_topic(input).await,
             _ => ToolResult::error(format!(
                 "Unknown tool: {}. Use your available tools: node management \
-                 (list_nodes, start_node, etc.), system (read_file, write_file, \
+                 (node_list, node_start, etc.), system (read_file, write_file, \
                  run_command), memory (memory_search, memory_forget), jobs/proposals \
-                 (schedule_task, list_jobs, delete_job, create_proposal, list_proposals), \
-                 world/context/alerts (list_world_state, configure_context, register_alert, unregister_alert), \
-                 or telemetry (get_system_telemetry, get_telemetry_history, update_telemetry_config).",
+                 (schedule_task, job_list, job_delete, create_proposal, proposal_list), \
+                 world/context/alerts (world_state_list, context_configure, alert_register, alert_unregister), \
+                 or telemetry (telemetry_get, telemetry_history, telemetry_config_update).",
                 name
             )),
         };
@@ -1651,7 +1651,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             None => return ToolResult::error("Telemetry service not available".to_string()),
         };
 
-        log::info!("[MCP] tool=update_telemetry_config");
+        log::info!("[MCP] tool=telemetry_config_update");
 
         // Map flat input fields into the nested config structure expected by update_config.
         let mut updates = serde_json::Map::new();
