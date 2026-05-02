@@ -79,7 +79,7 @@ The plugin's higher-level Claude Code assets are CC-specific:
 1. **Path A first.** Native dispatch is faster, more reliable, and exposes all 42 tools.
 2. **Llama 3.1 70B Instruct or Qwen 2.5 72B Instruct** for production. Smaller models work for read-only Viewer-tier tools but struggle on multi-step Operator/Admin workflows.
 3. **Pin the model.** `model = "llama3.1:70b"` not `model = "llama3.1:latest"` — the `:latest` tag changes silently.
-4. **Disable Admin-tier tools by default.** Until per-tool tier-mapping lands (see `alignment-notes.md` gap #4), every authenticated caller gets Admin. For a small-model agent that's a footgun. Gate at the prompt layer ("you may NOT call node_install, node_remove, node_build, zenoh_query, or memory_episodic_clear without explicit user approval").
+4. **Disable Admin-tier tools by default.** The cleanest way is now `BUBBALOOP_MCP_MODE=safe` (or `readonly` for inspection-only) — server rejects destructive tools at the boundary, no prompt-engineering required. Old prompt-layer gating still works as a backup but is no longer the primary defense.
 
 ## Notes on the tool-naming PR
 

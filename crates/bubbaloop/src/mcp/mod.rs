@@ -66,6 +66,28 @@ async fn bearer_auth_middleware(
 /// Default port for the MCP HTTP server.
 pub const MCP_PORT: u16 = 8088;
 
+/// Parse `$BUBBALOOP_MCP_MODE` into an RBAC tier ceiling.
+///
+/// Values: `readonly` -> Viewer, `safe` -> Operator, `admin` (or unset) -> Admin.
+/// Pattern lifted from the Red Hat kubernetes-mcp-server `--read-only` /
+/// `--disable-destructive` flags — clean separation between *what the deployment
+/// permits* and *what the caller is authorized for*.
+pub fn mode_from_env() -> rbac::Tier {
+    match std::env::var("BUBBALOOP_MCP_MODE").ok().as_deref() {
+        Some("readonly") => rbac::Tier::Viewer,
+        Some("safe") => rbac::Tier::Operator,
+        Some("admin") | None => rbac::Tier::Admin,
+        Some("") => rbac::Tier::Admin,
+        Some(other) => {
+            log::warn!(
+                "Unknown BUBBALOOP_MCP_MODE='{}', defaulting to admin",
+                other
+            );
+            rbac::Tier::Admin
+        }
+    }
+}
+
 /// Bubbaloop MCP server — wraps Zenoh operations as MCP tools.
 ///
 /// Generic over `P: PlatformOperations` so production uses `DaemonPlatform`
@@ -76,6 +98,10 @@ pub struct BubbaLoopMcpServer<P: PlatformOperations = platform::DaemonPlatform> 
     pub(crate) auth_token: Option<String>,
     pub(crate) tool_router: ToolRouter<Self>,
     pub(crate) machine_id: String,
+    /// Tier ceiling from $BUBBALOOP_MCP_MODE — caller cannot exceed this.
+    /// Default: Admin (no ceiling). Set to Viewer for read-only mode,
+    /// Operator to disable destructive ops.
+    pub(crate) mode_ceiling: rbac::Tier,
 }
 
 // Manual Clone impl: P doesn't need Clone because it's behind Arc.
@@ -86,6 +112,7 @@ impl<P: PlatformOperations> Clone for BubbaLoopMcpServer<P> {
             auth_token: self.auth_token.clone(),
             tool_router: self.tool_router.clone(),
             machine_id: self.machine_id.clone(),
+            mode_ceiling: self.mode_ceiling,
         }
     }
 }
@@ -140,6 +167,25 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
         // TODO(phase-3): Encode tier in token (e.g., bb_admin_<uuid>, bb_viewer_<uuid>)
         // and extract it here to enable per-token tier differentiation.
         let required = rbac::required_tier(&request.name);
+        // Mode-ceiling check (BUBBALOOP_MCP_MODE env var). The ceiling caps
+        // *what tools are reachable*, independent of the caller's own tier.
+        // Rationale: matches the Red Hat kubernetes-mcp-server pattern of
+        // --read-only / --disable-destructive flags — fast win for safe
+        // deployments without redoing token semantics.
+        if (required as u8) > (self.mode_ceiling as u8) {
+            log::warn!(
+                "Mode-restricted: tool '{}' needs {} tier but BUBBALOOP_MCP_MODE permits at most {}",
+                request.name, required, self.mode_ceiling
+            );
+            return Err(rmcp::model::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_REQUEST,
+                format!(
+                    "Mode-restricted: tool '{}' requires {} tier but BUBBALOOP_MCP_MODE permits at most {}",
+                    request.name, required, self.mode_ceiling
+                ),
+                None,
+            ));
+        }
         let caller_tier = rbac::Tier::Admin;
         if !caller_tier.has_permission(required) {
             log::warn!(
@@ -206,7 +252,8 @@ pub async fn run_mcp_stdio(
     let server = BubbaLoopMcpServer::new(
         platform, None, // No auth token for stdio
         machine_id,
-    );
+    )
+    .with_mode_ceiling(mode_from_env());
 
     // rmcp stdio transport: reads JSON-RPC from stdin, writes to stdout
     let service = server.serve(rmcp::transport::io::stdio()).await?;
@@ -257,11 +304,10 @@ pub async fn run_mcp_server(
 
     let mcp_service = StreamableHttpService::new(
         move || {
-            Ok(BubbaLoopMcpServer::new(
-                platform.clone(),
-                Some(token.clone()),
-                machine_id.clone(),
-            ))
+            Ok(
+                BubbaLoopMcpServer::new(platform.clone(), Some(token.clone()), machine_id.clone())
+                    .with_mode_ceiling(mode_from_env()),
+            )
         },
         LocalSessionManager::default().into(),
         Default::default(),
@@ -336,4 +382,54 @@ pub async fn run_mcp_server(
 
     log::info!("MCP server stopped.");
     Ok(())
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+
+    /// Serialize env-var manipulation across tests in this module to avoid races
+    /// when other unit tests probe BUBBALOOP_MCP_MODE concurrently.
+    fn with_env<F: FnOnce() -> ()>(value: Option<&str>, f: F) {
+        let saved = std::env::var("BUBBALOOP_MCP_MODE").ok();
+        match value {
+            Some(v) => std::env::set_var("BUBBALOOP_MCP_MODE", v),
+            None => std::env::remove_var("BUBBALOOP_MCP_MODE"),
+        }
+        f();
+        match saved {
+            Some(v) => std::env::set_var("BUBBALOOP_MCP_MODE", v),
+            None => std::env::remove_var("BUBBALOOP_MCP_MODE"),
+        }
+    }
+
+    #[test]
+    fn mode_from_env_parses_known_values() {
+        with_env(Some("readonly"), || {
+            assert_eq!(mode_from_env(), rbac::Tier::Viewer);
+        });
+        with_env(Some("safe"), || {
+            assert_eq!(mode_from_env(), rbac::Tier::Operator);
+        });
+        with_env(Some("admin"), || {
+            assert_eq!(mode_from_env(), rbac::Tier::Admin);
+        });
+    }
+
+    #[test]
+    fn mode_from_env_defaults_to_admin_when_unset_or_empty() {
+        with_env(None, || {
+            assert_eq!(mode_from_env(), rbac::Tier::Admin);
+        });
+        with_env(Some(""), || {
+            assert_eq!(mode_from_env(), rbac::Tier::Admin);
+        });
+    }
+
+    #[test]
+    fn mode_from_env_falls_back_to_admin_on_unknown() {
+        with_env(Some("loose-cannon"), || {
+            assert_eq!(mode_from_env(), rbac::Tier::Admin);
+        });
+    }
 }

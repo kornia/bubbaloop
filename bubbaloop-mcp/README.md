@@ -67,6 +67,18 @@ If you need a self-contained, no-daemon mode (e.g. CI, a fresh machine without `
 
 Note: stdio mode is process-scoped — it cannot reach a running daemon's live state (mission scheduler, world state, live providers). Use HTTP for anything beyond ad-hoc inspection.
 
+## Modes
+
+Cap which tools the MCP server will accept by setting `BUBBALOOP_MCP_MODE` before starting the daemon (or stdio process):
+
+```bash
+export BUBBALOOP_MCP_MODE=readonly  # only Viewer tools (status, lists, manifests)
+export BUBBALOOP_MCP_MODE=safe      # add Operator tools (start/stop, missions, beliefs)
+export BUBBALOOP_MCP_MODE=admin     # all 44 tools (default)
+```
+
+The ceiling is enforced server-side, independent of token tier — useful for read-only demos, restricted user sessions, or defense-in-depth alongside the future per-token tier mapping.
+
 ## Slash commands
 
 | Command | Purpose |

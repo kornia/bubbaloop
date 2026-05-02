@@ -53,3 +53,31 @@ Items 1–8 are **breaking changes** to the existing MCP API surface and need a 
 - [GitHub MCP server (reference implementation)](https://github.com/github/github-mcp-server)
 - [MCP specification — Streamable HTTP transport (March 2026)](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports)
 - [MCP server concepts](https://modelcontextprotocol.io/docs/learn/server-concepts)
+
+## Comparable projects
+
+A May 2026 scan of the MCP ecosystem turned up no project with bubbaloop's specific combination (Zenoh-backed multi-agent runtime + per-node manifest contracts + sensor/actuator lifecycle + mission/belief state, all exposed via MCP). The five closest cousins, ranked by structural similarity:
+
+| Project | What it does | What we borrowed |
+|---|---|---|
+| [`Ranch-Hand-Robotics/rde-mcp-ros-2`](https://github.com/ranch-hand-robotics/rde-mcp-ros-2) | ROS 2 CLI as ~30 MCP tools (node lifecycle, topics, params, lifecycle states, bag record/playback) | Closest in scope. Confirms the design space. |
+| [`agentic-community/mcp-gateway-registry`](https://github.com/agentic-community/mcp-gateway-registry) | Gateway aggregating multiple MCP servers + semantic tool `discover` API | Validates our per-node manifest pattern; future direction for `tool_discover("how do I start a recording?")` |
+| [`poly-mcp/IoT-Edge-MCP-Server`](https://github.com/poly-mcp/IoT-Edge-MCP-Server) | MQTT/Modbus IoT edge: sensor read, actuator write, alarm lifecycle | Alarm-acknowledge workflow worth borrowing for our reactive alerts |
+| [`containers/kubernetes-mcp-server`](https://github.com/containers/kubernetes-mcp-server) (Red Hat) | K8s control via MCP with `--read-only` / `--disable-destructive` flag pattern | **Adopted in this PR** as `BUBBALOOP_MCP_MODE` env var (closes part of gap #4 with a fast win) |
+| [`sbroenne/mcp-server-obs`](https://github.com/sbroenne/mcp-server-obs) | OBS Studio recording/streaming control: `obs_recording.Start`, `Stop`, `Pause`, `Resume`, `GetStatus`, `SetFormat`, `SetQuality`, `SetPath` | Direct template for the in-flight bubbaloop-nodes recorder. Use the same command vocabulary in the recorder's manifest. |
+
+### `BUBBALOOP_MCP_MODE` — the Red Hat-pattern fast win
+
+Set the env var to cap which tools the MCP server will accept, regardless of token tier:
+
+| Mode | Effect | Use case |
+|---|---|---|
+| `readonly` | Only Viewer-tier tools accepted (lists, status, manifests) | Inspection-only deployments, demos, restricted user accounts |
+| `safe` | Viewer + Operator tools accepted (start/stop/restart/pause OK; install/remove/build blocked) | Day-2 operations without surface for accidental destruction |
+| `admin` (default) | All 44 tools accepted | Single-user localhost dev |
+
+Defense-in-depth: the ceiling is enforced *in addition to* per-tool RBAC. A future per-token tier (see gap #4) would be ANDed with this ceiling, so a mode of `safe` still rejects destructive ops even if a token claims Admin tier.
+
+### Negative finding
+
+LangGraph, AutoGen, and CrewAI **do not expose their own runtime as MCP servers** — they consume MCP, they do not publish it. bubbaloop's `mission_list` / `task_schedule` / `belief_get` MCP surface is genuinely novel and worth highlighting in the eventual blog post.
