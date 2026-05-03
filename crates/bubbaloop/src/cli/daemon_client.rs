@@ -93,24 +93,9 @@ impl DaemonClient {
             .map_err(|e| DaemonClientError::Request(format!("Cannot find binary path: {}", e)))?;
 
         let log_path = crate::daemon::registry::get_bubbaloop_home().join("daemon.log");
-        let log_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .map_err(|e| {
-                DaemonClientError::Request(format!("Cannot open {}: {}", log_path.display(), e))
-            })?;
-        let log_stderr = log_file
-            .try_clone()
-            .map_err(|e| DaemonClientError::Request(format!("Cannot clone log handle: {}", e)))?;
-
-        let mut child = std::process::Command::new(&exe)
-            .args(["daemon", "run"])
-            .env("RUST_LOG", "info")
-            .stdout(log_file)
-            .stderr(log_stderr)
-            .stdin(std::process::Stdio::null())
-            .spawn()
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args(["daemon", "run"]).env("RUST_LOG", "info");
+        let mut child = crate::cli::up::spawn_detached_to_log(&mut cmd, &log_path)
             .map_err(|e| DaemonClientError::Request(format!("Failed to start daemon: {}", e)))?;
 
         let start = std::time::Instant::now();

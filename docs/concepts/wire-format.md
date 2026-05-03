@@ -4,9 +4,9 @@ description: "Canonical CBOR envelope used by Bubbaloop nodes on the data plane.
 
 # Wire Format
 
-Every payload published on the data plane (`bubbaloop/{global,local}/{machine}/{instance}/{topic}`) is a **CBOR-encoded envelope**. The envelope splits transport metadata (delivery, ordering, source) from schema metadata (sensor timestamps, frame IDs, codec). This separation is what lets the same MCAP recorder, dashboard subscriber, or replayer node consume frames from any sensor without baking in per-sensor decoders.
+Every payload published on the data plane is a **CBOR-encoded envelope**. The envelope splits transport metadata (delivery, ordering, source) from schema metadata (sensor timestamps, frame IDs, codec). This separation is what lets the same MCAP recorder, dashboard subscriber, or replayer node consume frames from any sensor without baking in per-sensor decoders.
 
-This document describes the canonical envelope and the conventions consumers rely on.
+For the topic-key layout (`bubbaloop/{global,local}/{machine}/{instance}/{suffix}`) and Zenoh routing, see [Messaging → Topic Convention](messaging.md#topic-convention). This document focuses on what's *inside* a payload at any of those keys.
 
 ---
 

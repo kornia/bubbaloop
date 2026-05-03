@@ -131,6 +131,14 @@ struct CreateArgs {
     #[argh(option, default = "String::from(\"Anonymous\")")]
     author: String,
 
+    /// skip the build step (default: build is run)
+    #[argh(switch)]
+    no_build: bool,
+
+    /// skip systemd-install (default: install is run)
+    #[argh(switch)]
+    no_install: bool,
+
     /// also start the node after install (default: false). Use this for
     /// the truly-one-shot flow: `bubbaloop node create foo --start`.
     #[argh(switch)]
@@ -525,13 +533,6 @@ pub(crate) async fn send_command(name: &str, command: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn send_logs_command(name: &str, lines: u32) -> Result<()> {
-    let client = crate::cli::daemon_client::DaemonClient::connect().await?;
-    let msg = client.send_get_logs(name, lines).await?;
-    println!("{}", msg);
-    Ok(())
-}
-
 /// One-shot node creation: scaffolds → builds → registers → installs → optionally starts.
 ///
 /// Replaces the 5-6-command sequence with a single invocation. Each phase
@@ -544,8 +545,12 @@ async fn create_node(args: CreateArgs) -> Result<()> {
         output,
         description,
         author,
+        no_build,
+        no_install,
         start,
     } = args;
+    let build = !no_build;
+    let install = !no_install || start; // --start implies install
 
     // Resolve where the scaffold will land BEFORE init_node creates it, so we
     // can pass the path to add_node afterwards. Mirrors init_node's resolution.
@@ -567,9 +572,15 @@ async fn create_node(args: CreateArgs) -> Result<()> {
 
     let path_str = resolved_output.display().to_string();
 
-    // Phase 2 (build + register + install systemd) all happens inside add_node
-    // when both --build and --install are passed. One daemon round-trip.
-    println!("[2/3] building + registering + installing systemd unit …");
+    println!(
+        "[2/3] registering{}{} …",
+        if build { " + building" } else { "" },
+        if install {
+            " + installing systemd unit"
+        } else {
+            ""
+        },
+    );
     manage::add_node(
         &path_str,
         None,        // output (already scaffolded)
@@ -577,8 +588,8 @@ async fn create_node(args: CreateArgs) -> Result<()> {
         None,        // subdir
         Some(&name), // name override = the registered name
         None,        // config (use the default config.yaml from scaffold)
-        true,        // build
-        true,        // install systemd
+        build,
+        install,
     )
     .await?;
 

@@ -169,4 +169,28 @@ mod tests {
     fn test_unknown_tool_requires_admin() {
         assert_eq!(required_tier("nonexistent_tool"), Tier::Admin);
     }
+
+    /// Cross-check: every tool listed in `toolsets::toolset_definitions` must
+    /// have an explicit (non-default) tier in `required_tier`. The two tables
+    /// describe orthogonal axes (functional bucket vs permission tier) and
+    /// can't be derived from each other, but they MUST agree on the set of
+    /// tool names — otherwise a rename in one place silently leaves the other
+    /// returning the default Admin tier (or a stale toolset entry).
+    #[test]
+    fn every_toolset_tool_has_an_explicit_tier() {
+        // Replicate the body of `required_tier` here so unknown tools are
+        // detected — `required_tier` always returns Admin for the unknown
+        // case, defeating the check. Instead, parse the source.
+        let source = include_str!("rbac.rs");
+        for tools in super::super::toolsets::toolset_definitions().values() {
+            for tool in tools {
+                assert!(
+                    source.contains(&format!("\"{}\"", tool)),
+                    "tool '{}' is in toolsets.rs but not mentioned in rbac.rs::required_tier — \
+                     a rename was probably missed",
+                    tool
+                );
+            }
+        }
+    }
 }

@@ -43,6 +43,23 @@ fn is_port_listening(port: u16) -> bool {
     .is_ok()
 }
 
+/// Spawn `cmd` detached, redirecting stdout+stderr to `log_path` (append).
+/// Both `up.rs` and `daemon_client::ensure_running` need this exact pattern.
+pub(crate) fn spawn_detached_to_log(
+    cmd: &mut std::process::Command,
+    log_path: &Path,
+) -> std::io::Result<std::process::Child> {
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)?;
+    let log_clone = log_file.try_clone()?;
+    cmd.stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_clone))
+        .stdin(Stdio::null())
+        .spawn()
+}
+
 /// Block (with timeout) until `port` accepts connections.
 fn wait_for_port(port: u16, label: &str) -> Result<()> {
     let deadline = Instant::now() + PORT_WAIT_TIMEOUT;
@@ -67,21 +84,12 @@ fn ensure_zenohd_running() -> Result<bool> {
     }
     let zenohd = get_bubbaloop_home().join("bin").join("zenohd");
     let log_path = get_bubbaloop_home().join("zenohd.log");
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
-    let log_clone = log_file.try_clone()?;
-    // Spawn directly — no exists() pre-check (TOCTOU + spawn already errors).
-    std::process::Command::new(&zenohd)
-        .stdout(Stdio::from(log_file))
-        .stderr(Stdio::from(log_clone))
-        .stdin(Stdio::null())
-        .spawn()
-        .map_err(|e| UpError::Bootstrap(format!(
+    spawn_detached_to_log(&mut std::process::Command::new(&zenohd), &log_path).map_err(|e| {
+        UpError::Bootstrap(format!(
             "failed to spawn zenohd at {} ({e}) — install with `bubbaloop daemon install` or place a Zenoh router there",
             zenohd.display()
-        )))?;
+        ))
+    })?;
     println!("→ Started zenohd (logs: {})", log_path.display());
     wait_for_port(ZENOH_PORT, "zenohd")?;
     Ok(true)
@@ -98,17 +106,9 @@ fn ensure_daemon_running() -> Result<bool> {
     let exe = std::env::current_exe()
         .map_err(|e| UpError::Bootstrap(format!("locating current exe: {e}")))?;
     let log_path = get_bubbaloop_home().join("daemon.log");
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
-    let log_clone = log_file.try_clone()?;
-    std::process::Command::new(&exe)
-        .args(["daemon", "run"])
-        .stdout(Stdio::from(log_file))
-        .stderr(Stdio::from(log_clone))
-        .stdin(Stdio::null())
-        .spawn()?;
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(["daemon", "run"]);
+    spawn_detached_to_log(&mut cmd, &log_path)?;
     println!("→ Started bubbaloop daemon (logs: {})", log_path.display());
     wait_for_port(MCP_PORT, "bubbaloop daemon")?;
     Ok(true)

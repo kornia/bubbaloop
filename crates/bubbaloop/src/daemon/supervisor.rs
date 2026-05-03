@@ -140,29 +140,18 @@ impl Supervisor {
 
     // ── Install / uninstall ────────────────────────────────────────────────
 
-    pub async fn install_service(
-        &self,
-        node_path: &str,
-        node_name: &str,
-        node_type: &str,
-        command: Option<&str>,
-        depends_on: &[String],
-        extra_env: &std::collections::BTreeMap<String, String>,
-    ) -> Result<()> {
+    pub async fn install_service(&self, spec: &systemd::ServiceSpec<'_>) -> Result<()> {
         match self {
-            Supervisor::Systemd(_) => {
-                systemd::install_service(
-                    node_path, node_name, node_type, command, depends_on, extra_env,
-                )
-                .await
-            }
-            Supervisor::Native(n) => {
-                // Native supervisor inherits the daemon's process env, so it
-                // doesn't need a baked unit file. We just ignore extra_env
-                // here — `pixi run` (or whoever launched the daemon) sets it.
-                let _ = extra_env;
-                n.install_service(node_path, node_name, node_type, command, depends_on)
-            }
+            Supervisor::Systemd(_) => systemd::install_service(spec).await,
+            // Native supervisor inherits the daemon's process env, so it
+            // doesn't need a baked unit file. extra_env is dropped on purpose.
+            Supervisor::Native(n) => n.install_service(
+                spec.node_path,
+                spec.name,
+                spec.node_type,
+                spec.command,
+                spec.depends_on,
+            ),
         }
     }
 
@@ -223,14 +212,14 @@ mod tests {
         let name = unique_name("sup-dlg");
 
         // Install through the Supervisor dispatcher
-        sup.install_service(
-            "/tmp",
-            &name,
-            "rust",
-            Some("sleep 30"),
-            &[],
-            &Default::default(),
-        )
+        sup.install_service(&systemd::ServiceSpec {
+            node_path: "/tmp",
+            name: &name,
+            node_type: "rust",
+            command: Some("sleep 30"),
+            depends_on: &[],
+            extra_env: &Default::default(),
+        })
         .await
         .unwrap();
         assert!(sup.is_installed(&name));

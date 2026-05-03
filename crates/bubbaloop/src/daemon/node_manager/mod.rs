@@ -986,14 +986,14 @@ mod tests {
         // Install a service directly through the supervisor
         manager
             .supervisor
-            .install_service(
-                "/tmp",
-                &name,
-                "rust",
-                Some("sleep 60"),
-                &[],
-                &Default::default(),
-            )
+            .install_service(&crate::daemon::systemd::ServiceSpec {
+                node_path: "/tmp",
+                name: &name,
+                node_type: "rust",
+                command: Some("sleep 60"),
+                depends_on: &[],
+                extra_env: &Default::default(),
+            })
             .await
             .unwrap();
         assert!(manager.supervisor.is_installed(&name));

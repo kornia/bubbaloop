@@ -12,6 +12,16 @@ use rmcp::{tool, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+/// Early-return guard for the validate-node-name preamble repeated by every
+/// node-targeting tool. Returns an error result with the validator's message.
+macro_rules! ensure_valid_node_name {
+    ($name:expr) => {
+        if let Err(e) = $crate::validation::validate_node_name(&$name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
+    };
+}
+
 // ── Tool parameter types ──────────────────────────────────────────
 
 #[derive(Deserialize, JsonSchema)]
@@ -459,9 +469,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_node_health node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self.platform.get_node_detail(&req.node_name).await {
             Ok(detail) => Ok(CallToolResult::success(vec![Content::text(
                 serde_json::to_string_pretty(&detail).unwrap_or_default(),
@@ -495,9 +503,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_node_config node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self.platform.get_node_config(&req.node_name).await {
             Ok(config) => Ok(CallToolResult::success(vec![Content::text(
                 serde_json::to_string_pretty(&config).unwrap_or_default(),
@@ -525,9 +531,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_node_manifest node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self.platform.get_manifests(None).await {
             Ok(manifests) => {
                 let found = manifests
@@ -566,9 +570,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=list_commands node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/manifest",
             "global", self.machine_id, req.node_name
@@ -628,9 +630,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             req.node_name,
             req.command
         );
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/command",
             "global", self.machine_id, req.node_name
@@ -676,9 +676,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=start_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Start)
@@ -708,9 +706,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=stop_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Stop)
@@ -740,9 +736,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=restart_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Restart)
@@ -776,9 +770,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             req.node_name,
             req.lines
         );
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(
@@ -980,9 +972,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_stream_info node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
 
         // The registered node name and the published Zenoh prefix can differ
         // when an instance overrides `name` in its config (cameras do this:
@@ -1092,9 +1082,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=build_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Build)
@@ -1169,9 +1157,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=remove_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self.platform.remove_node(&req.node_name).await {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1197,9 +1183,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=uninstall_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Uninstall)
@@ -1229,9 +1213,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=clean_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Clean)
@@ -1261,9 +1243,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=enable_autostart node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::EnableAutostart)
@@ -1293,9 +1273,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=disable_autostart node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::DisableAutostart)
@@ -1325,9 +1303,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_node_schema node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         let key = format!(
             "bubbaloop/{}/{}/{}/schema",
             "global", self.machine_id, req.node_name

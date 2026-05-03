@@ -54,14 +54,14 @@ impl NodeManager {
         };
 
         self.supervisor
-            .install_service(
-                &path,
+            .install_service(&crate::daemon::systemd::ServiceSpec {
+                node_path: &path,
                 name,
-                &manifest.node_type,
-                command.as_deref(),
-                &manifest.depends_on,
-                &manifest.environment,
-            )
+                node_type: &manifest.node_type,
+                command: command.as_deref(),
+                depends_on: &manifest.depends_on,
+                extra_env: &manifest.environment,
+            })
             .await?;
 
         drop(nodes);

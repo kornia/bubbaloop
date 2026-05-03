@@ -602,15 +602,27 @@ fn sanitize_command(cmd: &str) -> Result<String> {
 }
 
 /// Generate a systemd service unit file content
-pub fn generate_service_unit(
-    node_path: &str,
-    name: &str,
-    node_type: &str,
-    command: Option<&str>,
-    depends_on: &[String],
-    extra_env: &std::collections::BTreeMap<String, String>,
-) -> Result<String> {
-    // Validate and sanitize inputs
+/// Concrete arguments to render a systemd unit file. Bundled into a struct so
+/// adding another field (e.g. CPUWeight, working dir override) doesn't ripple
+/// through every caller chain.
+pub struct ServiceSpec<'a> {
+    pub node_path: &'a str,
+    pub name: &'a str,
+    pub node_type: &'a str,
+    pub command: Option<&'a str>,
+    pub depends_on: &'a [String],
+    pub extra_env: &'a std::collections::BTreeMap<String, String>,
+}
+
+pub fn generate_service_unit(spec: &ServiceSpec<'_>) -> Result<String> {
+    let ServiceSpec {
+        node_path,
+        name,
+        node_type,
+        command,
+        depends_on,
+        extra_env,
+    } = *spec;
     validate_node_name(name)?;
     let safe_node_path = sanitize_path(node_path)?;
     let safe_name = sanitize_description(name);
@@ -753,20 +765,12 @@ WantedBy=default.target
 }
 
 /// Install a service unit file
-pub async fn install_service(
-    node_path: &str,
-    name: &str,
-    node_type: &str,
-    command: Option<&str>,
-    depends_on: &[String],
-    extra_env: &std::collections::BTreeMap<String, String>,
-) -> Result<()> {
+pub async fn install_service(spec: &ServiceSpec<'_>) -> Result<()> {
     let service_dir = get_systemd_user_dir();
     std::fs::create_dir_all(&service_dir)?;
 
-    let service_path = get_service_path(name);
-    let content =
-        generate_service_unit(node_path, name, node_type, command, depends_on, extra_env)?;
+    let service_path = get_service_path(spec.name);
+    let content = generate_service_unit(spec)?;
     std::fs::write(&service_path, &content)?;
 
     // Reload systemd to pick up the new unit
@@ -805,6 +809,26 @@ pub fn is_service_installed(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a minimal `ServiceSpec` for tests; callers override the few
+    /// fields they care about.
+    fn spec<'a>(
+        node_path: &'a str,
+        name: &'a str,
+        node_type: &'a str,
+        command: Option<&'a str>,
+        depends_on: &'a [String],
+        extra_env: &'a std::collections::BTreeMap<String, String>,
+    ) -> ServiceSpec<'a> {
+        ServiceSpec {
+            node_path,
+            name,
+            node_type,
+            command,
+            depends_on,
+            extra_env,
+        }
+    }
 
     // ActiveState parsing
     #[test]
@@ -1013,14 +1037,14 @@ mod tests {
     // generate_service_unit
     #[test]
     fn test_generate_service_unit_rust_default() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/test-node",
             "test-node",
             "rust",
             None,
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_ok());
         let content = result.unwrap();
 
@@ -1036,14 +1060,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_python_default() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/py-node",
             "py-node",
             "python",
             None,
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_ok());
         let content = result.unwrap();
 
@@ -1056,14 +1080,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_cargo_command() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/dev-node",
             "dev-node",
             "rust",
             Some("cargo run --release"),
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_ok());
         let content = result.unwrap();
 
@@ -1074,14 +1098,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_pixi_command() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/pixi-node",
             "pixi-node",
             "python",
             Some("pixi run start"),
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_ok());
         let content = result.unwrap();
 
@@ -1092,14 +1116,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_with_dependencies() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/dependent-node",
             "dependent-node",
             "rust",
             None,
             &["dep1".to_string(), "dep2".to_string()],
             &Default::default(),
-        );
+        ));
         assert!(result.is_ok());
         let content = result.unwrap();
 
@@ -1111,14 +1135,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_invalid_name() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/bad-node",
             "bad node with spaces",
             "rust",
             None,
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_err());
         if let Err(SystemdError::InvalidNodeName(_)) = result {
             // Expected error type
@@ -1129,14 +1153,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_invalid_command() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/test-node",
             "test-node",
             "rust",
             Some("cargo run\n[Unit]\nDescription=evil"),
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_err());
         if let Err(SystemdError::InvalidInput(_)) = result {
             // Expected error type
@@ -1147,14 +1171,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_invalid_dependency_name() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/test-node",
             "test-node",
             "rust",
             None,
             &["valid-dep".to_string(), "bad dep".to_string()],
             &Default::default(),
-        );
+        ));
         assert!(result.is_err());
         if let Err(SystemdError::InvalidNodeName(_)) = result {
             // Expected error type
@@ -1168,14 +1192,14 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("GST_PLUGIN_PATH".to_string(), "/opt/gst/lib".to_string());
         env.insert("CUDA_VISIBLE_DEVICES".to_string(), "0".to_string());
-        let content = generate_service_unit(
+        let content = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/cam",
             "cam",
             "python",
             Some("python3 main.py"),
             &[],
             &env,
-        )
+        ))
         .unwrap();
         assert!(content.contains("Environment=CUDA_VISIBLE_DEVICES=0"));
         assert!(content.contains("Environment=GST_PLUGIN_PATH=/opt/gst/lib"));
@@ -1192,39 +1216,39 @@ mod tests {
             "OK".to_string(),
             "value\n[Service]\nExecStart=/bin/evil".to_string(),
         );
-        let r = generate_service_unit(
+        let r = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/x",
             "x",
             "rust",
             None,
             &[],
             &env,
-        );
+        ));
         assert!(r.is_err(), "newline in env value must be rejected");
 
         let mut env = std::collections::BTreeMap::new();
         env.insert("9STARTS_DIGIT".to_string(), "v".to_string());
-        let r = generate_service_unit(
+        let r = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/x",
             "x",
             "rust",
             None,
             &[],
             &env,
-        );
+        ));
         assert!(r.is_err(), "env key starting with digit must be rejected");
     }
 
     #[test]
     fn test_generate_service_unit_security_hardening() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/secure-node",
             "secure-node",
             "rust",
             None,
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_ok());
         let content = result.unwrap();
 
@@ -1242,14 +1266,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_restart_policy() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/restart-node",
             "restart-node",
             "rust",
             None,
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_ok());
         let content = result.unwrap();
 
@@ -1268,14 +1292,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_absolute_path_command() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/abs-node",
             "abs-node",
             "python",
             Some("/usr/bin/python3 script.py"),
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_ok());
         let content = result.unwrap();
 
@@ -1285,14 +1309,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_python_sandboxing() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/py-sandbox",
             "py-sandbox",
             "python",
             None,
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_ok());
         let content = result.unwrap();
 
@@ -1311,14 +1335,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_rust_no_python_sandbox() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/rust-node",
             "rust-node",
             "rust",
             None,
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_ok());
         let content = result.unwrap();
 
@@ -1330,14 +1354,14 @@ mod tests {
 
     #[test]
     fn test_generate_service_unit_contains_machine_id_and_scope() {
-        let result = generate_service_unit(
+        let result = generate_service_unit(&spec(
             "/home/user/.bubbaloop/nodes/test-node",
             "test-node",
             "rust",
             None,
             &[],
             &Default::default(),
-        );
+        ));
         assert!(result.is_ok());
         let content = result.unwrap();
 
