@@ -685,20 +685,20 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
 
-        // The node's *registered* name may differ from the *published instance
-        // name* (the YAML's top-level `name` field used as the Zenoh prefix).
-        // Camera nodes especially use this — registered as `tapo-terrace`,
-        // publishing as `tapo_terrace_camera`. Resolve via the config_override
-        // file when present.
+        // The registered node name and the published Zenoh prefix can differ
+        // when an instance overrides `name` in its config (cameras do this:
+        // registered `tapo-terrace`, published `tapo_terrace_camera`).
         let detail = self.platform.get_node_detail(&req.node_name).await.ok();
-        let instance_name = detail
+        let config_path = detail
             .as_ref()
             .and_then(|d| d.get("config_override").and_then(|v| v.as_str()))
-            .filter(|p| !p.is_empty())
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .and_then(|yaml| serde_yaml::from_str::<serde_yaml::Value>(&yaml).ok())
-            .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
-            .unwrap_or_else(|| req.node_name.clone());
+            .filter(|p| !p.is_empty());
+        let instance_name = match config_path {
+            Some(path) => read_yaml_name(path)
+                .await
+                .unwrap_or_else(|| req.node_name.clone()),
+            None => req.node_name.clone(),
+        };
 
         let info = serde_json::json!({
             "zenoh_topic": format!("bubbaloop/{}/{}/{}/**", "global", self.machine_id, instance_name),
@@ -1476,6 +1476,14 @@ fn default_role() -> String {
 
 fn default_kind() -> String {
     "unknown".to_string()
+}
+
+/// Read the top-level `name` field from a YAML config. Returns None on any
+/// I/O or parse failure — callers fall back to the registered node name.
+async fn read_yaml_name(path: &str) -> Option<String> {
+    let yaml = tokio::fs::read_to_string(path).await.ok()?;
+    let v: serde_yaml::Value = serde_yaml::from_str(&yaml).ok()?;
+    v.get("name").and_then(|n| n.as_str()).map(String::from)
 }
 
 fn entry_active(e: &IoEntry, include_declared_but_unused: bool) -> bool {

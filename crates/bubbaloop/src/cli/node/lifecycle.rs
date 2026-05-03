@@ -37,11 +37,8 @@ pub(crate) async fn view_logs(args: LogsArgs) -> Result<()> {
         return Ok(());
     }
 
-    let client = crate::cli::daemon_client::DaemonClient::connect().await?;
     let lines: u32 = args.lines.try_into().unwrap_or(u32::MAX);
-    let msg = client.send_get_logs(&args.name, lines).await?;
-    println!("{}", msg);
-    Ok(())
+    super::send_logs_command(&args.name, lines).await
 }
 
 #[cfg(test)]

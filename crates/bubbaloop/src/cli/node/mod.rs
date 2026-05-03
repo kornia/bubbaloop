@@ -481,6 +481,13 @@ pub(crate) async fn send_command(name: &str, command: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn send_logs_command(name: &str, lines: u32) -> Result<()> {
+    let client = crate::cli::daemon_client::DaemonClient::connect().await?;
+    let msg = client.send_get_logs(name, lines).await?;
+    println!("{}", msg);
+    Ok(())
+}
+
 pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
