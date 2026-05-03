@@ -28,6 +28,15 @@ pub(crate) struct ToolsetNameRequest {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub(crate) struct NodeLogsRequest {
+    /// Name of the node (e.g., "rtsp-camera", "openmeteo")
+    node_name: String,
+    /// Number of log lines to fetch. Defaults to 50, capped at 5000.
+    #[serde(default)]
+    lines: u32,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub(crate) struct SendCommandRequest {
     /// Name of the node to send the command to
     node_name: String,
@@ -749,7 +758,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
 
     #[tool(
         name = "node_logs",
-        description = "Get the latest logs from a node's systemd service.",
+        description = "Get the latest logs from a node's systemd service. Default 50 lines (use `lines` to override, max 5000).",
         annotations(
             title = "Node logs",
             read_only_hint = true,
@@ -760,15 +769,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     )]
     async fn get_node_logs(
         &self,
-        Parameters(req): Parameters<NodeNameRequest>,
+        Parameters(req): Parameters<NodeLogsRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        log::info!("[MCP] tool=get_node_logs node={}", req.node_name);
+        log::info!(
+            "[MCP] tool=get_node_logs node={} lines={}",
+            req.node_name,
+            req.lines
+        );
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
         match self
             .platform
-            .execute_command(&req.node_name, platform::NodeCommand::GetLogs)
+            .execute_command(
+                &req.node_name,
+                platform::NodeCommand::GetLogs { lines: req.lines },
+            )
             .await
         {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
@@ -967,11 +983,29 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         if let Err(e) = validation::validate_node_name(&req.node_name) {
             return Ok(CallToolResult::success(vec![Content::text(e)]));
         }
+
+        // The node's *registered* name may differ from the *published instance
+        // name* (the YAML's top-level `name` field used as the Zenoh prefix).
+        // Camera nodes especially use this — registered as `tapo-terrace`,
+        // publishing as `tapo_terrace_camera`. Resolve via the config_override
+        // file when present.
+        let detail = self.platform.get_node_detail(&req.node_name).await.ok();
+        let instance_name = detail
+            .as_ref()
+            .and_then(|d| d.get("config_override").and_then(|v| v.as_str()))
+            .filter(|p| !p.is_empty())
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|yaml| serde_yaml::from_str::<serde_yaml::Value>(&yaml).ok())
+            .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
+            .unwrap_or_else(|| req.node_name.clone());
+
         let info = serde_json::json!({
-            "zenoh_topic": format!("bubbaloop/{}/{}/{}/**", "global", self.machine_id, req.node_name),
-            "encoding": "protobuf",
+            "zenoh_topic": format!("bubbaloop/{}/{}/{}/**", "global", self.machine_id, instance_name),
+            "registered_name": req.node_name,
+            "instance_name": instance_name,
+            "encoding": "cbor",
             "endpoint": "tcp/localhost:7447",
-            "note": "Subscribe to this topic via Zenoh client library for real-time data. MCP is control-plane only."
+            "note": "Subscribe to this topic via Zenoh client library for real-time data. MCP is control-plane only. `instance_name` is the YAML config's top-level `name`; it may differ from the registered node name."
         });
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&info).unwrap_or_default(),

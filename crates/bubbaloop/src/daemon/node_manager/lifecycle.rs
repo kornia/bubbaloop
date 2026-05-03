@@ -60,6 +60,7 @@ impl NodeManager {
                 &manifest.node_type,
                 command.as_deref(),
                 &manifest.depends_on,
+                &manifest.environment,
             )
             .await?;
 

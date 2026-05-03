@@ -312,8 +312,7 @@ pub(crate) struct LogsArgs {
     #[argh(positional)]
     pub(crate) name: String,
 
-    /// number of lines to show (default: 50)
-    #[allow(dead_code)]
+    /// number of lines to show (default: 50, max 5000)
     #[argh(option, short = 'n', default = "50")]
     pub(crate) lines: usize,
 

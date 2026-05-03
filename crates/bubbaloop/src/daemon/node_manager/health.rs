@@ -141,10 +141,16 @@ impl NodeManager {
                 let mut nodes = manager.nodes.write().await;
 
                 for node in nodes.values_mut() {
-                    // Only check running nodes
                     if node.status == NodeStatus::Running {
-                        // If we've received at least one heartbeat, check staleness
-                        if node.last_health_check_ms > 0 {
+                        if node.last_health_check_ms == 0 {
+                            // Never seen a heartbeat — distinguish "just started, give
+                            // it a moment" from "running but silent". The dashboard
+                            // can surface Starting as a transient yellow state instead
+                            // of red Unhealthy.
+                            if node.health_status != HealthStatus::Starting {
+                                node.health_status = HealthStatus::Starting;
+                            }
+                        } else {
                             let age = now - node.last_health_check_ms;
                             if age > HEALTH_TIMEOUT_MS
                                 && node.health_status != HealthStatus::Unhealthy

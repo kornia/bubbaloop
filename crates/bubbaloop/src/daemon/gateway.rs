@@ -52,8 +52,12 @@ pub enum DaemonCommandType {
     StopNode { name: String },
     /// Restart a node by name.
     RestartNode { name: String },
-    /// Get logs for a node.
-    GetLogs { name: String },
+    /// Get logs for a node. `lines = 0` means use the daemon default (50).
+    GetLogs {
+        name: String,
+        #[serde(default)]
+        lines: u32,
+    },
     /// Install a node from source (marketplace name, path, or GitHub).
     InstallNode {
         source: String,
@@ -409,6 +413,7 @@ mod tests {
             },
             DaemonCommandType::GetLogs {
                 name: "cam".to_string(),
+                lines: 0,
             },
             DaemonCommandType::InstallNode {
                 source: "src".to_string(),

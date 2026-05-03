@@ -272,6 +272,7 @@ impl DaemonClient {
             },
             "logs" | "get_logs" | "get-logs" => DaemonCommandType::GetLogs {
                 name: name.to_string(),
+                lines: 0,
             },
             "install" => DaemonCommandType::InstallService {
                 name: name.to_string(),
@@ -299,6 +300,16 @@ impl DaemonClient {
             }
         };
         self.send(cmd_type).await
+    }
+
+    /// Get logs for a node, optionally requesting a specific number of lines.
+    /// `lines = 0` falls back to the daemon default.
+    pub async fn send_get_logs(&self, name: &str, lines: u32) -> Result<String> {
+        self.send(DaemonCommandType::GetLogs {
+            name: name.to_string(),
+            lines,
+        })
+        .await
     }
 
     /// Add a node from source path.

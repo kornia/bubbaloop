@@ -678,7 +678,10 @@ impl<P: PlatformOperations> Dispatcher<P> {
             "node_start" => self.handle_node_command(input, NodeCommand::Start).await,
             "node_stop" => self.handle_node_command(input, NodeCommand::Stop).await,
             "node_restart" => self.handle_node_command(input, NodeCommand::Restart).await,
-            "node_logs" => self.handle_node_command(input, NodeCommand::GetLogs).await,
+            "node_logs" => {
+                self.handle_node_command(input, NodeCommand::GetLogs { lines: 0 })
+                    .await
+            }
             "node_build" => self.handle_node_command(input, NodeCommand::Build).await,
             "node_remove" => self.handle_remove_node(input).await,
             "node_uninstall" => {

@@ -876,6 +876,13 @@ publishes:
 requires:
   hardware:
     - network
+
+# Environment variables baked into the systemd unit (KEY: VALUE).
+# Use this for runtime knobs like GST_PLUGIN_PATH or CUDA_VISIBLE_DEVICES that
+# `pixi run` would normally set — without this, a clean systemd install runs
+# with the daemon's environment only.
+environment:
+  GST_PLUGIN_PATH: /home/nvidia/.pixi/envs/default/lib/gstreamer-1.0
 ```
 
 **Required fields** (validated by `bubbaloop node validate`):
