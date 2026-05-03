@@ -525,6 +525,13 @@ pub(crate) async fn send_command(name: &str, command: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn send_logs_command(name: &str, lines: u32) -> Result<()> {
+    let client = crate::cli::daemon_client::DaemonClient::connect().await?;
+    let msg = client.send_get_logs(name, lines).await?;
+    println!("{}", msg);
+    Ok(())
+}
+
 /// One-shot node creation: scaffolds → builds → registers → installs → optionally starts.
 ///
 /// Replaces the 5-6-command sequence with a single invocation. Each phase

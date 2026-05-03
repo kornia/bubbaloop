@@ -40,9 +40,7 @@ pub(crate) async fn add_node(
     let _resp = client.add_node(&node_path, name, config).await?;
     println!("Added node from: {}", node_path);
 
-    // The daemon registers the node under the override name when --name is set;
-    // otherwise it falls back to the manifest name extracted from node.yaml.
-    // Subsequent commands (build/install) must use the registered name.
+    // Use the registered name (override or extracted) for any follow-up commands.
     let registered_name = name
         .map(String::from)
         .or_else(|| install::extract_node_name(&node_path).ok());
