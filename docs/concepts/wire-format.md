@@ -110,10 +110,10 @@ Commands sent to a node's `command` queryable use **JSON** (not CBOR), and accep
 
 ```jsonc
 // Flat (bubbaloop daemon ≥ PR #80) — preferred
-{ "command": "start_recording", "topic_patterns": ["**/compressed"], "output_dir": "/data/mcap" }
+{ "command": "start_recording", "topic_patterns": ["**/compressed"] }
 
 // Nested (older daemons / direct callers) — still accepted
-{ "command": "start_recording", "params": { "topic_patterns": [...], "output_dir": "..." } }
+{ "command": "start_recording", "params": { "topic_patterns": ["**/compressed"] } }
 ```
 
 Nodes should accept both; the bubbaloop SDK does this transparently. Commands are JSON because they are written by humans (slash commands, MCP tools) and round-trip through tools that don't speak CBOR. Sensor data is CBOR because it is high-volume and binary.
