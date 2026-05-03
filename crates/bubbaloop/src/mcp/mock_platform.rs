@@ -968,6 +968,10 @@ mod tests {
             "job_list",
             "mission_list",
             "constraint_list",
+            // Dynamic-toolset meta-tools (gap #12)
+            "toolset_list",
+            "toolset_get_tools",
+            "toolset_enable",
         ];
         for tool in &viewer_tools {
             assert_eq!(
