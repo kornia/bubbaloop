@@ -427,7 +427,7 @@ mod mode_tests {
 
     /// Serialize env-var manipulation across tests in this module to avoid races
     /// when other unit tests probe BUBBALOOP_MCP_MODE concurrently.
-    fn with_env<F: FnOnce() -> ()>(value: Option<&str>, f: F) {
+    fn with_env<F: FnOnce()>(value: Option<&str>, f: F) {
         let saved = std::env::var("BUBBALOOP_MCP_MODE").ok();
         match value {
             Some(v) => std::env::set_var("BUBBALOOP_MCP_MODE", v),
