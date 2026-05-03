@@ -69,7 +69,12 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "belief_get"
         | "alert_list"
         | "world_state_list"
-        | "dataflow_graph" => Tier::Viewer,
+        | "dataflow_graph"
+        // Dynamic-toolset meta-tools (gap #12). Viewer — they reveal
+        // structure but don't mutate state.
+        | "toolset_list"
+        | "toolset_get_tools"
+        | "toolset_enable" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
         "node_start"

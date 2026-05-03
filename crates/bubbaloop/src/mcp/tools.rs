@@ -21,6 +21,13 @@ pub(crate) struct NodeNameRequest {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub(crate) struct ToolsetNameRequest {
+    /// Name of the toolset (e.g., "node", "mission", "belief"). Use
+    /// `toolset_list` to discover available toolsets.
+    toolset_name: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub(crate) struct SendCommandRequest {
     /// Name of the node to send the command to
     node_name: String,
@@ -216,6 +223,9 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             tool_router: Self::tool_router(),
             machine_id,
             mode_ceiling: super::rbac::Tier::Admin,
+            enabled_toolsets: std::sync::Arc::new(std::sync::Mutex::new(
+                super::toolsets::default_enabled(),
+            )),
         }
     }
 
@@ -223,6 +233,17 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     /// Caller cannot invoke any tool requiring a tier higher than this ceiling.
     pub fn with_mode_ceiling(mut self, ceiling: super::rbac::Tier) -> Self {
         self.mode_ceiling = ceiling;
+        self
+    }
+
+    /// Override the initial enabled-toolsets set (typically used by tests
+    /// that want a known starting state). Production callers get the value
+    /// from `$BUBBALOOP_MCP_TOOLSETS` automatically via `new()`.
+    #[cfg(any(test, feature = "test-harness"))]
+    pub fn with_enabled_toolsets(self, toolsets: std::collections::HashSet<String>) -> Self {
+        if let Ok(mut guard) = self.enabled_toolsets.lock() {
+            *guard = toolsets;
+        }
         self
     }
 
@@ -1766,6 +1787,147 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
                 e
             ))])),
         }
+    }
+
+    // ── Toolset meta-tools (gap #12 dynamic disclosure) ──────────────
+    //
+    // Three always-visible tools that let an agent inspect and broaden the
+    // currently-enabled toolset surface at runtime. Pattern lifted from the
+    // GitHub MCP server's `X-MCP-Toolsets` header (Jan 2026 changelog).
+
+    #[tool(
+        name = "toolset_list",
+        description = "List all available toolsets, the count of tools each contains, and which are currently enabled for this session. Use this first to discover what's reachable; use `toolset_enable` to activate one, then re-fetch the tool list.",
+        annotations(
+            title = "List toolsets",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn toolset_list(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=toolset_list");
+        let enabled = self
+            .enabled_toolsets
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        let mut rows: Vec<serde_json::Value> = super::toolsets::toolset_definitions()
+            .iter()
+            .map(|(name, tools)| {
+                serde_json::json!({
+                    "name": name,
+                    "tool_count": tools.len(),
+                    "enabled": enabled.contains(*name),
+                })
+            })
+            .collect();
+        // Stable, alphabetical for predictable output.
+        rows.sort_by(|a, b| {
+            a["name"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["name"].as_str().unwrap_or(""))
+        });
+        let body = serde_json::json!({
+            "toolsets": rows,
+            "enabled_count": enabled.len(),
+            "total_count": super::toolsets::toolset_definitions().len(),
+            "note": "Call `toolset_enable` with a toolset name to activate it for this session. Then re-fetch tools/list.",
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".to_string()),
+        )]))
+    }
+
+    #[tool(
+        name = "toolset_get_tools",
+        description = "List the tool names contained in a specific toolset, without enabling it. Useful for previewing what `toolset_enable` would expose.",
+        annotations(
+            title = "Get tools in a toolset",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn toolset_get_tools(
+        &self,
+        Parameters(req): Parameters<ToolsetNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=toolset_get_tools name={}", req.toolset_name);
+        match super::toolsets::toolset_definitions().get(req.toolset_name.as_str()) {
+            Some(tools) => {
+                let body = serde_json::json!({
+                    "toolset": req.toolset_name,
+                    "tool_count": tools.len(),
+                    "tools": tools,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".to_string()),
+                )]))
+            }
+            None => {
+                let known: Vec<&&str> = super::toolsets::toolset_definitions().keys().collect();
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Error: unknown toolset '{}'. Known: {:?}",
+                    req.toolset_name, known
+                ))]))
+            }
+        }
+    }
+
+    #[tool(
+        name = "toolset_enable",
+        description = "Enable a toolset for this session — its tools become visible on the next `tools/list` call. Idempotent: enabling an already-enabled toolset is a no-op.",
+        annotations(
+            title = "Enable a toolset",
+            // Read-only from the caller's perspective: it doesn't mutate the
+            // bubbaloop state, only the per-session visibility filter.
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn toolset_enable(
+        &self,
+        Parameters(req): Parameters<ToolsetNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=toolset_enable name={}", req.toolset_name);
+        if !super::toolsets::toolset_definitions().contains_key(req.toolset_name.as_str()) {
+            let known: Vec<&&str> = super::toolsets::toolset_definitions().keys().collect();
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: unknown toolset '{}'. Known: {:?}",
+                req.toolset_name, known
+            ))]));
+        }
+        let was_already_enabled = match self.enabled_toolsets.lock() {
+            Ok(mut guard) => !guard.insert(req.toolset_name.clone()),
+            Err(_) => {
+                return Ok(CallToolResult::success(vec![Content::text(
+                    "Error: enabled_toolsets state lock poisoned",
+                )]))
+            }
+        };
+        // TODO(gap #12 follow-up): emit `notifications/tools/list_changed`
+        // here so MCP clients re-fetch the tool list automatically. rmcp
+        // 0.15 supports this via the connection context but the API surface
+        // is still being finalised; for v1, callers must re-call tools/list
+        // manually after enabling. Documented in alignment-notes.
+        let body = serde_json::json!({
+            "toolset": req.toolset_name,
+            "was_already_enabled": was_already_enabled,
+            "tool_count": super::toolsets::toolset_definitions()
+                .get(req.toolset_name.as_str())
+                .map(|v| v.len())
+                .unwrap_or(0),
+            "note": "Re-call `tools/list` to see the newly-visible tools.",
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".to_string()),
+        )]))
     }
 }
 

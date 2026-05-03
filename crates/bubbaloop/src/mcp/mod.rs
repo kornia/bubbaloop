@@ -10,12 +10,14 @@ pub mod mock_platform;
 pub mod platform;
 pub mod rbac;
 mod tools;
+pub mod toolsets;
 
 use platform::PlatformOperations;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::model::*;
 use rmcp::ServerHandler;
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 /// Axum middleware that enforces Bearer token authentication.
 ///
@@ -102,6 +104,12 @@ pub struct BubbaLoopMcpServer<P: PlatformOperations = platform::DaemonPlatform> 
     /// Default: Admin (no ceiling). Set to Viewer for read-only mode,
     /// Operator to disable destructive ops.
     pub(crate) mode_ceiling: rbac::Tier,
+    /// Per-session enabled toolsets (gap #12 dynamic disclosure). Mutated
+    /// at runtime via the `toolset_enable` meta-tool; initialised from
+    /// `$BUBBALOOP_MCP_TOOLSETS` (default: all enabled, backwards compatible).
+    /// `Arc<Mutex<...>>` so the per-session server clone shares state with
+    /// any background dispatch on the same session.
+    pub(crate) enabled_toolsets: Arc<Mutex<HashSet<String>>>,
 }
 
 // Manual Clone impl: P doesn't need Clone because it's behind Arc.
@@ -113,6 +121,8 @@ impl<P: PlatformOperations> Clone for BubbaLoopMcpServer<P> {
             tool_router: self.tool_router.clone(),
             machine_id: self.machine_id.clone(),
             mode_ceiling: self.mode_ceiling,
+            // Share toolset state via Arc — clones see the same enable/disable mutations.
+            enabled_toolsets: self.enabled_toolsets.clone(),
         }
     }
 }
@@ -214,15 +224,42 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
         _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        // Gap #12 dynamic toolsets — filter the full router output to only
+        // include tools whose name is in an enabled toolset (or is one of the
+        // always-visible meta-tools). See `toolsets::is_visible`.
+        let enabled = match self.enabled_toolsets.lock() {
+            Ok(g) => g.clone(),
+            Err(poisoned) => {
+                log::warn!("enabled_toolsets mutex poisoned — recovering inner state");
+                poisoned.into_inner().clone()
+            }
+        };
+        let filtered: Vec<Tool> = self
+            .tool_router
+            .list_all()
+            .into_iter()
+            .filter(|t| toolsets::is_visible(&t.name, &enabled))
+            .collect();
         Ok(ListToolsResult {
-            tools: self.tool_router.list_all(),
+            tools: filtered,
             meta: None,
             next_cursor: None,
         })
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.tool_router.get(name).cloned()
+        // Mirror the visibility filter on get_tool — a tool the client
+        // can't see via list_tools should also not be retrievable by name.
+        // The dispatch path (call_tool) is intentionally NOT filtered: an
+        // RBAC-passing caller that knows the name can still invoke it,
+        // matching GitHub MCP's `X-MCP-Tools` semantics where the header
+        // narrows visibility but doesn't gate execution.
+        let enabled = self.enabled_toolsets.lock().ok()?.clone();
+        if toolsets::is_visible(name, &enabled) {
+            self.tool_router.get(name).cloned()
+        } else {
+            None
+        }
     }
 }
 
