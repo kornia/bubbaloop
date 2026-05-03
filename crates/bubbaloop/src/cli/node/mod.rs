@@ -550,7 +550,7 @@ async fn create_node(args: CreateArgs) -> Result<()> {
             .join(&name),
     };
 
-    println!("[1/4] scaffolding {} from {} template …", name, node_type);
+    println!("[1/3] scaffolding {} from {} template …", name, node_type);
     init_node(InitArgs {
         name: name.clone(),
         node_type: node_type.clone(),
@@ -561,10 +561,9 @@ async fn create_node(args: CreateArgs) -> Result<()> {
 
     let path_str = resolved_output.display().to_string();
 
-    // Phases 2-4 (build + register + install systemd) all happen inside add_node
-    // when both --build and --install are passed. This is the load-bearing call:
-    // one round-trip to the daemon does the work.
-    println!("[2/4] building + registering + installing systemd unit …");
+    // Phase 2 (build + register + install systemd) all happens inside add_node
+    // when both --build and --install are passed. One daemon round-trip.
+    println!("[2/3] building + registering + installing systemd unit …");
     manage::add_node(
         &path_str,
         None,        // output (already scaffolded)
@@ -578,12 +577,14 @@ async fn create_node(args: CreateArgs) -> Result<()> {
     .await?;
 
     if start {
-        println!("[3/4] starting {} …", name);
+        println!("[3/3] starting {} …", name);
         lifecycle::start_node(&name).await?;
-        println!("[4/4] done — {} is running", name);
+        println!("done — {} is running", name);
     } else {
-        println!("[3/4] skipped: pass --start to also start now");
-        println!("      or run: bubbaloop node start {}", name);
+        println!(
+            "done — pass --start to also start now, or run: bubbaloop node start {}",
+            name
+        );
     }
     Ok(())
 }

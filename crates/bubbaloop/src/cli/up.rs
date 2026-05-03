@@ -166,10 +166,10 @@ fn print_setup_instructions(cwd: &Path) {
 /// skill-loading flow. Errors here are treated as fatal — the rest of `up`
 /// requires a live daemon connection.
 fn bootstrap() -> Result<()> {
-    let _started_zenohd = ensure_zenohd_running()?;
-    let _started_daemon = ensure_daemon_running()?;
+    ensure_zenohd_running()?;
+    ensure_daemon_running()?;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let _wrote = write_project_mcp_config(&cwd)?;
+    write_project_mcp_config(&cwd)?;
     print_setup_instructions(&cwd);
     Ok(())
 }
