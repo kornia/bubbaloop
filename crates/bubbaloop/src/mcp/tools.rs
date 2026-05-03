@@ -208,6 +208,154 @@ pub(crate) struct UpdateBeliefRequest {
     notes: Option<String>,
 }
 
+// ── Helpers ───────────────────────────────────────────────────────
+
+/// Build the wire payload sent to a node's `/command` queryable.
+///
+/// **Flat envelope**: when `params` is a JSON object, its keys are spread into
+/// the top-level alongside `"command"` — i.e. the wire format is
+/// `{"command": "...", ...params}`, not `{"command": "...", "params": {...}}`.
+/// This matches what nodes using `#[serde(tag = "command")]` (or the OBS-style
+/// command vocabulary) expect to parse. Closes alignment-notes gap #11.
+///
+/// **Fallback**: when `params` isn't a JSON object (null, scalar, array), the
+/// payload uses the nested form `{command, params}` so legacy nodes that parse
+/// either shape keep working.
+///
+/// **Collision handling**: if the caller's `params` happens to contain its own
+/// `"command"` key, OUR `command` value wins — re-inserted last so a malicious
+/// caller can't redirect the command via the params bag.
+pub(crate) fn build_command_payload(command: &str, params: &serde_json::Value) -> Vec<u8> {
+    let payload = match params.as_object() {
+        Some(params_obj) => {
+            let mut flat: serde_json::Map<String, serde_json::Value> = params_obj.clone();
+            flat.insert(
+                "command".to_string(),
+                serde_json::Value::String(command.to_string()),
+            );
+            serde_json::Value::Object(flat)
+        }
+        None => serde_json::json!({
+            "command": command,
+            "params": params,
+        }),
+    };
+    serde_json::to_vec(&payload).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::build_command_payload;
+    use serde_json::json;
+
+    /// Decode a payload back to JSON for assertions.
+    fn decode(bytes: &[u8]) -> serde_json::Value {
+        serde_json::from_slice(bytes).expect("payload was not valid JSON")
+    }
+
+    #[test]
+    fn object_params_get_flattened_alongside_command() {
+        let payload = build_command_payload(
+            "start_recording",
+            &json!({"output_path": "/tmp/x.mp4", "duration_secs": 30}),
+        );
+        let v = decode(&payload);
+        // Flat shape: top-level keys are command + each param.
+        assert_eq!(v["command"], "start_recording");
+        assert_eq!(v["output_path"], "/tmp/x.mp4");
+        assert_eq!(v["duration_secs"], 30);
+        // No nested `params` field.
+        assert!(v.get("params").is_none(), "expected flat shape, got nested");
+    }
+
+    #[test]
+    fn empty_object_params_yields_just_command() {
+        let payload = build_command_payload("get_status", &json!({}));
+        let v = decode(&payload);
+        assert_eq!(v["command"], "get_status");
+        assert!(v.get("params").is_none());
+        assert_eq!(v.as_object().map(|o| o.len()), Some(1));
+    }
+
+    #[test]
+    fn null_params_falls_back_to_nested_form() {
+        let payload = build_command_payload("stop_recording", &serde_json::Value::Null);
+        let v = decode(&payload);
+        assert_eq!(v["command"], "stop_recording");
+        // Null can't be flattened — nested form preserves the explicit null.
+        assert_eq!(v["params"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn array_params_falls_back_to_nested_form() {
+        let payload = build_command_payload("multi", &json!([1, 2, 3]));
+        let v = decode(&payload);
+        assert_eq!(v["command"], "multi");
+        assert_eq!(v["params"], json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn scalar_params_falls_back_to_nested_form() {
+        let payload = build_command_payload("volume_set", &json!(42));
+        let v = decode(&payload);
+        assert_eq!(v["command"], "volume_set");
+        assert_eq!(v["params"], 42);
+    }
+
+    #[test]
+    fn caller_command_in_params_cannot_override() {
+        // Defense against a caller passing `params: {"command": "evil"}`.
+        // Our explicit `command` parameter must win.
+        let payload = build_command_payload(
+            "real_command",
+            &json!({"command": "evil_command", "data": 1}),
+        );
+        let v = decode(&payload);
+        assert_eq!(
+            v["command"], "real_command",
+            "params.command must NOT override the real command"
+        );
+        assert_eq!(v["data"], 1);
+    }
+
+    #[test]
+    fn nested_objects_in_params_are_preserved() {
+        let payload = build_command_payload(
+            "configure",
+            &json!({
+                "video": {"codec": "h264", "bitrate": 4_000_000},
+                "audio": null,
+            }),
+        );
+        let v = decode(&payload);
+        assert_eq!(v["command"], "configure");
+        assert_eq!(v["video"]["codec"], "h264");
+        assert_eq!(v["video"]["bitrate"], 4_000_000);
+        assert_eq!(v["audio"], serde_json::Value::Null);
+    }
+
+    /// Wire-format reference test: regression-protect the exact JSON bytes a
+    /// recorder using `#[serde(tag = "command", rename_all = "snake_case")]`
+    /// would parse successfully into its `Command::Start` variant.
+    #[test]
+    fn recorder_compatible_wire_format() {
+        let payload = build_command_payload(
+            "start",
+            &json!({
+                "topic_patterns": ["bubbaloop/global/*/cam/**"],
+                "output_dir": "/tmp/clips",
+                "chunk_duration_secs": 60,
+            }),
+        );
+        let v = decode(&payload);
+        // Reproduces the exact shape recorder/src/commands.rs expects.
+        assert_eq!(v["command"], "start");
+        assert_eq!(v["topic_patterns"][0], "bubbaloop/global/*/cam/**");
+        assert_eq!(v["output_dir"], "/tmp/clips");
+        assert_eq!(v["chunk_duration_secs"], 60);
+    }
+}
+
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
@@ -478,11 +626,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             "bubbaloop/{}/{}/{}/command",
             "global", self.machine_id, req.node_name
         );
-        let payload = serde_json::json!({
-            "command": req.command,
-            "params": req.params,
-        });
-        let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
+        let payload_bytes = build_command_payload(&req.command, &req.params);
 
         match self
             .platform
