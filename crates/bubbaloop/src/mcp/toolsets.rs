@@ -175,6 +175,21 @@ pub fn default_enabled() -> HashSet<String> {
     }
 }
 
+/// Reverse index: tool_name → list of toolset names that expose it.
+/// Built once from `toolset_definitions()`, then `is_visible` is O(1).
+fn tool_to_toolsets() -> &'static HashMap<&'static str, Vec<&'static str>> {
+    static REV: OnceLock<HashMap<&'static str, Vec<&'static str>>> = OnceLock::new();
+    REV.get_or_init(|| {
+        let mut rev: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
+        for (toolset, tools) in toolset_definitions() {
+            for tool in tools {
+                rev.entry(tool).or_default().push(toolset);
+            }
+        }
+        rev
+    })
+}
+
 /// Returns true if `tool_name` is exposed under any of the `enabled` toolsets,
 /// or is one of the always-visible meta-tools.
 ///
@@ -185,14 +200,10 @@ pub fn is_visible(tool_name: &str, enabled: &HashSet<String>) -> bool {
     if meta_tools().contains(&tool_name) {
         return true;
     }
-    for ts_name in enabled {
-        if let Some(tools) = toolset_definitions().get(ts_name.as_str()) {
-            if tools.contains(&tool_name) {
-                return true;
-            }
-        }
+    match tool_to_toolsets().get(tool_name) {
+        Some(owners) => owners.iter().any(|ts| enabled.contains(*ts)),
+        None => false,
     }
-    false
 }
 
 #[cfg(test)]

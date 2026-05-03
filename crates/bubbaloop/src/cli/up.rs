@@ -66,23 +66,22 @@ fn ensure_zenohd_running() -> Result<bool> {
         return Ok(false);
     }
     let zenohd = get_bubbaloop_home().join("bin").join("zenohd");
-    if !zenohd.exists() {
-        return Err(UpError::Bootstrap(format!(
-            "zenohd binary missing at {} — install with `bubbaloop daemon install` or place a Zenoh router there",
-            zenohd.display()
-        )));
-    }
     let log_path = get_bubbaloop_home().join("zenohd.log");
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)?;
     let log_clone = log_file.try_clone()?;
+    // Spawn directly — no exists() pre-check (TOCTOU + spawn already errors).
     std::process::Command::new(&zenohd)
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_clone))
         .stdin(Stdio::null())
-        .spawn()?;
+        .spawn()
+        .map_err(|e| UpError::Bootstrap(format!(
+            "failed to spawn zenohd at {} ({e}) — install with `bubbaloop daemon install` or place a Zenoh router there",
+            zenohd.display()
+        )))?;
     println!("→ Started zenohd (logs: {})", log_path.display());
     wait_for_port(ZENOH_PORT, "zenohd")?;
     Ok(true)
