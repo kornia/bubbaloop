@@ -29,30 +29,68 @@ These items live in `crates/bubbaloop/src/mcp/` and are out of scope for the plu
 | 5 | **Tools-only — no Resources, no Prompts.** Both GitHub and Figma ship resources (file contents, schemas) and prompts (workflow templates). Bubbaloop's node manifests, schemas, and mission YAMLs are natural resources. | `crates/bubbaloop/src/mcp/mod.rs` — extend `ServerCapabilities::builder()` and implement `list_resources` / `list_prompts` |
 | 6 | **No pagination.** `list_tools` returns `next_cursor: None` always; `list_jobs` / `list_proposals` are unpaginated. | `crates/bubbaloop/src/mcp/tools.rs` — accept cursor params, return `next_cursor` |
 | 7 | **No `title` field on tools.** GitHub uses both `name` (machine) and `title` (human). | `crates/bubbaloop/src/mcp/tools.rs` |
-| 8 | **No OAuth 2.1 flow on hosted MCP.** Only Bearer token from disk. Fine for single-user localhost, blocks "remote bubbaloop". | `crates/bubbaloop/src/mcp/mod.rs` + new module `mcp/oauth.rs` |
+| 8 | **No OAuth 2.1 flow on hosted MCP.** Only Bearer token from disk. Fine for single-user localhost, blocks "remote bubbaloop". Mandated by MCP 2025-11-25 spec for public remote servers. | `crates/bubbaloop/src/mcp/mod.rs` + new module `mcp/oauth.rs` |
+| 11 | **`node_install` MCP tool is registry-add only, not systemd-install.** CLI's `bubbaloop node install` creates the systemd unit; the MCP tool of the same name doesn't, so `node_start <newly-added>` fails with `Unit ... not found`. Surfaced when trying to install `recorder-py` end-to-end via the plugin. | `crates/bubbaloop/src/mcp/tools.rs` — either fold systemd-install into existing `node_install`, OR add a separate `node_systemd_install` tool |
+| 12 | **No dynamic / progressive toolset disclosure.** GitHub MCP, Postman, and the ProDisco research all start with 2–3 meta-tools (`toolset_list`, `toolset_enable`, `toolset_get_tools`) and demand-load the rest. Klavis benchmark shows 60–85% context reduction + 13–15% tool-selection accuracy gain on small models — exactly bubbaloop's Ollama target. | `crates/bubbaloop/src/mcp/mod.rs` — add `toolset_*` meta-tools, gate `list_tools` on enabled toolsets, send `notifications/tools/list_changed` after enable |
+| 13 | **No structured error bodies.** Tool errors return plain strings (`"Error: Node not found: foo"`). Stripe / Datadog / Salesforce all return `{"code": "E_NOT_FOUND", "message": "...", "retry": false, "hint": "..."}`. LangChain's `langchain-mcp-adapters` issue #312 calls this out — multi-step chains crash on transient failures because callers can't distinguish retry-able from terminal. | `crates/bubbaloop/src/mcp/tools.rs` — replace `Content::text(format!("Error: ..."))` pattern with `Content::text(serde_json::to_string(&ErrorBody { code, message, retry, hint }).unwrap())` and `isError: true` |
+| 14 | **Outputs are pre-rendered text, not descriptive JSON.** `node_health` returns nicely-formatted JSON; many other tools return prose strings (`"Started tapo-terrace"`). Framelink's MCP server beat the official Figma MCP on adoption precisely because it returns semantic JSON the LLM can compose, not pre-rendered code. Same lesson: a downstream agent should be able to `jq` over our output, not regex-extract from prose. | `crates/bubbaloop/src/mcp/tools.rs` — standardize on `Content::text(serde_json::to_string_pretty(&Body { ... }))` for every tool that returns success state |
 
 ## Why we didn't ship the server changes in this plugin
 
 Items 1–8 are **breaking changes** to the existing MCP API surface and need a coordinated decision (especially the naming convention in #1, which renames ~42 tools). The plugin wrapper is purely additive — it doesn't depend on the renames — so it ships now, and the server cleanup happens in a follow-up PR.
 
-## Recommended order for closing server gaps
+## Recommended order for closing server gaps (revised May 2026 with production signals)
 
-1. Pick & enforce a tool-naming convention (#1) — biggest discoverability win, blocks compounding cost as external integrations land.
-2. Add `ToolAnnotations` (#2) — safety + auto-approval ergonomics, near-zero risk.
-3. Implement token → tier mapping (#4) — removes `TODO(phase-3)`, unblocks real multi-user.
-4. Toolset grouping (#3) — bigger refactor; do once #1 and #2 are stable.
-5. Resources + prompts (#5) — high ergonomic value but additive; defer until the rest stabilises.
-6. Pagination (#6), title field (#7) — polish.
-7. OAuth (#8) — only when there's a hosted bubbaloop deployment.
+**Done:** #1 noun_verb rename ✅. #2 ToolAnnotations ✅. #4 partial: `BUBBALOOP_MCP_MODE` ceiling adopted (Red Hat k8s pattern).
+
+**Open, in priority order:**
+
+1. **#12 Dynamic toolset disclosure** (`enable_toolset` meta-tools, demand-load the rest). GitHub's Jan 2026 changelog confirmed `X-MCP-Toolsets` header in production; Claude Code already supports `notifications/tools/list_changed`. Klavis benchmark: 60–85% context reduction, +13–15% tool-selection accuracy on small models. *Solves the same problem as `BUBBALOOP_MCP_MODE` but at the per-domain level (camera vs mission vs belief), not just at the tier level.*
+2. **#14 Descriptive JSON outputs (was #3 in old order — promoted)**. The arxiv Feb 2026 paper found 97.1% of 856 tools surveyed had description/output quality defects, and Framelink's 4.6× npm-install spike in Q1 2026 was driven specifically by output richness over the official Figma server. Higher ROI per engineering hour than #13 right now because there's a validated playbook to copy (Framelink + the arxiv augmentor pattern).
+3. **#13 Structured error bodies** (`{"code","message","retry","hint"}` instead of `"Error: ..."` strings). Real pain (LangChain MCP adapters keep hitting it) but no dominant solution yet — bubbaloop would be a first-mover. Cheap to ship; the real difficulty is consistency across all 44 tools, not the design itself.
+4. **#5 Resources + Prompts**. The June 2026 spec draft adds TTL/ETag for Resources lists, raising the floor. Production data: workflows backed by Prompts hit ~near-100% reliability vs 60–70% for instruction-only workflows. Bubbaloop's manifests/schemas/missions are natural Resources.
+5. **#4 Per-token RBAC tier mapping**. GitHub's `X-MCP-Toolsets` + OAuth scope filtering is the reference impl (Jan 2026). Higher complexity than #12/#13/#14 — defer until multi-tenant deployment is concretely planned. *Note: ToolAnnotations are explicitly hints, not contracts (per official MCP blog Mar 2026) — annotations cannot replace per-token RBAC for actual security.*
+6. **#11 systemd-install MCP tool**. Currently "registry-add" only — caller can't `node_install` then `node_start` end-to-end through MCP. We hit this live with `recorder-py`. Cheap to ship, removes a real friction point.
+7. **#3 Toolset grouping**. Subsumed by #12 — the toolsets defined for #12's `enable_toolset` ARE the groupings. Probably collapses into #12.
+8. **#6 Pagination, #7 title field**. Polish. #7 is now mostly subsumed by ToolAnnotations' `title` (already shipped).
+9. **#8 OAuth 2.1 PKCE**. Mandated by 2025-11-25 spec for *public* remote servers; bubbaloop's Jetson edge deployment falls under the internal-server carve-out. Defer until a hosted/multi-tenant variant ships. GitHub's remote MCP uses dynamic OAuth scope challenges if you want a reference implementation when the time comes.
+
+## Production signals worth tracking
+
+- **MCP ecosystem health is mixed.** ~97M cumulative SDK downloads, 9,400+ public servers, GitHub's MCP server runs ~7M tool calls/week at >95% success — but a April 2026 scan of 2,181 remote endpoints found **52% completely dead**. Top causes: expired credentials, silent upstream API breakage, cold-start serverless timeouts. Bubbaloop's edge model (Jetson, single-user, daemon-managed) sidesteps most of these.
+- **Tool-count reduction is the dominant 2026 lesson.** GitHub Copilot cut its tool surface 40 → 13 with measurable benchmark improvement; Block reduced its Linear MCP server 30+ → 2 tools. Bubbaloop sits at 44 — without #12 dynamic toolsets, this is the next size class where small-model accuracy degrades noticeably.
+- **`Mcp-Session-Id` "Session not found" is a widespread bug**, not a bubbaloop edge case. Open issues in playwright-mcp, anthropics/claude-agent-sdk-python, modelcontextprotocol/python-sdk, openai/codex, LibreChat. Root causes: ~30-min idle timeouts, no client reconnection on 404, load-balancer state-affinity loss in containerized deploys. Mitigation: server-side, prefer stateless mode where possible (rmcp 0.15 supports it via different SessionManager). Affects bubbaloop only if we ship a multi-instance/HA daemon.
+- **June 2026 MCP spec draft** adds TTL/ETag for `resources/list` and `prompts/list`, plus explicit subscription streams and gateway/proxy intermediary semantics. No breaking changes ratified yet.
+- **ToolAnnotations are hints, not contracts** (official MCP blog March 2026). ~17% of GitHub's MCP users use read-only mode; no major client surfaces annotations in UI. Bubbaloop's RBAC enforcement (server-side mode ceiling + per-tool tier check) is the right pattern; relying on annotations alone for safety would be wrong.
 
 ## Sources
 
+**MCP spec & Anthropic docs**
 - [Claude Code plugins documentation](https://code.claude.com/docs/en/plugins.md)
 - [Claude Code plugin reference](https://code.claude.com/docs/en/plugins-reference.md)
 - [Anthropic official plugin marketplace](https://github.com/anthropics/claude-plugins-official)
-- [GitHub MCP server (reference implementation)](https://github.com/github/github-mcp-server)
-- [MCP specification — Streamable HTTP transport (March 2026)](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports)
+- [MCP specification — Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports)
 - [MCP server concepts](https://modelcontextprotocol.io/docs/learn/server-concepts)
+- [2026 MCP roadmap (official)](https://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/)
+- [ToolAnnotations: hints vs contracts (March 2026)](https://blog.modelcontextprotocol.io/posts/2026-03-16-tool-annotations/)
+
+**Reference implementations**
+- [GitHub MCP server](https://github.com/github/github-mcp-server)
+- [GitHub MCP — `X-MCP-Toolsets` header (Jan 2026)](https://github.blog/changelog/2026-01-28-github-mcp-server-new-projects-tools-oauth-scope-filtering-and-new-features/)
+- [Framelink (descriptive-JSON winner)](https://github.com/GLips/Figma-Context-MCP)
+- [Red Hat kubernetes-mcp-server (mode-flag pattern)](https://github.com/containers/kubernetes-mcp-server)
+
+**Production signals (Feb–May 2026)**
+- [MCP tool description quality — arxiv Feb 2026](https://arxiv.org/html/2602.14878v1)
+- [52% dead remote MCP endpoints — April 2026 scan](https://modelslab.com/blog/api/mcp-vs-cli-ai-agents-developers-2026)
+- [Framelink 4.6× growth + 53k weekly installs (March 2026)](https://chatforest.com/reviews/framelink-figma-mcp-server/)
+- [GitHub MCP 7M tool-calls/week](https://www.zenml.io/llmops-database/building-and-scaling-a-production-mcp-server-for-developer-tooling)
+- [Tool count reduction — GitHub 40→13, Block 30+→2](https://dev.to/aws-heroes/mcp-tool-design-why-your-ai-agent-is-failing-and-how-to-fix-it-40fc)
+- [`Mcp-Session-Id` "Session not found" — python-sdk issue](https://github.com/modelcontextprotocol/python-sdk/issues/1676)
+- [`Session not found` — playwright-mcp issue](https://github.com/microsoft/playwright-mcp/issues/1307)
+- [MCP client capability gap analysis — PulseMCP](https://www.pulsemcp.com/posts/mcp-client-capabilities-gap)
+- [MCP caching strategies + June 2026 spec plans](https://chatforest.com/guides/mcp-caching-strategies/)
+- [MCP adoption statistics 2026](https://www.digitalapplied.com/blog/mcp-adoption-statistics-2026-model-context-protocol)
 
 ## Comparable projects
 
