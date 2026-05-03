@@ -9,8 +9,6 @@ import threading
 from unittest.mock import MagicMock
 
 import cbor2
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # topic()
@@ -576,7 +574,7 @@ def test_import_discover_nodes():
 
 
 def test_import_get_sample():
-    from bubbaloop_sdk import get_sample, GetSampleTimeout
+    from bubbaloop_sdk import GetSampleTimeout, get_sample
     assert callable(get_sample)
     assert GetSampleTimeout is not None
 
