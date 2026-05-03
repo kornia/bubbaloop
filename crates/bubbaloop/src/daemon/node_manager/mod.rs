@@ -507,7 +507,7 @@ impl NodeManager {
         // Special handling for GET_LOGS since it returns data in output field
         if command_type == CommandType::GetLogs {
             let node_state = self.get_node(&cmd.node_name).await;
-            return match self.get_logs(&cmd.node_name).await {
+            return match self.get_logs(&cmd.node_name, cmd.log_lines).await {
                 Ok(logs) => CommandResult {
                     request_id: cmd.request_id,
                     success: true,
@@ -592,8 +592,17 @@ impl NodeManager {
             .ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))
     }
 
-    /// Get logs for a node service
-    async fn get_logs(&self, name: &str) -> Result<String> {
+    /// Get logs for a node service. `lines == 0` uses the default (50).
+    async fn get_logs(&self, name: &str, lines: u32) -> Result<String> {
+        // Cap at a sane upper bound to avoid pulling enormous journals.
+        const DEFAULT_LINES: u32 = 50;
+        const MAX_LINES: u32 = 5_000;
+        let n = if lines == 0 {
+            DEFAULT_LINES
+        } else {
+            lines.min(MAX_LINES)
+        };
+
         // Check if node exists
         let _path = self.find_node_path(name).await?;
 
@@ -608,12 +617,13 @@ check stderr: {dir}/{name}.stderr"
         }
 
         let service_name = systemd::get_service_name(name);
+        let n_str = n.to_string();
 
         // Use _SYSTEMD_USER_UNIT filter for user services (logs are in system journal)
         // This works on systems where --user journal doesn't exist
         let unit_filter = format!("_SYSTEMD_USER_UNIT={}", service_name);
         let journal_output = tokio::process::Command::new(JOURNALCTL_PATH)
-            .args([&unit_filter, "-n", "50", "--no-pager", "-o", "cat"])
+            .args([&unit_filter, "-n", &n_str, "--no-pager", "-o", "cat"])
             .output()
             .await?;
 
@@ -945,7 +955,7 @@ mod tests {
             );
         }
 
-        let result = manager.get_logs("test-logs-native").await.unwrap();
+        let result = manager.get_logs("test-logs-native", 0).await.unwrap();
         assert!(
             result.contains("journalctl"),
             "Message should mention journalctl: {}",
@@ -976,7 +986,14 @@ mod tests {
         // Install a service directly through the supervisor
         manager
             .supervisor
-            .install_service("/tmp", &name, "rust", Some("sleep 60"), &[])
+            .install_service(
+                "/tmp",
+                &name,
+                "rust",
+                Some("sleep 60"),
+                &[],
+                &Default::default(),
+            )
             .await
             .unwrap();
         assert!(manager.supervisor.is_installed(&name));

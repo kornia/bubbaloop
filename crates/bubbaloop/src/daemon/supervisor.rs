@@ -147,12 +147,20 @@ impl Supervisor {
         node_type: &str,
         command: Option<&str>,
         depends_on: &[String],
+        extra_env: &std::collections::BTreeMap<String, String>,
     ) -> Result<()> {
         match self {
             Supervisor::Systemd(_) => {
-                systemd::install_service(node_path, node_name, node_type, command, depends_on).await
+                systemd::install_service(
+                    node_path, node_name, node_type, command, depends_on, extra_env,
+                )
+                .await
             }
             Supervisor::Native(n) => {
+                // Native supervisor inherits the daemon's process env, so it
+                // doesn't need a baked unit file. We just ignore extra_env
+                // here — `pixi run` (or whoever launched the daemon) sets it.
+                let _ = extra_env;
                 n.install_service(node_path, node_name, node_type, command, depends_on)
             }
         }
@@ -215,9 +223,16 @@ mod tests {
         let name = unique_name("sup-dlg");
 
         // Install through the Supervisor dispatcher
-        sup.install_service("/tmp", &name, "rust", Some("sleep 30"), &[])
-            .await
-            .unwrap();
+        sup.install_service(
+            "/tmp",
+            &name,
+            "rust",
+            Some("sleep 30"),
+            &[],
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         assert!(sup.is_installed(&name));
 
         // Start through dispatcher

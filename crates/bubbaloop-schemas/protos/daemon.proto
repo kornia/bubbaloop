@@ -16,11 +16,21 @@ enum NodeStatus {
   NODE_STATUS_NOT_INSTALLED = 6;
 }
 
-// Health status based on heartbeat monitoring
+// Health status based on heartbeat monitoring.
+//
+// Lifecycle:
+//   Unknown   — node is not running, or never observed
+//   Starting  — node is running but has not yet emitted its first heartbeat
+//   Healthy   — heartbeat received within the timeout window
+//   Unhealthy — was Healthy, but heartbeats stopped arriving
+//
+// (Future: HEALTH_STATUS_PRODUCING for nodes that are both healthy AND
+//  observed publishing data on their declared topics.)
 enum HealthStatus {
   HEALTH_STATUS_UNKNOWN = 0;
   HEALTH_STATUS_HEALTHY = 1;
   HEALTH_STATUS_UNHEALTHY = 2;
+  HEALTH_STATUS_STARTING = 3;
 }
 
 // State of a single node
@@ -108,6 +118,8 @@ message NodeCommand {
   string name_override = 8;
   // Config file path override (appended as -c to command for this instance)
   string config_override = 9;
+  // Number of log lines to fetch (GET_LOGS only; 0 = backend default).
+  uint32 log_lines = 10;
 }
 
 // Result of a command execution

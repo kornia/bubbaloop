@@ -39,7 +39,10 @@ pub enum NodeCommand {
     Stop,
     Restart,
     Build,
-    GetLogs,
+    /// Fetch the last `lines` log lines (0 = backend default, currently 50).
+    GetLogs {
+        lines: u32,
+    },
     Install,
     Uninstall,
     Clean,

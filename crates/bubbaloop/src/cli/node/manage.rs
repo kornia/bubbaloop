@@ -40,21 +40,24 @@ pub(crate) async fn add_node(
     let _resp = client.add_node(&node_path, name, config).await?;
     println!("Added node from: {}", node_path);
 
-    let node_name = install::extract_node_name(&node_path).ok();
+    // The daemon registers the node under the override name when --name is set;
+    // otherwise it falls back to the manifest name extracted from node.yaml.
+    // Subsequent commands (build/install) must use the registered name.
+    let registered_name = name
+        .map(String::from)
+        .or_else(|| install::extract_node_name(&node_path).ok());
 
-    // Optional: build
     if build {
-        if let Some(ref name) = node_name {
+        if let Some(ref n) = registered_name {
             println!("Building node...");
-            send_command(name, "build").await?;
+            send_command(n, "build").await?;
         }
     }
 
-    // Optional: install
     if do_install {
-        if let Some(ref name) = node_name {
+        if let Some(ref n) = registered_name {
             println!("Installing as service...");
-            send_command(name, "install").await?;
+            send_command(n, "install").await?;
         }
     }
 

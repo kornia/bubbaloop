@@ -626,10 +626,10 @@ mod tests {
     async fn execute_command_get_logs() {
         let mock = MockPlatform::new();
         let msg = mock
-            .execute_command("test-node", NodeCommand::GetLogs)
+            .execute_command("test-node", NodeCommand::GetLogs { lines: 0 })
             .await
             .unwrap();
-        assert_eq!(msg, "mock: GetLogs executed");
+        assert_eq!(msg, "mock: GetLogs { lines: 0 } executed");
     }
 
     #[tokio::test]
@@ -1106,7 +1106,7 @@ mod tests {
             NodeCommand::Stop,
             NodeCommand::Restart,
             NodeCommand::Build,
-            NodeCommand::GetLogs,
+            NodeCommand::GetLogs { lines: 0 },
             NodeCommand::Install,
             NodeCommand::Uninstall,
             NodeCommand::Clean,

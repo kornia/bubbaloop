@@ -80,6 +80,12 @@ pub struct NodeManifest {
     /// Hardware/software requirements
     #[serde(default)]
     pub requires: Option<Requirements>,
+    /// Environment variables to bake into the systemd unit (KEY -> VALUE).
+    /// Use this for runtime knobs like GST_PLUGIN_PATH, CUDA_VISIBLE_DEVICES,
+    /// or anything else `pixi run` would normally set. The daemon adds one
+    /// `Environment=KEY=VALUE` line per entry to the generated unit.
+    #[serde(default)]
+    pub environment: std::collections::BTreeMap<String, String>,
     /// Extensible metadata (for future use)
     #[serde(default)]
     pub metadata: std::collections::HashMap<String, serde_json::Value>,
