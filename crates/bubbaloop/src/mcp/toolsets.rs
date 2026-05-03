@@ -233,7 +233,8 @@ mod tests {
     /// None). Acquires the process-wide `ENV_TEST_LOCK` to serialize against
     /// other env-var-mutating tests in the same process.
     fn with_toolsets_env<F: FnOnce()>(value: Option<&str>, f: F) {
-        let _guard = super::ENV_TEST_LOCK
+        // ENV_TEST_LOCK lives in `crate::mcp` (one level up from `mcp::toolsets`).
+        let _guard = crate::mcp::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let saved = std::env::var("BUBBALOOP_MCP_TOOLSETS").ok();
