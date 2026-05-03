@@ -371,7 +371,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             tool_router: Self::tool_router(),
             machine_id,
             mode_ceiling: super::rbac::Tier::Admin,
-            enabled_toolsets: std::sync::Arc::new(std::sync::Mutex::new(
+            enabled_toolsets: std::sync::Arc::new(std::sync::RwLock::new(
                 super::toolsets::default_enabled(),
             )),
         }
@@ -389,7 +389,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     /// from `$BUBBALOOP_MCP_TOOLSETS` automatically via `new()`.
     #[cfg(any(test, feature = "test-harness"))]
     pub fn with_enabled_toolsets(self, toolsets: std::collections::HashSet<String>) -> Self {
-        if let Ok(mut guard) = self.enabled_toolsets.lock() {
+        if let Ok(mut guard) = self.enabled_toolsets.write() {
             *guard = toolsets;
         }
         self
@@ -1954,7 +1954,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         log::info!("[MCP] tool=toolset_list");
         let enabled = self
             .enabled_toolsets
-            .lock()
+            .read()
             .map(|g| g.clone())
             .unwrap_or_default();
         let mut rows: Vec<serde_json::Value> = super::toolsets::toolset_definitions()
@@ -2047,7 +2047,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
                 req.toolset_name, known
             ))]));
         }
-        let was_already_enabled = match self.enabled_toolsets.lock() {
+        let was_already_enabled = match self.enabled_toolsets.write() {
             Ok(mut guard) => !guard.insert(req.toolset_name.clone()),
             Err(_) => {
                 return Ok(CallToolResult::success(vec![Content::text(

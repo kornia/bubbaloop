@@ -17,7 +17,14 @@ use rmcp::handler::server::tool::ToolRouter;
 use rmcp::model::*;
 use rmcp::ServerHandler;
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
+
+/// Process-wide lock used by tests that mutate environment variables. Tests
+/// that call `set_var` / `remove_var` MUST acquire this before mutating to
+/// avoid races with other tests in the same process. Cargo runs tests in a
+/// single binary by default.
+#[cfg(test)]
+pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Axum middleware that enforces Bearer token authentication.
 ///
@@ -107,9 +114,9 @@ pub struct BubbaLoopMcpServer<P: PlatformOperations = platform::DaemonPlatform> 
     /// Per-session enabled toolsets (gap #12 dynamic disclosure). Mutated
     /// at runtime via the `toolset_enable` meta-tool; initialised from
     /// `$BUBBALOOP_MCP_TOOLSETS` (default: all enabled, backwards compatible).
-    /// `Arc<Mutex<...>>` so the per-session server clone shares state with
-    /// any background dispatch on the same session.
-    pub(crate) enabled_toolsets: Arc<Mutex<HashSet<String>>>,
+    /// `Arc<RwLock<...>>` because reads (every `list_tools` / `get_tool`
+    /// call) vastly outnumber writes (only `toolset_enable` mutates).
+    pub(crate) enabled_toolsets: Arc<RwLock<HashSet<String>>>,
 }
 
 // Manual Clone impl: P doesn't need Clone because it's behind Arc.
@@ -226,20 +233,19 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
         // Gap #12 dynamic toolsets — filter the full router output to only
         // include tools whose name is in an enabled toolset (or is one of the
-        // always-visible meta-tools). See `toolsets::is_visible`.
-        let enabled = match self.enabled_toolsets.lock() {
-            Ok(g) => g.clone(),
-            Err(poisoned) => {
-                log::warn!("enabled_toolsets mutex poisoned — recovering inner state");
-                poisoned.into_inner().clone()
-            }
-        };
+        // always-visible meta-tools). Read-locked the whole filter pass so
+        // we never clone the HashSet.
+        let enabled = self
+            .enabled_toolsets
+            .read()
+            .unwrap_or_else(|p| p.into_inner());
         let filtered: Vec<Tool> = self
             .tool_router
             .list_all()
             .into_iter()
             .filter(|t| toolsets::is_visible(&t.name, &enabled))
             .collect();
+        drop(enabled);
         Ok(ListToolsResult {
             tools: filtered,
             meta: None,
@@ -254,7 +260,7 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
         // RBAC-passing caller that knows the name can still invoke it,
         // matching GitHub MCP's `X-MCP-Tools` semantics where the header
         // narrows visibility but doesn't gate execution.
-        let enabled = self.enabled_toolsets.lock().ok()?.clone();
+        let enabled = self.enabled_toolsets.read().ok()?;
         if toolsets::is_visible(name, &enabled) {
             self.tool_router.get(name).cloned()
         } else {
@@ -425,9 +431,14 @@ pub async fn run_mcp_server(
 mod mode_tests {
     use super::*;
 
-    /// Serialize env-var manipulation across tests in this module to avoid races
-    /// when other unit tests probe BUBBALOOP_MCP_MODE concurrently.
+    /// Serialize env-var manipulation across the whole crate's tests via the
+    /// process-wide `ENV_TEST_LOCK`. Without this, two tests calling
+    /// `set_var`/`remove_var` concurrently can each observe values set by
+    /// the other.
     fn with_env<F: FnOnce()>(value: Option<&str>, f: F) {
+        let _guard = super::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let saved = std::env::var("BUBBALOOP_MCP_MODE").ok();
         match value {
             Some(v) => std::env::set_var("BUBBALOOP_MCP_MODE", v),

@@ -229,57 +229,59 @@ mod tests {
         assert!(!is_visible("totally_made_up_tool", &enabled));
     }
 
+    /// Run `f` with `BUBBALOOP_MCP_TOOLSETS` set to `value` (or unset if
+    /// None). Acquires the process-wide `ENV_TEST_LOCK` to serialize against
+    /// other env-var-mutating tests in the same process.
+    fn with_toolsets_env<F: FnOnce()>(value: Option<&str>, f: F) {
+        let _guard = super::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let saved = std::env::var("BUBBALOOP_MCP_TOOLSETS").ok();
+        match value {
+            Some(v) => std::env::set_var("BUBBALOOP_MCP_TOOLSETS", v),
+            None => std::env::remove_var("BUBBALOOP_MCP_TOOLSETS"),
+        }
+        f();
+        match saved {
+            Some(v) => std::env::set_var("BUBBALOOP_MCP_TOOLSETS", v),
+            None => std::env::remove_var("BUBBALOOP_MCP_TOOLSETS"),
+        }
+    }
+
     #[test]
     fn default_enabled_when_env_unset_returns_all_toolsets() {
-        // Save+clear+restore so this test doesn't race against others
-        // touching the same env var.
-        let prev = std::env::var("BUBBALOOP_MCP_TOOLSETS").ok();
-        std::env::remove_var("BUBBALOOP_MCP_TOOLSETS");
-        let got = default_enabled();
-        let want: HashSet<String> = toolset_definitions()
-            .keys()
-            .map(|s| (*s).to_string())
-            .collect();
-        assert_eq!(got, want);
-        if let Some(v) = prev {
-            std::env::set_var("BUBBALOOP_MCP_TOOLSETS", v);
-        }
+        with_toolsets_env(None, || {
+            let got = default_enabled();
+            let want: HashSet<String> = toolset_definitions()
+                .keys()
+                .map(|s| (*s).to_string())
+                .collect();
+            assert_eq!(got, want);
+        });
     }
 
     #[test]
     fn default_enabled_with_explicit_subset_returns_subset() {
-        let prev = std::env::var("BUBBALOOP_MCP_TOOLSETS").ok();
-        std::env::set_var(
-            "BUBBALOOP_MCP_TOOLSETS",
-            "node,mission, belief ,unknown_one",
-        );
-        let got = default_enabled();
-        // Should contain the three valid ones, drop the unknown.
-        assert!(got.contains("node"));
-        assert!(got.contains("mission"));
-        assert!(got.contains("belief"));
-        assert!(!got.contains("unknown_one"));
-        assert_eq!(got.len(), 3);
-        match prev {
-            Some(v) => std::env::set_var("BUBBALOOP_MCP_TOOLSETS", v),
-            None => std::env::remove_var("BUBBALOOP_MCP_TOOLSETS"),
-        }
+        with_toolsets_env(Some("node,mission, belief ,unknown_one"), || {
+            let got = default_enabled();
+            assert!(got.contains("node"));
+            assert!(got.contains("mission"));
+            assert!(got.contains("belief"));
+            assert!(!got.contains("unknown_one"));
+            assert_eq!(got.len(), 3);
+        });
     }
 
     #[test]
     fn star_means_all() {
-        let prev = std::env::var("BUBBALOOP_MCP_TOOLSETS").ok();
-        std::env::set_var("BUBBALOOP_MCP_TOOLSETS", "*");
-        let got = default_enabled();
-        let want: HashSet<String> = toolset_definitions()
-            .keys()
-            .map(|s| (*s).to_string())
-            .collect();
-        assert_eq!(got, want);
-        match prev {
-            Some(v) => std::env::set_var("BUBBALOOP_MCP_TOOLSETS", v),
-            None => std::env::remove_var("BUBBALOOP_MCP_TOOLSETS"),
-        }
+        with_toolsets_env(Some("*"), || {
+            let got = default_enabled();
+            let want: HashSet<String> = toolset_definitions()
+                .keys()
+                .map(|s| (*s).to_string())
+                .collect();
+            assert_eq!(got, want);
+        });
     }
 
     /// Sanity check: every toolset's tool list contains only valid identifiers
