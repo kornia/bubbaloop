@@ -65,8 +65,20 @@ pub(crate) struct QueryTopicRequest {
 
 #[derive(Deserialize, JsonSchema)]
 pub(crate) struct InstallNodeRequest {
-    /// Source path: local directory path or GitHub "user/repo" format
+    /// Source path: local directory path, GitHub "user/repo" format, or
+    /// a marketplace node name (e.g. "rtsp-camera").
     source: String,
+    /// Optional override for the registered node name. Required when
+    /// installing a multi-instance node (e.g. one rtsp-camera process per
+    /// physical camera) — each instance must have a unique name.
+    #[serde(default)]
+    name: Option<String>,
+    /// Optional path to a per-instance YAML config. Appended to the node's
+    /// `command` as `-c <path>`. Required when the node's config lives at
+    /// a non-default path (e.g. `configs/config.yaml`) or when installing
+    /// a multi-instance node.
+    #[serde(default)]
+    config: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
@@ -1098,7 +1110,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
 
     #[tool(
         name = "node_install",
-        description = "Install a node from the marketplace, a local path, or GitHub repository. Accepts a marketplace name (e.g., 'rtsp-camera'), a local directory path (e.g., '/path/to/my-node'), or GitHub format (e.g., 'user/repo'). Downloads precompiled binaries when available, registers the node with the daemon, and creates the systemd service. Admin only.",
+        description = "Install a node from the marketplace, a local path, or GitHub repository. Accepts a marketplace name (e.g., 'rtsp-camera'), a local directory path (e.g., '/path/to/my-node'), or GitHub format (e.g., 'user/repo'). Downloads precompiled binaries when available, registers the node with the daemon, and creates the systemd service. Optional `name` overrides the registered node name (required for multi-instance nodes — one rtsp-camera process per camera, each with a unique name). Optional `config` is the path to a per-instance YAML config (appended as `-c <path>` to the node's command at start; required when the node's config lives at a non-default path like `configs/config.yaml` or for multi-instance nodes). Admin only.",
         annotations(
             title = "Install node",
             read_only_hint = false,
@@ -1111,14 +1123,21 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         &self,
         Parameters(req): Parameters<InstallNodeRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        log::info!("[MCP] tool=install_node source={}", req.source);
+        log::info!(
+            "[MCP] tool=install_node source={} name={:?} config={:?}",
+            req.source,
+            req.name,
+            req.config
+        );
 
         // Route based on source format:
-        // - Simple name (no `/`, no `.` prefix, valid node name) → marketplace
-        // - Path/URL → existing install_node flow
+        // - Simple name (no `/`, no `.` prefix, valid node name, no overrides) → marketplace
+        // - Path/URL or any case with overrides → add_node (supports name + config)
         let is_marketplace_name = !req.source.contains('/')
             && !req.source.starts_with('.')
-            && validation::validate_node_name(&req.source).is_ok();
+            && validation::validate_node_name(&req.source).is_ok()
+            && req.name.is_none()
+            && req.config.is_none();
 
         let result = if is_marketplace_name {
             self.platform.install_from_marketplace(&req.source).await
@@ -1129,7 +1148,16 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
                     e
                 ))]));
             }
-            self.platform.install_node(&req.source).await
+            // When name and config are absent, this matches the previous
+            // single-arg behavior (install_node). When set, we route via
+            // add_node so the per-instance overrides take effect.
+            if req.name.is_some() || req.config.is_some() {
+                self.platform
+                    .add_node(&req.source, req.name.as_deref(), req.config.as_deref())
+                    .await
+            } else {
+                self.platform.install_node(&req.source).await
+            }
         };
 
         match result {
