@@ -94,11 +94,16 @@ impl NodeManager {
 
                     let now = Self::now_ms();
 
-                    // Verify the node is registered and in a running state
+                    // Verify the node is registered and in a running state.
+                    // Match against BOTH the registered name and the YAML
+                    // `name` field — heartbeats from instance-overridden
+                    // nodes (e.g. `tapo-terrace` registered, publishing
+                    // under `tapo_terrace_camera`) carry the published
+                    // name in the topic.
                     let mut nodes = manager_heartbeat.nodes.write().await;
                     let mut found = false;
                     for node in nodes.values_mut() {
-                        if node.effective_name() == name {
+                        if node.matches_topic_name(&name) {
                             if node.status != NodeStatus::Running {
                                 log::warn!(
                                     "Ignoring heartbeat from node '{}' which is not running (status: {:?})",
