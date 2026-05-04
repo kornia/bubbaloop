@@ -930,6 +930,33 @@ The detection order for multi-token commands is:
 - `capabilities` — List of skill types: `sensor`, `actuator`, `processor`, `gateway`
 - `publishes` — List of topics with suffix, description, schema_type, rate_hz
 - `requires` — Hardware/software dependencies (hardware: network, camera, gpio, etc.)
+- `environment` — Map of `KEY: VALUE` baked into the systemd unit (see below)
+
+### Systemd environment baking
+
+The `environment:` map in `node.yaml` is emitted as `Environment=KEY=VALUE` lines in the generated systemd unit. Use it for runtime knobs that `pixi run` would set in dev — without it, the systemd-installed node runs with whatever env the daemon had at start.
+
+```yaml
+environment:
+  GST_PLUGIN_PATH: /home/nvidia/.pixi/envs/default/lib/gstreamer-1.0
+  CUDA_VISIBLE_DEVICES: "0"
+```
+
+Constraints (validated at install time):
+- Keys must match `[A-Za-z_][A-Za-z0-9_]*`.
+- Newlines, control chars, or `[Section]` markers in values are rejected (would let a malicious manifest inject systemd directives).
+- Sorted by key in the unit file (BTreeMap iteration → stable diffs across regenerations).
+
+The native (non-systemd) supervisor inherits the daemon's process env and ignores this field by design.
+
+### Heartbeat topic & registered-vs-published name match
+
+The daemon's health monitor subscribes to `bubbaloop/*/*/*/health` and matches the topic name against **both** the registered node name *and* the YAML config's top-level `name`. Multi-instance nodes whose registered alias (e.g. `tapo-terrace`) differs from the published instance name (e.g. `tapo_terrace_camera`) do not need to do anything special — heartbeats are matched on either. Health transitions:
+
+- `Unknown` — node is not running
+- `Starting` — running, no heartbeat yet (first ~30s after start)
+- `Healthy` — heartbeat received within the last 30s
+- `Unhealthy` — was healthy, but heartbeats stopped arriving for >30s
 
 ## Best Practices
 

@@ -300,6 +300,10 @@ Every well-behaved node serves five standard queryables:
 | `config` | `/config` | YAML or JSON config |
 | `command` | `/command` | Accepts control commands |
 
+### Heartbeat name match
+
+The daemon's health monitor subscribes to `bubbaloop/*/*/*/health` and matches the topic name against **both** the node's registered name AND the YAML config's top-level `name`. This means multi-instance nodes registered under an alias (e.g. `tapo-terrace`) but publishing under the config's instance name (e.g. `tapo_terrace_camera`) get matched on either form. The four observable health states are `Unknown` → `Starting` → `Healthy` → `Unhealthy` (see [node-development → Heartbeat](../node-development.md#heartbeat-topic--registered-vs-published-name-match) for transition rules).
+
 Discovery: query `bubbaloop/**/manifest` to find all nodes, or use the SDK:
 
 ```rust

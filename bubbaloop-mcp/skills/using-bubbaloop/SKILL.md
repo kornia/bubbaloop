@@ -5,7 +5,7 @@ description: Use when interacting with a Bubbaloop deployment via its MCP server
 
 # Using bubbaloop
 
-Bubbaloop exposes 42 MCP tools across three RBAC tiers (Viewer / Operator / Admin) for managing sensor nodes on a Zenoh-based pub/sub mesh.
+Bubbaloop exposes 47 MCP tools across three RBAC tiers (Viewer / Operator / Admin) for managing sensor nodes on a Zenoh-based pub/sub mesh. Three of those (`toolset_list`, `toolset_enable`, `toolset_get_tools`) are dynamic-disclosure meta-tools — always visible regardless of which toolsets are enabled, used to narrow or broaden the live tool surface for context-window-limited models.
 
 ## The two-plane model — the rule that matters most
 
@@ -28,11 +28,15 @@ Then act with `node_command_send` or lifecycle tools. This sequence is cheap, si
 
 | Tier | Use for | Examples |
 |---|---|---|
-| **Viewer** | Read-only inspection | `node_list`, `node_health`, `node_stream_info`, `job_list` |
-| **Operator** | Day-to-day control | `node_start`, `node_stop`, `node_restart`, `node_command_send`, `schedule_task` |
-| **Admin** | System modification | `node_install`, `node_remove`, `node_build`, `zenoh_query`, `memory_episodic_clear` |
+| **Viewer** (22) | Read-only inspection | `node_list`, `node_health`, `node_stream_info`, `dataflow_graph`, `job_list`, `toolset_list` |
+| **Operator** (15) | Day-to-day control | `node_start`, `node_stop`, `node_restart`, `node_command_send`, `node_logs` (now accepts `lines` param) |
+| **Admin** (12) | System modification | `node_install`, `node_remove`, `node_build`, `zenoh_query`, `memory_episodic_clear` |
 
 In single-user localhost mode all authenticated callers receive Admin tier, but you should still treat Admin actions as requiring explicit user confirmation.
+
+## Dynamic toolsets
+
+Tools are grouped into 11 toolsets by domain (`node`, `mission`, `belief`, `system`, `telemetry`, …). All toolsets are enabled by default. To narrow the surface for a small model, set `BUBBALOOP_MCP_TOOLSETS=node,mission,system` before launching the daemon — only those toolsets' tools will be visible on `tools/list`. At runtime, an agent can call `toolset_list` to see what's available, then `toolset_enable("<name>")` to activate one for the session and re-fetch tools/list.
 
 ## Authentication
 

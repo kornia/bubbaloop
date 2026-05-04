@@ -72,7 +72,18 @@ latency: 200
 | `frame_rate` | integer | No | — | Target publish rate in FPS (1-120, unlimited if unset) |
 | `raw_width` | integer | No | `560` | Width of raw RGBA frames (SHM path) |
 | `raw_height` | integer | No | `560` | Height of raw RGBA frames (SHM path) |
-| `hw_accel` | string | No | `nvidia` | Hardware acceleration: `nvidia` (Jetson NVDEC) or `cpu` |
+| `hw_accel` | string | No | `nvidia` | Hardware acceleration: `nvidia` (Jetson NVDEC) or `cpu`. If `nvidia` is requested but `nvv4l2decoder` is not in the GStreamer registry, the node logs a warning and falls back to `cpu` automatically — safe to set blindly. |
+
+### Hardware Decode Caveat (Jetson)
+
+Hardware decode requires the binary to load the **same GStreamer ABI** as the plugins it scans. The `pixi run build` (default) link path uses pixi's `gstreamer-1.0`, which doesn't include the NVIDIA Jetson decoders (`nvv4l2decoder`, `nvvidconv`). Mixing host plugin paths with pixi GStreamer crashes on duplicate type registration. Two-line summary:
+
+| Goal | Build path | `hw_accel` | `node.yaml` `environment:` |
+|---|---|---|---|
+| Portable (everywhere) | `pixi run build` | `cpu` (or `nvidia` — falls back) | (none) |
+| Jetson hardware decode | `cargo build --release` (no pixi) | `nvidia` | `GST_PLUGIN_PATH: /usr/lib/aarch64-linux-gnu/gstreamer-1.0` |
+
+The `environment:` field is bubbaloop's per-node systemd env-baking (see [Node Development → environment](../../node-development.md#systemd-environment-baking)). Full discussion lives in `bubbaloop-nodes-official/rtsp-camera/README.md`.
 
 ### RTSP URL Format
 

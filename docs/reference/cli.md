@@ -156,6 +156,16 @@ bubbaloop debug <subcommand>
 
 ## Command Details
 
+### bubbaloop up
+
+One-command bootstrap. Idempotent: ensures `zenohd` is on `:7447` and the bubbaloop daemon is on `:8088` (spawning each if missing), then writes a project-scoped `.mcp.json` so any MCP-aware client (Claude Code, Cursor, Cline, Claude Desktop, Copilot CLI, Zed) launched in the current directory picks up the bubbaloop tools automatically. After this, agents can call `node_list`, `node_command_send`, etc., without further setup.
+
+```bash
+bubbaloop up
+```
+
+This is the recommended first command after install.
+
 ### bubbaloop status
 
 Show current system and node status.
@@ -241,6 +251,31 @@ bubbaloop node init <name> [OPTIONS]
 bubbaloop node init my-sensor                       # Rust node
 bubbaloop node init my-sensor --node-type python    # Python node
 bubbaloop node init my-sensor -o /path/to/output    # Custom location
+```
+
+### bubbaloop node create
+
+One-shot: scaffold + build + register + install + (optionally) start. Replaces the 5-6 commands `init` → build → `add` → `install` → `start` with one invocation.
+
+```bash
+bubbaloop node create <name> [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-t, --node-type <type>` | Node type: `rust` (default), `python` |
+| `-o, --output <path>` | Output directory (default: ./<name>) |
+| `-d, --description <desc>` | Node description |
+| `--author <name>` | Author name |
+| `--no-build` | Skip the build step (build is run by default) |
+| `--no-install` | Skip the systemd-install step (install is run by default) |
+| `--start` | Start the node after install (implies install; the truly-one-shot flow) |
+
+**Examples:**
+```bash
+bubbaloop node create my-sensor --start                # Scaffold → build → install → start
+bubbaloop node create my-sensor --no-build --no-install # Scaffold only (init alias)
+bubbaloop node create my-sensor --node-type python --start
 ```
 
 ### bubbaloop node add

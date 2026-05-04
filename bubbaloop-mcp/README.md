@@ -14,7 +14,7 @@ Full step-by-step in [`INSTALL.md`](INSTALL.md).
 
 ## What you get
 
-- **44 MCP tools** across three RBAC tiers (Viewer / Operator / Admin), exposed by the running `bubbaloop daemon run` daemon. Names follow `noun_verb` (`node_list`, `mission_pause`, `belief_update`) and ship with full `ToolAnnotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`).
+- **47 MCP tools** across three RBAC tiers (Viewer / Operator / Admin), exposed by the running `bubbaloop daemon run` daemon. Names follow `noun_verb` (`node_list`, `mission_pause`, `belief_update`) and ship with full `ToolAnnotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`).
 - **8 slash commands** under `/bubbaloop:*` covering status, diagnostics, lifecycle, and node authoring.
 - **3 subagents** dispatchable via the `Agent` tool — one per audience.
 - **1 skill** (`using-bubbaloop`) auto-loaded into agent context to prevent the two-plane mistake (don't poll streaming data through MCP).
@@ -71,7 +71,7 @@ Cap which tools the MCP server accepts by setting `BUBBALOOP_MCP_MODE` BEFORE st
 ```bash
 export BUBBALOOP_MCP_MODE=readonly  # only Viewer tools — public dashboards, demos
 export BUBBALOOP_MCP_MODE=safe      # adds Operator tools — start/stop/restart, missions
-export BUBBALOOP_MCP_MODE=admin     # all 44 tools (default)
+export BUBBALOOP_MCP_MODE=admin     # all 47 tools (default)
 ```
 
 Server-side enforcement, independent of token tier. Useful for read-only deployments and defense in depth alongside the future per-token tier mapping (gap #4).

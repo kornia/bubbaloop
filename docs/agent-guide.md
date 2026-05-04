@@ -862,11 +862,13 @@ Bubbaloop uses three authorization tiers. Each tool requires a minimum tier to e
 
 | Tier | Access Level | MCP Tools |
 |------|--------------|-----------|
-| **Viewer** (18) | Read-only monitoring | `node_list`, `node_health`, `node_schema`, `node_stream_info`, `system_status`, `machine_info`, `node_discover`, `node_manifest`, `node_commands`, `capability_discover`, `proposal_list`, `job_list`, `telemetry_get`, `telemetry_history`, `mission_list`, `constraint_list`, `belief_get`, `world_state_list` |
+| **Viewer** (22) | Read-only monitoring | `node_list`, `node_health`, `node_schema`, `node_stream_info`, `system_status`, `machine_info`, `node_discover`, `node_manifest`, `node_commands`, `capability_discover`, `proposal_list`, `job_list`, `telemetry_get`, `telemetry_history`, `mission_list`, `constraint_list`, `belief_get`, `alert_list`, `world_state_list`, `dataflow_graph`, `toolset_list`, `toolset_get_tools`, `toolset_enable` |
 | **Operator** (15) | Day-to-day operations | `node_start`, `node_stop`, `node_restart`, `node_config`, `node_command_send`, `node_logs`, `node_autostart_enable`, `node_autostart_disable`, `proposal_approve`, `proposal_reject`, `job_delete`, `mission_pause`, `mission_resume`, `mission_cancel`, `belief_update` |
 | **Admin** (12) | System modification | `node_install`, `node_remove`, `node_build`, `zenoh_query`, `node_uninstall`, `node_clean`, `memory_episodic_clear`, `telemetry_config_update`, `context_configure`, `alert_register`, `alert_unregister`, `constraint_register` |
 
-The tier counts (18+15+12=45) include 3 telemetry tools that are mapped in both the MCP server and the agent dispatch. The MCP server exposes 42 unique tools.
+The MCP server exposes 47 tools across these tiers (live `tools/list` count). Three are **dynamic-toolset meta-tools** (`toolset_list`, `toolset_get_tools`, `toolset_enable`) — always visible regardless of which toolsets are enabled, since they're how an agent discovers and activates the rest of the surface (gap #12 from `bubbaloop-mcp/docs/alignment-notes.md`).
+
+`node_logs` accepts an optional `lines` parameter (default 50, max 5000) so an agent can ask for a specific log window. Other read tools have no parameters beyond `node_name`.
 
 **Default tier:** In single-user localhost mode, all requests are granted Admin tier.
 

@@ -80,7 +80,7 @@ Set `BUBBALOOP_MCP_MODE` BEFORE starting the daemon. Server-enforced ceiling, in
 ```bash
 export BUBBALOOP_MCP_MODE=readonly  # only Viewer tools — public dashboards, demos
 export BUBBALOOP_MCP_MODE=safe      # adds Operator tools — start/stop/restart/missions
-export BUBBALOOP_MCP_MODE=admin     # all 44 tools (default) — local development
+export BUBBALOOP_MCP_MODE=admin     # all 47 tools (default) — local development
 ```
 
 A `safe`-mode daemon will reject `node_install` / `node_remove` / `node_build` / `zenoh_query` / `memory_episodic_clear` even if the caller's token claims admin. Pattern lifted from Red Hat's `kubernetes-mcp-server`.

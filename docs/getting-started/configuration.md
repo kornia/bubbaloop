@@ -34,7 +34,7 @@ latency: 200                 # Buffer latency in milliseconds (optional)
 | `frame_rate` | integer | No | — | Target publish rate in FPS (1-120, unlimited if unset) |
 | `raw_width` | integer | No | `560` | Width of raw RGBA frames (SHM path) |
 | `raw_height` | integer | No | `560` | Height of raw RGBA frames (SHM path) |
-| `hw_accel` | string | No | `nvidia` | Hardware acceleration: `nvidia` (Jetson NVDEC) or `cpu` |
+| `hw_accel` | string | No | `nvidia` | Hardware acceleration: `nvidia` (Jetson NVDEC) or `cpu`. Falls back to `cpu` automatically if `nvv4l2decoder` is not registered (see [hardware-decode caveat](../components/sensors/rtsp-camera.md#hardware-decode-caveat-jetson)). |
 
 ### RTSP URL Format
 
