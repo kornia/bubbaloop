@@ -953,9 +953,9 @@ mod tests {
         let proposal = Proposal {
             id: "prop-1".to_string(),
             timestamp: "2026-03-03T10:00:00Z".to_string(),
-            skill: "restart_node".to_string(),
+            skill: "node_restart".to_string(),
             description: "Restart front-door camera (offline for 5 minutes)".to_string(),
-            actions: r#"[{"tool":"restart_node","args":{"node_name":"rtsp-camera"}}]"#.to_string(),
+            actions: r#"[{"tool":"node_restart","args":{"node_name":"rtsp-camera"}}]"#.to_string(),
             status: "pending".to_string(),
             decided_by: None,
             decided_at: None,
@@ -964,7 +964,7 @@ mod tests {
 
         let pending = store.list_proposals(Some("pending")).unwrap();
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].skill, "restart_node");
+        assert_eq!(pending[0].skill, "node_restart");
 
         store.approve_proposal("prop-1", "user").unwrap();
 
@@ -982,9 +982,9 @@ mod tests {
         let proposal = Proposal {
             id: "prop-2".to_string(),
             timestamp: "2026-03-03T10:00:00Z".to_string(),
-            skill: "remove_node".to_string(),
+            skill: "node_remove".to_string(),
             description: "Remove unused weather node".to_string(),
-            actions: r#"[{"tool":"remove_node","args":{"node_name":"openmeteo"}}]"#.to_string(),
+            actions: r#"[{"tool":"node_remove","args":{"node_name":"openmeteo"}}]"#.to_string(),
             status: "pending".to_string(),
             decided_by: None,
             decided_at: None,

@@ -12,12 +12,38 @@ use rmcp::{tool, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+/// Early-return guard for the validate-node-name preamble repeated by every
+/// node-targeting tool. Returns an error result with the validator's message.
+macro_rules! ensure_valid_node_name {
+    ($name:expr) => {
+        if let Err(e) = $crate::validation::validate_node_name(&$name) {
+            return Ok(CallToolResult::success(vec![Content::text(e)]));
+        }
+    };
+}
+
 // ── Tool parameter types ──────────────────────────────────────────
 
 #[derive(Deserialize, JsonSchema)]
 pub(crate) struct NodeNameRequest {
     /// Name of the node (e.g., "rtsp-camera", "openmeteo")
     node_name: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub(crate) struct ToolsetNameRequest {
+    /// Name of the toolset (e.g., "node", "mission", "belief"). Use
+    /// `toolset_list` to discover available toolsets.
+    toolset_name: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub(crate) struct NodeLogsRequest {
+    /// Name of the node (e.g., "rtsp-camera", "openmeteo")
+    node_name: String,
+    /// Number of log lines to fetch. Defaults to 50, capped at 5000.
+    #[serde(default)]
+    lines: u32,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -201,6 +227,154 @@ pub(crate) struct UpdateBeliefRequest {
     notes: Option<String>,
 }
 
+// ── Helpers ───────────────────────────────────────────────────────
+
+/// Build the wire payload sent to a node's `/command` queryable.
+///
+/// **Flat envelope**: when `params` is a JSON object, its keys are spread into
+/// the top-level alongside `"command"` — i.e. the wire format is
+/// `{"command": "...", ...params}`, not `{"command": "...", "params": {...}}`.
+/// This matches what nodes using `#[serde(tag = "command")]` (or the OBS-style
+/// command vocabulary) expect to parse. Closes alignment-notes gap #11.
+///
+/// **Fallback**: when `params` isn't a JSON object (null, scalar, array), the
+/// payload uses the nested form `{command, params}` so legacy nodes that parse
+/// either shape keep working.
+///
+/// **Collision handling**: if the caller's `params` happens to contain its own
+/// `"command"` key, OUR `command` value wins — re-inserted last so a malicious
+/// caller can't redirect the command via the params bag.
+pub(crate) fn build_command_payload(command: &str, params: &serde_json::Value) -> Vec<u8> {
+    let payload = match params.as_object() {
+        Some(params_obj) => {
+            let mut flat: serde_json::Map<String, serde_json::Value> = params_obj.clone();
+            flat.insert(
+                "command".to_string(),
+                serde_json::Value::String(command.to_string()),
+            );
+            serde_json::Value::Object(flat)
+        }
+        None => serde_json::json!({
+            "command": command,
+            "params": params,
+        }),
+    };
+    serde_json::to_vec(&payload).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::build_command_payload;
+    use serde_json::json;
+
+    /// Decode a payload back to JSON for assertions.
+    fn decode(bytes: &[u8]) -> serde_json::Value {
+        serde_json::from_slice(bytes).expect("payload was not valid JSON")
+    }
+
+    #[test]
+    fn object_params_get_flattened_alongside_command() {
+        let payload = build_command_payload(
+            "start_recording",
+            &json!({"output_path": "/tmp/x.mp4", "duration_secs": 30}),
+        );
+        let v = decode(&payload);
+        // Flat shape: top-level keys are command + each param.
+        assert_eq!(v["command"], "start_recording");
+        assert_eq!(v["output_path"], "/tmp/x.mp4");
+        assert_eq!(v["duration_secs"], 30);
+        // No nested `params` field.
+        assert!(v.get("params").is_none(), "expected flat shape, got nested");
+    }
+
+    #[test]
+    fn empty_object_params_yields_just_command() {
+        let payload = build_command_payload("get_status", &json!({}));
+        let v = decode(&payload);
+        assert_eq!(v["command"], "get_status");
+        assert!(v.get("params").is_none());
+        assert_eq!(v.as_object().map(|o| o.len()), Some(1));
+    }
+
+    #[test]
+    fn null_params_falls_back_to_nested_form() {
+        let payload = build_command_payload("stop_recording", &serde_json::Value::Null);
+        let v = decode(&payload);
+        assert_eq!(v["command"], "stop_recording");
+        // Null can't be flattened — nested form preserves the explicit null.
+        assert_eq!(v["params"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn array_params_falls_back_to_nested_form() {
+        let payload = build_command_payload("multi", &json!([1, 2, 3]));
+        let v = decode(&payload);
+        assert_eq!(v["command"], "multi");
+        assert_eq!(v["params"], json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn scalar_params_falls_back_to_nested_form() {
+        let payload = build_command_payload("volume_set", &json!(42));
+        let v = decode(&payload);
+        assert_eq!(v["command"], "volume_set");
+        assert_eq!(v["params"], 42);
+    }
+
+    #[test]
+    fn caller_command_in_params_cannot_override() {
+        // Defense against a caller passing `params: {"command": "evil"}`.
+        // Our explicit `command` parameter must win.
+        let payload = build_command_payload(
+            "real_command",
+            &json!({"command": "evil_command", "data": 1}),
+        );
+        let v = decode(&payload);
+        assert_eq!(
+            v["command"], "real_command",
+            "params.command must NOT override the real command"
+        );
+        assert_eq!(v["data"], 1);
+    }
+
+    #[test]
+    fn nested_objects_in_params_are_preserved() {
+        let payload = build_command_payload(
+            "configure",
+            &json!({
+                "video": {"codec": "h264", "bitrate": 4_000_000},
+                "audio": null,
+            }),
+        );
+        let v = decode(&payload);
+        assert_eq!(v["command"], "configure");
+        assert_eq!(v["video"]["codec"], "h264");
+        assert_eq!(v["video"]["bitrate"], 4_000_000);
+        assert_eq!(v["audio"], serde_json::Value::Null);
+    }
+
+    /// Wire-format reference test: regression-protect the exact JSON bytes a
+    /// recorder using `#[serde(tag = "command", rename_all = "snake_case")]`
+    /// would parse successfully into its `Command::Start` variant.
+    #[test]
+    fn recorder_compatible_wire_format() {
+        let payload = build_command_payload(
+            "start",
+            &json!({
+                "topic_patterns": ["bubbaloop/global/*/cam/**"],
+                "output_dir": "/tmp/clips",
+                "chunk_duration_secs": 60,
+            }),
+        );
+        let v = decode(&payload);
+        // Reproduces the exact shape recorder/src/commands.rs expects.
+        assert_eq!(v["command"], "start");
+        assert_eq!(v["topic_patterns"][0], "bubbaloop/global/*/cam/**");
+        assert_eq!(v["output_dir"], "/tmp/clips");
+        assert_eq!(v["chunk_duration_secs"], 60);
+    }
+}
+
 // ── Tool implementations ──────────────────────────────────────────
 
 #[tool_router]
@@ -215,11 +389,41 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             auth_token,
             tool_router: Self::tool_router(),
             machine_id,
+            mode_ceiling: super::rbac::Tier::Admin,
+            enabled_toolsets: std::sync::Arc::new(std::sync::RwLock::new(
+                super::toolsets::default_enabled(),
+            )),
         }
     }
 
+    /// Apply a tier ceiling — typically derived from `$BUBBALOOP_MCP_MODE`.
+    /// Caller cannot invoke any tool requiring a tier higher than this ceiling.
+    pub fn with_mode_ceiling(mut self, ceiling: super::rbac::Tier) -> Self {
+        self.mode_ceiling = ceiling;
+        self
+    }
+
+    /// Override the initial enabled-toolsets set (typically used by tests
+    /// that want a known starting state). Production callers get the value
+    /// from `$BUBBALOOP_MCP_TOOLSETS` automatically via `new()`.
+    #[cfg(any(test, feature = "test-harness"))]
+    pub fn with_enabled_toolsets(self, toolsets: std::collections::HashSet<String>) -> Self {
+        if let Ok(mut guard) = self.enabled_toolsets.write() {
+            *guard = toolsets;
+        }
+        self
+    }
+
     #[tool(
-        description = "List all registered nodes with their status, capabilities, and topics. Returns node name, status (running/stopped/etc), type, and whether it's built."
+        name = "node_list",
+        description = "List all registered nodes with their status, capabilities, and topics. Returns node name, status (running/stopped/etc), type, and whether it's built.",
+        annotations(
+            title = "List nodes",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn list_nodes(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=list_nodes");
@@ -249,15 +453,23 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Get detailed health status of a specific node including uptime.")]
+    #[tool(
+        name = "node_health",
+        description = "Get detailed health status of a specific node including uptime.",
+        annotations(
+            title = "Node health",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn get_node_health(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_node_health node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self.platform.get_node_detail(&req.node_name).await {
             Ok(detail) => Ok(CallToolResult::success(vec![Content::text(
                 serde_json::to_string_pretty(&detail).unwrap_or_default(),
@@ -276,16 +488,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Get the current configuration of a node by querying its Zenoh config queryable."
+        name = "node_config",
+        description = "Get the current configuration of a node by querying its Zenoh config queryable.",
+        annotations(
+            title = "Node configuration",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_node_config(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_node_config node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self.platform.get_node_config(&req.node_name).await {
             Ok(config) => Ok(CallToolResult::success(vec![Content::text(
                 serde_json::to_string_pretty(&config).unwrap_or_default(),
@@ -298,16 +516,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Get the full manifest for a node, including capabilities, published topics, commands, and hardware requirements."
+        name = "node_manifest",
+        description = "Get the full manifest for a node, including capabilities, published topics, commands, and hardware requirements.",
+        annotations(
+            title = "Node manifest",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_node_manifest(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_node_manifest node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self.platform.get_manifests(None).await {
             Ok(manifests) => {
                 let found = manifests
@@ -331,16 +555,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "List available commands for a specific node with their parameters and descriptions. Use this before send_command to discover what actions a node supports."
+        name = "node_commands",
+        description = "List available commands for a specific node with their parameters and descriptions. Use this before send_command to discover what actions a node supports.",
+        annotations(
+            title = "Node commands",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn list_commands(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=list_commands node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/manifest",
             "global", self.machine_id, req.node_name
@@ -381,7 +611,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Send a command to a node's command queryable. The node must support the command — call list_commands first to see available commands. Example: node_name='rtsp-camera', command='capture_frame', params={\"resolution\": \"1080p\"}. Returns the command result or error."
+        name = "node_command_send",
+        description = "Send a command to a node's command queryable. The node must support the command — call node_commands first to see available commands. Example: node_name='rtsp-camera', command='capture_frame', params={\"resolution\": \"1080p\"}. Returns the command result or error.",
+        annotations(
+            title = "Send node command",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn send_command(
         &self,
@@ -392,18 +630,12 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             req.node_name,
             req.command
         );
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         let key_expr = format!(
             "bubbaloop/{}/{}/{}/command",
             "global", self.machine_id, req.node_name
         );
-        let payload = serde_json::json!({
-            "command": req.command,
-            "params": req.params,
-        });
-        let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
+        let payload_bytes = build_command_payload(&req.command, &req.params);
 
         match self
             .platform
@@ -429,16 +661,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Start a stopped node via the daemon. The node must be installed and built."
+        name = "node_start",
+        description = "Start a stopped node via the daemon. The node must be installed and built.",
+        annotations(
+            title = "Start node",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn start_node(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=start_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Start)
@@ -452,15 +690,23 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Stop a running node via the daemon.")]
+    #[tool(
+        name = "node_stop",
+        description = "Stop a running node via the daemon.",
+        annotations(
+            title = "Stop node",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn stop_node(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=stop_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Stop)
@@ -474,15 +720,23 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Restart a node (stop then start).")]
+    #[tool(
+        name = "node_restart",
+        description = "Restart a node (stop then start).",
+        annotations(
+            title = "Restart node",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn restart_node(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=restart_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Restart)
@@ -496,18 +750,33 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Get the latest logs from a node's systemd service.")]
+    #[tool(
+        name = "node_logs",
+        description = "Get the latest logs from a node's systemd service. Default 50 lines (use `lines` to override, max 5000).",
+        annotations(
+            title = "Node logs",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn get_node_logs(
         &self,
-        Parameters(req): Parameters<NodeNameRequest>,
+        Parameters(req): Parameters<NodeLogsRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        log::info!("[MCP] tool=get_node_logs node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        log::info!(
+            "[MCP] tool=get_node_logs node={} lines={}",
+            req.node_name,
+            req.lines
+        );
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
-            .execute_command(&req.node_name, platform::NodeCommand::GetLogs)
+            .execute_command(
+                &req.node_name,
+                platform::NodeCommand::GetLogs { lines: req.lines },
+            )
             .await
         {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
@@ -519,7 +788,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Query a Zenoh key expression (admin only). Key must start with 'bubbaloop/'. Returns up to 100 results."
+        name = "zenoh_query",
+        description = "Query a Zenoh key expression (admin only). Key must start with 'bubbaloop/'. Returns up to 100 results.",
+        annotations(
+            title = "Zenoh query",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn query_zenoh(
         &self,
@@ -542,7 +819,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Reconstruct the runtime dataflow DAG by querying every node's CBOR-encoded `manifest` queryable. Returns nodes (instance + role + machine_id + node_kind + started_at_ns) and edges (publisher_instance → subscriber_instance per topic). Edge inference uses per-topic liveness: by default only `still_live && ever_fired` topics produce edges, so the graph reflects what is *actually firing right now*. Set `include_declared_but_unused=true` to also include topics that were declared but have never received/emitted a sample. Surfaces orphan_inputs (subscribers with no producer) and unconsumed_outputs (publishers with no subscriber). Single source of truth for who-feeds-whom — no config grepping required."
+        name = "dataflow_graph",
+        description = "Reconstruct the runtime dataflow DAG by querying every node's CBOR-encoded `manifest` queryable. Returns nodes (instance + role + machine_id + node_kind + started_at_ns) and edges (publisher_instance → subscriber_instance per topic). Edge inference uses per-topic liveness: by default only `still_live && ever_fired` topics produce edges, so the graph reflects what is *actually firing right now*. Set `include_declared_but_unused=true` to also include topics that were declared but have never received/emitted a sample. Surfaces orphan_inputs (subscribers with no producer) and unconsumed_outputs (publishers with no subscriber). Single source of truth for who-feeds-whom — no config grepping required.",
+        annotations(
+            title = "Dataflow graph",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn dataflow(
         &self,
@@ -573,7 +858,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Discover all nodes across all machines by querying manifests. Returns a list of all self-describing nodes with their capabilities."
+        name = "node_discover",
+        description = "Discover all nodes across all machines by querying manifests. Returns a list of all self-describing nodes with their capabilities.",
+        annotations(
+            title = "Discover nodes",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn discover_nodes(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=discover_nodes");
@@ -587,7 +880,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Discover available node capabilities. Returns nodes grouped by capability type (sensor, actuator, processor, gateway). Optionally filter by a single capability type."
+        name = "capability_discover",
+        description = "Discover available node capabilities. Returns nodes grouped by capability type (sensor, actuator, processor, gateway). Optionally filter by a single capability type.",
+        annotations(
+            title = "Discover capabilities",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn discover_capabilities(
         &self,
@@ -656,21 +957,45 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Additional tools ───────────────────────────────────────────
 
     #[tool(
-        description = "Get Zenoh connection parameters for subscribing to a node's data stream. Returns topic pattern, encoding, and endpoint. Use this to set up streaming data access outside MCP."
+        name = "node_stream_info",
+        description = "Get Zenoh connection parameters for subscribing to a node's data stream. Returns topic pattern, encoding, and endpoint. Use this to set up streaming data access outside MCP.",
+        annotations(
+            title = "Node stream info",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_stream_info(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_stream_info node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
+
+        // The registered node name and the published Zenoh prefix can differ
+        // when an instance overrides `name` in its config (cameras do this:
+        // registered `tapo-terrace`, published `tapo_terrace_camera`).
+        let detail = self.platform.get_node_detail(&req.node_name).await.ok();
+        let config_path = detail
+            .as_ref()
+            .and_then(|d| d.get("config_override").and_then(|v| v.as_str()))
+            .filter(|p| !p.is_empty());
+        let instance_name = match config_path {
+            Some(path) => read_yaml_name(path)
+                .await
+                .unwrap_or_else(|| req.node_name.clone()),
+            None => req.node_name.clone(),
+        };
+
         let info = serde_json::json!({
-            "zenoh_topic": format!("bubbaloop/{}/{}/{}/**", "global", self.machine_id, req.node_name),
-            "encoding": "protobuf",
+            "zenoh_topic": format!("bubbaloop/{}/{}/{}/**", "global", self.machine_id, instance_name),
+            "registered_name": req.node_name,
+            "instance_name": instance_name,
+            "encoding": "cbor",
             "endpoint": "tcp/localhost:7447",
-            "note": "Subscribe to this topic via Zenoh client library for real-time data. MCP is control-plane only."
+            "note": "Subscribe to this topic via Zenoh client library for real-time data. MCP is control-plane only. `instance_name` is the YAML config's top-level `name`; it may differ from the registered node name."
         });
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&info).unwrap_or_default(),
@@ -678,7 +1003,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Get overall system status including daemon health, node count, and Zenoh connection state."
+        name = "system_status",
+        description = "Get overall system status including daemon health, node count, and Zenoh connection state.",
+        annotations(
+            title = "System status",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_system_status(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_system_status");
@@ -706,7 +1039,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Get machine hardware and OS information: architecture, hostname, OS version."
+        name = "machine_info",
+        description = "Get machine hardware and OS information: architecture, hostname, OS version.",
+        annotations(
+            title = "Machine info",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_machine_info(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_machine_info");
@@ -726,16 +1067,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Trigger a build for a node. Builds the node's source code using its configured build command (Cargo, pixi, etc.). Admin only."
+        name = "node_build",
+        description = "Trigger a build for a node. Builds the node's source code using its configured build command (Cargo, pixi, etc.). Admin only.",
+        annotations(
+            title = "Build node",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn build_node(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=build_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Build)
@@ -750,7 +1097,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Install a node from the marketplace, a local path, or GitHub repository. Accepts a marketplace name (e.g., 'rtsp-camera'), a local directory path (e.g., '/path/to/my-node'), or GitHub format (e.g., 'user/repo'). Downloads precompiled binaries when available, registers the node with the daemon, and creates the systemd service. Admin only."
+        name = "node_install",
+        description = "Install a node from the marketplace, a local path, or GitHub repository. Accepts a marketplace name (e.g., 'rtsp-camera'), a local directory path (e.g., '/path/to/my-node'), or GitHub format (e.g., 'user/repo'). Downloads precompiled binaries when available, registers the node with the daemon, and creates the systemd service. Admin only.",
+        annotations(
+            title = "Install node",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn install_node(
         &self,
@@ -787,16 +1142,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Remove a registered node. Stops the node first if it is running, then removes it from the daemon registry. Admin only."
+        name = "node_remove",
+        description = "Remove a registered node. Stops the node first if it is running, then removes it from the daemon registry. Admin only.",
+        annotations(
+            title = "Remove node",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn remove_node(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=remove_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self.platform.remove_node(&req.node_name).await {
             Ok(msg) => Ok(CallToolResult::success(vec![Content::text(msg)])),
             Err(e) => Ok(CallToolResult::success(vec![Content::text(format!(
@@ -807,16 +1168,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Uninstall a node's systemd service. Stops the node if running and removes the systemd service file, but keeps the node registered. Admin only."
+        name = "node_uninstall",
+        description = "Uninstall a node's systemd service. Stops the node if running and removes the systemd service file, but keeps the node registered. Admin only.",
+        annotations(
+            title = "Uninstall node",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn uninstall_node(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=uninstall_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Uninstall)
@@ -831,16 +1198,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Clean a node's build artifacts and cached data. Useful for forcing a rebuild. Admin only."
+        name = "node_clean",
+        description = "Clean a node's build artifacts and cached data. Useful for forcing a rebuild. Admin only.",
+        annotations(
+            title = "Clean node artifacts",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn clean_node(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=clean_node node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::Clean)
@@ -855,16 +1228,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Enable autostart for a node. The node's systemd service will start automatically on boot."
+        name = "node_autostart_enable",
+        description = "Enable autostart for a node. The node's systemd service will start automatically on boot.",
+        annotations(
+            title = "Enable autostart",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn enable_autostart(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=enable_autostart node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::EnableAutostart)
@@ -879,16 +1258,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Disable autostart for a node. The node's systemd service will no longer start automatically on boot."
+        name = "node_autostart_disable",
+        description = "Disable autostart for a node. The node's systemd service will no longer start automatically on boot.",
+        annotations(
+            title = "Disable autostart",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn disable_autostart(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=disable_autostart node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         match self
             .platform
             .execute_command(&req.node_name, platform::NodeCommand::DisableAutostart)
@@ -903,16 +1288,22 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Get the protobuf schema of a node's data messages. Returns the schema in human-readable format if available."
+        name = "node_schema",
+        description = "Get the protobuf schema of a node's data messages. Returns the schema in human-readable format if available.",
+        annotations(
+            title = "Node schema",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_node_schema(
         &self,
         Parameters(req): Parameters<NodeNameRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=get_node_schema node={}", req.node_name);
-        if let Err(e) = validation::validate_node_name(&req.node_name) {
-            return Ok(CallToolResult::success(vec![Content::text(e)]));
-        }
+        ensure_valid_node_name!(req.node_name);
         let key = format!(
             "bubbaloop/{}/{}/{}/schema",
             "global", self.machine_id, req.node_name
@@ -929,7 +1320,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Agent proposal tools ─────────────────────────────────────────
 
     #[tool(
-        description = "List agent proposals awaiting human approval. Optionally filter by status: 'pending', 'approved', 'rejected'."
+        name = "proposal_list",
+        description = "List agent proposals awaiting human approval. Optionally filter by status: 'pending', 'approved', 'rejected'.",
+        annotations(
+            title = "List proposals",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn list_proposals(
         &self,
@@ -946,7 +1345,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Approve a pending agent proposal. The proposed actions will be executed by the agent on its next heartbeat."
+        name = "proposal_approve",
+        description = "Approve a pending agent proposal. The proposed actions will be executed by the agent on its next heartbeat.",
+        annotations(
+            title = "Approve proposal",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn approve_proposal(
         &self,
@@ -971,7 +1378,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Reject a pending agent proposal. The proposed actions will be discarded."
+        name = "proposal_reject",
+        description = "Reject a pending agent proposal. The proposed actions will be discarded.",
+        annotations(
+            title = "Reject proposal",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn reject_proposal(
         &self,
@@ -998,7 +1413,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Memory admin tools ──────────────────────────────────────────
 
     #[tool(
-        description = "List agent jobs with optional status filter. Returns all scheduled, running, completed, and failed jobs."
+        name = "job_list",
+        description = "List agent jobs with optional status filter. Returns all scheduled, running, completed, and failed jobs.",
+        annotations(
+            title = "List jobs",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn list_jobs(
         &self,
@@ -1015,7 +1438,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Delete a specific agent job by ID. Removes the job from the scheduler. Operator only."
+        name = "job_delete",
+        description = "Delete a specific agent job by ID. Removes the job from the scheduler. Operator only.",
+        annotations(
+            title = "Delete job",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn delete_job(
         &self,
@@ -1032,7 +1463,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Clear episodic memory logs older than the specified number of days. Removes NDJSON files and FTS5 index entries. Admin only."
+        name = "memory_episodic_clear",
+        description = "Clear episodic memory logs older than the specified number of days. Removes NDJSON files and FTS5 index entries. Admin only.",
+        annotations(
+            title = "Clear episodic memory",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn clear_episodic_memory(
         &self,
@@ -1058,7 +1497,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Context provider tools ────────────────────────────────────
 
     #[tool(
-        description = "Configure a context provider: a daemon background task that subscribes to a Zenoh topic pattern and writes extracted field values into world state. Required: mission_id, topic_pattern (e.g. 'bubbaloop/**/vision/detections'), world_state_key_template (e.g. '{label}.location'), value_field (JSON path to extract). Optional: filter (e.g. 'confidence>0.8'), min_interval_secs, max_age_secs, confidence_field. Use list_world_state to see results. Admin only."
+        name = "context_configure",
+        description = "Configure a context provider: a daemon background task that subscribes to a Zenoh topic pattern and writes extracted field values into world state. Required: mission_id, topic_pattern (e.g. 'bubbaloop/**/vision/detections'), world_state_key_template (e.g. '{label}.location'), value_field (JSON path to extract). Optional: filter (e.g. 'confidence>0.8'), min_interval_secs, max_age_secs, confidence_field. Use world_state_list to see results. Admin only.",
+        annotations(
+            title = "Configure context provider",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn configure_context(
         &self,
@@ -1100,7 +1547,17 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
 
     // ── Mission lifecycle tools ─────────────────────────────────────
 
-    #[tool(description = "List all missions with their status, expiry, and resources.")]
+    #[tool(
+        name = "mission_list",
+        description = "List all missions with their status, expiry, and resources.",
+        annotations(
+            title = "List missions",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn list_missions(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=list_missions");
         match self.platform.list_missions().await {
@@ -1115,7 +1572,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Pause an active mission. The agent will stop working on it until resumed."
+        name = "mission_pause",
+        description = "Pause an active mission. The agent will stop working on it until resumed.",
+        annotations(
+            title = "Pause mission",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn pause_mission(
         &self,
@@ -1135,7 +1600,17 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Resume a paused mission. The agent will continue working on it.")]
+    #[tool(
+        name = "mission_resume",
+        description = "Resume a paused mission. The agent will continue working on it.",
+        annotations(
+            title = "Resume mission",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn resume_mission(
         &self,
         Parameters(req): Parameters<MissionIdRequest>,
@@ -1155,7 +1630,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Cancel an active or paused mission. The agent will stop working on it permanently."
+        name = "mission_cancel",
+        description = "Cancel an active or paused mission. The agent will stop working on it permanently.",
+        annotations(
+            title = "Cancel mission",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn cancel_mission(
         &self,
@@ -1178,7 +1661,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Reactive alert tools ────────────────────────────────────────
 
     #[tool(
-        description = "Register a reactive alert rule. When the world state matches the predicate, the agent's arousal spikes without an LLM call. Admin only."
+        name = "alert_register",
+        description = "Register a reactive alert rule. When the world state matches the predicate, the agent's arousal spikes without an LLM call. Admin only.",
+        annotations(
+            title = "Register alert",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn register_alert(
         &self,
@@ -1217,7 +1708,17 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "Unregister a reactive alert rule by ID. Admin only.")]
+    #[tool(
+        name = "alert_unregister",
+        description = "Unregister a reactive alert rule by ID. Admin only.",
+        annotations(
+            title = "Unregister alert",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn unregister_alert(
         &self,
         Parameters(req): Parameters<AlertIdRequest>,
@@ -1232,13 +1733,23 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "List reactive alert rules with full introspection. \
+    #[tool(
+        name = "alert_list",
+        description = "List reactive alert rules with full introspection. \
             Each entry includes predicate, debounce_secs, arousal_boost, description, \
             and `dangling_fields` — world-state keys the predicate references \
             that no registered context provider appears to produce. A non-empty \
             dangling_fields list is a red flag: the rule may never fire, or may \
             fire on stale/ghost values (see incident 2026-04-10). \
-            Optional mission_id filter.")]
+            Optional mission_id filter.",
+        annotations(
+            title = "List alerts",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn list_alerts(
         &self,
         Parameters(req): Parameters<ListAlertsRequest>,
@@ -1260,7 +1771,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Constraint tools ────────────────────────────────────────────
 
     #[tool(
-        description = "Register a safety constraint for a mission. Constraints are checked before any actuator command (fail-closed). Admin only."
+        name = "constraint_register",
+        description = "Register a safety constraint for a mission. Constraints are checked before any actuator command (fail-closed). Admin only.",
+        annotations(
+            title = "Register constraint",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn register_constraint(
         &self,
@@ -1287,7 +1806,17 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         }
     }
 
-    #[tool(description = "List all safety constraints for a mission. Viewer only.")]
+    #[tool(
+        name = "constraint_list",
+        description = "List all safety constraints for a mission. Viewer only.",
+        annotations(
+            title = "List constraints",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn list_constraints(
         &self,
         Parameters(req): Parameters<ListConstraintsRequest>,
@@ -1320,7 +1849,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     // ── Belief tools ──────────────────────────────────────────────────
 
     #[tool(
-        description = "Get a single belief by subject and predicate. Returns the belief as JSON or 'not found'."
+        name = "belief_get",
+        description = "Get a single belief by subject and predicate. Returns the belief as JSON or 'not found'.",
+        annotations(
+            title = "Get belief",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn get_belief(
         &self,
@@ -1344,7 +1881,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "Create or update a belief about the world. Beliefs are durable assertions the agent holds (e.g. 'the dog eats at 08:00'). Operator only."
+        name = "belief_update",
+        description = "Create or update a belief about the world. Beliefs are durable assertions the agent holds (e.g. 'the dog eats at 08:00'). Operator only.",
+        annotations(
+            title = "Update belief",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn update_belief(
         &self,
@@ -1375,7 +1920,15 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
     }
 
     #[tool(
-        description = "List all world state entries. Returns the current world state snapshot as JSON."
+        name = "world_state_list",
+        description = "List all world state entries. Returns the current world state snapshot as JSON.",
+        annotations(
+            title = "World state",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn list_world_state(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=list_world_state");
@@ -1388,6 +1941,147 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
                 e
             ))])),
         }
+    }
+
+    // ── Toolset meta-tools (gap #12 dynamic disclosure) ──────────────
+    //
+    // Three always-visible tools that let an agent inspect and broaden the
+    // currently-enabled toolset surface at runtime. Pattern lifted from the
+    // GitHub MCP server's `X-MCP-Toolsets` header (Jan 2026 changelog).
+
+    #[tool(
+        name = "toolset_list",
+        description = "List all available toolsets, the count of tools each contains, and which are currently enabled for this session. Use this first to discover what's reachable; use `toolset_enable` to activate one, then re-fetch the tool list.",
+        annotations(
+            title = "List toolsets",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn toolset_list(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=toolset_list");
+        let enabled = self
+            .enabled_toolsets
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        let mut rows: Vec<serde_json::Value> = super::toolsets::toolset_definitions()
+            .iter()
+            .map(|(name, tools)| {
+                serde_json::json!({
+                    "name": name,
+                    "tool_count": tools.len(),
+                    "enabled": enabled.contains(*name),
+                })
+            })
+            .collect();
+        // Stable, alphabetical for predictable output.
+        rows.sort_by(|a, b| {
+            a["name"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["name"].as_str().unwrap_or(""))
+        });
+        let body = serde_json::json!({
+            "toolsets": rows,
+            "enabled_count": enabled.len(),
+            "total_count": super::toolsets::toolset_definitions().len(),
+            "note": "Call `toolset_enable` with a toolset name to activate it for this session. Then re-fetch tools/list.",
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".to_string()),
+        )]))
+    }
+
+    #[tool(
+        name = "toolset_get_tools",
+        description = "List the tool names contained in a specific toolset, without enabling it. Useful for previewing what `toolset_enable` would expose.",
+        annotations(
+            title = "Get tools in a toolset",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn toolset_get_tools(
+        &self,
+        Parameters(req): Parameters<ToolsetNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=toolset_get_tools name={}", req.toolset_name);
+        match super::toolsets::toolset_definitions().get(req.toolset_name.as_str()) {
+            Some(tools) => {
+                let body = serde_json::json!({
+                    "toolset": req.toolset_name,
+                    "tool_count": tools.len(),
+                    "tools": tools,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".to_string()),
+                )]))
+            }
+            None => {
+                let known: Vec<&&str> = super::toolsets::toolset_definitions().keys().collect();
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Error: unknown toolset '{}'. Known: {:?}",
+                    req.toolset_name, known
+                ))]))
+            }
+        }
+    }
+
+    #[tool(
+        name = "toolset_enable",
+        description = "Enable a toolset for this session — its tools become visible on the next `tools/list` call. Idempotent: enabling an already-enabled toolset is a no-op.",
+        annotations(
+            title = "Enable a toolset",
+            // Read-only from the caller's perspective: it doesn't mutate the
+            // bubbaloop state, only the per-session visibility filter.
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn toolset_enable(
+        &self,
+        Parameters(req): Parameters<ToolsetNameRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        log::info!("[MCP] tool=toolset_enable name={}", req.toolset_name);
+        if !super::toolsets::toolset_definitions().contains_key(req.toolset_name.as_str()) {
+            let known: Vec<&&str> = super::toolsets::toolset_definitions().keys().collect();
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: unknown toolset '{}'. Known: {:?}",
+                req.toolset_name, known
+            ))]));
+        }
+        let was_already_enabled = match self.enabled_toolsets.write() {
+            Ok(mut guard) => !guard.insert(req.toolset_name.clone()),
+            Err(_) => {
+                return Ok(CallToolResult::success(vec![Content::text(
+                    "Error: enabled_toolsets state lock poisoned",
+                )]))
+            }
+        };
+        // TODO(gap #12 follow-up): emit `notifications/tools/list_changed`
+        // here so MCP clients re-fetch the tool list automatically. rmcp
+        // 0.15 supports this via the connection context but the API surface
+        // is still being finalised; for v1, callers must re-call tools/list
+        // manually after enabling. Documented in alignment-notes.
+        let body = serde_json::json!({
+            "toolset": req.toolset_name,
+            "was_already_enabled": was_already_enabled,
+            "tool_count": super::toolsets::toolset_definitions()
+                .get(req.toolset_name.as_str())
+                .map(|v| v.len())
+                .unwrap_or(0),
+            "note": "Re-call `tools/list` to see the newly-visible tools.",
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".to_string()),
+        )]))
     }
 }
 
@@ -1440,6 +2134,14 @@ fn default_role() -> String {
 
 fn default_kind() -> String {
     "unknown".to_string()
+}
+
+/// Read the top-level `name` field from a YAML config. Returns None on any
+/// I/O or parse failure — callers fall back to the registered node name.
+async fn read_yaml_name(path: &str) -> Option<String> {
+    let yaml = tokio::fs::read_to_string(path).await.ok()?;
+    let v: serde_yaml::Value = serde_yaml::from_str(&yaml).ok()?;
+    v.get("name").and_then(|n| n.as_str()).map(String::from)
 }
 
 fn entry_active(e: &IoEntry, include_declared_but_unused: bool) -> bool {

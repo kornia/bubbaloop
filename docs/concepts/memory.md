@@ -52,10 +52,10 @@ front_door.status = "closed"    (confidence: 0.99, age: 1s)
 
 ### Who writes it: Context Providers
 
-Context Providers are daemon background tasks that subscribe to Zenoh topics and write to world state — no LLM involved. Each provider is configured with `configure_context` (Admin):
+Context Providers are daemon background tasks that subscribe to Zenoh topics and write to world state — no LLM involved. Each provider is configured with `context_configure` (Admin):
 
 ```
-configure_context
+context_configure
   mission_id="security-patrol"
   topic_pattern="bubbaloop/**/vision/detections"
   world_state_key_template="{label}.location"
@@ -90,7 +90,7 @@ Next agent turn sees: "person.location = hallway" in its prompt
 ### Reading world state
 
 ```
-list_world_state
+world_state_list
 → [
     {"key": "person.location", "value": "hallway", "confidence": 0.92, "updated_at": 1772990123},
     {"key": "robot_arm.location", "value": "home", "confidence": 0.8, "updated_at": 1772990111}
@@ -122,7 +122,7 @@ Every belief is a **subject + predicate → value** triple with a confidence sco
 ### Creating and updating beliefs
 
 ```
-update_belief
+belief_update
   subject="front_door_camera"
   predicate="is_reliable"
   value="true"
@@ -131,12 +131,12 @@ update_belief
 → Belief (front_door_camera, is_reliable) updated with confidence 0.95
 ```
 
-Calling `update_belief` again with the same subject+predicate increments `confirmation_count` and updates `confidence`. Calling it with a different value increments `contradiction_count`.
+Calling `belief_update` again with the same subject+predicate increments `confirmation_count` and updates `confidence`. Calling it with a different value increments `contradiction_count`.
 
 ### Reading beliefs
 
 ```
-get_belief subject="front_door_camera" predicate="is_reliable"
+belief_get subject="front_door_camera" predicate="is_reliable"
 → {
     "id": "belief-a3135f9d-...",
     "subject": "front_door_camera",
@@ -151,7 +151,7 @@ get_belief subject="front_door_camera" predicate="is_reliable"
     "notes": null
   }
 
-get_belief subject="nonexistent" predicate="nothing"
+belief_get subject="nonexistent" predicate="nothing"
 → "not found"
 ```
 
@@ -202,13 +202,13 @@ The daemon watches this directory (5-second poll) and picks up new and changed f
 
 ```
          ┌─────────┐
-    ───►  │ Active  │ ◄──── resume_mission
+    ───►  │ Active  │ ◄──── mission_resume
          └────┬────┘
-              │ pause_mission
+              │ mission_pause
          ┌────▼────┐
          │ Paused  │
          └────┬────┘
-              │ cancel_mission (or auto-expiry)
+              │ mission_cancel (or auto-expiry)
     ┌─────────┼──────────────────┐
     ▼         ▼                  ▼
 Cancelled  Completed           Failed
@@ -219,18 +219,18 @@ States: `active | paused | cancelled | completed | failed`
 ### MCP control tools
 
 ```
-list_missions
+mission_list
 → [
     {"id": "security-patrol", "status": "active",  "compiled_at": 1772990000, "expires_at": null},
     {"id": "dog-monitor",     "status": "paused",  "compiled_at": 1772989000, "expires_at": null}
   ]
 
-pause_mission   mission_id="security-patrol"   →  "Mission security-patrol paused"
-resume_mission  mission_id="security-patrol"   →  "Mission security-patrol resumed"
-cancel_mission  mission_id="security-patrol"   →  "Mission security-patrol cancelled"
+mission_pause   mission_id="security-patrol"   →  "Mission security-patrol paused"
+mission_resume  mission_id="security-patrol"   →  "Mission security-patrol resumed"
+mission_cancel  mission_id="security-patrol"   →  "Mission security-patrol cancelled"
 
 # Unknown mission ID returns a graceful error (not a crash):
-pause_mission   mission_id="nonexistent"       →  "Error: mission not found"
+mission_pause   mission_id="nonexistent"       →  "Error: mission not found"
 ```
 
 ### Mission DAG (dependencies)
@@ -252,7 +252,7 @@ Per-mission safety limits that are checked **synchronously and fail-closed** bef
 ### Registering constraints
 
 ```
-register_constraint
+constraint_register
   mission_id="robot-arm-task"
   constraint_type="workspace"
   params_json='{"x": [-1.0, 1.0], "y": [-1.0, 1.0], "z": [0.0, 2.0]}'
@@ -271,7 +271,7 @@ register_constraint
 ### Listing constraints
 
 ```
-list_constraints mission_id="robot-arm-task"
+constraint_list mission_id="robot-arm-task"
 → [
     {"constraint": {"Workspace": {"x": [-1.0, 1.0], "y": [-1.0, 1.0], "z": [0.0, 2.0]}}},
     {"constraint": {"MaxVelocity": 1.5}}
@@ -302,7 +302,7 @@ There is deliberately **no "publish arbitrary Zenoh message" fallback** — all 
 Fast pre-filter that fires without an LLM call when world state matches a predicate.
 
 ```
-register_alert
+alert_register
   mission_id="childproof-home"
   predicate="toddler.near_stairs = 'true'"
 → "Alert registered"
@@ -343,7 +343,7 @@ Per-rule debounce prevents alert storms. Each rule stores its last-fired timesta
       ▼
 [Belief engine]
       │ observation confirms: arm.in_greeting_position = true
-      │ update_belief → confirmation_count++
+      │ belief_update → confirmation_count++
 ```
 
 The LLM is called once. Everything else — sensor ingestion, alert matching, constraint validation — runs in the daemon without it.
@@ -376,18 +376,18 @@ Each agent has its own memory directory and database. No shared state:
 
 | Tool | Tier | Role | Description |
 |------|------|------|-------------|
-| `list_world_state` | 0 | Viewer | Current world state snapshot |
-| `configure_context` | 0 | Admin | Wire Zenoh topic → world state |
-| `update_belief` | 3 | Operator | Create or update a belief |
-| `get_belief` | 3 | Viewer | Retrieve a single belief |
-| `list_missions` | — | Viewer | List missions with status |
-| `pause_mission` | — | Operator | Pause an active mission |
-| `resume_mission` | — | Operator | Resume a paused mission |
-| `cancel_mission` | — | Admin | Cancel a mission permanently |
-| `register_constraint` | — | Admin | Add a safety constraint to a mission |
-| `list_constraints` | — | Viewer | List constraints for a mission |
-| `register_alert` | — | Admin | Register a reactive alert rule |
-| `unregister_alert` | — | Admin | Remove a reactive alert rule |
+| `world_state_list` | 0 | Viewer | Current world state snapshot |
+| `context_configure` | 0 | Admin | Wire Zenoh topic → world state |
+| `belief_update` | 3 | Operator | Create or update a belief |
+| `belief_get` | 3 | Viewer | Retrieve a single belief |
+| `mission_list` | — | Viewer | List missions with status |
+| `mission_pause` | — | Operator | Pause an active mission |
+| `mission_resume` | — | Operator | Resume a paused mission |
+| `mission_cancel` | — | Admin | Cancel a mission permanently |
+| `constraint_register` | — | Admin | Add a safety constraint to a mission |
+| `constraint_list` | — | Viewer | List constraints for a mission |
+| `alert_register` | — | Admin | Register a reactive alert rule |
+| `alert_unregister` | — | Admin | Remove a reactive alert rule |
 | `memory_search` | 2 | Operator | BM25 search over episodic logs |
 | `memory_forget` | 2 | Admin | Remove entries from episodic memory |
 | `schedule_task` | 3 | Operator | Create a one-shot or recurring job (cron). Distinct from missions — tasks are timed actions, missions are persistent goals. |

@@ -70,6 +70,16 @@ fn get_machine_ips() -> Vec<String> {
     Vec::new()
 }
 
+/// Read the top-level `name` field from an instance config YAML. Returns
+/// None on any I/O or parse failure — callers fall back to the registered
+/// node name. Sync I/O is fine here: refresh_all is not on a hot path,
+/// and YAML configs are small (OS pagecache hit on subsequent reads).
+fn read_published_name_from_config(path: &str) -> Option<String> {
+    let yaml = std::fs::read_to_string(path).ok()?;
+    let v: serde_yaml::Value = serde_yaml::from_str(&yaml).ok()?;
+    v.get("name").and_then(|n| n.as_str()).map(String::from)
+}
+
 /// Convert a systemd ActiveState to a NodeStatus.
 ///
 /// Extracted as a helper to deduplicate the mapping in `refresh_node` and `refresh_all`.
@@ -107,6 +117,12 @@ pub struct CachedNode {
     pub name_override: Option<String>,
     /// Config file path override (for multi-instance nodes)
     pub config_override: Option<String>,
+    /// Name the node publishes under on Zenoh — the `name` field of its
+    /// `config_override` YAML, if set. Cached at refresh time. Used to match
+    /// heartbeats whose topic includes the *instance* name (e.g.
+    /// `tapo_terrace_camera`) rather than the registered name (e.g.
+    /// `tapo-terrace`). Falls back to `effective_name()` when unresolved.
+    pub published_instance_name: Option<String>,
 }
 
 impl CachedNode {
@@ -119,6 +135,13 @@ impl CachedNode {
             .as_ref()
             .map(|m| m.name.clone())
             .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    /// Returns true if `topic_name` matches either this node's registered
+    /// (effective) name OR the name it publishes under on Zenoh.
+    pub fn matches_topic_name(&self, topic_name: &str) -> bool {
+        self.effective_name() == topic_name
+            || self.published_instance_name.as_deref() == Some(topic_name)
     }
 
     /// Convert to protobuf NodeState (requires machine info from caller)
@@ -436,6 +459,11 @@ impl NodeManager {
                 status
             };
 
+            let published_instance_name = entry
+                .config_override
+                .as_deref()
+                .and_then(read_published_name_from_config);
+
             let cached = CachedNode {
                 path: entry.path.clone(),
                 manifest,
@@ -449,6 +477,7 @@ impl NodeManager {
                 last_health_check_ms,
                 name_override: entry.name_override.clone(),
                 config_override: entry.config_override.clone(),
+                published_instance_name,
             };
 
             nodes.insert(key, cached);
@@ -507,7 +536,7 @@ impl NodeManager {
         // Special handling for GET_LOGS since it returns data in output field
         if command_type == CommandType::GetLogs {
             let node_state = self.get_node(&cmd.node_name).await;
-            return match self.get_logs(&cmd.node_name).await {
+            return match self.get_logs(&cmd.node_name, cmd.log_lines).await {
                 Ok(logs) => CommandResult {
                     request_id: cmd.request_id,
                     success: true,
@@ -592,8 +621,17 @@ impl NodeManager {
             .ok_or_else(|| NodeManagerError::NodeNotFound(name.to_string()))
     }
 
-    /// Get logs for a node service
-    async fn get_logs(&self, name: &str) -> Result<String> {
+    /// Get logs for a node service. `lines == 0` uses the default (50).
+    async fn get_logs(&self, name: &str, lines: u32) -> Result<String> {
+        // Cap at a sane upper bound to avoid pulling enormous journals.
+        const DEFAULT_LINES: u32 = 50;
+        const MAX_LINES: u32 = 5_000;
+        let n = if lines == 0 {
+            DEFAULT_LINES
+        } else {
+            lines.min(MAX_LINES)
+        };
+
         // Check if node exists
         let _path = self.find_node_path(name).await?;
 
@@ -608,12 +646,13 @@ check stderr: {dir}/{name}.stderr"
         }
 
         let service_name = systemd::get_service_name(name);
+        let n_str = n.to_string();
 
         // Use _SYSTEMD_USER_UNIT filter for user services (logs are in system journal)
         // This works on systems where --user journal doesn't exist
         let unit_filter = format!("_SYSTEMD_USER_UNIT={}", service_name);
         let journal_output = tokio::process::Command::new(JOURNALCTL_PATH)
-            .args([&unit_filter, "-n", "50", "--no-pager", "-o", "cat"])
+            .args([&unit_filter, "-n", &n_str, "--no-pager", "-o", "cat"])
             .output()
             .await?;
 
@@ -662,6 +701,67 @@ mod tests {
     use super::*;
     use prost::Message;
 
+    /// The recorder pipeline turned this up: tapo-terrace registered under
+    /// the override name but publishing on Zenoh under its config's `name`
+    /// field — heartbeats arrived under the published name and weren't
+    /// matched, so the node sat in `Starting` forever.
+    #[test]
+    fn matches_topic_name_resolves_both_registered_and_published_names() {
+        let node = CachedNode {
+            path: "/path".to_string(),
+            manifest: Some(NodeManifest {
+                name: "rtsp-camera".to_string(),
+                version: "0.1.0".to_string(),
+                node_type: "rust".to_string(),
+                ..Default::default()
+            }),
+            status: NodeStatus::Running,
+            installed: true,
+            autostart_enabled: false,
+            is_built: true,
+            build_state: BuildState::default(),
+            last_updated_ms: 0,
+            health_status: HealthStatus::Starting,
+            last_health_check_ms: 0,
+            name_override: Some("tapo-terrace".to_string()),
+            config_override: Some("/tmp/cfg.yaml".to_string()),
+            published_instance_name: Some("tapo_terrace_camera".to_string()),
+        };
+        // Heartbeat under the registered name → match.
+        assert!(node.matches_topic_name("tapo-terrace"));
+        // Heartbeat under the published instance name → also match.
+        assert!(node.matches_topic_name("tapo_terrace_camera"));
+        // Anything else → no match.
+        assert!(!node.matches_topic_name("rtsp-camera"));
+        assert!(!node.matches_topic_name("tapo-entrance"));
+    }
+
+    #[test]
+    fn matches_topic_name_falls_back_when_no_published_name_resolved() {
+        let node = CachedNode {
+            path: "/path".to_string(),
+            manifest: Some(NodeManifest {
+                name: "openmeteo".to_string(),
+                version: "0.1.0".to_string(),
+                node_type: "python".to_string(),
+                ..Default::default()
+            }),
+            status: NodeStatus::Running,
+            installed: true,
+            autostart_enabled: false,
+            is_built: true,
+            build_state: BuildState::default(),
+            last_updated_ms: 0,
+            health_status: HealthStatus::Healthy,
+            last_health_check_ms: 0,
+            name_override: None,
+            config_override: None,
+            published_instance_name: None,
+        };
+        assert!(node.matches_topic_name("openmeteo"));
+        assert!(!node.matches_topic_name("anything-else"));
+    }
+
     #[test]
     fn test_cached_node_base_node_with_override() {
         let node = CachedNode {
@@ -683,6 +783,7 @@ mod tests {
             last_health_check_ms: 0,
             name_override: Some("rtsp-camera-terrace".to_string()),
             config_override: None,
+            published_instance_name: None,
         };
 
         let proto = node.to_proto("machine1", "host1", &[]);
@@ -711,6 +812,7 @@ mod tests {
             last_health_check_ms: 0,
             name_override: None,
             config_override: None,
+            published_instance_name: None,
         };
 
         let proto = node.to_proto("machine1", "host1", &[]);
@@ -763,6 +865,7 @@ mod tests {
                 last_health_check_ms: 1700000000000,
                 name_override: name_override.map(|s| s.to_string()),
                 config_override: config_override.map(|s| s.to_string()),
+                published_instance_name: None,
             };
 
             assert_eq!(node.effective_name(), *expected_name);
@@ -804,6 +907,7 @@ mod tests {
             last_health_check_ms: 0,
             name_override: None,
             config_override: None,
+            published_instance_name: None,
         };
 
         let plain_proto = plain_node.to_proto("jetson_1", "jetson-1.local", &[]);
@@ -862,6 +966,7 @@ mod tests {
             last_health_check_ms: 0,
             name_override: Some("rtsp-camera-terrace".to_string()),
             config_override: None,
+            published_instance_name: None,
         };
         assert_eq!(node.effective_name(), "rtsp-camera-terrace");
     }
@@ -887,6 +992,7 @@ mod tests {
             last_health_check_ms: 0,
             name_override: None,
             config_override: None,
+            published_instance_name: None,
         };
         assert_eq!(node.effective_name(), "openmeteo");
     }
@@ -906,6 +1012,7 @@ mod tests {
             last_health_check_ms: 0,
             name_override: None,
             config_override: None,
+            published_instance_name: None,
         };
         assert_eq!(node.effective_name(), "unknown");
     }
@@ -941,11 +1048,12 @@ mod tests {
                     last_health_check_ms: 0,
                     name_override: Some("test-logs-native".to_string()),
                     config_override: None,
+                    published_instance_name: None,
                 },
             );
         }
 
-        let result = manager.get_logs("test-logs-native").await.unwrap();
+        let result = manager.get_logs("test-logs-native", 0).await.unwrap();
         assert!(
             result.contains("journalctl"),
             "Message should mention journalctl: {}",
@@ -976,7 +1084,14 @@ mod tests {
         // Install a service directly through the supervisor
         manager
             .supervisor
-            .install_service("/tmp", &name, "rust", Some("sleep 60"), &[])
+            .install_service(&crate::daemon::systemd::ServiceSpec {
+                node_path: "/tmp",
+                name: &name,
+                node_type: "rust",
+                command: Some("sleep 60"),
+                depends_on: &[],
+                extra_env: &Default::default(),
+            })
             .await
             .unwrap();
         assert!(manager.supervisor.is_installed(&name));

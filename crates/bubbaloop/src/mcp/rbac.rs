@@ -50,46 +50,62 @@ impl std::str::FromStr for Tier {
 pub fn required_tier(tool_name: &str) -> Tier {
     match tool_name {
         // Viewer tools (read-only)
-        "list_nodes"
-        | "get_node_health"
-        | "get_node_schema"
-        | "get_stream_info"
-        | "get_system_status"
-        | "get_machine_info"
-        | "discover_nodes"
-        | "get_node_manifest"
-        | "list_commands"
-        | "discover_capabilities"
-        | "list_proposals"
-        | "list_jobs"
-        | "get_system_telemetry"
-        | "get_telemetry_history"
-        | "list_missions"
-        | "list_constraints"
-        | "get_belief"
-        | "list_alerts"
-        | "list_world_state"
-        | "dataflow" => Tier::Viewer,
+        "node_list"
+        | "node_health"
+        | "node_schema"
+        | "node_stream_info"
+        | "system_status"
+        | "machine_info"
+        | "node_discover"
+        | "node_manifest"
+        | "node_commands"
+        | "capability_discover"
+        | "proposal_list"
+        | "job_list"
+        | "telemetry_get"
+        | "telemetry_history"
+        | "mission_list"
+        | "constraint_list"
+        | "belief_get"
+        | "alert_list"
+        | "world_state_list"
+        | "dataflow_graph"
+        // Dynamic-toolset meta-tools (gap #12). Viewer — they reveal
+        // structure but don't mutate state.
+        | "toolset_list"
+        | "toolset_get_tools"
+        | "toolset_enable" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
-        "start_node" | "stop_node" | "restart_node" | "get_node_config" | "send_command"
-        | "get_node_logs" | "enable_autostart" | "disable_autostart" | "approve_proposal"
-        | "reject_proposal" | "delete_job" | "pause_mission" | "resume_mission"
-        | "cancel_mission" | "update_belief" => Tier::Operator,
+        "node_start"
+        | "node_stop"
+        | "node_restart"
+        | "node_config"
+        | "node_command_send"
+        | "node_logs"
+        | "node_autostart_enable"
+        | "node_autostart_disable"
+        | "proposal_approve"
+        | "proposal_reject"
+        | "job_delete"
+        | "mission_pause"
+        | "mission_resume"
+        | "mission_cancel"
+        | "belief_update" => Tier::Operator,
 
         // Admin tools (system modification)
-        "install_node"
-        | "remove_node"
-        | "build_node"
-        | "query_zenoh"
-        | "uninstall_node"
-        | "clean_node"
-        | "clear_episodic_memory"
-        | "update_telemetry_config"
-        | "configure_context"
-        | "register_alert"
-        | "unregister_alert"
-        | "register_constraint" => Tier::Admin,
+        "node_install"
+        | "node_remove"
+        | "node_build"
+        | "zenoh_query"
+        | "node_uninstall"
+        | "node_clean"
+        | "memory_episodic_clear"
+        | "telemetry_config_update"
+        | "context_configure"
+        | "alert_register"
+        | "alert_unregister"
+        | "constraint_register" => Tier::Admin,
 
         // Unknown tools default to admin (principle of least privilege)
         _ => Tier::Admin,
@@ -122,35 +138,59 @@ mod tests {
 
     #[test]
     fn test_required_tier_viewer_tools() {
-        assert_eq!(required_tier("list_nodes"), Tier::Viewer);
-        assert_eq!(required_tier("get_node_health"), Tier::Viewer);
-        assert_eq!(required_tier("discover_nodes"), Tier::Viewer);
-        assert_eq!(required_tier("list_proposals"), Tier::Viewer);
-        assert_eq!(required_tier("list_jobs"), Tier::Viewer);
-        assert_eq!(required_tier("get_belief"), Tier::Viewer);
-        assert_eq!(required_tier("list_alerts"), Tier::Viewer);
-        assert_eq!(required_tier("list_world_state"), Tier::Viewer);
+        assert_eq!(required_tier("node_list"), Tier::Viewer);
+        assert_eq!(required_tier("node_health"), Tier::Viewer);
+        assert_eq!(required_tier("node_discover"), Tier::Viewer);
+        assert_eq!(required_tier("proposal_list"), Tier::Viewer);
+        assert_eq!(required_tier("job_list"), Tier::Viewer);
+        assert_eq!(required_tier("belief_get"), Tier::Viewer);
+        assert_eq!(required_tier("alert_list"), Tier::Viewer);
+        assert_eq!(required_tier("world_state_list"), Tier::Viewer);
     }
 
     #[test]
     fn test_required_tier_operator_tools() {
-        assert_eq!(required_tier("start_node"), Tier::Operator);
-        assert_eq!(required_tier("send_command"), Tier::Operator);
-        assert_eq!(required_tier("approve_proposal"), Tier::Operator);
-        assert_eq!(required_tier("reject_proposal"), Tier::Operator);
-        assert_eq!(required_tier("delete_job"), Tier::Operator);
-        assert_eq!(required_tier("update_belief"), Tier::Operator);
+        assert_eq!(required_tier("node_start"), Tier::Operator);
+        assert_eq!(required_tier("node_command_send"), Tier::Operator);
+        assert_eq!(required_tier("proposal_approve"), Tier::Operator);
+        assert_eq!(required_tier("proposal_reject"), Tier::Operator);
+        assert_eq!(required_tier("job_delete"), Tier::Operator);
+        assert_eq!(required_tier("belief_update"), Tier::Operator);
     }
 
     #[test]
     fn test_required_tier_admin_tools() {
-        assert_eq!(required_tier("query_zenoh"), Tier::Admin);
-        assert_eq!(required_tier("install_node"), Tier::Admin);
-        assert_eq!(required_tier("clear_episodic_memory"), Tier::Admin);
+        assert_eq!(required_tier("zenoh_query"), Tier::Admin);
+        assert_eq!(required_tier("node_install"), Tier::Admin);
+        assert_eq!(required_tier("memory_episodic_clear"), Tier::Admin);
     }
 
     #[test]
     fn test_unknown_tool_requires_admin() {
         assert_eq!(required_tier("nonexistent_tool"), Tier::Admin);
+    }
+
+    /// Cross-check: every tool listed in `toolsets::toolset_definitions` must
+    /// have an explicit (non-default) tier in `required_tier`. The two tables
+    /// describe orthogonal axes (functional bucket vs permission tier) and
+    /// can't be derived from each other, but they MUST agree on the set of
+    /// tool names — otherwise a rename in one place silently leaves the other
+    /// returning the default Admin tier (or a stale toolset entry).
+    #[test]
+    fn every_toolset_tool_has_an_explicit_tier() {
+        // Replicate the body of `required_tier` here so unknown tools are
+        // detected — `required_tier` always returns Admin for the unknown
+        // case, defeating the check. Instead, parse the source.
+        let source = include_str!("rbac.rs");
+        for tools in super::super::toolsets::toolset_definitions().values() {
+            for tool in tools {
+                assert!(
+                    source.contains(&format!("\"{}\"", tool)),
+                    "tool '{}' is in toolsets.rs but not mentioned in rbac.rs::required_tier — \
+                     a rename was probably missed",
+                    tool
+                );
+            }
+        }
     }
 }

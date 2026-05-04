@@ -34,7 +34,7 @@ latency: 200                 # Buffer latency in milliseconds (optional)
 | `frame_rate` | integer | No | — | Target publish rate in FPS (1-120, unlimited if unset) |
 | `raw_width` | integer | No | `560` | Width of raw RGBA frames (SHM path) |
 | `raw_height` | integer | No | `560` | Height of raw RGBA frames (SHM path) |
-| `hw_accel` | string | No | `nvidia` | Hardware acceleration: `nvidia` (Jetson NVDEC) or `cpu` |
+| `hw_accel` | string | No | `nvidia` | Hardware acceleration: `nvidia` (Jetson NVDEC) or `cpu`. Falls back to `cpu` automatically if `nvv4l2decoder` is not registered (see [hardware-decode caveat](../components/sensors/rtsp-camera.md#hardware-decode-caveat-jetson)). |
 
 ### RTSP URL Format
 
@@ -303,7 +303,7 @@ Severity levels (based on memory usage):
 | Red | 90-95% used | 10s | Kill largest non-essential node |
 | Critical | > 95% used | 5s | Kill ALL non-essential nodes |
 
-Hot-reload: Edit `telemetry.toml` while daemon is running. Agents can also tune thresholds via the `update_telemetry_config` tool.
+Hot-reload: Edit `telemetry.toml` while daemon is running. Agents can also tune thresholds via the `telemetry_config_update` tool.
 
 ## Remote Access Configuration
 

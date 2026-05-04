@@ -51,7 +51,7 @@ def manifest_topic(machine_id: str, instance_name: str) -> str:
 
 
 def build_manifest(
-    ctx: "NodeContext",
+    ctx: NodeContext,
     role: str,
     started_at_ns: int,
     node_kind: str = "python",
@@ -70,7 +70,7 @@ def build_manifest(
 
 
 def start_manifest_queryable(
-    ctx: "NodeContext",
+    ctx: NodeContext,
     role: str,
     started_at_ns: int,
     node_kind: str = "python",

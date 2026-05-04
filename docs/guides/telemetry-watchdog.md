@@ -163,7 +163,7 @@ Returns current system state — memory, CPU, disk, top processes.
     }
     ```
 
-### `get_telemetry_history`
+### `telemetry_history`
 
 Returns historical data with trend analysis. Useful for detecting memory leaks.
 
@@ -188,7 +188,7 @@ Returns historical data with trend analysis. Useful for detecting memory leaks.
     | `stable` | Normal |
     | `memory_falling` | Resources being freed |
 
-### `update_telemetry_config`
+### `telemetry_config_update`
 
 The agent can tune thresholds at runtime. Only provided fields are updated. Guardrails enforced automatically.
 
@@ -251,7 +251,7 @@ graph TB
     Sampler --> Ring
     Sampler -->|"alert (level >= Yellow)"| CB
     Ring -->|"batch flush (60s)"| Store
-    CB -->|"stop_node()"| NM
+    CB -->|"node_stop()"| NM
     CB -->|"WatchdogAlert"| AR
     Store -->|"query_history()"| AR
     Ring -->|"current_snapshot()"| AR

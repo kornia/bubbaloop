@@ -95,6 +95,7 @@ nav:
   - Concepts:
     - Architecture: concepts/architecture.md
     - Messaging: concepts/messaging.md
+    - Wire Format (CBOR): concepts/wire-format.md
     - 3-Tier Memory: concepts/memory.md
     - Topics: concepts/topics.md
   - Agent:

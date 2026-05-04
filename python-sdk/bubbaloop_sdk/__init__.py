@@ -15,9 +15,9 @@ from .manifest import (
     manifest_topic,
     start_manifest_queryable,
 )
+from .node import run_node
 from .publisher import CborPublisher, JsonPublisher, RawPublisher
 from .subscriber import CborSubscriber, Envelope, RawSubscriber
-from .node import run_node
 
 __all__ = [
     "CborPublisher",

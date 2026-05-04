@@ -201,7 +201,7 @@ fn parse_command(s: &str) -> Option<NodeCommand> {
         "stop" => Some(NodeCommand::Stop),
         "restart" => Some(NodeCommand::Restart),
         "build" => Some(NodeCommand::Build),
-        "logs" => Some(NodeCommand::GetLogs),
+        "logs" => Some(NodeCommand::GetLogs { lines: 0 }),
         "install" => Some(NodeCommand::Install),
         "uninstall" => Some(NodeCommand::Uninstall),
         "clean" => Some(NodeCommand::Clean),
@@ -224,7 +224,10 @@ mod tests {
             Some(NodeCommand::Restart)
         ));
         assert!(matches!(parse_command("build"), Some(NodeCommand::Build)));
-        assert!(matches!(parse_command("logs"), Some(NodeCommand::GetLogs)));
+        assert!(matches!(
+            parse_command("logs"),
+            Some(NodeCommand::GetLogs { lines: 0 })
+        ));
         assert!(matches!(
             parse_command("install"),
             Some(NodeCommand::Install)

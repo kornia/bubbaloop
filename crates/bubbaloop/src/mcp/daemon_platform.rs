@@ -74,6 +74,7 @@ fn build_node_command(cmd_type: CommandType, node_name: &str) -> ProtoNodeComman
         node_path: String::new(),
         name_override: String::new(),
         config_override: String::new(),
+        log_lines: 0,
     }
 }
 
@@ -119,6 +120,11 @@ impl PlatformOperations for DaemonPlatform {
                     "version": node.version,
                     "description": node.description,
                     "machine_id": node.machine_id,
+                    // Config override file (YAML) used by this instance, if any.
+                    // Consumers like get_stream_info read this to discover the
+                    // instance's published topic name (which can differ from the
+                    // registered node name).
+                    "config_override": node.config_override,
                 });
                 Ok(detail)
             }
@@ -127,20 +133,21 @@ impl PlatformOperations for DaemonPlatform {
     }
 
     async fn execute_command(&self, name: &str, cmd: NodeCommand) -> PlatformResult<String> {
-        let cmd_type = match cmd {
-            NodeCommand::Start => CommandType::Start,
-            NodeCommand::Stop => CommandType::Stop,
-            NodeCommand::Restart => CommandType::Restart,
-            NodeCommand::Build => CommandType::Build,
-            NodeCommand::GetLogs => CommandType::GetLogs,
-            NodeCommand::Install => CommandType::Install,
-            NodeCommand::Uninstall => CommandType::Uninstall,
-            NodeCommand::Clean => CommandType::Clean,
-            NodeCommand::EnableAutostart => CommandType::EnableAutostart,
-            NodeCommand::DisableAutostart => CommandType::DisableAutostart,
+        let (cmd_type, log_lines) = match cmd {
+            NodeCommand::Start => (CommandType::Start, 0),
+            NodeCommand::Stop => (CommandType::Stop, 0),
+            NodeCommand::Restart => (CommandType::Restart, 0),
+            NodeCommand::Build => (CommandType::Build, 0),
+            NodeCommand::GetLogs { lines } => (CommandType::GetLogs, lines),
+            NodeCommand::Install => (CommandType::Install, 0),
+            NodeCommand::Uninstall => (CommandType::Uninstall, 0),
+            NodeCommand::Clean => (CommandType::Clean, 0),
+            NodeCommand::EnableAutostart => (CommandType::EnableAutostart, 0),
+            NodeCommand::DisableAutostart => (CommandType::DisableAutostart, 0),
         };
 
-        let proto_cmd = build_node_command(cmd_type, name);
+        let mut proto_cmd = build_node_command(cmd_type, name);
+        proto_cmd.log_lines = log_lines;
         let result = self.node_manager.execute_command(proto_cmd).await;
         if result.success {
             if result.output.is_empty() {

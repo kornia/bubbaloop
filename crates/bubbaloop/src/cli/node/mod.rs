@@ -52,6 +52,7 @@ pub struct NodeCommand {
 #[argh(subcommand)]
 enum NodeAction {
     Init(InitArgs),
+    Create(CreateArgs),
     Validate(ValidateArgs),
     List(ListArgs),
     Add(AddArgs),
@@ -94,6 +95,54 @@ struct InitArgs {
     /// author name
     #[argh(option, default = "String::from(\"Anonymous\")")]
     author: String,
+}
+
+/// One-shot scaffold + build + register + install + (optionally) start.
+///
+/// Replaces the 5-6 commands needed to go from "nothing" to "running node":
+///   bubbaloop node init <name> --type <T>
+///   cargo build --release  (or pixi run build)
+///   bubbaloop node add <path>
+///   bubbaloop node install <name>
+///   bubbaloop node start <name>
+///
+/// Closes the "less-steps-to-onboard" gap for node authors.
+#[derive(FromArgs)]
+#[argh(subcommand, name = "create")]
+struct CreateArgs {
+    /// node name (e.g., "my-recorder")
+    #[argh(positional)]
+    name: String,
+
+    /// node type: rust or python (default: rust). Future: template names like
+    /// "recorder", "rtsp-camera", "sensor-stub" map to richer scaffolds.
+    #[argh(option, short = 't', default = "String::from(\"rust\")")]
+    node_type: String,
+
+    /// output directory (default: ./<name>)
+    #[argh(option, short = 'o')]
+    output: Option<String>,
+
+    /// node description
+    #[argh(option, short = 'd', default = "String::from(\"A Bubbaloop node\")")]
+    description: String,
+
+    /// author name
+    #[argh(option, default = "String::from(\"Anonymous\")")]
+    author: String,
+
+    /// skip the build step (default: build is run)
+    #[argh(switch)]
+    no_build: bool,
+
+    /// skip systemd-install (default: install is run)
+    #[argh(switch)]
+    no_install: bool,
+
+    /// also start the node after install (default: false). Use this for
+    /// the truly-one-shot flow: `bubbaloop node create foo --start`.
+    #[argh(switch)]
+    start: bool,
 }
 
 /// Validate a node manifest and directory structure
@@ -271,8 +320,7 @@ pub(crate) struct LogsArgs {
     #[argh(positional)]
     pub(crate) name: String,
 
-    /// number of lines to show (default: 50)
-    #[allow(dead_code)]
+    /// number of lines to show (default: 50, max 5000)
     #[argh(option, short = 'n', default = "50")]
     pub(crate) lines: usize,
 
@@ -392,6 +440,7 @@ impl NodeCommand {
                 Ok(())
             }
             Some(NodeAction::Init(args)) => init_node(args),
+            Some(NodeAction::Create(args)) => create_node(args).await,
             Some(NodeAction::Validate(args)) => validate_node(args),
             Some(NodeAction::List(args)) => {
                 if args.base && args.instances {
@@ -450,6 +499,8 @@ impl NodeCommand {
         eprintln!("Usage: bubbaloop node <command>\n");
         eprintln!("Commands:");
         eprintln!("  init        Initialize a new node from template");
+        eprintln!("  create      One-shot: init + build + add + install (+ optionally start)");
+        eprintln!("              Example: bubbaloop node create my-recorder --type rust --start");
         eprintln!("  validate    Validate a node manifest and directory structure");
         eprintln!("  list        List all registered nodes");
         eprintln!("  add         Add a node from local path or GitHub URL");
@@ -479,6 +530,79 @@ pub(crate) async fn send_command(name: &str, command: &str) -> Result<()> {
     let client = crate::cli::daemon_client::DaemonClient::connect().await?;
     let msg = client.send_node_command(name, command).await?;
     println!("{}", msg);
+    Ok(())
+}
+
+/// One-shot node creation: scaffolds → builds → registers → installs → optionally starts.
+///
+/// Replaces the 5-6-command sequence with a single invocation. Each phase
+/// surfaces its own progress; the chain stops on the first error so the user
+/// can fix the failing step without re-running the whole pipeline.
+async fn create_node(args: CreateArgs) -> Result<()> {
+    let CreateArgs {
+        name,
+        node_type,
+        output,
+        description,
+        author,
+        no_build,
+        no_install,
+        start,
+    } = args;
+    let build = !no_build;
+    let install = !no_install || start; // --start implies install
+
+    // Resolve where the scaffold will land BEFORE init_node creates it, so we
+    // can pass the path to add_node afterwards. Mirrors init_node's resolution.
+    let resolved_output = match output.as_ref() {
+        Some(p) => PathBuf::from(p),
+        None => std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(&name),
+    };
+
+    println!("[1/3] scaffolding {} from {} template …", name, node_type);
+    init_node(InitArgs {
+        name: name.clone(),
+        node_type: node_type.clone(),
+        output: output.clone(),
+        description,
+        author,
+    })?;
+
+    let path_str = resolved_output.display().to_string();
+
+    println!(
+        "[2/3] registering{}{} …",
+        if build { " + building" } else { "" },
+        if install {
+            " + installing systemd unit"
+        } else {
+            ""
+        },
+    );
+    manage::add_node(
+        &path_str,
+        None,        // output (already scaffolded)
+        "main",      // branch (irrelevant for local path)
+        None,        // subdir
+        Some(&name), // name override = the registered name
+        None,        // config (use the default config.yaml from scaffold)
+        build,
+        install,
+    )
+    .await?;
+
+    if start {
+        println!("[3/3] starting {} …", name);
+        lifecycle::start_node(&name).await?;
+        println!("done — {} is running", name);
+    } else {
+        println!(
+            "done — pass --start to also start now, or run: bubbaloop node start {}",
+            name
+        );
+    }
     Ok(())
 }
 

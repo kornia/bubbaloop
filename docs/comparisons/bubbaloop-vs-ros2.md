@@ -17,7 +17,7 @@ Both Bubbaloop and ROS2 connect sensors, actuators, and compute on robots and ed
 | **Transport** | Zenoh (native) | DDS (Fast DDS default); Zenoh experimental |
 | **Languages** | Rust, Python, TypeScript | C++, Python (official); Rust community |
 | **AI agents** | Built-in multi-agent runtime, MCP server, 4-tier memory | None native; community bridges (ROSA, RAI) |
-| **MCP support** | Native (42 tools, 3-tier RBAC) | Community projects only |
+| **MCP support** | Native (47 tools, 3-tier RBAC) | Community projects only |
 | **Install** | `curl \| bash` — 30 seconds | APT repo + rosdep + colcon — hours |
 | **Learning curve** | Minutes to first node | Days to weeks |
 | **Ecosystem** | Small, focused | Massive (Nav2, MoveIt2, Gazebo, Isaac ROS) |
@@ -79,7 +79,7 @@ This is the biggest differentiator.
 
 **Bubbaloop** has a **native multi-agent runtime**:
 - Each agent has a Soul (identity + capabilities), 4-tier memory, and adaptive heartbeat
-- 42 MCP tools for node lifecycle, data queries, beliefs, missions, constraints
+- 47 MCP tools for node lifecycle, data queries, beliefs, missions, constraints
 - Agents reason about hardware state, dispatch tools, and remember across sessions
 - Works with Claude, Ollama, and other LLM providers
 

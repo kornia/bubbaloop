@@ -326,7 +326,7 @@ async fn run_daemon_gateway(
                                         "clean" => PlatformCmd::Clean,
                                         "enable_autostart" => PlatformCmd::EnableAutostart,
                                         "disable_autostart" => PlatformCmd::DisableAutostart,
-                                        "get_logs" => PlatformCmd::GetLogs,
+                                        "get_logs" => PlatformCmd::GetLogs { lines: 0 },
                                         other => {
                                             log::warn!("[Gateway] Unknown command type: {}", other);
                                             reply_err!(
@@ -540,10 +540,13 @@ async fn dispatch_daemon_command(
                 Err(e) => events.push(gateway::DaemonEvent::error(id, &e.to_string())),
             }
         }
-        gateway::DaemonCommandType::GetLogs { name } => {
+        gateway::DaemonCommandType::GetLogs { name, lines } => {
             validate_name!(name);
             match platform
-                .execute_command(name, crate::mcp::platform::NodeCommand::GetLogs)
+                .execute_command(
+                    name,
+                    crate::mcp::platform::NodeCommand::GetLogs { lines: *lines },
+                )
                 .await
             {
                 Ok(msg) => events.push(gateway::DaemonEvent::result(id, &msg)),

@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 
 import zenoh
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -53,11 +52,11 @@ def test_publisher_cbor_local_true_sets_block_congestion_control():
     We call CborPublisher._declare directly (bypassing context.publisher_cbor)
     so this test is immune to class-attribute pollution from other test modules.
     """
-    from bubbaloop_sdk.publisher import CborPublisher
     session = MagicMock()
     # _declare may be polluted by prior test modules; use the real implementation
     # by importing the unbound function and calling it explicitly.
     import importlib
+
     import bubbaloop_sdk.publisher as pub_mod
     importlib.reload(pub_mod)
     CborPublisherFresh = pub_mod.CborPublisher
@@ -79,6 +78,7 @@ def test_publisher_cbor_local_true_sets_block_congestion_control():
 def test_publisher_cbor_local_false_stays_global_no_block():
     """Default local=False must NOT set congestion_control on the Zenoh publisher."""
     import importlib
+
     import bubbaloop_sdk.publisher as pub_mod
     importlib.reload(pub_mod)
     CborPublisherFresh = pub_mod.CborPublisher

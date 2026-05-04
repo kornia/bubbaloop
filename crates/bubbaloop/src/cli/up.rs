@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 use argh::FromArgs;
 use thiserror::Error;
@@ -13,6 +15,163 @@ use thiserror::Error;
 use crate::daemon::registry::get_bubbaloop_home;
 use crate::registry;
 use crate::{marketplace, skills};
+
+// ── Bootstrap helpers (gap "less-steps-to-onboard") ─────────────────
+//
+// `bubbaloop up` is the one-command entry point. Before doing the
+// skill-loading work (already-existing logic below), it guarantees the
+// prerequisites are running:
+//   1. zenohd on :7447
+//   2. bubbaloop daemon on :8088
+// And writes a project-scoped .mcp.json so any MCP client (Claude Code,
+// Cursor, Cline, Claude Desktop, Copilot CLI, Zed) launched in the
+// current dir picks up the bubbaloop tools automatically.
+
+/// Default port for zenohd.
+const ZENOH_PORT: u16 = 7447;
+/// Default port for the bubbaloop MCP HTTP server.
+const MCP_PORT: u16 = 8088;
+/// Maximum time to wait for a backgrounded service to bind its port.
+const PORT_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Quick non-blocking check: is something listening on `127.0.0.1:port`?
+fn is_port_listening(port: u16) -> bool {
+    std::net::TcpStream::connect_timeout(
+        &format!("127.0.0.1:{port}").parse().unwrap(),
+        Duration::from_millis(200),
+    )
+    .is_ok()
+}
+
+/// Spawn `cmd` detached, redirecting stdout+stderr to `log_path` (append).
+/// Both `up.rs` and `daemon_client::ensure_running` need this exact pattern.
+pub(crate) fn spawn_detached_to_log(
+    cmd: &mut std::process::Command,
+    log_path: &Path,
+) -> std::io::Result<std::process::Child> {
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)?;
+    let log_clone = log_file.try_clone()?;
+    cmd.stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_clone))
+        .stdin(Stdio::null())
+        .spawn()
+}
+
+/// Block (with timeout) until `port` accepts connections.
+fn wait_for_port(port: u16, label: &str) -> Result<()> {
+    let deadline = Instant::now() + PORT_WAIT_TIMEOUT;
+    while Instant::now() < deadline {
+        if is_port_listening(port) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Err(UpError::Bootstrap(format!(
+        "{label} did not bind :{port} within {}s",
+        PORT_WAIT_TIMEOUT.as_secs()
+    )))
+}
+
+/// Spawn zenohd from `~/.bubbaloop/bin/zenohd` in the background, redirecting
+/// its stdio to a log file. Idempotent: no-op if zenohd is already on :7447.
+fn ensure_zenohd_running() -> Result<bool> {
+    if is_port_listening(ZENOH_PORT) {
+        log::debug!("zenohd already on :{ZENOH_PORT}");
+        return Ok(false);
+    }
+    let zenohd = get_bubbaloop_home().join("bin").join("zenohd");
+    let log_path = get_bubbaloop_home().join("zenohd.log");
+    spawn_detached_to_log(&mut std::process::Command::new(&zenohd), &log_path).map_err(|e| {
+        UpError::Bootstrap(format!(
+            "failed to spawn zenohd at {} ({e}) — install with `bubbaloop daemon install` or place a Zenoh router there",
+            zenohd.display()
+        ))
+    })?;
+    println!("→ Started zenohd (logs: {})", log_path.display());
+    wait_for_port(ZENOH_PORT, "zenohd")?;
+    Ok(true)
+}
+
+/// Spawn `bubbaloop daemon run` in the background. Idempotent: no-op if the
+/// daemon is already on :8088. Self-spawns the current binary, so this works
+/// regardless of where bubbaloop is installed.
+fn ensure_daemon_running() -> Result<bool> {
+    if is_port_listening(MCP_PORT) {
+        log::debug!("bubbaloop daemon already on :{MCP_PORT}");
+        return Ok(false);
+    }
+    let exe = std::env::current_exe()
+        .map_err(|e| UpError::Bootstrap(format!("locating current exe: {e}")))?;
+    let log_path = get_bubbaloop_home().join("daemon.log");
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(["daemon", "run"]);
+    spawn_detached_to_log(&mut cmd, &log_path)?;
+    println!("→ Started bubbaloop daemon (logs: {})", log_path.display());
+    wait_for_port(MCP_PORT, "bubbaloop daemon")?;
+    Ok(true)
+}
+
+/// Write a project-scoped `.mcp.json` to the current working directory.
+/// Idempotent — refuses to overwrite an existing file (the user may have
+/// customised it). Returns `Ok(true)` if written, `Ok(false)` if skipped.
+fn write_project_mcp_config(cwd: &Path) -> Result<bool> {
+    let dest = cwd.join(".mcp.json");
+    if dest.exists() {
+        log::debug!(
+            ".mcp.json already exists at {}, leaving alone",
+            dest.display()
+        );
+        return Ok(false);
+    }
+    let body = r#"{
+  "mcpServers": {
+    "bubbaloop": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:8088/mcp",
+      "headers": {
+        "Authorization": "Bearer ${BUBBALOOP_MCP_TOKEN}"
+      }
+    }
+  }
+}
+"#;
+    std::fs::write(&dest, body)?;
+    println!("→ Wrote {}", dest.display());
+    Ok(true)
+}
+
+/// Print the user-facing post-bootstrap instructions. Shown once per
+/// invocation, after all bootstrap actions are complete.
+fn print_setup_instructions(cwd: &Path) {
+    let token_path = get_bubbaloop_home().join("mcp-token");
+    println!();
+    println!("Bubbaloop ready.");
+    println!("  daemon : http://127.0.0.1:{MCP_PORT}/mcp");
+    println!("  zenoh  : tcp/127.0.0.1:{ZENOH_PORT}");
+    println!();
+    println!("Next: in this directory, run any MCP client. Example for Claude Code:");
+    println!(
+        "  export BUBBALOOP_MCP_TOKEN=\"$(cat {})\"",
+        token_path.display()
+    );
+    println!("  cd {} && claude", cwd.display());
+    println!();
+}
+
+/// Run the full bootstrap (zenohd + daemon + .mcp.json) before the existing
+/// skill-loading flow. Errors here are treated as fatal — the rest of `up`
+/// requires a live daemon connection.
+fn bootstrap() -> Result<()> {
+    ensure_zenohd_running()?;
+    ensure_daemon_running()?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    write_project_mcp_config(&cwd)?;
+    print_setup_instructions(&cwd);
+    Ok(())
+}
 
 /// Errors for the `up` command.
 #[derive(Debug, Error)]
@@ -27,6 +186,8 @@ pub enum UpError {
     Registry(String),
     #[error("Daemon error: {0}")]
     Daemon(String),
+    #[error("Bootstrap error: {0}")]
+    Bootstrap(String),
 }
 
 pub type Result<T> = std::result::Result<T, UpError>;
@@ -46,6 +207,16 @@ pub struct UpCommand {
 
 impl UpCommand {
     pub async fn run(&self) -> Result<()> {
+        // ── Step 0: bootstrap (gap: less-steps-to-onboard) ─────────────
+        // Ensure prerequisites (zenohd + daemon) are up, write project
+        // .mcp.json, print next-step. Skipped in dry-run mode so no
+        // background processes are spawned during inspection.
+        if !self.dry_run {
+            bootstrap()?;
+        } else {
+            println!("[dry-run] Skipping bootstrap (would start zenohd + daemon, write .mcp.json)");
+        }
+
         let skills_dir = match &self.skills_dir {
             Some(p) => PathBuf::from(p),
             None => get_bubbaloop_home().join("skills"),

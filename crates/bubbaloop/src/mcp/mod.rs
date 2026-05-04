@@ -10,12 +10,21 @@ pub mod mock_platform;
 pub mod platform;
 pub mod rbac;
 mod tools;
+pub mod toolsets;
 
 use platform::PlatformOperations;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::model::*;
 use rmcp::ServerHandler;
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, RwLock};
+
+/// Process-wide lock used by tests that mutate environment variables. Tests
+/// that call `set_var` / `remove_var` MUST acquire this before mutating to
+/// avoid races with other tests in the same process. Cargo runs tests in a
+/// single binary by default.
+#[cfg(test)]
+pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Axum middleware that enforces Bearer token authentication.
 ///
@@ -66,6 +75,28 @@ async fn bearer_auth_middleware(
 /// Default port for the MCP HTTP server.
 pub const MCP_PORT: u16 = 8088;
 
+/// Parse `$BUBBALOOP_MCP_MODE` into an RBAC tier ceiling.
+///
+/// Values: `readonly` -> Viewer, `safe` -> Operator, `admin` (or unset) -> Admin.
+/// Pattern lifted from the Red Hat kubernetes-mcp-server `--read-only` /
+/// `--disable-destructive` flags — clean separation between *what the deployment
+/// permits* and *what the caller is authorized for*.
+pub fn mode_from_env() -> rbac::Tier {
+    match std::env::var("BUBBALOOP_MCP_MODE").ok().as_deref() {
+        Some("readonly") => rbac::Tier::Viewer,
+        Some("safe") => rbac::Tier::Operator,
+        Some("admin") | None => rbac::Tier::Admin,
+        Some("") => rbac::Tier::Admin,
+        Some(other) => {
+            log::warn!(
+                "Unknown BUBBALOOP_MCP_MODE='{}', defaulting to admin",
+                other
+            );
+            rbac::Tier::Admin
+        }
+    }
+}
+
 /// Bubbaloop MCP server — wraps Zenoh operations as MCP tools.
 ///
 /// Generic over `P: PlatformOperations` so production uses `DaemonPlatform`
@@ -76,6 +107,16 @@ pub struct BubbaLoopMcpServer<P: PlatformOperations = platform::DaemonPlatform> 
     pub(crate) auth_token: Option<String>,
     pub(crate) tool_router: ToolRouter<Self>,
     pub(crate) machine_id: String,
+    /// Tier ceiling from $BUBBALOOP_MCP_MODE — caller cannot exceed this.
+    /// Default: Admin (no ceiling). Set to Viewer for read-only mode,
+    /// Operator to disable destructive ops.
+    pub(crate) mode_ceiling: rbac::Tier,
+    /// Per-session enabled toolsets (gap #12 dynamic disclosure). Mutated
+    /// at runtime via the `toolset_enable` meta-tool; initialised from
+    /// `$BUBBALOOP_MCP_TOOLSETS` (default: all enabled, backwards compatible).
+    /// `Arc<RwLock<...>>` because reads (every `list_tools` / `get_tool`
+    /// call) vastly outnumber writes (only `toolset_enable` mutates).
+    pub(crate) enabled_toolsets: Arc<RwLock<HashSet<String>>>,
 }
 
 // Manual Clone impl: P doesn't need Clone because it's behind Arc.
@@ -86,6 +127,9 @@ impl<P: PlatformOperations> Clone for BubbaLoopMcpServer<P> {
             auth_token: self.auth_token.clone(),
             tool_router: self.tool_router.clone(),
             machine_id: self.machine_id.clone(),
+            mode_ceiling: self.mode_ceiling,
+            // Share toolset state via Arc — clones see the same enable/disable mutations.
+            enabled_toolsets: self.enabled_toolsets.clone(),
         }
     }
 }
@@ -103,24 +147,27 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
             server_info: Implementation::from_build_env(),
             instructions: Some(
                 "Bubbaloop skill runtime for AI agents. Controls physical sensor nodes via MCP.\n\n\
-                 **Discovery:** list_nodes, get_node_health, get_node_schema, get_stream_info, discover_capabilities\n\
-                 **Lifecycle:** start_node, stop_node, restart_node, build_node, install_node, remove_node, uninstall_node, clean_node\n\
-                 **Autostart:** enable_autostart, disable_autostart\n\
-                 **Data:** send_command, get_stream_info (returns Zenoh topic for streaming)\n\
-                 **Config:** get_node_config, get_node_manifest, list_commands\n\
-                 **Proposals:** list_proposals, approve_proposal, reject_proposal\n\
-                 **Memory:** list_jobs, delete_job, clear_episodic_memory\n\
-                 **Beliefs:** update_belief, get_belief — durable agent beliefs (subject+predicate model, e.g. subject='front_door_camera' predicate='is_reliable')\n\
-                 **World State:** list_world_state — live sensor-derived key/value snapshot\n\
-                 **Context Providers:** configure_context — wire a Zenoh topic pattern to world state (daemon background task)\n\
-                 **Missions:** list_missions, pause_mission, resume_mission, cancel_mission — YAML-file-driven goals (~/.bubbaloop/agents/{id}/missions/)\n\
-                 **Constraints:** register_constraint, list_constraints — per-mission safety limits (workspace/max_velocity/forbidden_zone/max_force)\n\
-                 **Alerts:** register_alert, unregister_alert, list_alerts — reactive rules that spike arousal when world state matches (list_alerts surfaces dangling world-state refs)\n\
-                 **System:** get_system_status, get_machine_info, query_zenoh, discover_nodes\n\n\
-                 install_node accepts marketplace names (e.g., 'rtsp-camera'), local paths, or GitHub 'user/repo' format.\n\
-                 Use discover_capabilities to find nodes by capability (sensor, actuator, processor, gateway).\n\
-                 Use get_node_manifest for full node details including topics, commands, and requirements.\n\
-                 Streaming data flows through Zenoh (not MCP). Use get_stream_info to get Zenoh connection params.\n\
+                 **Discovery:** node_list, node_health, node_schema, node_stream_info, capability_discover, node_discover, dataflow_graph\n\
+                 **Lifecycle:** node_start, node_stop, node_restart, node_build, node_install, node_remove, node_uninstall, node_clean\n\
+                 **Autostart:** node_autostart_enable, node_autostart_disable\n\
+                 **Data:** node_command_send, node_stream_info (returns Zenoh topic for streaming)\n\
+                 **Config:** node_config, node_manifest, node_commands\n\
+                 **Proposals:** proposal_list, proposal_approve, proposal_reject\n\
+                 **Memory:** job_list, job_delete, memory_episodic_clear\n\
+                 **Beliefs:** belief_update, belief_get — durable agent beliefs (subject+predicate model, e.g. subject='front_door_camera' predicate='is_reliable')\n\
+                 **World State:** world_state_list — live sensor-derived key/value snapshot\n\
+                 **Context Providers:** context_configure — wire a Zenoh topic pattern to world state (daemon background task)\n\
+                 **Missions:** mission_list, mission_pause, mission_resume, mission_cancel — YAML-file-driven goals (~/.bubbaloop/agents/{id}/missions/)\n\
+                 **Constraints:** constraint_register, constraint_list — per-mission safety limits (workspace/max_velocity/forbidden_zone/max_force)\n\
+                 **Alerts:** alert_register, alert_unregister, alert_list — reactive rules that spike arousal when world state matches (alert_list surfaces dangling world-state refs)\n\
+                 **Telemetry:** telemetry_get, telemetry_history, telemetry_config_update — CPU/mem/disk/temp snapshot + history + threshold tuning\n\
+                 **System:** system_status, machine_info, zenoh_query\n\
+                 **Toolsets (meta — always visible):** toolset_list, toolset_enable, toolset_get_tools — narrow or broaden the live tool surface for context-window-limited models. Default: all 11 toolsets enabled. Set BUBBALOOP_MCP_TOOLSETS=node,system to pre-narrow at deploy.\n\n\
+                 node_install accepts marketplace names (e.g., 'rtsp-camera'), local paths, or GitHub 'user/repo' format.\n\
+                 Use capability_discover to find nodes by capability (sensor, actuator, processor, gateway).\n\
+                 Use node_manifest for full node details including topics, commands, and requirements.\n\
+                 Streaming data flows through Zenoh (not MCP). Use node_stream_info to get Zenoh connection params.\n\
+                 node_logs accepts an optional `lines` param (default 50, max 5000).\n\
                  Missions are created by dropping a YAML file into ~/.bubbaloop/agents/{id}/missions/ — the daemon picks them up automatically.\n\
                  Constraint params_json format: workspace={\"x\":[-1,1],\"y\":[-1,1],\"z\":[0,2]}, max_velocity=1.5, forbidden_zone={\"center\":[0,0,0],\"radius\":0.3}, max_force=50.0\n\
                  Auth: Bearer token required (see ~/.bubbaloop/mcp-token)."
@@ -140,6 +187,25 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
         // TODO(phase-3): Encode tier in token (e.g., bb_admin_<uuid>, bb_viewer_<uuid>)
         // and extract it here to enable per-token tier differentiation.
         let required = rbac::required_tier(&request.name);
+        // Mode-ceiling check (BUBBALOOP_MCP_MODE env var). The ceiling caps
+        // *what tools are reachable*, independent of the caller's own tier.
+        // Rationale: matches the Red Hat kubernetes-mcp-server pattern of
+        // --read-only / --disable-destructive flags — fast win for safe
+        // deployments without redoing token semantics.
+        if (required as u8) > (self.mode_ceiling as u8) {
+            log::warn!(
+                "Mode-restricted: tool '{}' needs {} tier but BUBBALOOP_MCP_MODE permits at most {}",
+                request.name, required, self.mode_ceiling
+            );
+            return Err(rmcp::model::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_REQUEST,
+                format!(
+                    "Mode-restricted: tool '{}' requires {} tier but BUBBALOOP_MCP_MODE permits at most {}",
+                    request.name, required, self.mode_ceiling
+                ),
+                None,
+            ));
+        }
         let caller_tier = rbac::Tier::Admin;
         if !caller_tier.has_permission(required) {
             log::warn!(
@@ -168,15 +234,41 @@ impl<P: PlatformOperations> ServerHandler for BubbaLoopMcpServer<P> {
         _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        // Gap #12 dynamic toolsets — filter the full router output to only
+        // include tools whose name is in an enabled toolset (or is one of the
+        // always-visible meta-tools). Read-locked the whole filter pass so
+        // we never clone the HashSet.
+        let enabled = self
+            .enabled_toolsets
+            .read()
+            .unwrap_or_else(|p| p.into_inner());
+        let filtered: Vec<Tool> = self
+            .tool_router
+            .list_all()
+            .into_iter()
+            .filter(|t| toolsets::is_visible(&t.name, &enabled))
+            .collect();
+        drop(enabled);
         Ok(ListToolsResult {
-            tools: self.tool_router.list_all(),
+            tools: filtered,
             meta: None,
             next_cursor: None,
         })
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.tool_router.get(name).cloned()
+        // Mirror the visibility filter on get_tool — a tool the client
+        // can't see via list_tools should also not be retrievable by name.
+        // The dispatch path (call_tool) is intentionally NOT filtered: an
+        // RBAC-passing caller that knows the name can still invoke it,
+        // matching GitHub MCP's `X-MCP-Tools` semantics where the header
+        // narrows visibility but doesn't gate execution.
+        let enabled = self.enabled_toolsets.read().ok()?;
+        if toolsets::is_visible(name, &enabled) {
+            self.tool_router.get(name).cloned()
+        } else {
+            None
+        }
     }
 }
 
@@ -206,7 +298,8 @@ pub async fn run_mcp_stdio(
     let server = BubbaLoopMcpServer::new(
         platform, None, // No auth token for stdio
         machine_id,
-    );
+    )
+    .with_mode_ceiling(mode_from_env());
 
     // rmcp stdio transport: reads JSON-RPC from stdin, writes to stdout
     let service = server.serve(rmcp::transport::io::stdio()).await?;
@@ -239,7 +332,7 @@ pub async fn run_mcp_server(
     let health_manager = node_manager.clone();
 
     // HTTP MCP lives under the daemon's shutdown. Forward `shutdown_rx` so
-    // `configure_context` can spawn context providers live and still tear them
+    // `context_configure` can spawn context providers live and still tear them
     // down cleanly on daemon shutdown.
     let platform = Arc::new(platform::DaemonPlatform::new(
         node_manager,
@@ -257,11 +350,10 @@ pub async fn run_mcp_server(
 
     let mcp_service = StreamableHttpService::new(
         move || {
-            Ok(BubbaLoopMcpServer::new(
-                platform.clone(),
-                Some(token.clone()),
-                machine_id.clone(),
-            ))
+            Ok(
+                BubbaLoopMcpServer::new(platform.clone(), Some(token.clone()), machine_id.clone())
+                    .with_mode_ceiling(mode_from_env()),
+            )
         },
         LocalSessionManager::default().into(),
         Default::default(),
@@ -336,4 +428,59 @@ pub async fn run_mcp_server(
 
     log::info!("MCP server stopped.");
     Ok(())
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+
+    /// Serialize env-var manipulation across the whole crate's tests via the
+    /// process-wide `ENV_TEST_LOCK`. Without this, two tests calling
+    /// `set_var`/`remove_var` concurrently can each observe values set by
+    /// the other.
+    fn with_env<F: FnOnce()>(value: Option<&str>, f: F) {
+        let _guard = super::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let saved = std::env::var("BUBBALOOP_MCP_MODE").ok();
+        match value {
+            Some(v) => std::env::set_var("BUBBALOOP_MCP_MODE", v),
+            None => std::env::remove_var("BUBBALOOP_MCP_MODE"),
+        }
+        f();
+        match saved {
+            Some(v) => std::env::set_var("BUBBALOOP_MCP_MODE", v),
+            None => std::env::remove_var("BUBBALOOP_MCP_MODE"),
+        }
+    }
+
+    #[test]
+    fn mode_from_env_parses_known_values() {
+        with_env(Some("readonly"), || {
+            assert_eq!(mode_from_env(), rbac::Tier::Viewer);
+        });
+        with_env(Some("safe"), || {
+            assert_eq!(mode_from_env(), rbac::Tier::Operator);
+        });
+        with_env(Some("admin"), || {
+            assert_eq!(mode_from_env(), rbac::Tier::Admin);
+        });
+    }
+
+    #[test]
+    fn mode_from_env_defaults_to_admin_when_unset_or_empty() {
+        with_env(None, || {
+            assert_eq!(mode_from_env(), rbac::Tier::Admin);
+        });
+        with_env(Some(""), || {
+            assert_eq!(mode_from_env(), rbac::Tier::Admin);
+        });
+    }
+
+    #[test]
+    fn mode_from_env_falls_back_to_admin_on_unknown() {
+        with_env(Some("loose-cannon"), || {
+            assert_eq!(mode_from_env(), rbac::Tier::Admin);
+        });
+    }
 }

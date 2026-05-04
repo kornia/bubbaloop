@@ -17,7 +17,7 @@ Bubbaloop and Dora are both Rust-based frameworks for robotics and edge AI. They
 | **Transport** | Zenoh | Apache Arrow + shared memory + TCP |
 | **Serialization** | Protobuf | Apache Arrow (zero-copy cross-language) |
 | **Languages** | Rust, Python, TypeScript | Rust, Python, C, C++, WebAssembly |
-| **AI agents** | Built-in multi-agent runtime, 42 MCP tools | No agent runtime; dora-llm is experimental |
+| **AI agents** | Built-in multi-agent runtime, 47 MCP tools | No agent runtime; dora-llm is experimental |
 | **Install** | `curl \| bash` (~13 MB) | `pip install dora-rs-cli` or `cargo install` |
 | **Maturity** | Production-focused | Pre-1.0 (v0.5.0, March 2026) |
 | **GitHub stars** | ~600 | ~3,200 |
@@ -66,7 +66,7 @@ This is the sharpest difference.
 
 **Bubbaloop:**
 - Native multi-agent runtime with per-agent Soul, memory, and heartbeat
-- 42 MCP tools for hardware control, data queries, beliefs, missions
+- 47 MCP tools for hardware control, data queries, beliefs, missions
 - Works with Claude (API + OAuth), Ollama (local), and other providers
 - Agents remember across sessions, adapt behavior, and reason about hardware state
 

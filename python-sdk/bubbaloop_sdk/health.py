@@ -1,7 +1,6 @@
 """Background health heartbeat thread."""
 
 import threading
-import time
 
 import zenoh
 

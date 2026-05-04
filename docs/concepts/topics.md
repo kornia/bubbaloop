@@ -110,8 +110,8 @@ for node in nodes:
 
 ```
 discover_nodes          # Query all manifests on bubbaloop/**/manifest
-list_nodes              # List registered nodes with status
-get_stream_info         # Get Zenoh topic for a node's data stream
+node_list              # List registered nodes with status
+node_stream_info         # Get Zenoh topic for a node's data stream
 ```
 
 ### Via Dashboard

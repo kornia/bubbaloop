@@ -13,8 +13,39 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest", "pytest-asyncio", "ruff>=0.6", "pyright>=1.1"]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["bubbaloop_sdk*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# E,F = pyflakes/pycodestyle, I = isort, B = bugbear, UP = pyupgrade,
+# SIM = simplify, RET = return, C4 = comprehensions
+select = ["E", "F", "I", "B", "UP", "SIM", "RET", "C4"]
+ignore = [
+    "E501",  # line length — handled by formatter, not enforced strictly
+    "B008",  # function call in argument default (FastAPI/typer pattern)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]  # `assert False` is fine in tests
+# Pre-existing SDK code uses `Optional[X]` and `List[X]` typing forms that ruff
+# now flags. Out of scope for the testing-utils PR; tracked separately.
+"bubbaloop_sdk/context.py" = ["UP006", "UP035", "UP045", "F821"]
+"bubbaloop_sdk/get_sample.py" = ["UP006", "UP035", "UP045", "B904"]
+"bubbaloop_sdk/node.py" = ["UP006", "UP035", "UP045"]
+"bubbaloop_sdk/publisher.py" = ["UP006", "UP035", "UP045", "SIM105"]
+"bubbaloop_sdk/subscriber.py" = ["UP006", "UP035", "UP045", "SIM105"]
+
+[tool.pyright]
+include = ["bubbaloop_sdk", "tests"]
+exclude = ["**/build", "**/__pycache__"]
+pythonVersion = "3.9"
+typeCheckingMode = "basic"
+reportMissingImports = "warning"  # zenoh, cbor2 may not be in CI cache
+reportPrivateImportUsage = false

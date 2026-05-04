@@ -144,16 +144,16 @@ bubbaloop daemon
 
 | Tool | Description |
 |------|-------------|
-| `list_nodes` | List all nodes with status |
+| `node_list` | List all nodes with status |
 | `get_node_manifest` | Get a node's capabilities and topics |
 | `send_command` | Send a command to a node |
 | `install_node` / `uninstall_node` | Install or remove nodes |
-| `start_node` / `stop_node` | Control node lifecycle |
-| `get_node_logs` | Read node service logs |
+| `node_start` / `node_stop` | Control node lifecycle |
+| `node_logs` | Read node service logs |
 | `discover_nodes` | Fleet-wide manifest discovery |
 | `query_zenoh` | Query any Zenoh key expression |
 
-42 MCP tools + agent-internal tools. Configure Claude Code via `.mcp.json` (already in project root).
+47 MCP tools + agent-internal tools. Configure Claude Code via `.mcp.json` (already in project root).
 
 **Agent-internal tools** (daemon-side only, not exposed via MCP): `memory_search`, `memory_forget`, `schedule_task`, `create_proposal`, `read_file`, `write_file`, `run_command`.
 
@@ -170,7 +170,7 @@ CLI ───────────────┘               │
                                    │
 Daemon ────────────────────────────┤
   ├─ Node Manager (lifecycle)      │
-  ├─ MCP Server (42 tools)         │
+  ├─ MCP Server (47 tools)         │
   ├─ Telemetry Watchdog            │
   ├─ Agent Runtime (multi-agent)   │
   └─ Systemd D-Bus (zbus)         │

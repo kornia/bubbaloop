@@ -128,3 +128,40 @@ Both support `for` iteration. Decoding:
 
 - `CborSubscriber`: CBOR → SimpleNamespace, JSON → dict, other → bytes
 - `RawSubscriber`: always returns raw `bytes`
+
+## Testing utilities
+
+`bubbaloop_sdk.testing` ships in-memory fakes so node tests can exercise full publish/subscribe/queryable lifecycles without a real `zenohd`:
+
+```python
+from bubbaloop_sdk.testing import FakeContext, FakeZenohSession, make_envelope, make_command
+
+ctx = FakeContext(machine_id="test", instance_name="rec")
+node = MyNode(ctx, {"name": "rec"})
+threading.Thread(target=node.run, daemon=True).start()
+
+# Drive a queryable
+ctx.session.query(
+    "bubbaloop/global/test/rec/command",
+    make_command("start_recording", topic_patterns=["bubbaloop/global/test/cam/**"]),
+)
+
+# Publish a fake CBOR envelope so the node's subscriber fires
+ctx.session.publish(
+    "bubbaloop/global/test/cam/compressed",
+    make_envelope("bubbaloop://schemas/sensor/CompressedImage/v1",
+                  body={"data": b"fake-h264", "format": "h264"}),
+)
+
+ctx.signal_shutdown()  # unblocks node.run() if it's in wait_shutdown()
+```
+
+| Export | Purpose |
+|---|---|
+| `FakeZenohSession` | In-memory pub/sub + queryable. Pattern matching: `*` single segment, `**` zero or more. |
+| `FakeContext` | Stand-in for `NodeContext` (machine_id, instance_name, session, signal_shutdown) |
+| `make_envelope(schema_uri, body, ...)` | Build a canonical CBOR envelope per `docs/concepts/wire-format.md` |
+| `make_command(command, **params)` | Build a flat JSON command envelope (bubbaloop ≥ PR #80) |
+| `make_command_nested(command, params)` | Build a nested JSON command envelope (older daemons; tests for dual-envelope nodes) |
+
+Proven against the live `mcap-recorder` node — see `python-sdk/tests/testing/test_recorder_e2e.py` for the full lifecycle test (start → publish → status → stop → finalised .mcap on disk).

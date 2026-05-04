@@ -465,7 +465,7 @@ mod tests {
                 },
                 ContentBlock::ToolUse {
                     id: "tu_1".to_string(),
-                    name: "list_nodes".to_string(),
+                    name: "node_list".to_string(),
                     input: json!({"status": "running"}),
                 },
                 ContentBlock::ToolUse {
@@ -479,7 +479,7 @@ mod tests {
         let uses = msg.tool_uses();
         assert_eq!(uses.len(), 2);
         assert_eq!(uses[0].0, "tu_1");
-        assert_eq!(uses[0].1, "list_nodes");
+        assert_eq!(uses[0].1, "node_list");
     }
 
     #[test]
@@ -507,14 +507,14 @@ mod tests {
         let json_str = r#"{
             "type": "tool_use",
             "id": "toolu_abc",
-            "name": "list_nodes",
+            "name": "node_list",
             "input": {"filter": "running"}
         }"#;
         let block: ContentBlock = serde_json::from_str(json_str).unwrap();
         match &block {
             ContentBlock::ToolUse { id, name, .. } => {
                 assert_eq!(id, "toolu_abc");
-                assert_eq!(name, "list_nodes");
+                assert_eq!(name, "node_list");
             }
             _ => panic!("expected ToolUse"),
         }
@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn tool_definition_serialization() {
         let tool = ToolDefinition {
-            name: "list_nodes".to_string(),
+            name: "node_list".to_string(),
             description: "List all registered nodes".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -544,9 +544,9 @@ mod tests {
             }),
         };
         let json = serde_json::to_value(&tool).unwrap();
-        assert_eq!(json["name"], "list_nodes");
+        assert_eq!(json["name"], "node_list");
         let parsed: ToolDefinition = serde_json::from_value(json).unwrap();
-        assert_eq!(parsed.name, "list_nodes");
+        assert_eq!(parsed.name, "node_list");
     }
 
     #[test]
@@ -598,11 +598,11 @@ mod tests {
 
         let event = StreamEvent::ToolUse {
             id: "t1".to_string(),
-            name: "list_nodes".to_string(),
+            name: "node_list".to_string(),
             input: json!({}),
         };
         let debug = format!("{:?}", event);
-        assert!(debug.contains("list_nodes"));
+        assert!(debug.contains("node_list"));
 
         let event = StreamEvent::Done {
             usage: Usage {
@@ -676,7 +676,7 @@ mod tests {
                     },
                     ContentBlock::ToolUse {
                         id: "t1".to_string(),
-                        name: "list_nodes".to_string(),
+                        name: "node_list".to_string(),
                         input: json!({"status": "all"}),
                     },
                 ],
@@ -697,7 +697,7 @@ mod tests {
         match rx.recv().await.unwrap() {
             StreamEvent::ToolUse { id, name, input } => {
                 assert_eq!(id, "t1");
-                assert_eq!(name, "list_nodes");
+                assert_eq!(name, "node_list");
                 assert_eq!(input["status"], "all");
             }
             other => panic!("expected ToolUse, got {:?}", other),

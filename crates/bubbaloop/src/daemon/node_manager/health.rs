@@ -94,11 +94,16 @@ impl NodeManager {
 
                     let now = Self::now_ms();
 
-                    // Verify the node is registered and in a running state
+                    // Verify the node is registered and in a running state.
+                    // Match against BOTH the registered name and the YAML
+                    // `name` field — heartbeats from instance-overridden
+                    // nodes (e.g. `tapo-terrace` registered, publishing
+                    // under `tapo_terrace_camera`) carry the published
+                    // name in the topic.
                     let mut nodes = manager_heartbeat.nodes.write().await;
                     let mut found = false;
                     for node in nodes.values_mut() {
-                        if node.effective_name() == name {
+                        if node.matches_topic_name(&name) {
                             if node.status != NodeStatus::Running {
                                 log::warn!(
                                     "Ignoring heartbeat from node '{}' which is not running (status: {:?})",
@@ -141,10 +146,16 @@ impl NodeManager {
                 let mut nodes = manager.nodes.write().await;
 
                 for node in nodes.values_mut() {
-                    // Only check running nodes
                     if node.status == NodeStatus::Running {
-                        // If we've received at least one heartbeat, check staleness
-                        if node.last_health_check_ms > 0 {
+                        if node.last_health_check_ms == 0 {
+                            // Never seen a heartbeat — distinguish "just started, give
+                            // it a moment" from "running but silent". The dashboard
+                            // can surface Starting as a transient yellow state instead
+                            // of red Unhealthy.
+                            if node.health_status != HealthStatus::Starting {
+                                node.health_status = HealthStatus::Starting;
+                            }
+                        } else {
                             let age = now - node.last_health_check_ms;
                             if age > HEALTH_TIMEOUT_MS
                                 && node.health_status != HealthStatus::Unhealthy
