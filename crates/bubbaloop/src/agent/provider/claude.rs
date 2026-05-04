@@ -589,7 +589,7 @@ mod tests {
                 {
                     "type": "tool_use",
                     "id": "toolu_01A",
-                    "name": "list_nodes",
+                    "name": "node_list",
                     "input": {"status": "all"}
                 }
             ],
@@ -602,7 +602,7 @@ mod tests {
         match &resp.content[1] {
             ContentBlock::ToolUse { id, name, input } => {
                 assert_eq!(id, "toolu_01A");
-                assert_eq!(name, "list_nodes");
+                assert_eq!(name, "node_list");
                 assert_eq!(input["status"], "all");
             }
             _ => panic!("expected ToolUse"),
@@ -775,7 +775,7 @@ event: message_start\n\
 data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_2\",\"usage\":{\"input_tokens\":20,\"output_tokens\":0}}}\n\
 \n\
 event: content_block_start\n\
-data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"list_nodes\"}}\n\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"node_list\"}}\n\
 \n\
 event: content_block_delta\n\
 data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"status\\\"\"}}\n\
@@ -805,7 +805,7 @@ data: {\"type\":\"message_stop\"}\n\
             match event {
                 StreamEvent::ToolUse { id, name, input } => {
                     assert_eq!(id, "toolu_1");
-                    assert_eq!(name, "list_nodes");
+                    assert_eq!(name, "node_list");
                     assert_eq!(input["status"], "all");
                     got_tool = true;
                 }

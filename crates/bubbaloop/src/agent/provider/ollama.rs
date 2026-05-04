@@ -267,12 +267,12 @@ mod tests {
     #[test]
     fn response_with_tool_calls() {
         let json = r#"{
-            "message": { "content": "", "tool_calls": [{ "function": { "name": "list_nodes", "arguments": {} } }] },
+            "message": { "content": "", "tool_calls": [{ "function": { "name": "node_list", "arguments": {} } }] },
             "prompt_eval_count": 50, "eval_count": 10
         }"#;
         let resp: OllamaResp = serde_json::from_str(json).unwrap();
         assert_eq!(resp.message.tool_calls.len(), 1);
-        assert_eq!(resp.message.tool_calls[0].function.name, "list_nodes");
+        assert_eq!(resp.message.tool_calls[0].function.name, "node_list");
     }
 
     #[test]
@@ -294,13 +294,13 @@ mod tests {
     #[test]
     fn convert_messages_tool_results() {
         let msgs = vec![Message::tool_results(vec![(
-            "list_nodes".to_string(),
+            "node_list".to_string(),
             "2 nodes".to_string(),
             None,
         )])];
         let ollama = to_ollama_messages(&msgs);
         assert_eq!(ollama[0].role, "tool");
-        assert_eq!(ollama[0].tool_name.as_deref(), Some("list_nodes"));
+        assert_eq!(ollama[0].tool_name.as_deref(), Some("node_list"));
     }
 
     #[test]
@@ -313,7 +313,7 @@ mod tests {
                 },
                 ContentBlock::ToolUse {
                     id: "t1".to_string(),
-                    name: "list_nodes".to_string(),
+                    name: "node_list".to_string(),
                     input: serde_json::json!({}),
                 },
             ],
@@ -321,7 +321,7 @@ mod tests {
         let ollama = to_ollama_messages(&msgs);
         assert_eq!(
             ollama[0].tool_calls.as_ref().unwrap()[0].function.name,
-            "list_nodes"
+            "node_list"
         );
     }
 }

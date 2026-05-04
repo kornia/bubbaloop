@@ -1,7 +1,9 @@
 //! Internal MCP tool dispatch — calls PlatformOperations directly.
 //!
-//! Carries forward the battle-tested 37 tool definitions from agent/dispatch.rs,
-//! adapted to use the new provider types.
+//! Forwards the agent's tool calls to the platform, dispatching by tool name
+//! through a 38-arm match. The MCP HTTP/stdio server in `mcp/tools.rs`
+//! exposes 47 tools to external clients; the agent here uses the subset it
+//! needs for its own reasoning loop.
 
 use crate::agent::dispatch_security;
 use crate::agent::provider::{ContentBlock, ToolDefinition};

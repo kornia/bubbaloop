@@ -143,7 +143,7 @@ The sole control interface. Zenoh is the data plane only.
 | Role | Permissions |
 |---|---|
 | Viewer | Discovery and read-only data |
-| Operator | Viewer + lifecycle, send_command, config writes |
+| Operator | Viewer + lifecycle, node_command_send, config writes |
 | Admin | Operator + install/uninstall, system tools |
 
 Default for stdio: Admin. Default for HTTP: Viewer.
@@ -172,7 +172,7 @@ paths follow the topic hierarchy below.
 The Node SDK provides `schema` and `health` queryables automatically. `manifest`, `config`, and `command` are conventions that nodes implement as needed.
 
 AI agents discover nodes via the `bubbaloop/**/manifest` wildcard. They read
-the manifest to find available commands, then call `send_command` to act.
+the manifest to find available commands, then call `node_command_send` to act.
 
 **Schema rules**
 
