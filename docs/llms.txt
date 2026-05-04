@@ -5,7 +5,7 @@
 Bubbaloop is a physical AI orchestration platform built on Zenoh pub/sub. It runs as a single ~13MB binary on edge devices (Jetson, Raspberry Pi, any Linux) and provides:
 
 - **Multi-agent runtime** with Soul identity, 4-tier memory (world state, short-term, episodic, semantic), and adaptive heartbeat
-- **42 MCP tools** with 3-tier RBAC for node lifecycle, data queries, agent memory, beliefs, missions, and constraints
+- **47 MCP tools** with 3-tier RBAC for node lifecycle, data queries, agent memory, beliefs, missions, and constraints
 - **Zenoh data plane** for microsecond-latency pub/sub between sensor nodes, actuators, and AI agents
 - **Node SDK** (Rust + Python) for building self-describing nodes in ~50 lines of code
 - **Telemetry watchdog** with 5 severity levels and automatic circuit breakers
@@ -42,7 +42,7 @@ bubbaloop/{key_space}/{machine_id}/{node_name}/{resource}
 - `local` = SHM-only (same-machine, never crosses WebSocket bridge)
 
 ### MCP Integration
-Run `bubbaloop mcp --stdio` for Claude Code integration, or use the daemon's HTTP endpoint on :8088 for remote agents. 42 tools across 11 categories: Discovery, Lifecycle, Data, System, Memory, Beliefs, World State, Context Providers, Missions, Constraints, Alerts.
+Run `bubbaloop mcp --stdio` for Claude Code integration, or use the daemon's HTTP endpoint on :8088 for remote agents. 47 tools across 11 categories: Discovery, Lifecycle, Data, System, Memory, Beliefs, World State, Context Providers, Missions, Constraints, Alerts.
 
 ### Node SDK
 ```rust

@@ -1105,7 +1105,7 @@ system_status → node_logs
 
 ### Tool Count by Tier
 
-**MCP tools** (exposed to external clients via MCP server): 42 tools across Viewer/Operator/Admin tiers.
+**MCP tools** (exposed to external clients via MCP server): 47 tools across Viewer/Operator/Admin tiers.
 
 **Agent-internal tools** (available only to the LLM agent via dispatch, not exposed via MCP):
 
@@ -1154,7 +1154,7 @@ Now the agent autonomously monitors temperature every 15 minutes without further
 
 ## Summary
 
-- **42 MCP tools + agent-internal tools** across 3 RBAC tiers (Viewer, Operator, Admin)
+- **47 MCP tools + agent-internal tools** across 3 RBAC tiers (Viewer, Operator, Admin)
 - **Dual-plane architecture:** MCP for control, Zenoh for data
 - **Task scheduling** for autonomous behavior (cron jobs, retry with circuit breaker)
 - **Robustness** — turn/tool timeouts, provider retry, context recovery, result truncation

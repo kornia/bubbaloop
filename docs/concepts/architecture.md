@@ -98,7 +98,7 @@ systemd. Uses D-Bus (`zbus`) — no subprocess spawning.
 
 **Agent Runtime** — multi-agent Zenoh gateway. Described above.
 
-**MCP Server** — 42 MCP tools + agent-internal tools, 3-tier RBAC, stdio + HTTP transports.
+**MCP Server** — 47 MCP tools + agent-internal tools, 3-tier RBAC, stdio + HTTP transports.
 
 **Telemetry Watchdog**
 
@@ -114,7 +114,7 @@ Critical > 95%    — kill ALL non-essential nodes (5s sampling)
 ```
 
 Config at `~/.bubbaloop/telemetry.toml`. File-watched. Agent can tune thresholds at
-runtime via `update_telemetry_config`.
+runtime via `telemetry_config_update`.
 
 ---
 
@@ -122,7 +122,7 @@ runtime via `update_telemetry_config`.
 
 The sole control interface. Zenoh is the data plane only.
 
-**42 MCP tools + agent-internal tools across 11 categories**
+**47 MCP tools + agent-internal tools across 11 categories**
 
 | Category | What it covers |
 |---|---|
@@ -151,7 +151,7 @@ Default for stdio: Admin. Default for HTTP: Viewer.
 **Dual-plane design**
 
 MCP handles control and metadata. Zenoh handles data streams. Agents use
-`get_stream_info` to learn the Zenoh topic for a node, then subscribe directly
+`node_stream_info` to learn the Zenoh topic for a node, then subscribe directly
 for high-frequency data (video, IMU, etc.).
 
 ---

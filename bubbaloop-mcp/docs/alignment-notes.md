@@ -37,7 +37,7 @@ These items live in `crates/bubbaloop/src/mcp/` and are out of scope for the plu
 
 ## Why we didn't ship the server changes in this plugin
 
-Items 1–8 are **breaking changes** to the existing MCP API surface and need a coordinated decision (especially the naming convention in #1, which renames ~42 tools). The plugin wrapper is purely additive — it doesn't depend on the renames — so it ships now, and the server cleanup happens in a follow-up PR.
+Items 1–8 are **breaking changes** to the existing MCP API surface and need a coordinated decision (especially the naming convention in #1, which renames ~47 tools). The plugin wrapper is purely additive — it doesn't depend on the renames — so it ships now, and the server cleanup happens in a follow-up PR.
 
 ## Recommended order for closing server gaps (revised May 2026 with production signals)
 
@@ -47,7 +47,7 @@ Items 1–8 are **breaking changes** to the existing MCP API surface and need a 
 
 1. **#12 Dynamic toolset disclosure** (`enable_toolset` meta-tools, demand-load the rest). GitHub's Jan 2026 changelog confirmed `X-MCP-Toolsets` header in production; Claude Code already supports `notifications/tools/list_changed`. Klavis benchmark: 60–85% context reduction, +13–15% tool-selection accuracy on small models. *Solves the same problem as `BUBBALOOP_MCP_MODE` but at the per-domain level (camera vs mission vs belief), not just at the tier level.*
 2. **#14 Descriptive JSON outputs (was #3 in old order — promoted)**. The arxiv Feb 2026 paper found 97.1% of 856 tools surveyed had description/output quality defects, and Framelink's 4.6× npm-install spike in Q1 2026 was driven specifically by output richness over the official Figma server. Higher ROI per engineering hour than #13 right now because there's a validated playbook to copy (Framelink + the arxiv augmentor pattern).
-3. **#13 Structured error bodies** (`{"code","message","retry","hint"}` instead of `"Error: ..."` strings). Real pain (LangChain MCP adapters keep hitting it) but no dominant solution yet — bubbaloop would be a first-mover. Cheap to ship; the real difficulty is consistency across all 44 tools, not the design itself.
+3. **#13 Structured error bodies** (`{"code","message","retry","hint"}` instead of `"Error: ..."` strings). Real pain (LangChain MCP adapters keep hitting it) but no dominant solution yet — bubbaloop would be a first-mover. Cheap to ship; the real difficulty is consistency across all 47 tools, not the design itself.
 4. **#5 Resources + Prompts**. The June 2026 spec draft adds TTL/ETag for Resources lists, raising the floor. Production data: workflows backed by Prompts hit ~near-100% reliability vs 60–70% for instruction-only workflows. Bubbaloop's manifests/schemas/missions are natural Resources.
 5. **#4 Per-token RBAC tier mapping**. GitHub's `X-MCP-Toolsets` + OAuth scope filtering is the reference impl (Jan 2026). Higher complexity than #12/#13/#14 — defer until multi-tenant deployment is concretely planned. *Note: ToolAnnotations are explicitly hints, not contracts (per official MCP blog Mar 2026) — annotations cannot replace per-token RBAC for actual security.*
 6. **#11 systemd-install MCP tool**. Currently "registry-add" only — caller can't `node_install` then `node_start` end-to-end through MCP. We hit this live with `recorder-py`. Cheap to ship, removes a real friction point.
@@ -112,7 +112,7 @@ Set the env var to cap which tools the MCP server will accept, regardless of tok
 |---|---|---|
 | `readonly` | Only Viewer-tier tools accepted (lists, status, manifests) | Inspection-only deployments, demos, restricted user accounts |
 | `safe` | Viewer + Operator tools accepted (start/stop/restart/pause OK; install/remove/build blocked) | Day-2 operations without surface for accidental destruction |
-| `admin` (default) | All 44 tools accepted | Single-user localhost dev |
+| `admin` (default) | All 47 tools accepted | Single-user localhost dev |
 
 Defense-in-depth: the ceiling is enforced *in addition to* per-tool RBAC. A future per-token tier (see gap #4) would be ANDed with this ceiling, so a mode of `safe` still rejects destructive ops even if a token claims Admin tier.
 

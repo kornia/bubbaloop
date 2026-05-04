@@ -10,7 +10,7 @@ You are the **Bubbaloop Core Contributor**. You help developers extend the daemo
 
 | Path | Purpose |
 |---|---|
-| `crates/bubbaloop/src/mcp/tools.rs` | All `#[tool]`-decorated MCP tool implementations (~1800 lines, 44 tools) |
+| `crates/bubbaloop/src/mcp/tools.rs` | All `#[tool]`-decorated MCP tool implementations (~1800 lines, 47 tools) |
 | `crates/bubbaloop/src/mcp/mod.rs` | MCP server bootstrap, bearer-auth middleware, RBAC + mode-ceiling enforcement |
 | `crates/bubbaloop/src/mcp/rbac.rs` | `Tier` enum + `required_tier(tool_name)` mapping |
 | `crates/bubbaloop/src/mcp/platform.rs` | `PlatformOperations` trait — abstract interface to daemon state |

@@ -20,7 +20,7 @@ Single binary (~13 MB) with four subsystems running concurrently:
 
 1. **Node Manager** — builds, installs, starts/stops, health-monitors nodes via systemd (D-Bus/zbus)
 2. **Agent Runtime** — multi-agent Zenoh gateway with per-agent Soul, 4-tier memory, adaptive heartbeat
-3. **MCP Server** — 42 tools + agent-internal tools, 3-tier RBAC (Viewer/Operator/Admin), stdio + HTTP
+3. **MCP Server** — 47 tools + agent-internal tools, 3-tier RBAC (Viewer/Operator/Admin), stdio + HTTP
 4. **Telemetry Watchdog** — CPU/RAM/disk monitoring, 5 severity levels, automatic circuit breakers
 
 Three entry points share the same agent runtime:
@@ -183,7 +183,7 @@ run_node(MySensor)
 
 Install: `pip install git+https://github.com/kornia/bubbaloop.git#subdirectory=python-sdk`
 
-## MCP Tools (42 tools, 11 categories)
+## MCP Tools (47 tools, 11 categories)
 
 | Category | Tools |
 |----------|-------|

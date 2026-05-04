@@ -27,7 +27,7 @@ bubbaloop up
 bubbaloop agent chat "what is the system status?"
 ```
 
-The agent reasons with Llama and dispatches every MCP tool through the same internal path it uses for Claude. **All 42 tools are available — no subset, no compromise.**
+The agent reasons with Llama and dispatches every MCP tool through the same internal path it uses for Claude. **All 47 tools are available — no subset, no compromise.**
 
 ### Tuning for smaller models
 
@@ -64,7 +64,7 @@ go install github.com/mark3labs/mcphost@latest
 mcphost --config bubbaloop-mcp/.mcp.json --provider ollama --model llama3.1:70b
 ```
 
-You'll get an interactive shell where Llama can call any of bubbaloop's 42 tools. The bridge converts MCP `inputSchema` → Ollama's OpenAI-compatible `function_calling` format on the fly.
+You'll get an interactive shell where Llama can call any of bubbaloop's 47 tools. The bridge converts MCP `inputSchema` → Ollama's OpenAI-compatible `function_calling` format on the fly.
 
 ## What does NOT transfer
 
@@ -76,7 +76,7 @@ The plugin's higher-level Claude Code assets are CC-specific:
 
 ## Recommended Ollama-friendly defaults
 
-1. **Path A first.** Native dispatch is faster, more reliable, and exposes all 42 tools.
+1. **Path A first.** Native dispatch is faster, more reliable, and exposes all 47 tools.
 2. **Llama 3.1 70B Instruct or Qwen 2.5 72B Instruct** for production. Smaller models work for read-only Viewer-tier tools but struggle on multi-step Operator/Admin workflows.
 3. **Pin the model.** `model = "llama3.1:70b"` not `model = "llama3.1:latest"` — the `:latest` tag changes silently.
 4. **Disable Admin-tier tools by default.** The cleanest way is now `BUBBALOOP_MCP_MODE=safe` (or `readonly` for inspection-only) — server rejects destructive tools at the boundary, no prompt-engineering required. Old prompt-layer gating still works as a backup but is no longer the primary defense.

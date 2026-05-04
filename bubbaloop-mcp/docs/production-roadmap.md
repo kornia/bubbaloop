@@ -11,7 +11,7 @@ The vision: **the rock-solid framework someone reaches for when they need an LLM
 | Capability | What's shipped | Why it matters |
 |---|---|---|
 | Plugin layer (Claude Code) | `bubbaloop-mcp/` with 8 slash commands, 3 subagents, skill, INSTALL.md | Ergonomic UX matches GitHub/Figma plugins |
-| MCP wire surface | 44 tools, `noun_verb` naming, ToolAnnotations on every tool | Matches GitHub MCP convention; unique among edge runtimes |
+| MCP wire surface | 47 tools, `noun_verb` naming, ToolAnnotations on every tool | Matches GitHub MCP convention; unique among edge runtimes |
 | Mode-ceiling defense | `BUBBALOOP_MCP_MODE=readonly\|safe\|admin` | Red Hat k8s-mcp-server pattern, server-enforced |
 | Dynamic toolsets | 11 toolsets, 3 meta-tools (`toolset_list`/`enable`/`get_tools`), session-scoped | GitHub Jan 2026 changelog pattern; 47→25 visible with `node` only |
 | Two-plane architecture | MCP control plane (≤1 rps), Zenoh data plane (1000s msg/s) | The single most important arch decision; sidesteps MCP rate-limit failure modes |
@@ -219,7 +219,7 @@ Read these together; the synthesis is greater than the sum:
 3. **Per-node manifests = live discovery**: nodes self-describe via Zenoh queryables; daemon is opaque-text bridge; new node types ship without daemon changes.
 4. **Three-layer security composability**: mode-ceiling × per-token tier × per-tool annotations = the most flexible RBAC surface in any MCP server.
 5. **Self-introspection MCP tools**: agents debug themselves. `mcp_recent_calls`, `agent_belief_summary`, `agent_recent_thoughts` — the framework eats its own dog food.
-6. **Dynamic toolsets gating the 44 tools**: 47 → 25 visible with one toolset enabled. Small models pick the right tool at GitHub-MCP accuracy levels.
+6. **Dynamic toolsets gating the 47 tools**: 47 → 25 visible with one toolset enabled. Small models pick the right tool at GitHub-MCP accuracy levels.
 7. **Live-deployment evals**: scenarios run against the actual fleet, not mocks. Closes the lab-to-production gap that LangSmith/promptfoo can't.
 8. **Lifecycle state machine + supervision tree**: ROS 2's lifecycle + Erlang's fault tolerance, exposed as MCP tools agents can drive.
 9. **Declarative pipelines wired across machines**: ROS 2 launch + LangChain LCEL, but cross-language and cross-machine via Zenoh.

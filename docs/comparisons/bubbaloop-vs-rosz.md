@@ -90,7 +90,7 @@ These are core ROS 2 features that many robotics applications depend on. Bubbalo
 
 **Bubbaloop:**
 - Native multi-agent runtime with Soul, 4-tier memory, adaptive heartbeat
-- 42 MCP tools for hardware control and data queries
+- 47 MCP tools for hardware control and data queries
 - Works with Claude, Ollama, and other LLM providers
 - Agents reason about hardware, remember across sessions, dispatch tools
 
