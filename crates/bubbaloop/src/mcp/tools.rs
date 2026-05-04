@@ -612,7 +612,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
 
     #[tool(
         name = "node_command_send",
-        description = "Send a command to a node's command queryable. The node must support the command — call list_commands first to see available commands. Example: node_name='rtsp-camera', command='capture_frame', params={\"resolution\": \"1080p\"}. Returns the command result or error.",
+        description = "Send a command to a node's command queryable. The node must support the command — call node_commands first to see available commands. Example: node_name='rtsp-camera', command='capture_frame', params={\"resolution\": \"1080p\"}. Returns the command result or error.",
         annotations(
             title = "Send node command",
             read_only_hint = false,
@@ -1498,7 +1498,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
 
     #[tool(
         name = "context_configure",
-        description = "Configure a context provider: a daemon background task that subscribes to a Zenoh topic pattern and writes extracted field values into world state. Required: mission_id, topic_pattern (e.g. 'bubbaloop/**/vision/detections'), world_state_key_template (e.g. '{label}.location'), value_field (JSON path to extract). Optional: filter (e.g. 'confidence>0.8'), min_interval_secs, max_age_secs, confidence_field. Use list_world_state to see results. Admin only.",
+        description = "Configure a context provider: a daemon background task that subscribes to a Zenoh topic pattern and writes extracted field values into world state. Required: mission_id, topic_pattern (e.g. 'bubbaloop/**/vision/detections'), world_state_key_template (e.g. '{label}.location'), value_field (JSON path to extract). Optional: filter (e.g. 'confidence>0.8'), min_interval_secs, max_age_secs, confidence_field. Use world_state_list to see results. Admin only.",
         annotations(
             title = "Configure context provider",
             read_only_hint = false,

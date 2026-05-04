@@ -85,6 +85,15 @@ export BUBBALOOP_MCP_MODE=admin     # all 47 tools (default) — local developme
 
 A `safe`-mode daemon will reject `node_install` / `node_remove` / `node_build` / `zenoh_query` / `memory_episodic_clear` even if the caller's token claims admin. Pattern lifted from Red Hat's `kubernetes-mcp-server`.
 
+Optional second knob — narrow the *visible surface* (independent of mode):
+
+```bash
+export BUBBALOOP_MCP_TOOLSETS=node,system   # only those toolsets visible at boot
+unset BUBBALOOP_MCP_TOOLSETS                # all 11 toolsets visible (default)
+```
+
+Agents can broaden at runtime via the always-visible meta-tools `toolset_list` / `toolset_enable` / `toolset_get_tools`. See `README.md` → Modes → Toolset narrowing.
+
 ---
 
 ## Verify end-to-end (30 seconds)

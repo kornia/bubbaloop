@@ -76,6 +76,18 @@ export BUBBALOOP_MCP_MODE=admin     # all 47 tools (default)
 
 Server-side enforcement, independent of token tier. Useful for read-only deployments and defense in depth alongside the future per-token tier mapping (gap #4).
 
+### Toolset narrowing (`BUBBALOOP_MCP_TOOLSETS`)
+
+Independent of mode-ceiling, you can pre-narrow the *visible surface* by listing toolset names:
+
+```bash
+export BUBBALOOP_MCP_TOOLSETS=node,system        # only these 25 tools visible at boot
+export BUBBALOOP_MCP_TOOLSETS=*                  # all 11 toolsets (default)
+unset BUBBALOOP_MCP_TOOLSETS                     # same as *
+```
+
+At runtime an agent can broaden via `toolset_enable("<name>")` and re-fetch `tools/list`. The 11 toolsets are: `node`, `mission`, `belief`, `alert`, `constraint`, `world_state`, `proposal`, `job`, `memory`, `system`, `telemetry`. The three meta-tools (`toolset_list`, `toolset_enable`, `toolset_get_tools`) are always visible regardless of this setting.
+
 ## Other MCP clients
 
 The plugin's slash commands / subagents / skill are Claude-Code-specific, but the underlying MCP server works in any client (Cursor, Cline, Claude Desktop, Copilot CLI, Zed). Copy [`.mcp.json`](.mcp.json) into your client's config; export `BUBBALOOP_MCP_TOKEN` before launching.
