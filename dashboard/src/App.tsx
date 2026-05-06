@@ -10,9 +10,10 @@ import { NodeDiscoveryProvider } from "./contexts/NodeDiscoveryContext";
 import { Dashboard } from "./components/Dashboard";
 import { FleetBar } from "./components/FleetBar";
 import { MeshView } from "./components/MeshView";
+import { LibraryView } from "./components/LibraryView";
 import { H264Decoder } from "./lib/h264-decoder";
 
-type AppView = "dashboard" | "loop";
+type AppView = "dashboard" | "loop" | "library";
 
 // Zenoh endpoint resolution:
 // 1. ?zenoh=ws://host:port URL parameter override
@@ -281,6 +282,24 @@ export default function App() {
               </svg>
               The Loop
             </button>
+            <button
+              className={`view-tab ${currentView === "library" ? "active" : ""}`}
+              onClick={() => setCurrentView("library")}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <rect x="3" y="3" width="18" height="4" rx="1" />
+                <rect x="3" y="10" width="18" height="4" rx="1" />
+                <rect x="3" y="17" width="18" height="4" rx="1" />
+              </svg>
+              Library
+            </button>
           </div>
         </div>
         <StatusIndicator
@@ -298,7 +317,10 @@ export default function App() {
         </div>
       )}
 
-      {session ? (
+      {/* Library mode is independent of Zenoh — renders regardless of connection */}
+      {currentView === "library" ? (
+        <LibraryView />
+      ) : session ? (
         <FleetProvider>
           <NodeDiscoveryProvider session={session}>
             <ZenohSubscriptionProvider session={session}>
