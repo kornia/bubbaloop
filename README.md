@@ -132,12 +132,18 @@ bubbaloop up
 Bubbaloop includes an MCP (Model Context Protocol) server — the sole control interface for AI agents. The daemon starts it automatically on port 8088.
 
 ```bash
-# MCP over stdio (for Claude Code / local agents)
-bubbaloop mcp --stdio
-
-# MCP over HTTP (daemon mode, auto-started)
+# MCP over HTTP (daemon mode, auto-started on port 8088)
 bubbaloop daemon
-# → MCP server: http://127.0.0.1:8088/mcp
+
+# MCP over stdio (no auth needed, spawns own Zenoh session)
+bubbaloop mcp --stdio
+```
+
+**Claude Code setup (one-time):** The project `.mcp.json` uses `${BUBBALOOP_MCP_TOKEN}` for auth. Export the token before starting Claude Code:
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+export BUBBALOOP_MCP_TOKEN=$(bubbaloop mcp --token)
 ```
 
 **Available MCP tools:**
