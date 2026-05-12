@@ -1393,6 +1393,7 @@ zenoh-cli sub bubbaloop/daemon/nodes
 | `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` | `tcp/192.168.1.100:7447` |
 | `RUST_LOG` | Log level (trace/debug/info/warn/error) | `warn` | `RUST_LOG=debug` |
 | `BUBBALOOP_MCP_PORT` | MCP HTTP server port | `8088` | `9000` |
+| `BUBBALOOP_MCP_TOKEN` | Bearer token for MCP HTTP auth (set via `bubbaloop mcp --token`) | — | `bb_f47c1a60…` |
 | `RUST_BACKTRACE` | Show stack traces on panic | Not set | `1` (short) or `full` (detailed) |
 | `XDG_CONFIG_HOME` | Config directory | `~/.config` | `/home/user/.config` |
 | `XDG_DATA_HOME` | Data directory | `~/.local/share` | `/home/user/.local/share` |

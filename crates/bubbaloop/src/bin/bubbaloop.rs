@@ -104,6 +104,10 @@ struct McpArgs {
     /// zenoh endpoint to connect to (default: auto-discover local zenohd)
     #[argh(option, short = 'z')]
     zenoh_endpoint: Option<String>,
+
+    /// print the MCP bearer token and exit (use with BUBBALOOP_MCP_TOKEN)
+    #[argh(switch)]
+    token: bool,
 }
 
 /// Run the MCP server (stdio or HTTP mode).
@@ -111,6 +115,13 @@ struct McpArgs {
 /// In stdio mode, logs are redirected to ~/.bubbaloop/mcp-stdio.log to avoid
 /// corrupting the JSON-RPC protocol on stdout/stderr.
 async fn run_mcp_command(args: McpArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if args.token {
+        let token = bubbaloop::mcp::auth::load_or_generate_token()
+            .map_err(|e| format!("Failed to load MCP token: {}", e))?;
+        println!("{}", token);
+        return Ok(());
+    }
+
     if args.stdio {
         // Redirect logs to file to avoid corrupting the MCP JSON-RPC protocol.
         // stdout/stderr must stay clean for JSON-RPC messages.
@@ -226,6 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("  mcp       Run MCP server for AI agent integration:");
             eprintln!("              --stdio: JSON-RPC over stdin/stdout");
             eprintln!("              -p, --port <port>: HTTP mode (default: 8088)");
+            eprintln!("              --token: Print bearer token (for BUBBALOOP_MCP_TOKEN)");
             eprintln!("  node      Manage nodes:");
             eprintln!("              init, validate, list, add, remove");
             eprintln!("              install, uninstall, start, stop, restart");
