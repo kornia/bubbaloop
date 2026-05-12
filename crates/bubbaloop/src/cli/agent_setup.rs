@@ -443,6 +443,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::const_is_empty)]
     fn claude_models_not_empty() {
         assert!(!CLAUDE_MODELS.is_empty());
     }
