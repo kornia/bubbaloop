@@ -11,9 +11,10 @@ import { Dashboard } from "./components/Dashboard";
 import { FleetBar } from "./components/FleetBar";
 import { MeshView } from "./components/MeshView";
 import { LibraryView } from "./components/LibraryView";
+import { ChatView } from "./components/ChatView";
 import { H264Decoder } from "./lib/h264-decoder";
 
-type AppView = "dashboard" | "loop" | "library";
+type AppView = "dashboard" | "loop" | "library" | "chat";
 
 // Zenoh endpoint resolution:
 // 1. ?zenoh=ws://host:port URL parameter override
@@ -300,6 +301,22 @@ export default function App() {
               </svg>
               Library
             </button>
+            <button
+              className={`view-tab ${currentView === "chat" ? "active" : ""}`}
+              onClick={() => setCurrentView("chat")}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              Chat
+            </button>
           </div>
         </div>
         <StatusIndicator
@@ -317,9 +334,11 @@ export default function App() {
         </div>
       )}
 
-      {/* Library mode is independent of Zenoh — renders regardless of connection */}
+      {/* Library and Chat modes are independent of Zenoh */}
       {currentView === "library" ? (
         <LibraryView />
+      ) : currentView === "chat" ? (
+        <ChatView session={session ?? undefined} />
       ) : session ? (
         <FleetProvider>
           <NodeDiscoveryProvider session={session}>

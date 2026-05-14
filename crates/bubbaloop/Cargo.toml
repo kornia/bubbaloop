@@ -92,6 +92,8 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 rmcp.workspace = true
 schemars.workspace = true
 tower_governor = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+tokio-stream = "0.1"
 
 [features]
 default = []

@@ -8,6 +8,7 @@ use crate::agent::gateway::{self, AgentEvent, AgentManifest, AgentMessage};
 use crate::agent::heartbeat::{ArousalSource, ArousalState, HeartbeatState};
 use crate::agent::memory::Memory;
 use crate::agent::provider::claude::ClaudeProvider;
+use crate::agent::provider::gemini::GeminiProvider;
 use crate::agent::provider::ollama::OllamaProvider;
 use crate::agent::provider::ModelProvider;
 use crate::agent::soul::Soul;
@@ -34,8 +35,9 @@ const AGENT_INBOX_CAPACITY: usize = 32;
 // ── Provider dispatch ────────────────────────────────────────────
 
 /// Enum dispatch for model providers (avoids `dyn` — RPITIT traits aren't object-safe).
-enum AnyProvider {
+pub(crate) enum AnyProvider {
     Claude(ClaudeProvider),
+    Gemini(GeminiProvider),
     Ollama(OllamaProvider),
 }
 
@@ -48,7 +50,29 @@ impl ModelProvider for AnyProvider {
     ) -> crate::agent::provider::Result<crate::agent::provider::ModelResponse> {
         match self {
             Self::Claude(p) => p.generate(system, messages, tools).await,
+            Self::Gemini(p) => p.generate(system, messages, tools).await,
             Self::Ollama(p) => p.generate(system, messages, tools).await,
+        }
+    }
+
+    /// Override: delegate to each provider's real token-streaming implementation.
+    ///
+    /// Without this override, AnyProvider inherits the default `generate_stream`
+    /// from `ModelProvider` (mod.rs:292-329) which wraps `generate()` and emits
+    /// the entire response as a single TextDelta. That defeats the purpose of
+    /// streaming for the dashboard chat UX and the CLI REPL alike.
+    async fn generate_stream(
+        &self,
+        system: Option<&str>,
+        messages: &[crate::agent::provider::Message],
+        tools: &[crate::agent::provider::ToolDefinition],
+    ) -> crate::agent::provider::Result<
+        tokio::sync::mpsc::Receiver<crate::agent::provider::StreamEvent>,
+    > {
+        match self {
+            Self::Claude(p) => p.generate_stream(system, messages, tools).await,
+            Self::Gemini(p) => p.generate_stream(system, messages, tools).await,
+            Self::Ollama(p) => p.generate_stream(system, messages, tools).await,
         }
     }
 }
@@ -85,7 +109,18 @@ pub struct AgentEntry {
 }
 
 fn default_provider() -> String {
-    "claude".to_string()
+    // Gemini is the recommended provider (free tier, no ToS concerns).
+    // If GEMINI_API_KEY is set we default to gemini; otherwise fall through
+    // to claude (which requires ANTHROPIC_API_KEY or key file).
+    if std::env::var("GEMINI_API_KEY").is_ok()
+        || dirs::home_dir()
+            .map(|h| h.join(".bubbaloop").join("gemini-key").exists())
+            .unwrap_or(false)
+    {
+        "gemini".to_string()
+    } else {
+        "claude".to_string()
+    }
 }
 
 fn default_true() -> bool {
@@ -299,8 +334,35 @@ impl AgentRuntime {
                         continue;
                     }
                 },
+                "gemini" => match GeminiProvider::from_env(Some(&model_name)) {
+                    Ok(p) => AnyProvider::Gemini(p),
+                    Err(e) => {
+                        log::error!(
+                            "[Runtime] Agent '{}' failed to init Gemini provider: {}. \
+                             Set GEMINI_API_KEY or place key in ~/.bubbaloop/gemini-key",
+                            agent_id,
+                            e
+                        );
+                        continue;
+                    }
+                },
                 _ => match ClaudeProvider::from_env(Some(&model_name)) {
-                    Ok(p) => AnyProvider::Claude(p),
+                    Ok(p) => {
+                        // Warn if OAuth credentials are in use — per Anthropic Feb 2026 ToS,
+                        // OAuth is reserved for the Claude Code CLI. Account-level bans
+                        // have been reported. GEMINI_API_KEY is the recommended alternative.
+                        if p.is_using_oauth() {
+                            log::warn!(
+                                "[Runtime] Agent '{}': Claude OAuth credentials detected. \
+                                 Per Anthropic Feb 2026 ToS, OAuth is reserved for the Claude Code CLI \
+                                 — account-level bans have been reported. \
+                                 Set GEMINI_API_KEY (free tier) or ANTHROPIC_API_KEY for safe operation. \
+                                 A sanctioned subscription path (Agent SDK) ships 2026-06-15.",
+                                agent_id
+                            );
+                        }
+                        AnyProvider::Claude(p)
+                    }
                     Err(e) => {
                         log::error!(
                             "[Runtime] Agent '{}' failed to init Claude provider: {}",

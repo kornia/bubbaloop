@@ -1,0 +1,144 @@
+/**
+ * Agent types and daemon discovery utilities.
+ *
+ * Mirrors the Rust wire format from agent/gateway.rs.
+ */
+import { Reply, ReplyError, Duration } from "@eclipse-zenoh/zenoh-ts";
+import type { Session } from "@eclipse-zenoh/zenoh-ts";
+
+// ── Wire types (mirror agent/gateway.rs) ────────────────────────────
+
+export type AgentEventType =
+  | "delta"
+  | "tool"
+  | "tool_result"
+  | "error"
+  | "done"
+  | "system";
+
+export interface AgentEvent {
+  /** Correlation ID matching the inbox message. */
+  id: string;
+  type: AgentEventType;
+  /** Text payload (delta text, tool name, error message, etc.) */
+  text?: string;
+  /** Tool input JSON snippet (only on "tool" events) */
+  tool_input?: string;
+}
+
+export interface AgentManifest {
+  agent_id: string;
+  name: string;
+  capabilities: string[];
+  model: string;
+  is_default: boolean;
+  machine_id: string;
+}
+
+export interface DaemonManifest {
+  http_endpoint: string;
+  version: string;
+  machine_id: string;
+}
+
+/** A discovered agent bundled with its daemon's HTTP endpoint. */
+export interface ResolvedAgent {
+  agent: AgentManifest;
+  /** HTTP base URL for the daemon hosting this agent. */
+  http_endpoint: string;
+}
+
+// ── Discovery ────────────────────────────────────────────────────────
+
+const AGENT_MANIFEST_WILDCARD = "bubbaloop/global/*/agent/*/manifest";
+const DAEMON_MANIFEST_WILDCARD = "bubbaloop/global/*/daemon/manifest";
+const DISCOVERY_TIMEOUT_MS = 4000;
+
+/**
+ * Discover all agents and their hosting daemon HTTP endpoints via Zenoh.
+ *
+ * Queries both the agent manifest and daemon manifest topics, then joins
+ * by machine_id so each agent carries its daemon's HTTP endpoint.
+ */
+export async function discoverAgents(
+  session: Session
+): Promise<ResolvedAgent[]> {
+  const [agentReplies, daemonReplies] = await Promise.all([
+    queryWithTimeout(session, AGENT_MANIFEST_WILDCARD, DISCOVERY_TIMEOUT_MS),
+    queryWithTimeout(session, DAEMON_MANIFEST_WILDCARD, DISCOVERY_TIMEOUT_MS),
+  ]);
+
+  // Build machine_id → http_endpoint map from daemon manifests
+  const daemonByMachine = new Map<string, string>();
+  for (const reply of daemonReplies) {
+    const manifest = tryParseJson<DaemonManifest>(reply);
+    if (manifest?.machine_id && manifest?.http_endpoint) {
+      daemonByMachine.set(manifest.machine_id, manifest.http_endpoint);
+    }
+  }
+
+  const resolved: ResolvedAgent[] = [];
+  for (const reply of agentReplies) {
+    const agent = tryParseJson<AgentManifest>(reply);
+    if (!agent?.agent_id || !agent?.machine_id) continue;
+    const http_endpoint = daemonByMachine.get(agent.machine_id);
+    if (!http_endpoint) continue; // daemon not reachable from browser
+    resolved.push({ agent, http_endpoint });
+  }
+
+  return resolved;
+}
+
+async function queryWithTimeout(
+  session: Session,
+  selector: string,
+  timeoutMs: number
+): Promise<string[]> {
+  try {
+    const receiver = await session.get(selector, {
+      timeout: Duration.milliseconds.of(timeoutMs),
+    });
+    if (!receiver) return [];
+
+    const replies: string[] = [];
+    for await (const replyItem of receiver) {
+      let sample: unknown;
+      if (replyItem instanceof Reply) {
+        const result = replyItem.result();
+        if (result instanceof ReplyError) continue;
+        sample = result;
+      } else {
+        sample = replyItem;
+      }
+      const bytes = (sample as { payload: () => { toBytes: () => Uint8Array } })
+        ?.payload?.()?.toBytes?.();
+      if (!bytes) continue;
+      replies.push(new TextDecoder().decode(bytes));
+    }
+    return replies;
+  } catch {
+    return [];
+  }
+}
+
+function tryParseJson<T>(text: string): T | null {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+// ── Auth token storage ────────────────────────────────────────────────
+
+const TOKEN_KEY = "bubbaloop_mcp_token";
+
+export function loadToken(): string {
+  return localStorage.getItem(TOKEN_KEY) ?? "";
+}
+
+export function saveToken(token: string): void {
+  if (token.trim()) {
+    localStorage.setItem(TOKEN_KEY, token.trim());
+  }
+}
