@@ -154,15 +154,20 @@ impl DebugCommand {
     }
 
     fn print_help() {
-        log::info!("Debug commands for Zenoh network inspection\n");
-        log::info!("Usage: bubbaloop debug <command>\n");
-        log::info!("Commands:");
-        log::info!("  info        Show Zenoh connection information");
-        log::info!("  topics      List all active Zenoh topics");
-        log::info!("  query       Query a Zenoh queryable endpoint");
-        log::info!("  subscribe   Subscribe to a Zenoh topic and watch messages");
-        log::info!("  liveliness  Query liveliness tokens (entity discovery)");
-        log::info!("\nRun 'bubbaloop debug <command> --help' for more information.");
+        log::info!(
+            "Debug commands for Zenoh network inspection\n\
+             \n\
+             Usage: bubbaloop debug <command>\n\
+             \n\
+             Commands:\n\
+               info        Show Zenoh connection information\n\
+               topics      List all active Zenoh topics\n\
+               query       Query a Zenoh queryable endpoint\n\
+               subscribe   Subscribe to a Zenoh topic and watch messages\n\
+               liveliness  Query liveliness tokens (entity discovery)\n\
+             \n\
+             Run 'bubbaloop debug <command> --help' for more information."
+        );
     }
 }
 
@@ -238,7 +243,7 @@ async fn list_topics(args: TopicsArgs) -> Result<()> {
     } else if found_topics.is_empty() {
         log::info!("No topics found. The network may be empty or daemon not running.");
     } else {
-        log::info!("\nActive Topics ({}):", found_topics.len());
+        log::info!("Active Topics ({}):", found_topics.len());
         log::info!("{}", "-".repeat(80));
         let mut sorted: Vec<_> = found_topics.iter().collect();
         sorted.sort();
@@ -257,8 +262,7 @@ async fn list_topics(args: TopicsArgs) -> Result<()> {
 async fn subscribe_topic(args: SubscribeArgs) -> Result<()> {
     let session = get_zenoh_session().await?;
 
-    log::info!("Subscribing to: {}", args.topic);
-    log::info!("Press Ctrl+C to stop...\n");
+    log::info!("Subscribing to: {} (Ctrl+C to stop)", args.topic);
 
     let subscriber = session
         .declare_subscriber(&args.topic)
@@ -301,7 +305,6 @@ async fn subscribe_topic(args: SubscribeArgs) -> Result<()> {
                     log::info!("  ... ({} more bytes)", payload.len() - 64);
                 }
             }
-            log::info!("");
         }
     }
 }
@@ -310,8 +313,7 @@ async fn query_endpoint(args: QueryArgs) -> Result<()> {
     let session = get_zenoh_session().await?;
 
     if !args.json {
-        log::info!("Querying: {}", args.key);
-        log::info!("Timeout: {}s\n", args.timeout);
+        log::info!("Querying: {} (timeout: {}s)", args.key, args.timeout);
     }
 
     let mut get_builder = session
@@ -370,8 +372,7 @@ async fn query_endpoint(args: QueryArgs) -> Result<()> {
                     }
 
                     if i < replies.len() - 1 {
-                        log::info!("\n{}", "-".repeat(80));
-                        log::info!("");
+                        log::info!("{}", "-".repeat(80));
                     }
                 }
             }
@@ -417,21 +418,21 @@ async fn show_info(args: InfoArgs) -> Result<()> {
             }))?
         );
     } else {
-        log::info!("Zenoh Connection Info");
-        log::info!("{}", "=".repeat(80));
-        log::info!("Endpoint:     {}", endpoint);
-        log::info!("Session ID:   {}", session_id);
-        log::info!("Mode:         client");
-        log::info!("Status:       connected");
-        log::info!("\nEnvironment:");
         log::info!(
-            "  BUBBALOOP_ZENOH_ENDPOINT: {}",
+            "Zenoh Connection Info\n\
+             {}\n\
+             Endpoint:   {}\n\
+             Session ID: {}\n\
+             Mode:       client  Status: connected\n\
+             \n\
+             BUBBALOOP_ZENOH_ENDPOINT: {}\n\
+             RUST_LOG:                 {}",
+            "=".repeat(40),
+            endpoint,
+            session_id,
             std::env::var("BUBBALOOP_ZENOH_ENDPOINT")
-                .unwrap_or_else(|_| "(not set, using default)".to_string())
-        );
-        log::info!(
-            "  RUST_LOG: {}",
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "(not set)".to_string())
+                .unwrap_or_else(|_| "(not set, using default)".to_string()),
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "(not set)".to_string()),
         );
     }
 
@@ -446,8 +447,11 @@ async fn query_liveliness(args: LivelinessArgs) -> Result<()> {
     let session = get_zenoh_session().await?;
 
     if !args.json {
-        log::info!("Querying liveliness tokens: {}", args.pattern);
-        log::info!("Timeout: {}s\n", args.timeout);
+        log::info!(
+            "Querying liveliness tokens: {} (timeout: {}s)",
+            args.pattern,
+            args.timeout
+        );
     }
 
     let replies: Vec<_> = session
@@ -497,12 +501,11 @@ async fn query_liveliness(args: LivelinessArgs) -> Result<()> {
             }))?
         );
     } else if tokens.is_empty() {
-        log::info!("No liveliness tokens found.");
-        log::info!("This could mean:");
-        log::info!("  - No nodes with liveliness tokens are running");
-        log::info!("  - Nodes may not have declared liveliness tokens");
         log::info!(
-            "  - The pattern '{}' doesn't match any tokens",
+            "No liveliness tokens found. Possible reasons:\n\
+             - No nodes with liveliness tokens are running\n\
+             - Nodes may not have declared liveliness tokens\n\
+             - The pattern '{}' doesn't match any tokens",
             args.pattern
         );
     } else {

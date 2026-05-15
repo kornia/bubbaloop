@@ -127,10 +127,12 @@ impl LogoutCommand {
 // ── Interactive login flow ──────────────────────────────────────────
 
 async fn run_login(skip_validation: bool) -> Result<()> {
-    log::info!("Bubbaloop Login");
-    log::info!("Choose authentication method:");
-    log::info!("  [1] API Key (from console.anthropic.com)");
-    log::info!("  [2] Claude Subscription (via 'claude setup-token')");
+    log::info!(
+        "Bubbaloop Login\n\
+         Choose authentication method:\n\
+           [1] API Key (from console.anthropic.com)\n\
+           [2] Claude Subscription (via 'claude setup-token')"
+    );
 
     let choice = loop {
         log::info!("Enter choice (1 or 2):");
@@ -151,13 +153,10 @@ async fn run_login(skip_validation: bool) -> Result<()> {
 }
 
 async fn run_api_key_login(skip_validation: bool) -> Result<()> {
-    log::info!("API Key Login");
-    log::info!("To use the agent, you need an Anthropic API key.");
-    log::info!("1. Opening {}", CONSOLE_URL);
+    log::info!("API Key Login — opening {} ...", CONSOLE_URL);
     if open::that(CONSOLE_URL).is_err() {
         log::info!("Could not open browser — copy the URL above");
     }
-    log::info!("2. Create a new API key and copy it.");
 
     let key = match rpassword::prompt_password("Paste your API key: ") {
         Ok(k) => k.trim().to_string(),
@@ -199,13 +198,12 @@ async fn run_api_key_login(skip_validation: bool) -> Result<()> {
 }
 
 async fn run_setup_token_login() -> Result<()> {
-    log::info!("Claude Subscription Login (setup-token)");
-    log::info!("This method uses Claude Code to generate an auth token.");
-    log::info!("You need Claude Code installed (npm install -g @anthropic-ai/claude-code).");
-    log::info!("1. Run this command in another terminal:");
-    log::info!("   claude setup-token");
-    log::info!("2. Follow the prompts in Claude Code to authenticate.");
-    log::info!("   It will generate a token starting with 'sk-ant-oat01-'.");
+    log::info!(
+        "Claude Subscription Login (setup-token)\n\
+         Requires Claude Code (npm install -g @anthropic-ai/claude-code).\n\
+         Run 'claude setup-token' in another terminal, follow its prompts,\n\
+         then paste the token starting with 'sk-ant-oat01-' below."
+    );
 
     let token = match rpassword::prompt_password("Paste the setup-token: ") {
         Ok(t) => t.trim().to_string(),

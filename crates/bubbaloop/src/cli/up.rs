@@ -147,18 +147,16 @@ fn write_project_mcp_config(cwd: &Path) -> Result<bool> {
 /// invocation, after all bootstrap actions are complete.
 fn print_setup_instructions(cwd: &Path) {
     let token_path = get_bubbaloop_home().join("mcp-token");
-    log::info!("");
-    log::info!("Bubbaloop ready.");
-    log::info!("  daemon : http://127.0.0.1:{MCP_PORT}/mcp");
-    log::info!("  zenoh  : tcp/127.0.0.1:{ZENOH_PORT}");
-    log::info!("");
-    log::info!("Next: in this directory, run any MCP client. Example for Claude Code:");
     log::info!(
-        "  export BUBBALOOP_MCP_TOKEN=\"$(cat {})\"",
-        token_path.display()
+        "Bubbaloop ready.\n\
+         daemon: http://127.0.0.1:{MCP_PORT}/mcp  zenoh: tcp/127.0.0.1:{ZENOH_PORT}\n\
+         \n\
+         Next (Claude Code example):\n\
+           export BUBBALOOP_MCP_TOKEN=\"$(cat {})\"\n\
+           cd {} && claude",
+        token_path.display(),
+        cwd.display()
     );
-    log::info!("  cd {} && claude", cwd.display());
-    log::info!("");
 }
 
 /// Run the full bootstrap (zenohd + daemon + .mcp.json) before the existing
@@ -227,8 +225,11 @@ impl UpCommand {
         log::info!("Loading skills from: {}", skills_dir.display());
 
         if !skills_dir.exists() {
-            log::info!("Skills directory not found: {}", skills_dir.display());
-            log::info!("Create it with: mkdir -p {}", skills_dir.display());
+            log::info!(
+                "Skills directory not found: {} — create with: mkdir -p {}",
+                skills_dir.display(),
+                skills_dir.display()
+            );
             return Ok(());
         }
 
@@ -274,8 +275,7 @@ impl UpCommand {
         let mut skipped_count: usize = 0;
 
         for skill in &active_skills {
-            log::info!("\n  skill:  {}", skill.name);
-            log::info!("  driver: {}", skill.driver);
+            log::info!("skill: {}  driver: {}", skill.name, skill.driver);
 
             let driver_entry = match skills::resolve_driver(&skill.driver) {
                 Some(d) => d,
@@ -287,7 +287,7 @@ impl UpCommand {
             };
 
             let marketplace_node = driver_entry.marketplace_node;
-            log::info!("  node:   {}", marketplace_node);
+            log::info!("  node: {}", marketplace_node);
 
             let registry_node = match registry::find_by_name(&registry_nodes, marketplace_node) {
                 Some(n) => n,
@@ -381,7 +381,6 @@ impl UpCommand {
             }
         }
 
-        log::info!("");
         log::info!(
             "Done: {} started | {} already running | {} skipped | {} disabled",
             started_count,

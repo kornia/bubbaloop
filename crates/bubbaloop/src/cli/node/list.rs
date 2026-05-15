@@ -55,7 +55,6 @@ pub(crate) fn search_nodes(query: &str, category: Option<&str>, tag: Option<&str
     );
     log::info!("Refreshing marketplace registry...");
     if let Err(e) = registry::refresh_cache() {
-        log::warn!("registry refresh failed: {}", e);
         log::warn!("Warning: could not refresh registry (using cache): {}", e);
     }
     let all_nodes = registry::load_cached_registry();
@@ -96,7 +95,6 @@ pub(crate) fn search_nodes(query: &str, category: Option<&str>, tag: Option<&str
             node.repo
         );
     }
-    log::info!("");
     log::info!("Install with: bubbaloop node install <name>");
 
     Ok(())
@@ -105,7 +103,6 @@ pub(crate) fn search_nodes(query: &str, category: Option<&str>, tag: Option<&str
 pub(crate) async fn discover_nodes(format: &str) -> Result<()> {
     // Refresh marketplace cache
     if let Err(e) = registry::refresh_cache() {
-        log::warn!("registry refresh failed: {}", e);
         log::warn!("Warning: could not refresh registry (using cache): {}", e);
     }
     let all_marketplace = registry::load_cached_registry();
@@ -202,7 +199,6 @@ pub(crate) async fn discover_nodes(format: &str) -> Result<()> {
                 e.description
             );
         }
-        log::info!("");
         log::info!("Add with: bubbaloop node add <name>");
         log::info!("Create instance: bubbaloop node add <path> --name <instance-name>");
     }

@@ -27,7 +27,7 @@ const GEMINI_MODELS: &[(&str, &str)] = &[
 pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = AgentsConfig::load_or_default();
 
-    log::info!("\n  Agent Model Setup\n");
+    log::info!("Agent Model Setup");
 
     // Select which agent to configure
     let is_new_agent;
@@ -35,7 +35,7 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
         Some(id) => {
             is_new_agent = !config.agents.contains_key(id);
             if is_new_agent {
-                log::info!("  Creating new agent '{}'.\n", id);
+                log::info!("Creating new agent '{}'.", id);
                 config.agents.insert(
                     id.to_string(),
                     AgentEntry {
@@ -68,10 +68,7 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
     }
 
     // Choose provider (Gemini first — recommended, free tier, no ToS concerns)
-    log::info!("\n  Choose provider:\n");
-    log::info!("  [1] Gemini (recommended — free tier, strong vision)");
-    log::info!("  [2] Claude API (cloud, pay-per-token)");
-    log::info!("  [3] Ollama (local, no cloud bill)\n");
+    log::info!("Choose provider:\n  [1] Gemini (recommended — free tier, strong vision)\n  [2] Claude API (cloud, pay-per-token)\n  [3] Ollama (local, no cloud bill)");
 
     let provider_choice = prompt_choice("  Enter choice (1, 2, or 3)", &["1", "2", "3"])?;
     let provider = match provider_choice.as_str() {
@@ -82,27 +79,29 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
 
     // Nudge setup if credentials are missing for cloud providers
     if provider == "gemini" && !crate::agent::provider::gemini::GeminiProvider::has_credentials() {
-        log::info!("\n  No Gemini API key found.");
-        log::info!("  Set GEMINI_API_KEY or place key in ~/.bubbaloop/gemini-key");
-        log::info!("  Get a free key at: https://aistudio.google.com/app/apikey");
-        log::info!("\n  Continue anyway? Model config will be saved. [y/N]");
+        log::info!(
+            "No Gemini API key found. Set GEMINI_API_KEY or place key in ~/.bubbaloop/gemini-key\n\
+             Get a free key at: https://aistudio.google.com/app/apikey\n\
+             Continue anyway? Model config will be saved. [y/N]"
+        );
         let mut line = String::new();
         io::stdin().read_line(&mut line)?;
         if !line.trim().eq_ignore_ascii_case("y") {
-            log::info!("  Setup paused. Set GEMINI_API_KEY then run setup again.");
+            log::info!("Setup paused. Set GEMINI_API_KEY then run setup again.");
             return Ok(());
         }
     }
 
     if provider == "claude" && !login::has_claude_credentials() {
-        log::info!("\n  No Claude API credentials found.");
-        log::info!("  Run 'bubbaloop login' first to authenticate.");
-        log::info!("  Tip: GEMINI_API_KEY has a free tier — try provider [1] instead.\n");
-        log::info!("  Continue anyway? Model config will be saved. [y/N]");
+        log::info!(
+            "No Claude API credentials found. Run 'bubbaloop login' first to authenticate.\n\
+             Tip: GEMINI_API_KEY has a free tier — try provider [1] instead.\n\
+             Continue anyway? Model config will be saved. [y/N]"
+        );
         let mut line = String::new();
         io::stdin().read_line(&mut line)?;
         if !line.trim().eq_ignore_ascii_case("y") {
-            log::info!("  Setup cancelled. Run 'bubbaloop login' then try again.");
+            log::info!("Setup cancelled. Run 'bubbaloop login' then try again.");
             return Ok(());
         }
     }
@@ -123,16 +122,18 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
     // Save
     config.save()?;
 
-    log::info!("\n  Updated agent '{}':", agent_id);
-    log::info!("    provider: {}", provider);
-    log::info!("    model: {}", model);
+    log::info!(
+        "Updated agent '{}': provider={}, model={}",
+        agent_id,
+        provider,
+        model
+    );
     // For new agents, ask for a quick identity description and write identity.md
     if is_new_agent {
         let soul_dir = agent_directory(&agent_id).join("soul");
         std::fs::create_dir_all(&soul_dir).ok();
 
-        log::info!("\n  Describe this agent's role in one sentence");
-        log::info!("  (e.g., \"analyzes camera images and produces captions\"):\n");
+        log::info!("Describe this agent's role in one sentence\n  (e.g., \"analyzes camera images and produces captions\"):");
         let description = prompt_line("  Role")?;
 
         let identity = format!(
@@ -142,29 +143,31 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
         );
         let identity_path = soul_dir.join("identity.md");
         std::fs::write(&identity_path, &identity)?;
-        log::info!("  Wrote identity to {}", identity_path.display());
+        log::info!("Wrote identity to {}", identity_path.display());
     }
 
-    log::info!("\n  Saved to ~/.bubbaloop/agents.toml");
+    log::info!("Saved to ~/.bubbaloop/agents.toml");
 
     // Offer to restart the daemon so changes take effect immediately
-    log::info!("\n  Restart daemon for changes to take effect? [Y/n]");
+    log::info!("Restart daemon for changes to take effect? [Y/n]");
     let mut line = String::new();
     io::stdin().read_line(&mut line)?;
     let should_restart = line.trim().is_empty() || line.trim().eq_ignore_ascii_case("y");
 
     if should_restart {
         restart_daemon().await;
-        log::info!("\n  Chat with your agent:");
-        log::info!("    bubbaloop agent chat -a {}", agent_id);
+        log::info!(
+            "Chat with your agent:  bubbaloop agent chat -a {}",
+            agent_id
+        );
     } else if is_new_agent {
-        log::info!("  When ready, restart the daemon then chat:");
-        log::info!("    bubbaloop daemon restart");
-        log::info!("    bubbaloop agent chat -a {}", agent_id);
+        log::info!(
+            "When ready, restart the daemon then chat:\n  bubbaloop daemon restart\n  bubbaloop agent chat -a {}",
+            agent_id
+        );
     } else {
-        log::info!("  Run 'bubbaloop daemon restart' for changes to take effect.");
+        log::info!("Run 'bubbaloop daemon restart' for changes to take effect.");
     }
-    log::info!("");
 
     Ok(())
 }
@@ -179,11 +182,11 @@ fn select_agent(config: &AgentsConfig) -> Result<String, Box<dyn std::error::Err
 
     if agents.len() == 1 {
         let id = agents[0].0.clone();
-        log::info!("  Agent: {}", id);
+        log::info!("Agent: {}", id);
         return Ok(id);
     }
 
-    log::info!("  Available agents:\n");
+    log::info!("Available agents:");
     for (i, (id, entry)) in agents.iter().enumerate() {
         let default_tag = if entry.default { " (default)" } else { "" };
         let model_display = entry.model.as_deref().unwrap_or("soul default");
@@ -196,7 +199,6 @@ fn select_agent(config: &AgentsConfig) -> Result<String, Box<dyn std::error::Err
             model_display
         );
     }
-    log::info!("");
 
     let valid: Vec<String> = (1..=agents.len()).map(|i| i.to_string()).collect();
     let valid_refs: Vec<&str> = valid.iter().map(|s| s.as_str()).collect();
@@ -207,11 +209,11 @@ fn select_agent(config: &AgentsConfig) -> Result<String, Box<dyn std::error::Err
 
 /// Interactive Claude model selection.
 fn select_claude_model() -> Result<String, Box<dyn std::error::Error>> {
-    log::info!("\n  Available Claude models:\n");
+    log::info!("Available Claude models:");
     for (i, (id, desc)) in CLAUDE_MODELS.iter().enumerate() {
         log::info!("  [{}] {} — {}", i + 1, id, desc);
     }
-    log::info!("  [{}] Custom (enter model ID)\n", CLAUDE_MODELS.len() + 1);
+    log::info!("  [{}] Custom (enter model ID)", CLAUDE_MODELS.len() + 1);
 
     let valid: Vec<String> = (1..=CLAUDE_MODELS.len() + 1)
         .map(|i| i.to_string())
@@ -229,11 +231,11 @@ fn select_claude_model() -> Result<String, Box<dyn std::error::Error>> {
 
 /// Interactive Gemini model selection.
 fn select_gemini_model() -> Result<String, Box<dyn std::error::Error>> {
-    log::info!("\n  Available Gemini models:\n");
+    log::info!("Available Gemini models:");
     for (i, (id, desc)) in GEMINI_MODELS.iter().enumerate() {
         log::info!("  [{}] {} — {}", i + 1, id, desc);
     }
-    log::info!("  [{}] Custom (enter model ID)\n", GEMINI_MODELS.len() + 1);
+    log::info!("  [{}] Custom (enter model ID)", GEMINI_MODELS.len() + 1);
 
     let valid: Vec<String> = (1..=GEMINI_MODELS.len() + 1)
         .map(|i| i.to_string())
@@ -292,7 +294,7 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
         );
         return Err("Ollama returned an error".into());
     }
-    log::info!("  Checking Ollama at {}... OK\n", endpoint);
+    log::info!("  Checking Ollama at {}... OK", endpoint);
 
     let body: serde_json::Value = resp.json().await?;
     let local_models: Vec<OllamaModel> = body
@@ -323,7 +325,7 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
 
     // Section 1: Local models
     if !local_models.is_empty() {
-        log::info!("  Local models:\n");
+        log::info!("  Local models:");
         for m in &local_models {
             menu_idx += 1;
             let quant_display = if m.quant.is_empty() {
@@ -348,7 +350,7 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
 
     let recommended_start = menu_idx;
     if !recommended.is_empty() {
-        log::info!("\n  Recommended (will be downloaded):\n");
+        log::info!("  Recommended (will be downloaded):");
         for &(name, desc) in &recommended {
             menu_idx += 1;
             log::info!("  [{}] \u{2B07} {} — {}", menu_idx, name, desc);
@@ -358,7 +360,7 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
     // Section 3: Custom
     menu_idx += 1;
     let custom_idx = menu_idx;
-    log::info!("\n  [{}] Custom (enter model name)\n", custom_idx);
+    log::info!("  [{}] Custom (enter model name)", custom_idx);
 
     let valid: Vec<String> = (1..=custom_idx).map(|i| i.to_string()).collect();
     let valid_refs: Vec<&str> = valid.iter().map(|s| s.as_str()).collect();
@@ -408,7 +410,7 @@ fn find_ollama() -> std::path::PathBuf {
 
 /// Pull an Ollama model, showing progress via the CLI `ollama pull` command.
 async fn pull_ollama_model(model: &str, _endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
-    log::info!("\n  Pulling {}...\n", model);
+    log::info!("Pulling {}...", model);
 
     let ollama_bin = find_ollama();
     let status = tokio::process::Command::new(&ollama_bin)
@@ -422,7 +424,7 @@ async fn pull_ollama_model(model: &str, _endpoint: &str) -> Result<(), Box<dyn s
         return Err(format!("Failed to pull model '{}'. Check your connection.", model).into());
     }
 
-    log::info!("\n  Pull complete.");
+    log::info!("Pull complete.");
     Ok(())
 }
 

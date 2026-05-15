@@ -193,8 +193,10 @@ async fn try_zenoh_session(endpoint: Option<&str>) -> Option<std::sync::Arc<zeno
     match bubbaloop::cli::zenoh_session::create_zenoh_session(endpoint).await {
         Ok(s) => Some(s),
         Err(e) => {
-            log::warn!("Error: Cannot connect to Zenoh — is zenohd running?");
-            log::warn!("  {}", e);
+            log::warn!(
+                "Error: Cannot connect to Zenoh — is zenohd running?\n  {}",
+                e
+            );
             None
         }
     }
@@ -220,50 +222,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.command {
         // No subcommand = show help
         None => {
-            log::info!("Bubbaloop - AI-native orchestration for Physical AI\n");
-            log::info!("Usage: bubbaloop <command>\n");
-            log::info!("Commands:");
-            log::info!("  status    Show services status (non-interactive)");
-            log::info!("  doctor    Run system diagnostics and health checks");
-            log::info!("              --json: Output as JSON");
-            log::info!("              -c, --check <type>: all|zenoh|daemon (default: all)");
-            log::info!("              --fix: Auto-fix issues");
-            log::info!("  daemon    Manage the daemon lifecycle:");
-            log::info!("              run: Run in foreground (default)");
-            log::info!("              start: Start as systemd service");
-            log::info!("              stop: Graceful shutdown via Zenoh");
-            log::info!("              restart: Stop + start");
-            log::info!("              status: Show uptime, nodes, agents");
-            log::info!("              logs: Follow daemon logs");
-            log::info!("              fix: Auto-fix daemon issues");
-            log::info!("  mcp       Run MCP server for AI agent integration:");
-            log::info!("              --stdio: JSON-RPC over stdin/stdout");
-            log::info!("              -p, --port <port>: HTTP mode (default: 8088)");
-            log::info!("              --token: Print bearer token (for BUBBALOOP_MCP_TOKEN)");
-            log::info!("  node      Manage nodes:");
-            log::info!("              init, validate, list, add, remove");
-            log::info!("              install, uninstall, start, stop, restart");
-            log::info!("              logs, build");
-            log::info!("  launch    Launch node instances from a YAML file");
-            log::info!("              (default: ~/.bubbaloop/launch.yaml)");
-            log::info!("  marketplace  Manage marketplace sources:");
-            log::info!("              list, add, remove, enable, disable");
-            log::info!("  login     Authenticate with Anthropic API:");
-            log::info!("              --status: Show current auth status");
-            log::info!("  logout    Remove saved Anthropic API key");
-            log::info!("  agent     Interact with AI agents via the daemon:");
-            log::info!("              setup [-a <id>]: Configure provider, model, and identity (no daemon needed)");
             log::info!(
-                "              chat [-a agent[@machine]] [message]: Send messages to agents"
+                "Bubbaloop - AI-native orchestration for Physical AI\n\
+                 \n\
+                 Usage: bubbaloop <command>\n\
+                 \n\
+                 Commands:\n\
+                   status       Show services status (non-interactive)\n\
+                   doctor       Run system diagnostics: --json, -c all|zenoh|daemon, --fix\n\
+                   daemon       Manage daemon: run, start, stop, restart, status, logs, fix\n\
+                   mcp          MCP server: --stdio, -p <port>, --token\n\
+                   node         Manage nodes: init, create, validate, list, add, remove,\n\
+                                  instance, install, uninstall, start, stop, restart, logs, build\n\
+                   launch       Launch node instances from a YAML file\n\
+                   marketplace  Manage marketplace sources: list, add, remove, enable, disable\n\
+                   login        Authenticate: --status to show current auth\n\
+                   logout       Remove saved Anthropic API key\n\
+                   agent        AI agents: setup [-a <id>], chat [-a agent[@machine]] [msg], list\n\
+                   up           Load skills and ensure nodes are running: -s <dir>, --dry-run\n\
+                   debug        Debug Zenoh: info, topics, query, subscribe\n\
+                   init-tls     Print TLS/mTLS certificate generation guide\n\
+                 \n\
+                 Run 'bubbaloop <command> --help' for more information."
             );
-            log::info!("              list [--all]: Show running agents and capabilities");
-            log::info!("  up        Load skills and ensure sensor nodes are running:");
-            log::info!("              -s, --skills-dir <path>: Skills directory");
-            log::info!("              --dry-run: Show what would be done");
-            log::info!("  debug     Debug Zenoh connectivity:");
-            log::info!("              info, topics, query, subscribe");
-            log::info!("  init-tls  Print TLS/mTLS certificate generation guide");
-            log::info!("\nRun 'bubbaloop <command> --help' for more information.");
             return Ok(());
         }
         Some(Command::Login(cmd)) => {
@@ -462,39 +443,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/home/user"));
                 home.join(".bubbaloop/certs").to_string_lossy().to_string()
             });
-            log::info!("TLS/mTLS Certificate Setup Guide");
-            log::info!("=================================\n");
-            log::info!("Target directory: {}\n", cert_dir);
-            log::info!("1. Generate a CA key and certificate:");
-            log::info!("   openssl genrsa -out {}/ca-key.pem 4096", cert_dir);
             log::info!(
-                "   openssl req -new -x509 -key {}/ca-key.pem -sha256 \\",
-                cert_dir
+                "TLS/mTLS Certificate Setup Guide\n\
+                 =================================\n\
+                 Target directory: {cert_dir}\n\
+                 \n\
+                 1. Generate a CA key and certificate:\n\
+                    openssl genrsa -out {cert_dir}/ca-key.pem 4096\n\
+                    openssl req -new -x509 -key {cert_dir}/ca-key.pem -sha256 \\\n\
+                      -subj \"/CN=bubbaloop-ca\" -days 3650 -out {cert_dir}/ca.pem\n\
+                 \n\
+                 2. Generate a server key and certificate:\n\
+                    openssl genrsa -out {cert_dir}/server-key.pem 4096\n\
+                    openssl req -new -key {cert_dir}/server-key.pem \\\n\
+                      -subj \"/CN=$(hostname)\" -out {cert_dir}/server.csr\n\
+                    openssl x509 -req -in {cert_dir}/server.csr \\\n\
+                      -CA {cert_dir}/ca.pem -CAkey {cert_dir}/ca-key.pem -CAcreateserial \\\n\
+                      -days 365 -sha256 -out {cert_dir}/server-cert.pem\n\
+                 \n\
+                 3. Copy ca.pem to ALL machines in the deployment.\n\
+                 \n\
+                 4. Update Zenoh config (~/.bubbaloop/zenoh/zenohd.json5):\n\
+                    See: configs/zenoh/tls-example.json5\n\
+                 \n\
+                 5. Set BUBBALOOP_ZENOH_ENDPOINT on clients:\n\
+                    export BUBBALOOP_ZENOH_ENDPOINT=\"tls/<router-ip>:7447\"\n\
+                 \n\
+                 6. Verify with: bubbaloop doctor -c security"
             );
-            log::info!(
-                "     -subj \"/CN=bubbaloop-ca\" -days 3650 -out {}/ca.pem\n",
-                cert_dir
-            );
-            log::info!("2. Generate a server key and certificate:");
-            log::info!("   openssl genrsa -out {}/server-key.pem 4096", cert_dir);
-            log::info!("   openssl req -new -key {}/server-key.pem \\", cert_dir);
-            log::info!(
-                "     -subj \"/CN=$(hostname)\" -out {}/server.csr",
-                cert_dir
-            );
-            log::info!("   openssl x509 -req -in {}/server.csr \\", cert_dir);
-            log::info!(
-                "     -CA {}/ca.pem -CAkey {}/ca-key.pem -CAcreateserial \\",
-                cert_dir,
-                cert_dir
-            );
-            log::info!("     -days 365 -sha256 -out {}/server-cert.pem\n", cert_dir);
-            log::info!("3. Copy ca.pem to ALL machines in the deployment.\n");
-            log::info!("4. Update Zenoh config (~/.bubbaloop/zenoh/zenohd.json5):");
-            log::info!("   See: configs/zenoh/tls-example.json5\n");
-            log::info!("5. Set BUBBALOOP_ZENOH_ENDPOINT on clients:");
-            log::info!("   export BUBBALOOP_ZENOH_ENDPOINT=\"tls/<router-ip>:7447\"\n");
-            log::info!("6. Verify with: bubbaloop doctor -c security");
         }
     }
 

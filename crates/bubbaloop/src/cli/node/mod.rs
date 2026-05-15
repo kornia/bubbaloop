@@ -495,34 +495,35 @@ impl NodeCommand {
     }
 
     fn print_help() {
-        log::info!("Node management commands\n");
-        log::info!("Usage: bubbaloop node <command>\n");
-        log::info!("Commands:");
-        log::info!("  init        Initialize a new node from template");
-        log::info!("  create      One-shot: init + build + add + install (+ optionally start)");
-        log::info!("              Example: bubbaloop node create my-recorder --type rust --start");
-        log::info!("  validate    Validate a node manifest and directory structure");
-        log::info!("  list        List all registered nodes");
-        log::info!("  add         Add a node from local path or GitHub URL");
-        log::info!("  remove      Remove a node from the registry");
-        log::info!("  instance    Create an instance of a multi-instance node");
         log::info!(
-            "              Example: bubbaloop node instance rtsp-camera terrace -c config.yaml"
+            "Node management commands\n\
+             \n\
+             Usage: bubbaloop node <command>\n\
+             \n\
+             Commands:\n\
+               init       Initialize a new node from template\n\
+               create     One-shot: init + build + add + install [--start]\n\
+               validate   Validate a node manifest and directory structure\n\
+               list       List all registered nodes\n\
+               add        Add a node from local path or GitHub URL\n\
+               remove     Remove a node from the registry\n\
+               instance   Create an instance of a multi-instance node\n\
+               search     Search the node marketplace\n\
+               discover   Discover available nodes with status\n\
+               install    Install a node (or from marketplace by name)\n\
+               uninstall  Uninstall a node's systemd service\n\
+               start      Start a node service\n\
+               stop       Stop a node service\n\
+               restart    Restart a node service\n\
+               logs       View logs for a node\n\
+               build      Build a node\n\
+               clean      Clean a node's build artifacts\n\
+               enable     Enable autostart for a node\n\
+               disable    Disable autostart for a node\n\
+               (See also: bubbaloop launch  -- launch multi-instance YAML)\n\
+             \n\
+             Run 'bubbaloop node <command> --help' for more information."
         );
-        log::info!("  search      Search the node marketplace");
-        log::info!("  discover    Discover available nodes with status");
-        log::info!("  install     Install a node (or from marketplace by name)");
-        log::info!("  uninstall   Uninstall a node's systemd service");
-        log::info!("  start       Start a node service");
-        log::info!("  stop        Stop a node service");
-        log::info!("  restart     Restart a node service");
-        log::info!("  logs        View logs for a node");
-        log::info!("  build       Build a node");
-        log::info!("  clean       Clean a node's build artifacts");
-        log::info!("  enable      Enable autostart for a node");
-        log::info!("  disable     Disable autostart for a node");
-        log::info!("  (See also: bubbaloop launch  -- launch multi-instance YAML)");
-        log::info!("\nRun 'bubbaloop node <command> --help' for more information.");
     }
 }
 
@@ -663,24 +664,27 @@ fn init_node(args: InitArgs) -> Result<()> {
 
     let abs_path = output_dir.canonicalize().unwrap_or(output_dir.clone());
 
-    log::info!(
-        "Initialized node '{}' at: {}",
-        args.name,
-        abs_path.display()
-    );
-    log::info!("");
-    log::info!("Next steps:");
-    log::info!("  cd {}", output_dir.display());
     if args.node_type.to_lowercase() == "rust" {
-        log::info!("  # Edit src/node.rs with your logic");
-        log::info!("  cargo build --release");
+        log::info!(
+            "Initialized '{}' at {}\n\
+             Next: cd {} && cargo build --release\n\
+             Register: bubbaloop node add {}",
+            args.name,
+            abs_path.display(),
+            output_dir.display(),
+            abs_path.display()
+        );
     } else {
-        log::info!("  # Edit main.py with your logic");
-        log::info!("  pip install -r requirements.txt");
+        log::info!(
+            "Initialized '{}' at {}\n\
+             Next: cd {} && pip install -r requirements.txt\n\
+             Register: bubbaloop node add {}",
+            args.name,
+            abs_path.display(),
+            output_dir.display(),
+            abs_path.display()
+        );
     }
-    log::info!("");
-    log::info!("To register with bubbaloop daemon:");
-    log::info!("  bubbaloop node add {}", abs_path.display());
 
     Ok(())
 }
@@ -691,29 +695,28 @@ fn validate_node(args: ValidateArgs) -> Result<()> {
     // 1. Check node.yaml exists
     let manifest_path = path.join("node.yaml");
     if !manifest_path.exists() {
-        log::info!("FAIL: node.yaml not found at {}", manifest_path.display());
-        return Err(NodeError::NotFound("node.yaml".into()));
+        return Err(NodeError::NotFound(format!(
+            "node.yaml not found at {}",
+            manifest_path.display()
+        )));
     }
-    log::info!("OK: node.yaml found");
 
     // 2. Parse manifest
     let content = std::fs::read_to_string(&manifest_path)?;
     let manifest: serde_yaml::Value = serde_yaml::from_str(&content)
         .map_err(|e| NodeError::CommandFailed(format!("Invalid YAML: {}", e)))?;
-    log::info!("OK: node.yaml parses correctly");
 
     // 3. Check required fields
     let required = ["name", "version", "type"];
     for field in required {
         if manifest.get(field).is_none() {
-            log::info!("FAIL: Missing required field: {}", field);
             return Err(NodeError::CommandFailed(format!(
-                "Missing field: {}",
+                "Missing required field: {}",
                 field
             )));
         }
     }
-    log::info!("OK: All required fields present (name, version, type)");
+    log::info!("OK: node.yaml valid (name, version, type present)");
 
     // 4. Validate type
     let node_type = manifest["type"].as_str().unwrap_or("");
@@ -727,14 +730,11 @@ fn validate_node(args: ValidateArgs) -> Result<()> {
     // 5. Check command file exists (if specified)
     if let Some(cmd) = manifest.get("command").and_then(|v| v.as_str()) {
         let cmd_path = path.join(cmd.trim_start_matches("./"));
-        if cmd_path.exists() {
-            log::info!("OK: Command '{}' exists", cmd);
-        } else {
+        if !cmd_path.exists() {
             log::info!("INFO: Command '{}' does not exist yet (needs build)", cmd);
         }
     }
 
-    log::info!("");
     log::info!("Validation passed!");
     Ok(())
 }
