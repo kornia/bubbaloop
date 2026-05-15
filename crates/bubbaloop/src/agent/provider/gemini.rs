@@ -115,6 +115,7 @@ struct GenerationConfig {
 // ── Wire types (response) ────────────────────────────────────────────
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 struct GenerateResponse {
     candidates: Vec<GeminiCandidate>,
     #[serde(default)]
