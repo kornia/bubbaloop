@@ -1,6 +1,7 @@
-//! Model provider trait — abstracts LLM backends (Claude, Ollama, etc.).
+//! Model provider trait — abstracts LLM backends (Claude, Gemini, Ollama, etc.).
 
 pub mod claude;
+pub mod gemini;
 pub mod ollama;
 
 use serde::{Deserialize, Serialize};

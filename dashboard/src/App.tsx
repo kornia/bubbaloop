@@ -10,9 +10,10 @@ import { NodeDiscoveryProvider } from "./contexts/NodeDiscoveryContext";
 import { Dashboard } from "./components/Dashboard";
 import { FleetBar } from "./components/FleetBar";
 import { MeshView } from "./components/MeshView";
+import { ChatView } from "./components/ChatView";
 import { H264Decoder } from "./lib/h264-decoder";
 
-type AppView = "dashboard" | "loop";
+type AppView = "dashboard" | "loop" | "chat";
 
 // Zenoh endpoint resolution:
 // 1. ?zenoh=ws://host:port URL parameter override
@@ -281,6 +282,22 @@ export default function App() {
               </svg>
               The Loop
             </button>
+            <button
+              className={`view-tab ${currentView === "chat" ? "active" : ""}`}
+              onClick={() => setCurrentView("chat")}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              Chat
+            </button>
           </div>
         </div>
         <StatusIndicator
@@ -298,7 +315,9 @@ export default function App() {
         </div>
       )}
 
-      {session ? (
+      {currentView === "chat" ? (
+        <ChatView session={session ?? undefined} />
+      ) : session ? (
         <FleetProvider>
           <NodeDiscoveryProvider session={session}>
             <ZenohSubscriptionProvider session={session}>
@@ -348,9 +367,10 @@ export default function App() {
 
       <style>{`
         .app {
-          min-height: 100vh;
+          height: 100%;
           display: flex;
           flex-direction: column;
+          overflow: hidden;
           background:
             radial-gradient(ellipse at top left, rgba(61, 90, 254, 0.05) 0%, transparent 50%),
             radial-gradient(ellipse at bottom right, rgba(0, 229, 255, 0.03) 0%, transparent 50%),
@@ -364,6 +384,8 @@ export default function App() {
           padding: 16px 24px;
           background: var(--bg-secondary);
           border-bottom: 1px solid var(--border-color);
+          flex-shrink: 0;
+          z-index: 200;
         }
 
         .header-left {

@@ -13,8 +13,10 @@
 //! The daemon never makes autonomous decisions — it's a passive skill runtime.
 
 pub mod belief_updater;
+pub mod chat_route;
 pub mod constraints;
 pub mod context_provider;
+pub mod daemon_manifest;
 pub mod federated;
 pub mod gateway;
 pub mod mission;

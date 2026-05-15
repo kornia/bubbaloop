@@ -331,6 +331,10 @@ pub async fn run_mcp_server(
 
     let health_manager = node_manager.clone();
 
+    // Clone session before it's moved into platform (needed for chat handler and manifest)
+    let session_for_chat = session.clone();
+    let session_for_manifest = session.clone();
+
     // HTTP MCP lives under the daemon's shutdown. Forward `shutdown_rx` so
     // `context_configure` can spawn context providers live and still tear them
     // down cleanly on daemon shutdown.
@@ -341,7 +345,24 @@ pub async fn run_mcp_server(
         Some(shutdown_rx.clone()),
     ));
 
+    // Register daemon manifest queryable (discovery: http_endpoint + version)
+    crate::daemon::daemon_manifest::register_daemon_manifest(
+        &session_for_manifest,
+        &machine_id,
+        port,
+        shutdown_rx.clone(),
+    )
+    .await;
+
     let api_router = crate::api::api_router(platform.clone());
+
+    // Chat router: POST /api/v1/agents/{id}/turns → SSE
+    let chat_state = Arc::new(crate::daemon::chat_route::ChatState {
+        session: session_for_chat,
+        machine_id: machine_id.clone(),
+        auth_token: token.clone(),
+    });
+    let chat_router = crate::daemon::chat_route::chat_router(chat_state);
 
     // Build auth layer before mcp_service closure consumes `token`.
     // /mcp and /api/v1 require bearer token; /health remains unauthenticated
@@ -380,8 +401,12 @@ pub async fn run_mcp_server(
         }
     });
 
+    // Merge api_router and chat_router before nesting under /api/v1.
+    // Each sub-router carries its own state type — axum supports this via merge.
+    let combined_api = axum::Router::new().merge(api_router).merge(chat_router);
+
     let authenticated_routes = axum::Router::new()
-        .nest("/api/v1", api_router)
+        .nest("/api/v1", combined_api)
         .nest_service("/mcp", mcp_service)
         .layer(auth_layer);
 
@@ -410,7 +435,37 @@ pub async fn run_mcp_server(
         .merge(authenticated_routes)
         .layer(tower_governor::GovernorLayer::new(governor_conf));
 
-    let bind_addr = format!("127.0.0.1:{}", port);
+    // Bind address: BUBBALOOP_HTTP_BIND overrides default localhost-only.
+    // Setting 0.0.0.0 is required for dashboard access from a remote laptop.
+    // Default is localhost-only per CLAUDE.md security convention.
+    let bind_addr =
+        std::env::var("BUBBALOOP_HTTP_BIND").unwrap_or_else(|_| format!("127.0.0.1:{}", port));
+
+    // CORS: fail-closed. BUBBALOOP_DASHBOARD_ORIGIN must be set explicitly.
+    // If unset, the CORS layer is not mounted — browsers are blocked by
+    // missing CORS headers, but non-browser clients (CLI, curl) still work.
+    let router = if let Ok(origin) = std::env::var("BUBBALOOP_DASHBOARD_ORIGIN") {
+        let allowed_origin = origin
+            .parse::<axum::http::HeaderValue>()
+            .map_err(|e| format!("Invalid BUBBALOOP_DASHBOARD_ORIGIN: {}", e))?;
+        let cors = tower_http::cors::CorsLayer::new()
+            .allow_origin(allowed_origin)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+            ]);
+        log::info!("CORS enabled for origin: {}", origin);
+        router.layer(cors)
+    } else {
+        log::info!("CORS disabled (set BUBBALOOP_DASHBOARD_ORIGIN to enable browser access)");
+        router
+    };
+
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     log::info!(
         "MCP server listening on http://{}/mcp (rate limit: 100 burst, 1/sec sustained)",

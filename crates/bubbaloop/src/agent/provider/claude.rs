@@ -38,7 +38,7 @@ const RETRY_BASE_SECS: u64 = 1;
 // ── Auth method ─────────────────────────────────────────────────────
 
 /// How the client authenticates with the Anthropic API.
-enum AuthMethod {
+pub(crate) enum AuthMethod {
     /// Traditional API key (x-api-key header)
     ApiKey(String),
     /// OAuth bearer token (Authorization: Bearer header)
@@ -200,6 +200,14 @@ impl ClaudeProvider {
     /// Get the model name this provider is configured with.
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    /// Whether this provider is using OAuth (Claude Code subscription bearer token).
+    ///
+    /// Dashboard chat refuses OAuth per Anthropic's Feb 2026 ToS — account-level
+    /// bans are enforced for non-CLI OAuth use. API key (`x-api-key`) is sanctioned.
+    pub(crate) fn is_using_oauth(&self) -> bool {
+        matches!(self.auth, AuthMethod::OAuthToken(_))
     }
 
     /// Build an authenticated request to the Messages API.

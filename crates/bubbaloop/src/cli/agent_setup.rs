@@ -14,6 +14,15 @@ const CLAUDE_MODELS: &[(&str, &str)] = &[
     ("claude-opus-4-20250514", "Opus 4 (most capable)"),
 ];
 
+/// Known Gemini models for interactive selection.
+const GEMINI_MODELS: &[(&str, &str)] = &[
+    (
+        "gemini-2.5-flash",
+        "2.5 Flash — free tier, fast vision+text",
+    ),
+    ("gemini-2.5-pro", "2.5 Pro — strongest reasoning, billed"),
+];
+
 /// Run the interactive setup wizard.
 pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = AgentsConfig::load_or_default();
@@ -57,22 +66,39 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
         }
     }
 
-    // Choose provider
+    // Choose provider (Gemini first — recommended, free tier, no ToS concerns)
     println!("\n  Choose provider:\n");
-    println!("  [1] Claude API (cloud)");
-    println!("  [2] Ollama (local)\n");
+    println!("  [1] Gemini (recommended — free tier, strong vision)");
+    println!("  [2] Claude API (cloud, pay-per-token)");
+    println!("  [3] Ollama (local, no cloud bill)\n");
 
-    let provider_choice = prompt_choice("  Enter choice (1 or 2)", &["1", "2"])?;
-    let provider = if provider_choice == "1" {
-        "claude"
-    } else {
-        "ollama"
+    let provider_choice = prompt_choice("  Enter choice (1, 2, or 3)", &["1", "2", "3"])?;
+    let provider = match provider_choice.as_str() {
+        "1" => "gemini",
+        "2" => "claude",
+        _ => "ollama",
     };
 
-    // Nudge login if picking Claude without credentials
+    // Nudge setup if credentials are missing for cloud providers
+    if provider == "gemini" && !crate::agent::provider::gemini::GeminiProvider::has_credentials() {
+        println!("\n  No Gemini API key found.");
+        println!("  Set GEMINI_API_KEY or place key in ~/.bubbaloop/gemini-key");
+        println!("  Get a free key at: https://aistudio.google.com/app/apikey");
+        println!("\n  Continue anyway? Model config will be saved. [y/N]");
+        let mut line = String::new();
+        print!("  ");
+        io::stdout().flush()?;
+        io::stdin().read_line(&mut line)?;
+        if !line.trim().eq_ignore_ascii_case("y") {
+            println!("  Setup paused. Set GEMINI_API_KEY then run setup again.");
+            return Ok(());
+        }
+    }
+
     if provider == "claude" && !login::has_claude_credentials() {
         println!("\n  No Claude API credentials found.");
-        println!("  Run 'bubbaloop login' first to authenticate.\n");
+        println!("  Run 'bubbaloop login' first to authenticate.");
+        println!("  Tip: GEMINI_API_KEY has a free tier — try provider [1] instead.\n");
         println!("  Continue anyway? Model config will be saved. [y/N]");
         let mut line = String::new();
         print!("  ");
@@ -87,6 +113,7 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
     // Choose model based on provider
     let model = match provider {
         "ollama" => select_ollama_model().await?,
+        "gemini" => select_gemini_model()?,
         _ => select_claude_model()?,
     };
 
@@ -202,6 +229,28 @@ fn select_claude_model() -> Result<String, Box<dyn std::error::Error>> {
         Ok(CLAUDE_MODELS[idx].0.to_string())
     } else {
         prompt_line("  Enter Claude model ID")
+    }
+}
+
+/// Interactive Gemini model selection.
+fn select_gemini_model() -> Result<String, Box<dyn std::error::Error>> {
+    println!("\n  Available Gemini models:\n");
+    for (i, (id, desc)) in GEMINI_MODELS.iter().enumerate() {
+        println!("  [{}] {} — {}", i + 1, id, desc);
+    }
+    println!("  [{}] Custom (enter model ID)\n", GEMINI_MODELS.len() + 1);
+
+    let valid: Vec<String> = (1..=GEMINI_MODELS.len() + 1)
+        .map(|i| i.to_string())
+        .collect();
+    let valid_refs: Vec<&str> = valid.iter().map(|s| s.as_str()).collect();
+    let choice = prompt_choice("  Select model", &valid_refs)?;
+    let idx: usize = choice.parse::<usize>()? - 1;
+
+    if idx < GEMINI_MODELS.len() {
+        Ok(GEMINI_MODELS[idx].0.to_string())
+    } else {
+        prompt_line("  Enter Gemini model ID")
     }
 }
 
