@@ -8,6 +8,7 @@
 //! and Claude API key are accepted. See `check_oauth_gate()`.
 
 use crate::agent::gateway::{self, AgentEvent, AgentEventType, AgentMessage};
+use crate::agent::runtime::AgentsConfig;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -99,6 +100,22 @@ pub async fn agent_turn_handler(
                         The CLI (bubbaloop agent chat) remains available at operator risk."
                     .to_string(),
                 code: "oauth_chat_disabled".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    // 404 if the agent_id is not in agents.toml
+    let config = AgentsConfig::load_or_default();
+    if !config.agents.contains_key(&agent_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ErrorBody {
+                error: format!(
+                    "Agent '{}' not found. Check ~/.bubbaloop/agents.toml.",
+                    agent_id
+                ),
+                code: "agent_not_found".to_string(),
             }),
         )
             .into_response();

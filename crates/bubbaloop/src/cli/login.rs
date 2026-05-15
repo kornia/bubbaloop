@@ -288,74 +288,133 @@ async fn run_setup_token_login() -> Result<()> {
 // ── Status check ────────────────────────────────────────────────────
 
 async fn show_status() -> Result<()> {
-    let path = key_file_path()?;
+    let mut any_found = false;
 
-    // Check env var first
-    if let Ok(env_key) = std::env::var("ANTHROPIC_API_KEY") {
-        println!("API key source: ANTHROPIC_API_KEY environment variable");
-        print!("Validating... ");
-        match validate_api_key(&env_key).await {
-            Ok(model) => println!("Valid ({} available)", model),
-            Err(LoginError::InvalidKey(msg)) => println!("Invalid: {}", msg),
-            Err(e) => println!("Could not validate: {}", e),
-        }
-        return Ok(());
-    }
+    // ── Gemini ───────────────────────────────────────────────────────
+    let gemini_key = std::env::var("GEMINI_API_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let gemini_key_file = dirs::home_dir()
+        .map(|h| h.join(".bubbaloop").join("gemini-key"))
+        .filter(|p| p.exists());
 
-    // Check API key file
-    if path.exists() {
-        let content = std::fs::read_to_string(&path)?;
-        let key = content.lines().next().unwrap_or("").trim();
+    if let Some(key) = gemini_key {
+        println!("Gemini: GEMINI_API_KEY env var ({})", mask_key(&key));
+        any_found = true;
+    } else if let Some(path) = gemini_key_file {
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let key = content.lines().next().unwrap_or("").trim().to_string();
         if key.is_empty() {
-            println!("Key file exists but is empty: {}", path.display());
-            println!("Run 'bubbaloop login' to set up your API key.");
-            return Ok(());
+            println!("Gemini: key file exists but is empty ({})", path.display());
+        } else {
+            println!("Gemini: {} ({})", path.display(), mask_key(&key));
+            any_found = true;
         }
-
-        println!("API key source: {}", path.display());
-        let masked = mask_key(key);
-        println!("Key: {}", masked);
-        print!("Validating... ");
-        match validate_api_key(key).await {
-            Ok(model) => println!("Valid ({} available)", model),
-            Err(LoginError::InvalidKey(msg)) => println!("Invalid: {}", msg),
-            Err(e) => println!("Could not validate: {}", e),
-        }
-        return Ok(());
+    } else {
+        println!("Gemini: not configured  (set GEMINI_API_KEY or ~/.bubbaloop/gemini-key)");
     }
 
-    // Check OAuth credentials
-    match load_oauth_credentials() {
-        Ok(Some(creds)) => {
-            let oauth_path = oauth_credentials_path()?;
-            println!("API key source: {} (OAuth)", oauth_path.display());
-            let masked = mask_key(&creds.access_token);
-            println!("Access token: {}", masked);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            if creds.expires_at > now {
-                let remaining = creds.expires_at - now;
-                let hours = remaining / 3600;
-                let minutes = (remaining % 3600) / 60;
-                println!("Token expires in: {}h {}m", hours, minutes);
-            } else {
-                println!("Token expired — run 'bubbaloop login' to refresh");
+    // ── Claude ───────────────────────────────────────────────────────
+    let claude_path = key_file_path()?;
+
+    if let Ok(env_key) = std::env::var("ANTHROPIC_API_KEY") {
+        if !env_key.trim().is_empty() {
+            print!(
+                "Claude: ANTHROPIC_API_KEY env var ({})  validating... ",
+                mask_key(&env_key)
+            );
+            match validate_api_key(&env_key).await {
+                Ok(model) => println!("valid ({} available)", model),
+                Err(LoginError::InvalidKey(msg)) => println!("invalid: {}", msg),
+                Err(e) => println!("could not validate: {}", e),
             }
-            print!("Validating... ");
-            match validate_bearer_token(&creds.access_token).await {
-                Ok(model) => println!("Valid ({} available)", model),
-                Err(e) => println!("Invalid: {}", e),
-            }
-            return Ok(());
+            any_found = true;
         }
-        Ok(None) => {} // No OAuth credentials, fall through to "no key"
-        Err(e) => log::warn!("Failed to read OAuth credentials: {}", e),
+    } else if claude_path.exists() {
+        let content = std::fs::read_to_string(&claude_path)?;
+        let key = content.lines().next().unwrap_or("").trim().to_string();
+        if key.is_empty() {
+            println!(
+                "Claude: key file exists but is empty ({})",
+                claude_path.display()
+            );
+        } else {
+            print!(
+                "Claude: {} ({})  validating... ",
+                claude_path.display(),
+                mask_key(&key)
+            );
+            match validate_api_key(&key).await {
+                Ok(model) => println!("valid ({} available)", model),
+                Err(LoginError::InvalidKey(msg)) => println!("invalid: {}", msg),
+                Err(e) => println!("could not validate: {}", e),
+            }
+            any_found = true;
+        }
+    } else {
+        match load_oauth_credentials() {
+            Ok(Some(creds)) => {
+                let oauth_path = oauth_credentials_path()?;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let expiry = if creds.expires_at > now {
+                    let remaining = creds.expires_at - now;
+                    format!(
+                        "expires in {}h {}m",
+                        remaining / 3600,
+                        (remaining % 3600) / 60
+                    )
+                } else {
+                    "EXPIRED — run 'bubbaloop login' to refresh".to_string()
+                };
+                print!(
+                    "Claude: {} (OAuth, {})  validating... ",
+                    oauth_path.display(),
+                    expiry
+                );
+                match validate_bearer_token(&creds.access_token).await {
+                    Ok(model) => println!("valid ({} available)", model),
+                    Err(e) => println!("invalid: {}", e),
+                }
+                println!(
+                    "  WARNING: OAuth is prohibited for dashboard chat (Anthropic Feb 2026 ToS)."
+                );
+                println!("  Use GEMINI_API_KEY (free) or ANTHROPIC_API_KEY instead.");
+                any_found = true;
+            }
+            Ok(None) => {
+                println!(
+                    "Claude: not configured  (run 'bubbaloop login' or set ANTHROPIC_API_KEY)"
+                );
+            }
+            Err(e) => log::warn!("Failed to read OAuth credentials: {}", e),
+        }
     }
 
-    println!("No API key configured.");
-    println!("Run 'bubbaloop login' to set up your API key.");
+    // ── Ollama ───────────────────────────────────────────────────────
+    let ollama_host =
+        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let ollama_ok = reqwest::Client::new()
+        .get(format!("{}/api/tags", ollama_host.trim_end_matches('/')))
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+    if ollama_ok {
+        println!("Ollama:  reachable at {}", ollama_host);
+        any_found = true;
+    } else {
+        println!("Ollama:  not reachable at {} (optional)", ollama_host);
+    }
+
+    if !any_found {
+        println!("\nNo providers configured. Recommended: set GEMINI_API_KEY (free tier).");
+        println!("  https://aistudio.google.com/app/apikey");
+    }
+
     Ok(())
 }
 

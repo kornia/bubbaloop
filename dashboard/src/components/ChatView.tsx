@@ -494,6 +494,14 @@ export function ChatView({ session }: { session?: Session }) {
           )}
         </div>
 
+        {/* Claude OAuth risk warning */}
+        {selectedAgent && providerFromModel(selectedAgent.agent.model) === "claude" && (
+          <div className="claude-warn">
+            ⚠ Claude via OAuth is prohibited for dashboard chat (Anthropic Feb 2026 ToS — active enforcement).
+            Use <code>GEMINI_API_KEY</code> (free) or <code>ANTHROPIC_API_KEY</code> instead.
+          </div>
+        )}
+
         {/* Messages */}
         <div className="chat-log">
           {entries.length === 0 && token && selectedAgent && (
@@ -936,6 +944,23 @@ export function ChatView({ session }: { session?: Session }) {
           font-size: 12px;
           background: rgba(255, 214, 0, 0.06);
           border: 1px solid rgba(255, 214, 0, 0.2);
+        }
+
+        .claude-warn {
+          padding: 8px 14px;
+          background: rgba(255, 214, 0, 0.06);
+          border: 1px solid rgba(255, 214, 0, 0.2);
+          border-radius: 8px;
+          font-size: 12px;
+          color: var(--warning);
+          line-height: 1.5;
+        }
+        .claude-warn code {
+          background: rgba(255,255,255,0.08);
+          padding: 1px 5px;
+          border-radius: 3px;
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 11px;
         }
 
         /* Input bar — full page width, always pinned at bottom */
