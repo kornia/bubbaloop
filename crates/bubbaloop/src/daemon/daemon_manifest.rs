@@ -88,22 +88,28 @@ pub async fn register_daemon_manifest(
     });
 }
 
-/// Derive the public HTTP endpoint from `BUBBALOOP_HTTP_BIND` or default.
+/// Derive the public HTTP endpoint published in the daemon manifest.
 ///
-/// Converts the bind address to a proper HTTP URL:
-/// - `0.0.0.0:8088` → `http://0.0.0.0:8088` (operator must substitute real IP/hostname)
-/// - `127.0.0.1:8088` → `http://127.0.0.1:8088` (localhost-only)
-///
-/// The dashboard substitutes the Jetson's hostname when the bind address is
-/// `0.0.0.0` — it doesn't connect to `0.0.0.0` literally.
+/// Resolution order:
+/// 1. `BUBBALOOP_HTTP_PUBLIC_URL` — full URL, e.g. `http://100.119.20.61:8088`
+/// 2. `BUBBALOOP_HTTP_BIND` — bind address coerced to URL (strip `0.0.0.0` → localhost)
+/// 3. Default: `http://127.0.0.1:{port}`
 fn build_http_endpoint(port: u16) -> String {
+    // Explicit public URL takes precedence
+    if let Ok(url) = std::env::var("BUBBALOOP_HTTP_PUBLIC_URL") {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            return url;
+        }
+    }
+    // Fall back to bind address, replacing 0.0.0.0 with localhost
     let bind =
         std::env::var("BUBBALOOP_HTTP_BIND").unwrap_or_else(|_| format!("127.0.0.1:{}", port));
     if bind.starts_with("http://") || bind.starts_with("https://") {
-        bind
-    } else {
-        format!("http://{}", bind)
+        return bind;
     }
+    // Replace unroutable 0.0.0.0 with 127.0.0.1
+    let bind = bind.replace("0.0.0.0", "127.0.0.1");
+    format!("http://{}", bind)
 }
 
 #[cfg(test)]

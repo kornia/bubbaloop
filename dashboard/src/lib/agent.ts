@@ -51,7 +51,6 @@ export interface ResolvedAgent {
 // ── Discovery ────────────────────────────────────────────────────────
 
 const AGENT_MANIFEST_WILDCARD = "bubbaloop/global/*/agent/*/manifest";
-const DAEMON_MANIFEST_WILDCARD = "bubbaloop/global/*/daemon/manifest";
 const DISCOVERY_TIMEOUT_MS = 4000;
 
 /**
@@ -63,27 +62,18 @@ const DISCOVERY_TIMEOUT_MS = 4000;
 export async function discoverAgents(
   session: Session
 ): Promise<ResolvedAgent[]> {
-  const [agentReplies, daemonReplies] = await Promise.all([
-    queryWithTimeout(session, AGENT_MANIFEST_WILDCARD, DISCOVERY_TIMEOUT_MS),
-    queryWithTimeout(session, DAEMON_MANIFEST_WILDCARD, DISCOVERY_TIMEOUT_MS),
-  ]);
+  const agentReplies = await queryWithTimeout(
+    session,
+    AGENT_MANIFEST_WILDCARD,
+    DISCOVERY_TIMEOUT_MS
+  );
 
-  // Build machine_id → http_endpoint map from daemon manifests
-  const daemonByMachine = new Map<string, string>();
-  for (const reply of daemonReplies) {
-    const manifest = tryParseJson<DaemonManifest>(reply);
-    if (manifest?.machine_id && manifest?.http_endpoint) {
-      daemonByMachine.set(manifest.machine_id, manifest.http_endpoint);
-    }
-  }
-
+  // http_endpoint is empty — ChatView uses the Vite proxy (/api/v1/...) directly.
   const resolved: ResolvedAgent[] = [];
   for (const reply of agentReplies) {
     const agent = tryParseJson<AgentManifest>(reply);
     if (!agent?.agent_id || !agent?.machine_id) continue;
-    const http_endpoint = daemonByMachine.get(agent.machine_id);
-    if (!http_endpoint) continue; // daemon not reachable from browser
-    resolved.push({ agent, http_endpoint });
+    resolved.push({ agent, http_endpoint: "" });
   }
 
   return resolved;

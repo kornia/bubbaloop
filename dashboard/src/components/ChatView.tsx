@@ -22,33 +22,130 @@ type ChatEntry =
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
+const PROVIDER_COLORS: Record<string, string> = {
+  gemini: "#4285F4",
+  claude: "#D4A574",
+  ollama: "#7C3AED",
+};
+
+function providerFromModel(model: string): string {
+  if (model.startsWith("gemini")) return "gemini";
+  if (model.startsWith("claude")) return "claude";
+  return "ollama";
+}
+
+function AgentPill({
+  agent,
+  selected,
+  onClick,
+}: {
+  agent: ResolvedAgent;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  const provider = providerFromModel(agent.agent.model);
+  const color = PROVIDER_COLORS[provider] ?? "#888";
+  return (
+    <button
+      className={`agent-pill${selected ? " agent-pill-selected" : ""}`}
+      onClick={onClick}
+      style={{ "--pill-color": color } as React.CSSProperties}
+    >
+      <span className="pill-dot" />
+      <span className="pill-name">{agent.agent.agent_id}</span>
+      <span className="pill-model">{agent.agent.model.split("-")[0]}</span>
+      {agent.agent.is_default && <span className="pill-default">default</span>}
+    </button>
+  );
+}
+
 function AgentSelector({
   agents,
   selected,
   onSelect,
+  discovering,
+  onRefresh,
 }: {
   agents: ResolvedAgent[];
   selected: ResolvedAgent | null;
   onSelect: (a: ResolvedAgent) => void;
+  discovering: boolean;
+  onRefresh: () => void;
 }) {
-  if (agents.length === 0) return null;
+  const [open, setOpen] = useState(false);
+
+  if (discovering) {
+    return <span className="agent-status-hint">Discovering agents…</span>;
+  }
+  if (agents.length === 0) {
+    return (
+      <div className="agent-empty">
+        <span>No agents found</span>
+        <button className="agent-refresh-btn" onClick={onRefresh} title="Retry">↻</button>
+      </div>
+    );
+  }
+  if (agents.length === 1) {
+    const a = agents[0];
+    return (
+      <div className="agent-trigger agent-trigger-single">
+        <span className="trigger-dot" style={{ background: PROVIDER_COLORS[providerFromModel(a.agent.model)] ?? "#888" }} />
+        <span className="trigger-name">{a.agent.agent_id}</span>
+        <span className="trigger-model">{a.agent.model.split("-")[0]}</span>
+      </div>
+    );
+  }
 
   return (
-    <select
-      className="agent-select"
-      value={selected?.agent.agent_id ?? ""}
-      onChange={(e) => {
-        const found = agents.find((a) => a.agent.agent_id === e.target.value);
-        if (found) onSelect(found);
-      }}
-    >
-      {agents.map((a) => (
-        <option key={a.agent.agent_id} value={a.agent.agent_id}>
-          {a.agent.name} ({a.agent.machine_id.slice(0, 8)})
-          {a.agent.is_default ? " ★" : ""}
-        </option>
-      ))}
-    </select>
+    <div className="agent-selector-wrap">
+      {/* Trigger chip showing the active agent */}
+      <button
+        className="agent-trigger"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        {selected ? (
+          <>
+            <span
+              className="trigger-dot"
+              style={{ background: PROVIDER_COLORS[providerFromModel(selected.agent.model)] ?? "#888" }}
+            />
+            <span className="trigger-name">{selected.agent.agent_id}</span>
+            <span className="trigger-model">{selected.agent.model.split("-")[0]}</span>
+          </>
+        ) : (
+          <span className="trigger-name">Select agent</span>
+        )}
+        <svg
+          className={`trigger-chevron${open ? " open" : ""}`}
+          width="12" height="12" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" strokeWidth="2.5"
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+
+      {/* Dropdown panel */}
+      {open && (
+        <>
+          <div className="agent-backdrop" onClick={() => setOpen(false)} />
+          <div className="agent-panel">
+            <div className="agent-panel-header">
+              <span style={{flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>Agents on {agents[0]?.agent.machine_id}</span>
+              <button className="agent-refresh-btn" onClick={() => { setOpen(false); onRefresh(); }} title="Refresh">↻</button>
+            </div>
+            {agents.map((a) => (
+              <AgentPill
+                key={a.agent.agent_id}
+                agent={a}
+                selected={a.agent.agent_id === selected?.agent.agent_id}
+                onClick={() => { onSelect(a); setOpen(false); }}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -71,27 +168,36 @@ function EntryRow({ entry }: { entry: ChatEntry }) {
     case "tool":
       return (
         <div className="chat-entry chat-tool">
-          <span className="tool-chip">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <div className="tool-tool-row">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{flexShrink:0,opacity:0.5}}>
               <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
             </svg>
-            {entry.name}
-          </span>
+            <span className="tool-name">{entry.name}</span>
+          </div>
           {entry.input && (
             <details className="tool-details">
-              <summary>input</summary>
+              <summary className="tool-summary">args</summary>
               <pre className="tool-json">{entry.input}</pre>
             </details>
           )}
         </div>
       );
-    case "tool_result":
+    case "tool_result": {
+      const preview = entry.text.length > 80 ? entry.text.slice(0, 80) + "…" : entry.text;
+      const hasMore = entry.text.length > 80;
       return (
         <div className="chat-entry chat-tool-result">
-          <span className="tool-result-chip">result</span>
-          <span className="entry-text tool-result-text">{entry.text}</span>
+          {hasMore ? (
+            <details className="tool-details" style={{width:"100%"}}>
+              <summary className="tool-summary tool-result-summary">{preview}</summary>
+              <pre className="tool-json">{entry.text}</pre>
+            </details>
+          ) : (
+            <span className="tool-result-text">{entry.text}</span>
+          )}
         </div>
       );
+    }
     case "error":
       return (
         <div className="chat-entry chat-error">
@@ -170,11 +276,14 @@ export function ChatView({ session }: { session?: Session }) {
 
   const abortRef = useRef<AbortController | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const chatBodyRef = useRef<HTMLDivElement>(null);
+  const userScrolledRef = useRef(false);
   // Accumulates assistant delta text across SSE frames before flushing to state
   const deltaBufferRef = useRef("");
 
-  // Auto-scroll to bottom when new entries arrive
+  // Auto-scroll to bottom when new entries arrive, unless user has scrolled up
   useEffect(() => {
+    if (userScrolledRef.current) return;
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries]);
 
@@ -210,6 +319,7 @@ export function ChatView({ session }: { session?: Session }) {
     const message = input.trim();
     setInput("");
     setEntries((prev) => [...prev, { kind: "user", text: message }]);
+    userScrolledRef.current = false;
     setStreaming(true);
     setOauthBlocked(false);
     deltaBufferRef.current = "";
@@ -217,7 +327,10 @@ export function ChatView({ session }: { session?: Session }) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    const url = `${selectedAgent.http_endpoint}/api/v1/agents/${selectedAgent.agent.agent_id}/turns`;
+    // Use the Vite proxy path (/api → http://127.0.0.1:8088) to avoid mixed-content
+    // blocks when the dashboard is served over HTTPS. Works for both dev (Vite proxy)
+    // and production (nginx proxy_pass /api → daemon).
+    const url = `/api/v1/agents/${selectedAgent.agent.agent_id}/turns`;
 
     let gotDone = false;
 
@@ -323,6 +436,18 @@ export function ChatView({ session }: { session?: Session }) {
     setToken(tokenDraft.trim());
   }, [tokenDraft]);
 
+  const handleRefresh = useCallback(() => {
+    if (!session) return;
+    setDiscovering(true);
+    discoverAgents(session)
+      .then((found) => {
+        setAgents(found);
+        const def = found.find((a) => a.agent.is_default) ?? found[0] ?? null;
+        setSelectedAgent(def);
+      })
+      .finally(() => setDiscovering(false));
+  }, [session]);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -345,127 +470,108 @@ export function ChatView({ session }: { session?: Session }) {
 
   return (
     <div className="chat-view">
-      {/* Token setup */}
-      {!token && (
-        <div className="token-setup">
-          <h3>Enter daemon token</h3>
-          <p>
-            Paste the MCP token from your Jetson (<code>cat ~/.bubbaloop/mcp-token</code>)
-          </p>
-          <div className="token-row">
-            <input
-              type="password"
-              className="token-input"
-              placeholder="bubbaloop-token-..."
-              value={tokenDraft}
-              onChange={(e) => setTokenDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleTokenSave(); }}
-            />
-            <button className="token-save-btn" onClick={handleTokenSave} disabled={!tokenDraft.trim()}>
-              Save
-            </button>
-          </div>
-        </div>
-      )}
 
-      {/* Header bar */}
-      <div className="chat-header">
-        <div className="chat-header-left">
-          {token ? (
-            <>
-              {!session ? (
-                <span className="no-session-hint">Connect to Zenoh to discover agents</span>
-              ) : discovering ? (
-                <span className="discovering-hint">Discovering agents...</span>
-              ) : agents.length === 0 ? (
-                <span className="no-agents-hint">No agents found — is the daemon running?</span>
+      {/* Scrollable area: token setup + agent bar + messages */}
+      <div className="chat-body" ref={chatBodyRef} onScroll={() => { userScrolledRef.current = true; }}>
+        <div className="chat-body-inner">
+
+          {!token && (
+            <div className="token-setup">
+              <h3>Enter daemon token</h3>
+              <p>Paste the MCP token from your Jetson (<code>cat ~/.bubbaloop/mcp-token</code>)</p>
+              <div className="token-row">
+                <input
+                  type="password"
+                  className="token-input"
+                  placeholder="bubbaloop-token-..."
+                  value={tokenDraft}
+                  onChange={(e) => setTokenDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleTokenSave(); }}
+                />
+                <button className="token-save-btn" onClick={handleTokenSave} disabled={!tokenDraft.trim()}>
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Agent selector bar */}
+          <div className="chat-header">
+            <div className="chat-header-left">
+              {!token ? null : !session ? (
+                <span className="agent-status-hint">Connect to Zenoh to discover agents</span>
               ) : (
                 <AgentSelector
                   agents={agents}
                   selected={selectedAgent}
                   onSelect={setSelectedAgent}
+                  discovering={discovering}
+                  onRefresh={handleRefresh}
                 />
               )}
-            </>
-          ) : null}
-        </div>
-        <div className="chat-header-right">
-          {token && (
-            <button
-              className="token-reset-btn"
-              onClick={() => { setToken(""); setTokenDraft(""); localStorage.removeItem("bubbaloop_mcp_token"); }}
-              title="Change token"
-            >
-              Token ✕
-            </button>
-          )}
-          {agents.length > 0 && session && (
-            <button
-              className="rediscover-btn"
-              onClick={() => {
-                setDiscovering(true);
-                discoverAgents(session)
-                  .then((found) => {
-                    setAgents(found);
-                    const def = found.find((a) => a.agent.is_default) ?? found[0] ?? null;
-                    setSelectedAgent(def);
-                  })
-                  .finally(() => setDiscovering(false));
-              }}
-              disabled={discovering}
-              title="Refresh agent list"
-            >
-              ↻
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Message log */}
-      <div className="chat-log">
-        {entries.length === 0 && token && selectedAgent && (
-          <div className="chat-empty">
-            <p>Connected to <strong>{selectedAgent.agent.name}</strong></p>
-            <p className="chat-empty-hint">Try: "what nodes are running?" or "describe the current system state"</p>
+            </div>
+            <div className="chat-header-right">
+              {token && (
+                <button
+                  className="token-reset-btn"
+                  onClick={() => { setToken(""); setTokenDraft(""); localStorage.removeItem("bubbaloop_mcp_token"); }}
+                  title="Change token"
+                >
+                  ✕ token
+                </button>
+              )}
+            </div>
           </div>
-        )}
-        {entries.map((entry, i) => (
-          <EntryRow key={i} entry={entry} />
-        ))}
-        <div ref={logEndRef} />
+
+          {/* Messages */}
+          <div className="chat-log">
+            {entries.length === 0 && token && selectedAgent && (
+              <div className="chat-empty">
+                <p>Talking to <strong>{selectedAgent.agent.agent_id}</strong></p>
+                <p className="chat-empty-hint">Try: "what nodes are running?" or "describe the current system state"</p>
+              </div>
+            )}
+            {entries.map((entry, i) => (
+              <EntryRow key={i} entry={entry} />
+            ))}
+            <div ref={logEndRef} />
+          </div>
+
+        </div>
       </div>
 
-      {/* Input area */}
-      <div className="chat-input-area">
-        <textarea
-          className="chat-textarea"
-          placeholder={
-            !token
-              ? "Enter token above to start chatting"
-              : !selectedAgent
-              ? "No agent selected"
-              : streaming
-              ? "Waiting for response..."
-              : "Message agent (Enter to send, Shift+Enter for newline)"
-          }
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={!token || !selectedAgent || streaming}
-          rows={3}
-        />
-        <div className="chat-actions">
+      {/* Input bar — full width, always pinned at bottom */}
+      <div className="chat-input-bar">
+        <div className="chat-input-area">
+          <textarea
+            className="chat-textarea"
+            placeholder={
+              !token
+                ? "Paste token to start"
+                : !selectedAgent
+                ? "No agent selected"
+                : streaming
+                ? "Responding…"
+                : "Message agent…"
+            }
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={!token || !selectedAgent || streaming}
+            rows={1}
+          />
           {streaming ? (
             <button className="stop-btn" onClick={handleStop}>
-              Stop
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="4" y="4" width="16" height="16" rx="2" />
+              </svg>
             </button>
           ) : (
-            <button
-              className="send-btn"
-              onClick={handleSend}
-              disabled={!token || !selectedAgent || !input.trim()}
-            >
-              Send
+            <button className="send-btn" onClick={handleSend} disabled={!token || !selectedAgent || !input.trim()} aria-label="Send">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
             </button>
           )}
         </div>
@@ -477,11 +583,8 @@ export function ChatView({ session }: { session?: Session }) {
           display: flex;
           flex-direction: column;
           min-height: 0;
-          max-width: 900px;
-          margin: 0 auto;
+          overflow: hidden;
           width: 100%;
-          padding: 16px;
-          gap: 12px;
         }
 
         /* Token setup */
@@ -557,45 +660,185 @@ export function ChatView({ session }: { session?: Session }) {
           align-items: center;
           gap: 6px;
         }
-        .no-session-hint, .discovering-hint, .no-agents-hint {
+        .agent-status-hint {
           font-size: 13px;
           color: var(--text-muted);
         }
-        .agent-select {
-          padding: 5px 10px;
-          background: var(--bg-secondary);
-          border: 1px solid var(--border-color);
-          border-radius: 6px;
-          color: var(--text-primary);
-          font-size: 13px;
-          cursor: pointer;
-          outline: none;
-        }
-        .agent-select:focus { border-color: var(--accent-primary); }
-        .token-reset-btn, .rediscover-btn {
+        .token-reset-btn {
           padding: 4px 10px;
           background: none;
           border: 1px solid var(--border-color);
           border-radius: 6px;
           color: var(--text-muted);
-          font-size: 12px;
+          font-size: 11px;
           cursor: pointer;
           transition: all 0.15s;
+          white-space: nowrap;
         }
-        .token-reset-btn:hover, .rediscover-btn:hover {
-          border-color: var(--accent-primary);
+        .token-reset-btn:hover { border-color: var(--error); color: var(--error); }
+
+        /* Agent selector */
+        .agent-selector-wrap { position: relative; }
+
+        .agent-trigger {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          padding: 7px 12px;
+          background: var(--bg-secondary);
+          border: 1px solid var(--border-color);
+          border-radius: 20px;
           color: var(--text-primary);
+          font-size: 13px;
+          font-family: inherit;
+          cursor: pointer;
+          transition: border-color 0.15s, background 0.15s;
+          min-width: 0;
+        }
+        .agent-trigger:hover { border-color: var(--accent-primary); background: var(--bg-tertiary); }
+        .trigger-dot {
+          width: 8px; height: 8px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+        .trigger-name {
+          font-weight: 600;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 140px;
+        }
+        .trigger-model {
+          font-size: 11px;
+          color: var(--text-muted);
+          font-family: 'JetBrains Mono', monospace;
+        }
+        .trigger-chevron {
+          margin-left: 2px;
+          transition: transform 0.2s;
+          flex-shrink: 0;
+          color: var(--text-muted);
+        }
+        .trigger-chevron.open { transform: rotate(180deg); }
+
+        .agent-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 99;
+        }
+        .agent-panel {
+          position: absolute;
+          top: calc(100% + 6px);
+          left: 0;
+          z-index: 100;
+          min-width: 240px;
+          background: var(--bg-secondary);
+          border: 1px solid var(--border-color);
+          border-radius: 12px;
+          box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+          overflow: hidden;
+        }
+        .agent-panel-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 10px 14px 8px;
+          font-size: 11px;
+          color: var(--text-muted);
+          border-bottom: 1px solid var(--border-color);
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+        }
+        .agent-refresh-btn {
+          background: none;
+          border: none;
+          color: var(--text-muted);
+          font-size: 14px;
+          cursor: pointer;
+          padding: 0 4px;
+          line-height: 1;
+          transition: color 0.15s;
+        }
+        .agent-refresh-btn:hover { color: var(--text-primary); }
+
+        .agent-pill {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          width: 100%;
+          padding: 11px 14px;
+          background: none;
+          border: none;
+          cursor: pointer;
+          text-align: left;
+          transition: background 0.12s;
+          font-family: inherit;
+        }
+        .agent-pill:hover { background: var(--bg-tertiary); }
+        .agent-pill-selected { background: rgba(61, 90, 254, 0.08); }
+        .agent-pill-selected:hover { background: rgba(61, 90, 254, 0.12); }
+
+        .pill-dot {
+          width: 10px; height: 10px;
+          border-radius: 50%;
+          background: var(--pill-color, #888);
+          flex-shrink: 0;
+        }
+        .pill-name {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--text-primary);
+          flex: 1;
+        }
+        .pill-model {
+          font-size: 11px;
+          color: var(--text-muted);
+          font-family: 'JetBrains Mono', monospace;
+        }
+        .pill-default {
+          font-size: 10px;
+          padding: 2px 6px;
+          background: rgba(0, 229, 255, 0.12);
+          border: 1px solid rgba(0, 229, 255, 0.25);
+          border-radius: 10px;
+          color: var(--accent-secondary);
+          font-weight: 600;
         }
 
-        /* Message log */
-        .chat-log {
+        .agent-empty {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 13px;
+          color: var(--text-muted);
+        }
+
+        /* Scrollable body: token setup + header + messages */
+        .chat-body {
           flex: 1;
           overflow-y: auto;
+          overflow-x: hidden;
+          display: flex;
+          flex-direction: column;
+          min-height: 0;
+          padding: 16px 16px 0;
+        }
+        .chat-body-inner {
+          max-width: 900px;
+          width: 100%;
+          margin: 0 auto;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+          flex: 1;
+        }
+
+        /* Message log — only this region scrolls */
+        .chat-log {
           display: flex;
           flex-direction: column;
           gap: 8px;
-          padding: 4px 0;
-          min-height: 0;
+          padding-bottom: 8px;
         }
         .chat-empty {
           flex: 1;
@@ -645,61 +888,71 @@ export function ChatView({ session }: { session?: Session }) {
         .chat-assistant {
           background: var(--bg-secondary);
           border: 1px solid var(--border-color);
+          flex-direction: column;
+          gap: 2px;
         }
-        .chat-assistant .entry-role { color: var(--accent-secondary); }
+        .chat-assistant .entry-role {
+          color: var(--accent-secondary);
+          font-size: 10px;
+        }
 
         .chat-tool {
-          background: rgba(0, 229, 255, 0.05);
-          border: 1px solid rgba(0, 229, 255, 0.15);
+          background: transparent;
+          border: none;
+          padding: 2px 14px;
+          gap: 6px;
+          align-items: flex-start;
           flex-direction: column;
+        }
+        .tool-tool-row {
+          display: flex;
+          align-items: center;
           gap: 6px;
         }
-        .tool-chip {
-          display: inline-flex;
-          align-items: center;
-          gap: 5px;
-          padding: 3px 10px;
-          background: rgba(0, 229, 255, 0.12);
-          border: 1px solid rgba(0, 229, 255, 0.25);
-          border-radius: 20px;
+        .tool-name {
           font-size: 12px;
           font-weight: 600;
-          color: var(--accent-secondary);
           font-family: 'JetBrains Mono', monospace;
+          color: var(--accent-secondary);
         }
-        .tool-details summary {
+        .tool-details { display: block; width: 100%; }
+        .tool-summary {
           font-size: 11px;
           color: var(--text-muted);
           cursor: pointer;
           user-select: none;
-          margin-left: 4px;
+          list-style: none;
+          padding: 1px 7px;
+          border: 1px solid var(--border-color);
+          border-radius: 10px;
+          transition: border-color 0.15s, color 0.15s;
         }
+        .tool-summary:hover { border-color: var(--accent-secondary); color: var(--text-secondary); }
+        .tool-summary::-webkit-details-marker { display: none; }
         .tool-json {
-          margin: 4px 0 0;
-          padding: 8px;
+          width: 100%;
+          margin: 4px 0 2px;
+          padding: 8px 10px;
           background: var(--bg-primary);
-          border-radius: 4px;
-          font-size: 11px;
+          border-radius: 6px;
+          font-size: 12px;
           font-family: 'JetBrains Mono', monospace;
           color: var(--text-secondary);
-          overflow-x: auto;
-          white-space: pre;
+          white-space: pre-wrap;
+          word-break: break-all;
+          overflow: hidden;
         }
 
         .chat-tool-result {
-          background: rgba(0, 200, 83, 0.05);
-          border: 1px solid rgba(0, 200, 83, 0.12);
-          align-items: flex-start;
+          background: transparent;
+          border: none;
+          padding: 1px 14px 3px 30px;
         }
-        .tool-result-chip {
-          font-size: 10px;
-          font-weight: 700;
-          letter-spacing: 0.06em;
-          text-transform: uppercase;
-          color: var(--success);
-          min-width: 44px;
-          padding-top: 2px;
-          flex-shrink: 0;
+        .tool-result-summary {
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 11px;
+          color: var(--text-muted);
+          list-style: none;
         }
         .tool-result-text {
           font-size: 12px;
@@ -734,11 +987,20 @@ export function ChatView({ session }: { session?: Session }) {
           border: 1px solid rgba(255, 214, 0, 0.2);
         }
 
-        /* Input area */
+        /* Input bar — full page width, always pinned at bottom */
+        .chat-input-bar {
+          flex-shrink: 0;
+          border-top: 1px solid var(--border-color);
+          background: var(--bg-secondary);
+          padding: 10px 16px;
+        }
         .chat-input-area {
           display: flex;
           gap: 10px;
           align-items: flex-end;
+          max-width: 900px;
+          margin: 0 auto;
+          width: 100%;
         }
         .chat-textarea {
           flex: 1;
@@ -757,26 +1019,36 @@ export function ChatView({ session }: { session?: Session }) {
         .chat-textarea:focus { border-color: var(--accent-primary); }
         .chat-textarea:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        .send-btn, .stop-btn {
-          padding: 10px 20px;
-          border: none;
-          border-radius: 8px;
-          font-size: 14px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: all 0.15s;
-          white-space: nowrap;
-        }
         .send-btn {
+          width: 44px;
+          height: 44px;
+          flex-shrink: 0;
           background: var(--accent-primary);
+          border: none;
+          border-radius: 50%;
           color: white;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: filter 0.15s;
         }
-        .send-btn:hover:not(:disabled) { filter: brightness(1.1); }
-        .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .send-btn:hover:not(:disabled) { filter: brightness(1.15); }
+        .send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .stop-btn {
+          width: 44px;
+          height: 44px;
+          flex-shrink: 0;
           background: rgba(255, 23, 68, 0.15);
           border: 1px solid rgba(255, 23, 68, 0.3);
+          border-radius: 50%;
           color: var(--error);
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 11px;
+          font-weight: 600;
         }
         .stop-btn:hover { background: rgba(255, 23, 68, 0.25); }
 
@@ -840,17 +1112,28 @@ export function ChatView({ session }: { session?: Session }) {
         }
         .oauth-dismiss:hover { border-color: var(--accent-primary); color: var(--text-primary); }
 
+        /* Single-agent trigger: non-interactive chip */
+        .agent-trigger-single { cursor: default; pointer-events: none; }
+
         /* Mobile */
         @media (max-width: 768px) {
-          .chat-view { padding: 10px; }
+          .chat-view { }
+          .chat-body { padding: 10px 10px 0; }
           .token-setup { padding: 14px 16px; }
           .token-row { flex-direction: column; }
           .token-save-btn { width: 100%; }
           .chat-entry { padding: 8px 10px; font-size: 13px; }
           .entry-role { min-width: 36px; }
           .oauth-gate { margin: 20px 0; padding: 20px; }
-          .chat-input-area { flex-direction: column; }
-          .send-btn, .stop-btn { width: 100%; }
+          /* Full-width agent panel on mobile */
+          .agent-panel {
+            position: fixed;
+            left: 10px; right: 10px;
+            top: auto;
+            bottom: 80px;
+            min-width: unset;
+          }
+          .agent-trigger { font-size: 12px; padding: 6px 10px; }
         }
       `}</style>
     </div>

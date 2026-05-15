@@ -95,6 +95,12 @@ export default defineConfig({
     host: 'localhost',
     // Proxy through Vite for cross-machine access
     proxy: {
+      // Daemon HTTP+SSE API proxy — forwards /api/v1 to the local daemon.
+      // Browser stays on HTTPS (same origin); daemon stays plain HTTP on localhost.
+      '/api': {
+        target: 'http://127.0.0.1:8088',
+        changeOrigin: true,
+      },
       // Zenoh WebSocket proxy
       '/zenoh': {
         target: 'ws://127.0.0.1:10001',

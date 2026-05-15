@@ -10,11 +10,10 @@ import { NodeDiscoveryProvider } from "./contexts/NodeDiscoveryContext";
 import { Dashboard } from "./components/Dashboard";
 import { FleetBar } from "./components/FleetBar";
 import { MeshView } from "./components/MeshView";
-import { LibraryView } from "./components/LibraryView";
 import { ChatView } from "./components/ChatView";
 import { H264Decoder } from "./lib/h264-decoder";
 
-type AppView = "dashboard" | "loop" | "library" | "chat";
+type AppView = "dashboard" | "loop" | "chat";
 
 // Zenoh endpoint resolution:
 // 1. ?zenoh=ws://host:port URL parameter override
@@ -284,24 +283,6 @@ export default function App() {
               The Loop
             </button>
             <button
-              className={`view-tab ${currentView === "library" ? "active" : ""}`}
-              onClick={() => setCurrentView("library")}
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <rect x="3" y="3" width="18" height="4" rx="1" />
-                <rect x="3" y="10" width="18" height="4" rx="1" />
-                <rect x="3" y="17" width="18" height="4" rx="1" />
-              </svg>
-              Library
-            </button>
-            <button
               className={`view-tab ${currentView === "chat" ? "active" : ""}`}
               onClick={() => setCurrentView("chat")}
             >
@@ -334,10 +315,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Library and Chat modes are independent of Zenoh */}
-      {currentView === "library" ? (
-        <LibraryView />
-      ) : currentView === "chat" ? (
+      {currentView === "chat" ? (
         <ChatView session={session ?? undefined} />
       ) : session ? (
         <FleetProvider>
@@ -389,9 +367,10 @@ export default function App() {
 
       <style>{`
         .app {
-          min-height: 100vh;
+          height: 100vh;
           display: flex;
           flex-direction: column;
+          overflow: hidden;
           background:
             radial-gradient(ellipse at top left, rgba(61, 90, 254, 0.05) 0%, transparent 50%),
             radial-gradient(ellipse at bottom right, rgba(0, 229, 255, 0.03) 0%, transparent 50%),
@@ -405,6 +384,8 @@ export default function App() {
           padding: 16px 24px;
           background: var(--bg-secondary);
           border-bottom: 1px solid var(--border-color);
+          flex-shrink: 0;
+          z-index: 50;
         }
 
         .header-left {
