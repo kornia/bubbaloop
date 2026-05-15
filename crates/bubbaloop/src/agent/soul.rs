@@ -8,7 +8,6 @@
 //! A background task watches the directory and hot-reloads on changes.
 
 use serde::Deserialize;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -193,9 +192,9 @@ impl Soul {
     /// Returns the chosen agent name on success.
     /// Uses stdin/stdout directly — must run before the REPL thread starts.
     pub fn run_onboarding(soul_dir: &Path) -> std::io::Result<String> {
-        println!();
-        println!("  Welcome to Bubbaloop! Let's set up your agent.");
-        println!();
+        log::info!("");
+        log::info!("  Welcome to Bubbaloop! Let's set up your agent.");
+        log::info!("");
 
         let name = prompt_with_default("  What should I call your agent?", "jean-clawd")?;
 
@@ -249,12 +248,12 @@ impl Soul {
         std::fs::write(&caps_path, updated)?;
         set_restrictive_file_permissions(&caps_path);
 
-        println!();
-        println!("  Agent configured: {} ({})", name, focus);
-        println!("  Approval mode: {}", approval_mode);
-        println!("  Edit ~/.bubbaloop/soul/ anytime to customize.");
-        println!("  To reset: rm ~/.bubbaloop/.onboarded");
-        println!();
+        log::info!("");
+        log::info!("  Agent configured: {} ({})", name, focus);
+        log::info!("  Approval mode: {}", approval_mode);
+        log::info!("  Edit ~/.bubbaloop/soul/ anytime to customize.");
+        log::info!("  To reset: rm ~/.bubbaloop/.onboarded");
+        log::info!("");
 
         Ok(name)
     }
@@ -374,8 +373,7 @@ pub fn soul_directory() -> PathBuf {
 
 /// Prompt the user for input with a default value. Returns the default if Enter is pressed.
 fn prompt_with_default(prompt: &str, default: &str) -> std::io::Result<String> {
-    print!("{} [{}]: ", prompt, default);
-    std::io::stdout().flush()?;
+    log::info!("{} [{}]: ", prompt, default);
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
     let trimmed = input.trim();

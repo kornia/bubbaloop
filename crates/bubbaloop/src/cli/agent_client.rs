@@ -112,46 +112,45 @@ async fn send_and_render(
                             match event.event_type {
                                 AgentEventType::Delta => {
                                     if !shown_agent_header {
-                                        println!("\n[{}]", agent_id_from_topic);
+                                        log::info!("\n[{}]", agent_id_from_topic);
                                         shown_agent_header = true;
                                     }
                                     if let Some(text) = &event.text {
-                                        print!("{}", text);
-                                        std::io::Write::flush(&mut std::io::stdout()).ok();
+                                        log::info!("{}", text);
                                     }
                                 }
                                 AgentEventType::Tool => {
                                     if let Some(name) = &event.text {
                                         if verbose {
                                             match event.input.as_deref().filter(|s| !s.is_empty() && *s != "{}") {
-                                                Some(inp) => println!("  [calling {} {}]", name, inp),
-                                                None => println!("  [calling {}]", name),
+                                                Some(inp) => log::info!("  [calling {} {}]", name, inp),
+                                                None => log::info!("  [calling {}]", name),
                                             }
                                         } else {
-                                            println!("  [calling {}...]", name);
+                                            log::info!("  [calling {}...]", name);
                                         }
                                     }
                                 }
                                 AgentEventType::ToolResult => {
                                     if let Some(result) = &event.text {
                                         let limit = if verbose { 300 } else { 120 };
-                                        println!("  → {}", truncate_with_ellipsis(result, limit));
+                                        log::info!("  → {}", truncate_with_ellipsis(result, limit));
                                     }
                                 }
                                 AgentEventType::System => {
                                     if verbose {
                                         if let Some(msg) = &event.text {
-                                            eprintln!("  ⟳ {}", msg);
+                                            log::info!("  ⟳ {}", msg);
                                         }
                                     }
                                 }
                                 AgentEventType::Error => {
                                     if let Some(msg) = &event.text {
-                                        eprintln!("Error: {}", msg);
+                                        log::warn!("Error: {}", msg);
                                     }
                                 }
                                 AgentEventType::Done => {
-                                    println!();
+                                    log::info!("");
                                     return Ok(());
                                 }
                             }
@@ -164,9 +163,9 @@ async fn send_and_render(
             }
             _ = tokio::time::sleep(timeout) => {
                 if !got_first {
-                    eprintln!("Error: No response from daemon within {}s. Is `bubbaloop up` running?", RESPONSE_TIMEOUT.as_secs());
+                    log::warn!("Error: No response from daemon within {}s. Is `bubbaloop up` running?", RESPONSE_TIMEOUT.as_secs());
                 } else {
-                    eprintln!("Error: Response timed out during streaming.");
+                    log::warn!("Error: Response timed out during streaming.");
                 }
                 return Err("timeout".into());
             }
@@ -650,21 +649,25 @@ pub async fn run_agent_list(
 
     if manifests.is_empty() {
         if all_machines {
-            println!("No agents found on any machine.");
+            log::info!("No agents found on any machine.");
         } else {
-            println!("No agents found. Is `bubbaloop up` running?");
+            log::info!("No agents found. Is `bubbaloop up` running?");
         }
         return Ok(());
     }
 
     if all_machines {
-        println!(
+        log::info!(
             "{:<20} {:<20} {:<25} {:<10} {:<30} CAPABILITIES",
-            "ID", "MACHINE", "NAME", "DEFAULT", "MODEL",
+            "ID",
+            "MACHINE",
+            "NAME",
+            "DEFAULT",
+            "MODEL",
         );
-        println!("{}", "-".repeat(115));
+        log::info!("{}", "-".repeat(115));
         for m in &manifests {
-            println!(
+            log::info!(
                 "{:<20} {:<20} {:<25} {:<10} {:<30} {}",
                 m.agent_id,
                 m.machine_id,
@@ -675,13 +678,16 @@ pub async fn run_agent_list(
             );
         }
     } else {
-        println!(
+        log::info!(
             "{:<20} {:<25} {:<10} {:<30} CAPABILITIES",
-            "ID", "NAME", "DEFAULT", "MODEL",
+            "ID",
+            "NAME",
+            "DEFAULT",
+            "MODEL",
         );
-        println!("{}", "-".repeat(95));
+        log::info!("{}", "-".repeat(95));
         for m in &manifests {
-            println!(
+            log::info!(
                 "{:<20} {:<25} {:<10} {:<30} {}",
                 m.agent_id,
                 m.name,

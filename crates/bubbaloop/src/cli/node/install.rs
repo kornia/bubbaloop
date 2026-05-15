@@ -103,14 +103,14 @@ pub(crate) fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -
 
     if target_dir.exists() {
         // Reuse existing clone (e.g., installing a second node from the same multi-node repo)
-        println!("Using existing clone at {}", target_dir.display());
+        log::info!("Using existing clone at {}", target_dir.display());
     } else {
         // Create parent directory
         if let Some(parent) = target_dir.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        println!(
+        log::info!(
             "Cloning {} (branch: {}) to {}...",
             url,
             branch,
@@ -136,13 +136,13 @@ pub(crate) fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -
             return Err(NodeError::GitClone(stderr.to_string()));
         }
 
-        println!("Cloned successfully!");
+        log::info!("Cloned successfully!");
     }
 
     // Check for node.yaml
     let manifest = target_dir.join("node.yaml");
     if !manifest.exists() {
-        eprintln!("Warning: No node.yaml found in repository. You may need to create one.");
+        log::warn!("Warning: No node.yaml found in repository. You may need to create one.");
     }
 
     Ok(target_dir.to_string_lossy().to_string())
@@ -156,7 +156,7 @@ pub(crate) fn clone_from_github(url: &str, output: Option<&str>, branch: &str) -
 /// Delegates to `crate::marketplace::download_precompiled` for the actual
 /// download logic (shared with MCP).
 pub(crate) fn try_download_precompiled(entry: &registry::RegistryNode) -> Result<String> {
-    println!("Downloading precompiled binary...");
+    log::info!("Downloading precompiled binary...");
     crate::marketplace::download_precompiled(entry)
         .map_err(|e| NodeError::CommandFailed(e.to_string()))
 }
@@ -193,14 +193,14 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
         "node install: '{}' not registered, checking marketplace",
         args.name
     );
-    println!(
+    log::info!(
         "Node '{}' not registered. Checking marketplace...",
         args.name
     );
 
     if let Err(e) = registry::refresh_cache() {
         log::warn!("registry refresh failed: {}", e);
-        eprintln!("Warning: could not refresh registry (using cache): {}", e);
+        log::warn!("Warning: could not refresh registry (using cache): {}", e);
     }
     let nodes = registry::load_cached_registry();
 
@@ -227,7 +227,7 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
         entry.repo,
         entry.subdir
     );
-    println!("Found '{}' in marketplace ({})", entry.name, entry.repo);
+    log::info!("Found '{}' in marketplace ({})", entry.name, entry.repo);
 
     // Validate repo before constructing URL
     registry::validate_repo(&entry.repo)
@@ -236,15 +236,15 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
     // Try precompiled binary first (fast path)
     match try_download_precompiled(&entry) {
         Ok(node_path) => {
-            println!("Downloaded precompiled binary for '{}'", args.name);
+            log::info!("Downloaded precompiled binary for '{}'", args.name);
 
             // Register with daemon via Zenoh gateway
             client.add_node(&node_path, None, None).await?;
 
-            println!("Registered node: {}", args.name);
+            log::info!("Registered node: {}", args.name);
 
             // Install as systemd service
-            println!("Installing {} as systemd service...", args.name);
+            log::info!("Installing {} as systemd service...", args.name);
             send_command(&args.name, "install").await?;
 
             log::info!(
@@ -252,9 +252,10 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
                 args.name,
                 entry.repo
             );
-            println!(
+            log::info!(
                 "\nInstalled '{}' from {} (precompiled)",
-                args.name, entry.repo
+                args.name,
+                entry.repo
             );
             return Ok(());
         }
@@ -263,7 +264,7 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
                 "Precompiled binary not available ({}), building from source",
                 e
             );
-            println!("Precompiled binary not available, building from source...");
+            log::info!("Precompiled binary not available, building from source...");
         }
     }
 
@@ -282,16 +283,16 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
     client.add_node(&node_path, None, None).await?;
 
     log::info!("node install: registered '{}' with daemon", args.name);
-    println!("Registered node: {}", args.name);
+    log::info!("Registered node: {}", args.name);
 
     // Build only if --build is passed
     if args.build {
-        println!("Building {}...", args.name);
+        log::info!("Building {}...", args.name);
         send_command(&args.name, "build").await?;
     }
 
     // Install as systemd service
-    println!("Installing {} as systemd service...", args.name);
+    log::info!("Installing {} as systemd service...", args.name);
     send_command(&args.name, "install").await?;
 
     log::info!(
@@ -299,7 +300,7 @@ pub(crate) async fn handle_install(args: InstallArgs) -> Result<()> {
         args.name,
         entry.repo
     );
-    println!("\nInstalled '{}' from {}", args.name, entry.repo);
+    log::info!("\nInstalled '{}' from {}", args.name, entry.repo);
 
     Ok(())
 }

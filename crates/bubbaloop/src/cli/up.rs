@@ -90,7 +90,7 @@ fn ensure_zenohd_running() -> Result<bool> {
             zenohd.display()
         ))
     })?;
-    println!("→ Started zenohd (logs: {})", log_path.display());
+    log::info!("→ Started zenohd (logs: {})", log_path.display());
     wait_for_port(ZENOH_PORT, "zenohd")?;
     Ok(true)
 }
@@ -109,7 +109,7 @@ fn ensure_daemon_running() -> Result<bool> {
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(["daemon", "run"]);
     spawn_detached_to_log(&mut cmd, &log_path)?;
-    println!("→ Started bubbaloop daemon (logs: {})", log_path.display());
+    log::info!("→ Started bubbaloop daemon (logs: {})", log_path.display());
     wait_for_port(MCP_PORT, "bubbaloop daemon")?;
     Ok(true)
 }
@@ -139,7 +139,7 @@ fn write_project_mcp_config(cwd: &Path) -> Result<bool> {
 }
 "#;
     std::fs::write(&dest, body)?;
-    println!("→ Wrote {}", dest.display());
+    log::info!("→ Wrote {}", dest.display());
     Ok(true)
 }
 
@@ -147,18 +147,18 @@ fn write_project_mcp_config(cwd: &Path) -> Result<bool> {
 /// invocation, after all bootstrap actions are complete.
 fn print_setup_instructions(cwd: &Path) {
     let token_path = get_bubbaloop_home().join("mcp-token");
-    println!();
-    println!("Bubbaloop ready.");
-    println!("  daemon : http://127.0.0.1:{MCP_PORT}/mcp");
-    println!("  zenoh  : tcp/127.0.0.1:{ZENOH_PORT}");
-    println!();
-    println!("Next: in this directory, run any MCP client. Example for Claude Code:");
-    println!(
+    log::info!("");
+    log::info!("Bubbaloop ready.");
+    log::info!("  daemon : http://127.0.0.1:{MCP_PORT}/mcp");
+    log::info!("  zenoh  : tcp/127.0.0.1:{ZENOH_PORT}");
+    log::info!("");
+    log::info!("Next: in this directory, run any MCP client. Example for Claude Code:");
+    log::info!(
         "  export BUBBALOOP_MCP_TOKEN=\"$(cat {})\"",
         token_path.display()
     );
-    println!("  cd {} && claude", cwd.display());
-    println!();
+    log::info!("  cd {} && claude", cwd.display());
+    log::info!("");
 }
 
 /// Run the full bootstrap (zenohd + daemon + .mcp.json) before the existing
@@ -214,7 +214,9 @@ impl UpCommand {
         if !self.dry_run {
             bootstrap()?;
         } else {
-            println!("[dry-run] Skipping bootstrap (would start zenohd + daemon, write .mcp.json)");
+            log::info!(
+                "[dry-run] Skipping bootstrap (would start zenohd + daemon, write .mcp.json)"
+            );
         }
 
         let skills_dir = match &self.skills_dir {
@@ -222,28 +224,28 @@ impl UpCommand {
             None => get_bubbaloop_home().join("skills"),
         };
 
-        println!("Loading skills from: {}", skills_dir.display());
+        log::info!("Loading skills from: {}", skills_dir.display());
 
         if !skills_dir.exists() {
-            println!("Skills directory not found: {}", skills_dir.display());
-            println!("Create it with: mkdir -p {}", skills_dir.display());
+            log::info!("Skills directory not found: {}", skills_dir.display());
+            log::info!("Create it with: mkdir -p {}", skills_dir.display());
             return Ok(());
         }
 
         if self.dry_run {
-            println!("[dry-run] No changes will be made.");
+            log::info!("[dry-run] No changes will be made.");
         }
 
         let skill_configs = skills::load_skills(&skills_dir)?;
         if skill_configs.is_empty() {
-            println!("No skills found in {}", skills_dir.display());
+            log::info!("No skills found in {}", skills_dir.display());
             return Ok(());
         }
 
         // Filter to enabled skills only
         let active_skills: Vec<_> = skill_configs.iter().filter(|s| s.enabled).collect();
         let disabled_count = skill_configs.len() - active_skills.len();
-        println!(
+        log::info!(
             "Found {} skill(s) ({} active, {} disabled)",
             skill_configs.len(),
             active_skills.len(),
@@ -251,7 +253,7 @@ impl UpCommand {
         );
 
         if active_skills.is_empty() {
-            println!("No active skills to process.");
+            log::info!("No active skills to process.");
             return Ok(());
         }
 
@@ -272,25 +274,25 @@ impl UpCommand {
         let mut skipped_count: usize = 0;
 
         for skill in &active_skills {
-            println!("\n  skill:  {}", skill.name);
-            println!("  driver: {}", skill.driver);
+            log::info!("\n  skill:  {}", skill.name);
+            log::info!("  driver: {}", skill.driver);
 
             let driver_entry = match skills::resolve_driver(&skill.driver) {
                 Some(d) => d,
                 None => {
-                    println!("  [skip] Unknown driver '{}'", skill.driver);
+                    log::info!("  [skip] Unknown driver '{}'", skill.driver);
                     skipped_count += 1;
                     continue;
                 }
             };
 
             let marketplace_node = driver_entry.marketplace_node;
-            println!("  node:   {}", marketplace_node);
+            log::info!("  node:   {}", marketplace_node);
 
             let registry_node = match registry::find_by_name(&registry_nodes, marketplace_node) {
                 Some(n) => n,
                 None => {
-                    println!("  [skip] Node '{}' not in registry", marketplace_node);
+                    log::info!("  [skip] Node '{}' not in registry", marketplace_node);
                     skipped_count += 1;
                     continue;
                 }
@@ -300,13 +302,13 @@ impl UpCommand {
             let node_dir = if is_node_installed(marketplace_node) {
                 resolve_node_dir(&registry_node)
             } else if self.dry_run {
-                println!("  [dry-run] Would install {}", marketplace_node);
+                log::info!("  [dry-run] Would install {}", marketplace_node);
                 skipped_count += 1;
                 continue;
             } else {
-                println!("  Installing {}...", marketplace_node);
+                log::info!("  Installing {}...", marketplace_node);
                 let dir = marketplace::download_precompiled(&registry_node)?;
-                println!("  Downloaded to {}", dir);
+                log::info!("  Downloaded to {}", dir);
                 PathBuf::from(&dir)
             };
 
@@ -316,11 +318,11 @@ impl UpCommand {
                 match write_node_config(&cfg_dir, &skill.config) {
                     Ok(()) => {
                         let p = cfg_dir.join("config.yaml");
-                        println!("  Config written to {}", p.display());
+                        log::info!("  Config written to {}", p.display());
                         Some(p.display().to_string())
                     }
                     Err(e) => {
-                        println!("  [warn] Config write failed: {}", e);
+                        log::warn!("  [warn] Config write failed: {}", e);
                         None
                     }
                 }
@@ -329,7 +331,7 @@ impl UpCommand {
             };
 
             if self.dry_run {
-                println!("  [dry-run] Would register + start {}", skill.name);
+                log::info!("  [dry-run] Would register + start {}", skill.name);
                 continue;
             }
 
@@ -345,7 +347,7 @@ impl UpCommand {
                     log::debug!("Registered {}: {}", instance_name, msg);
                 }
                 Err(e) => {
-                    println!("  [warn] Could not register with daemon: {}", e);
+                    log::warn!("  [warn] Could not register with daemon: {}", e);
                     skipped_count += 1;
                     continue;
                 }
@@ -365,24 +367,27 @@ impl UpCommand {
             match client.send_node_command(instance_name, "start").await {
                 Ok(msg) => {
                     if msg.contains("already") || msg.contains("Running") {
-                        println!("  [ok] Already running");
+                        log::info!("  [ok] Already running");
                         already_running += 1;
                     } else {
-                        println!("  [ok] Started");
+                        log::info!("  [ok] Started");
                         started_count += 1;
                     }
                 }
                 Err(e) => {
-                    println!("  [err] Failed to start: {}", e);
+                    log::warn!("  [err] Failed to start: {}", e);
                     skipped_count += 1;
                 }
             }
         }
 
-        println!();
-        println!(
+        log::info!("");
+        log::info!(
             "Done: {} started | {} already running | {} skipped | {} disabled",
-            started_count, already_running, skipped_count, disabled_count
+            started_count,
+            already_running,
+            skipped_count,
+            disabled_count
         );
 
         // 6. Register skill schedules as agent jobs (in default agent's memory)
@@ -424,14 +429,15 @@ impl UpCommand {
                         last_error: None,
                     };
                     if self.dry_run {
-                        println!(
+                        log::info!(
                             "  [dry-run] Would register schedule: {} ({})",
-                            skill.name, schedule_expr
+                            skill.name,
+                            schedule_expr
                         );
                     } else if let Err(e) = store.create_job(&job) {
-                        println!("  [warn] Failed to register schedule: {}", e);
+                        log::warn!("  [warn] Failed to register schedule: {}", e);
                     } else {
-                        println!("  Registered schedule: {} ({})", skill.name, schedule_expr);
+                        log::info!("  Registered schedule: {} ({})", skill.name, schedule_expr);
                     }
                 }
             }

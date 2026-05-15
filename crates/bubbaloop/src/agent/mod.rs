@@ -52,13 +52,12 @@ impl EventSink for StdoutSink {
         match event.event_type {
             AgentEventType::Delta => {
                 if let Some(text) = &event.text {
-                    print!("{}", text);
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
+                    log::info!("{}", text);
                 }
             }
             AgentEventType::Tool => {
                 if let Some(name) = &event.text {
-                    println!("  [calling {}...]", name);
+                    log::info!("  [calling {}...]", name);
                 }
             }
             AgentEventType::ToolResult => {
@@ -66,7 +65,7 @@ impl EventSink for StdoutSink {
             }
             AgentEventType::Error => {
                 if let Some(msg) = &event.text {
-                    println!("Error: {}", msg);
+                    log::warn!("Error: {}", msg);
                 }
             }
             AgentEventType::Done => {

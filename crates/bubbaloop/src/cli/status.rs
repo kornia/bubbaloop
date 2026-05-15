@@ -79,8 +79,8 @@ async fn check_daemon_mcp(port: u16) -> Option<DaemonHealthResponse> {
 }
 
 fn print_table(status: &StatusOutput) {
-    println!("bubbaloop status");
-    println!("================");
+    log::info!("bubbaloop status");
+    log::info!("================");
 
     // Zenoh Router
     let zenoh_symbol = if status.zenoh.running { "✓" } else { "✗" };
@@ -89,7 +89,7 @@ fn print_table(status: &StatusOutput) {
     } else {
         "stopped".to_string()
     };
-    println!("Zenoh Router:  {} {}", zenoh_symbol, zenoh_state);
+    log::info!("Zenoh Router:  {} {}", zenoh_symbol, zenoh_state);
 
     // Daemon
     let daemon_symbol = if status.daemon.running { "✓" } else { "✗" };
@@ -102,7 +102,7 @@ fn print_table(status: &StatusOutput) {
     } else {
         "stopped".to_string()
     };
-    println!("Daemon:        {} {}", daemon_symbol, daemon_state);
+    log::info!("Daemon:        {} {}", daemon_symbol, daemon_state);
 
     // Bridge
     let bridge_symbol = if status.bridge.running { "✓" } else { "✗" };
@@ -111,18 +111,20 @@ fn print_table(status: &StatusOutput) {
     } else {
         "stopped".to_string()
     };
-    println!("Bridge:        {} {}", bridge_symbol, bridge_state);
+    log::info!("Bridge:        {} {}", bridge_symbol, bridge_state);
 
     // Node summary
-    println!();
+    log::info!("");
     let total = status.nodes.running + status.nodes.stopped + status.nodes.not_installed;
     if total > 0 {
-        println!(
+        log::info!(
             "Nodes: {} running, {} stopped, {} not installed",
-            status.nodes.running, status.nodes.stopped, status.nodes.not_installed
+            status.nodes.running,
+            status.nodes.stopped,
+            status.nodes.not_installed
         );
     } else {
-        println!("Nodes: none registered");
+        log::info!("Nodes: none registered");
     }
 }
 

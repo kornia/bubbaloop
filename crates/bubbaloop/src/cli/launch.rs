@@ -138,26 +138,26 @@ impl LaunchCommand {
         let launch = parse_launch_file(&content)?;
 
         if self.dry_run {
-            println!("[DRY RUN] Instance: {}", launch.name);
-            println!("  Base node: {}", self.node);
-            println!("  Launch file: {}", self.file);
+            log::info!("[DRY RUN] Instance: {}", launch.name);
+            log::info!("  Base node: {}", self.node);
+            log::info!("  Launch file: {}", self.file);
             if launch.config.is_some() {
-                println!(
+                log::info!(
                     "  Config: would write to ~/.bubbaloop/configs/{}.yaml",
                     launch.name
                 );
             }
             if self.build {
-                println!("  Would: build");
+                log::info!("  Would: build");
             }
             if self.install {
-                println!("  Would: install as systemd service");
+                log::info!("  Would: install as systemd service");
             }
             if self.start {
-                println!("  Would: start");
+                log::info!("  Would: start");
             }
             if !self.build && !self.install && !self.start {
-                println!("  Would: register with daemon");
+                log::info!("  Would: register with daemon");
             }
             return Ok(());
         }
@@ -171,7 +171,7 @@ impl LaunchCommand {
         // 3. Write config if present
         let config_path = if let Some(ref config) = launch.config {
             let dest = write_config(&default_configs_dir(), &launch.name, config)?;
-            println!("Config written to {}", dest.display());
+            log::info!("Config written to {}", dest.display());
             Some(dest.to_string_lossy().to_string())
         } else {
             None
@@ -187,25 +187,25 @@ impl LaunchCommand {
         // 5. Register instance via REST API (reuse the same client)
         self.register_instance(&client, &node_path, name_override, config_path.as_deref())
             .await?;
-        println!("Registered: {}", launch.name);
+        log::info!("Registered: {}", launch.name);
 
         // 6. Optional build / install / start
         if self.build {
-            println!("Building...");
+            log::info!("Building...");
             node::send_command(&launch.name, "build").await?;
         }
 
         if self.install {
-            println!("Installing as systemd service...");
+            log::info!("Installing as systemd service...");
             node::send_command(&launch.name, "install").await?;
         }
 
         if self.start {
-            println!("Starting...");
+            log::info!("Starting...");
             node::send_command(&launch.name, "start").await?;
         }
 
-        println!("\nLaunched {} successfully!", launch.name);
+        log::info!("\nLaunched {} successfully!", launch.name);
         Ok(())
     }
 

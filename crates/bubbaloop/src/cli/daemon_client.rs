@@ -87,7 +87,7 @@ impl DaemonClient {
             return Ok(());
         }
 
-        eprintln!("Daemon not running — starting it automatically...");
+        log::info!("Daemon not running — starting it automatically...");
 
         let exe = std::env::current_exe()
             .map_err(|e| DaemonClientError::Request(format!("Cannot find binary path: {}", e)))?;
@@ -120,7 +120,7 @@ impl DaemonClient {
             }
 
             if self.is_running().await {
-                eprintln!(
+                log::info!(
                     "Daemon started (pid={}, log={})",
                     child.id(),
                     log_path.display()
@@ -334,21 +334,21 @@ pub async fn run_daemon_status(
 
     match client.health().await {
         Ok(manifest) => {
-            println!("Daemon Status");
-            println!("=============");
-            println!("  Version:    {}", manifest.version);
-            println!("  Machine:    {}", manifest.machine_id);
-            println!("  Uptime:     {}s", manifest.uptime_secs);
-            println!("  Nodes:      {}", manifest.node_count);
-            println!("  Agents:     {}", manifest.agent_count);
-            println!("  MCP port:   {}", manifest.mcp_port);
+            log::info!("Daemon Status");
+            log::info!("=============");
+            log::info!("  Version:    {}", manifest.version);
+            log::info!("  Machine:    {}", manifest.machine_id);
+            log::info!("  Uptime:     {}s", manifest.uptime_secs);
+            log::info!("  Nodes:      {}", manifest.node_count);
+            log::info!("  Agents:     {}", manifest.agent_count);
+            log::info!("  MCP port:   {}", manifest.mcp_port);
         }
         Err(DaemonClientError::NotReachable) => {
-            println!("Daemon is not running.");
-            println!("Start it with: bubbaloop daemon start");
+            log::info!("Daemon is not running.");
+            log::info!("Start it with: bubbaloop daemon start");
         }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            log::warn!("Error: {}", e);
         }
     }
 
@@ -362,13 +362,13 @@ pub async fn run_daemon_stop(
     let client = DaemonClient::new(session);
 
     if !client.is_running().await {
-        println!("Daemon is not running.");
+        log::info!("Daemon is not running.");
         return Ok(());
     }
 
     match client.send(DaemonCommandType::Shutdown).await {
-        Ok(_) => println!("Daemon shutdown initiated."),
-        Err(e) => eprintln!("Error: {}", e),
+        Ok(_) => log::info!("Daemon shutdown initiated."),
+        Err(e) => log::warn!("Error: {}", e),
     }
 
     Ok(())
@@ -387,7 +387,7 @@ pub fn run_daemon_logs() -> std::result::Result<(), Box<dyn std::error::Error>> 
         .status()?;
 
     if !status.success() {
-        eprintln!(
+        log::warn!(
             "journalctl failed. This command only works when the daemon is installed as a systemd service."
         );
     }
@@ -421,18 +421,18 @@ pub async fn run_daemon_start() -> std::result::Result<(), Box<dyn std::error::E
 
     let service_path = service_dir.join("bubbaloop-daemon.service");
     std::fs::write(&service_path, service_content)?;
-    println!("Installed service: {}", service_path.display());
+    log::info!("Installed service: {}", service_path.display());
 
     // Reload and start via zbus (D-Bus) — never spawn systemctl as subprocess
     let systemd = crate::daemon::systemd::SystemdClient::new().await.map_err(|e| {
         format!("Failed to connect to systemd user session via D-Bus: {}. Is the user session active?", e)
     })?;
     if let Err(e) = systemd.daemon_reload().await {
-        eprintln!("Warning: systemd daemon-reload failed: {}", e);
+        log::warn!("Warning: systemd daemon-reload failed: {}", e);
     }
     match systemd.start_unit("bubbaloop-daemon.service").await {
-        Ok(()) => println!("Daemon started as systemd service."),
-        Err(e) => eprintln!(
+        Ok(()) => log::info!("Daemon started as systemd service."),
+        Err(e) => log::warn!(
             "Failed to start daemon service: {}. Check: systemctl --user status bubbaloop-daemon",
             e
         ),
@@ -448,21 +448,23 @@ pub async fn run_daemon_fix(
     let client = DaemonClient::new(session);
 
     if !client.is_running().await {
-        println!("Daemon is not running. Starting it...");
+        log::info!("Daemon is not running. Starting it...");
         run_daemon_start().await?;
         return Ok(());
     }
 
     match client.health().await {
         Ok(manifest) => {
-            println!(
+            log::info!(
                 "Daemon is healthy (v{}, uptime={}s, nodes={})",
-                manifest.version, manifest.uptime_secs, manifest.node_count
+                manifest.version,
+                manifest.uptime_secs,
+                manifest.node_count
             );
         }
         Err(e) => {
-            println!("Daemon health check failed: {}", e);
-            println!("Restarting daemon...");
+            log::warn!("Daemon health check failed: {}", e);
+            log::info!("Restarting daemon...");
             let _ = client.send(DaemonCommandType::Shutdown).await;
             tokio::time::sleep(Duration::from_secs(2)).await;
             run_daemon_start().await?;
