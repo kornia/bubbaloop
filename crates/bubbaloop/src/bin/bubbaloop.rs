@@ -202,10 +202,12 @@ async fn try_zenoh_session(endpoint: Option<&str>) -> Option<std::sync::Arc<zeno
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging — warn level by default; subcommands may override via init_logger().
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .target(env_logger::Target::Stderr)
-        .init();
+    // bubbaloop=info shows user-facing CLI output; other crates stay at warn to avoid noise.
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("bubbaloop=info,warn"),
+    )
+    .target(env_logger::Target::Stderr)
+    .init();
 
     let args: Args = argh::from_env();
 
