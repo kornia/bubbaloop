@@ -509,10 +509,10 @@ async fn process_gemini_sse(
             for part in candidate.content.parts {
                 match part {
                     GeminiPart::Text(t) => {
-                        if !t.text.is_empty() {
-                            if tx.send(StreamEvent::TextDelta(t.text)).await.is_err() {
-                                return Ok(());
-                            }
+                        if !t.text.is_empty()
+                            && tx.send(StreamEvent::TextDelta(t.text)).await.is_err()
+                        {
+                            return Ok(());
                         }
                     }
                     GeminiPart::FunctionCall(fc) => {
