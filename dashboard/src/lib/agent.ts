@@ -23,7 +23,7 @@ export interface AgentEvent {
   /** Text payload (delta text, tool name, error message, etc.) */
   text?: string;
   /** Tool input JSON snippet (only on "tool" events) */
-  tool_input?: string;
+  input?: string;
 }
 
 export interface AgentManifest {

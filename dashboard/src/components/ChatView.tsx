@@ -262,6 +262,9 @@ export function ChatView({ session }: { session?: Session }) {
   // Accumulates assistant delta text across SSE frames before flushing to state
   const deltaBufferRef = useRef("");
 
+  // Abort any in-flight SSE stream when the component unmounts
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
+
   // Auto-scroll to bottom when new entries arrive, unless user has scrolled up
   useEffect(() => {
     if (userScrolledRef.current) return;
@@ -369,7 +372,7 @@ export function ChatView({ session }: { session?: Session }) {
             flushDeltaBuffer();
             setEntries((prev) => [
               ...prev,
-              { kind: "tool", name: event.text ?? "tool", input: event.tool_input ?? "" },
+              { kind: "tool", name: event.text ?? "tool", input: event.input ?? "" },
             ]);
             break;
 

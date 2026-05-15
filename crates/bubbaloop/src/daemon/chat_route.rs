@@ -278,11 +278,18 @@ fn event_type_str(t: &AgentEventType) -> &'static str {
 /// API key) but a valid OAuth token exists. This means the runtime would fall
 /// through to OAuth — which we block at the HTTP layer for dashboard turns.
 fn is_using_oauth_only() -> bool {
-    // Any of these means a sanctioned (non-OAuth) path is available:
-    if std::env::var("GEMINI_API_KEY").is_ok() {
+    // Any of these means a sanctioned (non-OAuth) path is available.
+    // Use map+unwrap_or instead of is_ok() to reject empty strings.
+    if std::env::var("GEMINI_API_KEY")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
         return false;
     }
-    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+    if std::env::var("ANTHROPIC_API_KEY")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
         return false;
     }
     if has_gemini_key_file() {
