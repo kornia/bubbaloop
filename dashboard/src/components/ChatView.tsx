@@ -18,7 +18,8 @@ type ChatEntry =
   | { kind: "tool_result"; text: string }
   | { kind: "error"; text: string }
   | { kind: "system"; text: string }
-  | { kind: "connection_lost" };
+  | { kind: "connection_lost" }
+  | { kind: "oauth_blocked" };
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -32,31 +33,6 @@ function providerFromModel(model: string): string {
   if (model.startsWith("gemini")) return "gemini";
   if (model.startsWith("claude")) return "claude";
   return "ollama";
-}
-
-function AgentPill({
-  agent,
-  selected,
-  onClick,
-}: {
-  agent: ResolvedAgent;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  const provider = providerFromModel(agent.agent.model);
-  const color = PROVIDER_COLORS[provider] ?? "#888";
-  return (
-    <button
-      className={`agent-pill${selected ? " agent-pill-selected" : ""}`}
-      onClick={onClick}
-      style={{ "--pill-color": color } as React.CSSProperties}
-    >
-      <span className="pill-dot" />
-      <span className="pill-name">{agent.agent.agent_id}</span>
-      <span className="pill-model">{agent.agent.model.split("-")[0]}</span>
-      {agent.agent.is_default && <span className="pill-default">default</span>}
-    </button>
-  );
 }
 
 function AgentSelector({
@@ -134,14 +110,24 @@ function AgentSelector({
               <span style={{flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>Agents on {agents[0]?.agent.machine_id}</span>
               <button className="agent-refresh-btn" onClick={() => { setOpen(false); onRefresh(); }} title="Refresh">↻</button>
             </div>
-            {agents.map((a) => (
-              <AgentPill
-                key={a.agent.agent_id}
-                agent={a}
-                selected={a.agent.agent_id === selected?.agent.agent_id}
-                onClick={() => { onSelect(a); setOpen(false); }}
-              />
-            ))}
+            {agents.map((a) => {
+              const provider = providerFromModel(a.agent.model);
+              const color = PROVIDER_COLORS[provider] ?? "#888";
+              const isSelected = a.agent.agent_id === selected?.agent.agent_id;
+              return (
+                <button
+                  key={a.agent.agent_id}
+                  className={`agent-pill${isSelected ? " agent-pill-selected" : ""}`}
+                  onClick={() => { onSelect(a); setOpen(false); }}
+                  style={{ "--pill-color": color } as React.CSSProperties}
+                >
+                  <span className="pill-dot" />
+                  <span className="pill-name">{a.agent.agent_id}</span>
+                  <span className="pill-model">{a.agent.model.split("-")[0]}</span>
+                  {a.agent.is_default && <span className="pill-default">default</span>}
+                </button>
+              );
+            })}
           </div>
         </>
       )}
@@ -149,7 +135,7 @@ function AgentSelector({
   );
 }
 
-function EntryRow({ entry }: { entry: ChatEntry }) {
+function EntryRow({ entry, onDismissOauth }: { entry: ChatEntry; onDismissOauth: () => void }) {
   switch (entry.kind) {
     case "user":
       return (
@@ -222,43 +208,39 @@ function EntryRow({ entry }: { entry: ChatEntry }) {
           Connection lost — stream ended without completion
         </div>
       );
+    case "oauth_blocked":
+      return (
+        <div className="oauth-gate">
+          <div className="oauth-gate-icon">🔒</div>
+          <h3>Dashboard chat unavailable with Claude OAuth</h3>
+          <p>
+            Per Anthropic's Feb 2026 Terms of Service, OAuth credentials are reserved
+            for Claude Code CLI. Account-level bans are actively enforced for
+            non-CLI OAuth usage.
+          </p>
+          <div className="oauth-options">
+            <div className="oauth-option">
+              <strong>Option 1 (recommended): Gemini API key (free)</strong>
+              <code>export GEMINI_API_KEY=your_key</code>
+              <span>15 RPM / 1M tokens/day free via Google AI Studio</span>
+            </div>
+            <div className="oauth-option">
+              <strong>Option 2: Claude API key (pay-per-token)</strong>
+              <code>export ANTHROPIC_API_KEY=your_key</code>
+              <span>Billed separately from Claude Pro/Max subscription</span>
+            </div>
+            <div className="oauth-option">
+              <strong>Option 3: Use the CLI</strong>
+              <code>bubbaloop agent chat</code>
+              <span>CLI path remains available at operator risk</span>
+            </div>
+          </div>
+          <button className="oauth-dismiss" onClick={onDismissOauth}>
+            Dismiss
+          </button>
+        </div>
+      );
   }
-}
-
-// ── OAuth explainer ──────────────────────────────────────────────────
-
-function OAuthGate({ onDismiss }: { onDismiss: () => void }) {
-  return (
-    <div className="oauth-gate">
-      <div className="oauth-gate-icon">🔒</div>
-      <h3>Dashboard chat unavailable with Claude OAuth</h3>
-      <p>
-        Per Anthropic's Feb 2026 Terms of Service, OAuth credentials are reserved
-        for Claude Code CLI. Account-level bans are actively enforced for
-        non-CLI OAuth usage.
-      </p>
-      <div className="oauth-options">
-        <div className="oauth-option">
-          <strong>Option 1 (recommended): Gemini API key (free)</strong>
-          <code>export GEMINI_API_KEY=your_key</code>
-          <span>15 RPM / 1M tokens/day free via Google AI Studio</span>
-        </div>
-        <div className="oauth-option">
-          <strong>Option 2: Claude API key (pay-per-token)</strong>
-          <code>export ANTHROPIC_API_KEY=your_key</code>
-          <span>Billed separately from Claude Pro/Max subscription</span>
-        </div>
-        <div className="oauth-option">
-          <strong>Option 3: Use the CLI</strong>
-          <code>bubbaloop agent chat</code>
-          <span>CLI path remains available at operator risk</span>
-        </div>
-      </div>
-      <button className="oauth-dismiss" onClick={onDismiss}>
-        Dismiss
-      </button>
-    </div>
-  );
 }
 
 // ── Main component ────────────────────────────────────────────────────
@@ -272,7 +254,6 @@ export function ChatView({ session }: { session?: Session }) {
   const [input, setInput] = useState("");
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [streaming, setStreaming] = useState(false);
-  const [oauthBlocked, setOauthBlocked] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -287,18 +268,22 @@ export function ChatView({ session }: { session?: Session }) {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries]);
 
-  // Discover agents when session becomes available
-  useEffect(() => {
-    if (!session) return;
+  const runDiscovery = useCallback((s: Session) => {
     setDiscovering(true);
-    discoverAgents(session)
+    discoverAgents(s)
       .then((found) => {
         setAgents(found);
         const def = found.find((a) => a.agent.is_default) ?? found[0] ?? null;
         setSelectedAgent(def);
       })
       .finally(() => setDiscovering(false));
-  }, [session]);
+  }, []);
+
+  // Discover agents when session becomes available
+  useEffect(() => {
+    if (!session) return;
+    runDiscovery(session);
+  }, [session, runDiscovery]);
 
   const flushDeltaBuffer = useCallback(() => {
     if (!deltaBufferRef.current) return;
@@ -321,7 +306,6 @@ export function ChatView({ session }: { session?: Session }) {
     setEntries((prev) => [...prev, { kind: "user", text: message }]);
     userScrolledRef.current = false;
     setStreaming(true);
-    setOauthBlocked(false);
     deltaBufferRef.current = "";
 
     const ctrl = new AbortController();
@@ -350,7 +334,7 @@ export function ChatView({ session }: { session?: Session }) {
           let body: { code?: string } = {};
           try { body = await res.json(); } catch { /* ignore */ }
           if (body.code === "oauth_chat_disabled") {
-            setOauthBlocked(true);
+            setEntries((prev) => [...prev, { kind: "oauth_blocked" }]);
             return;
           }
         }
@@ -438,15 +422,12 @@ export function ChatView({ session }: { session?: Session }) {
 
   const handleRefresh = useCallback(() => {
     if (!session) return;
-    setDiscovering(true);
-    discoverAgents(session)
-      .then((found) => {
-        setAgents(found);
-        const def = found.find((a) => a.agent.is_default) ?? found[0] ?? null;
-        setSelectedAgent(def);
-      })
-      .finally(() => setDiscovering(false));
-  }, [session]);
+    runDiscovery(session);
+  }, [session, runDiscovery]);
+
+  const dismissOauth = useCallback(() => {
+    setEntries((prev) => prev.filter((e) => e.kind !== "oauth_blocked"));
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -460,84 +441,70 @@ export function ChatView({ session }: { session?: Session }) {
 
   // ── Render ────────────────────────────────────────────────────────
 
-  if (oauthBlocked) {
-    return (
-      <div className="chat-view">
-        <OAuthGate onDismiss={() => setOauthBlocked(false)} />
-      </div>
-    );
-  }
-
   return (
     <div className="chat-view">
 
       {/* Scrollable area: token setup + agent bar + messages */}
       <div className="chat-body" ref={chatBodyRef} onScroll={() => { userScrolledRef.current = true; }}>
-        <div className="chat-body-inner">
 
-          {!token && (
-            <div className="token-setup">
-              <h3>Enter daemon token</h3>
-              <p>Paste the MCP token from your Jetson (<code>cat ~/.bubbaloop/mcp-token</code>)</p>
-              <div className="token-row">
-                <input
-                  type="password"
-                  className="token-input"
-                  placeholder="bubbaloop-token-..."
-                  value={tokenDraft}
-                  onChange={(e) => setTokenDraft(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") handleTokenSave(); }}
-                />
-                <button className="token-save-btn" onClick={handleTokenSave} disabled={!tokenDraft.trim()}>
-                  Save
-                </button>
-              </div>
+        {!token && (
+          <div className="token-setup">
+            <h3>Enter daemon token</h3>
+            <p>Paste the MCP token from your Jetson (<code>cat ~/.bubbaloop/mcp-token</code>)</p>
+            <div className="token-row">
+              <input
+                type="password"
+                className="token-input"
+                placeholder="bubbaloop-token-..."
+                value={tokenDraft}
+                onChange={(e) => setTokenDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleTokenSave(); }}
+              />
+              <button className="token-save-btn" onClick={handleTokenSave} disabled={!tokenDraft.trim()}>
+                Save
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Agent selector bar */}
+        <div className="chat-header">
+          {!token ? null : !session ? (
+            <span className="agent-status-hint">Connect to Zenoh to discover agents</span>
+          ) : (
+            <AgentSelector
+              agents={agents}
+              selected={selectedAgent}
+              onSelect={setSelectedAgent}
+              discovering={discovering}
+              onRefresh={handleRefresh}
+            />
+          )}
+          {token && (
+            <button
+              className="token-reset-btn"
+              onClick={() => { setToken(""); setTokenDraft(""); localStorage.removeItem("bubbaloop_mcp_token"); }}
+              title="Change token"
+            >
+              ✕ token
+            </button>
+          )}
+        </div>
+
+        {/* Messages */}
+        <div className="chat-log">
+          {entries.length === 0 && token && selectedAgent && (
+            <div className="chat-empty">
+              <p>Talking to <strong>{selectedAgent.agent.agent_id}</strong></p>
+              <p className="chat-empty-hint">Try: "what nodes are running?" or "describe the current system state"</p>
             </div>
           )}
-
-          {/* Agent selector bar */}
-          <div className="chat-header">
-            <div className="chat-header-left">
-              {!token ? null : !session ? (
-                <span className="agent-status-hint">Connect to Zenoh to discover agents</span>
-              ) : (
-                <AgentSelector
-                  agents={agents}
-                  selected={selectedAgent}
-                  onSelect={setSelectedAgent}
-                  discovering={discovering}
-                  onRefresh={handleRefresh}
-                />
-              )}
-            </div>
-            <div className="chat-header-right">
-              {token && (
-                <button
-                  className="token-reset-btn"
-                  onClick={() => { setToken(""); setTokenDraft(""); localStorage.removeItem("bubbaloop_mcp_token"); }}
-                  title="Change token"
-                >
-                  ✕ token
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Messages */}
-          <div className="chat-log">
-            {entries.length === 0 && token && selectedAgent && (
-              <div className="chat-empty">
-                <p>Talking to <strong>{selectedAgent.agent.agent_id}</strong></p>
-                <p className="chat-empty-hint">Try: "what nodes are running?" or "describe the current system state"</p>
-              </div>
-            )}
-            {entries.map((entry, i) => (
-              <EntryRow key={i} entry={entry} />
-            ))}
-            <div ref={logEndRef} />
-          </div>
-
+          {entries.map((entry, i) => (
+            <EntryRow key={i} entry={entry} onDismissOauth={dismissOauth} />
+          ))}
+          <div ref={logEndRef} />
         </div>
+
       </div>
 
       {/* Input bar — full width, always pinned at bottom */}
@@ -644,27 +611,16 @@ export function ChatView({ session }: { session?: Session }) {
         /* Header */
         .chat-header {
           display: flex;
-          justify-content: space-between;
           align-items: center;
           gap: 8px;
           min-height: 32px;
-        }
-        .chat-header-left {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          flex: 1;
-        }
-        .chat-header-right {
-          display: flex;
-          align-items: center;
-          gap: 6px;
         }
         .agent-status-hint {
           font-size: 13px;
           color: var(--text-muted);
         }
         .token-reset-btn {
+          margin-left: auto;
           padding: 4px 10px;
           background: none;
           border: 1px solid var(--border-color);
@@ -822,15 +778,10 @@ export function ChatView({ session }: { session?: Session }) {
           flex-direction: column;
           min-height: 0;
           padding: 16px 16px 0;
-        }
-        .chat-body-inner {
           max-width: 900px;
           width: 100%;
           margin: 0 auto;
-          display: flex;
-          flex-direction: column;
           gap: 12px;
-          flex: 1;
         }
 
         /* Message log — only this region scrolls */
@@ -950,9 +901,6 @@ export function ChatView({ session }: { session?: Session }) {
         }
         .tool-result-summary {
           font-family: 'JetBrains Mono', monospace;
-          font-size: 11px;
-          color: var(--text-muted);
-          list-style: none;
         }
         .tool-result-text {
           font-size: 12px;
@@ -1117,7 +1065,6 @@ export function ChatView({ session }: { session?: Session }) {
 
         /* Mobile */
         @media (max-width: 768px) {
-          .chat-view { }
           .chat-body { padding: 10px 10px 0; }
           .token-setup { padding: 14px 16px; }
           .token-row { flex-direction: column; }
