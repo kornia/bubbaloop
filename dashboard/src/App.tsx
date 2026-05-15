@@ -367,7 +367,7 @@ export default function App() {
 
       <style>{`
         .app {
-          height: 100vh;
+          height: 100%;
           display: flex;
           flex-direction: column;
           overflow: hidden;
@@ -385,7 +385,7 @@ export default function App() {
           background: var(--bg-secondary);
           border-bottom: 1px solid var(--border-color);
           flex-shrink: 0;
-          z-index: 50;
+          z-index: 200;
         }
 
         .header-left {

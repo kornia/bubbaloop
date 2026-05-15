@@ -724,13 +724,13 @@ export function ChatView({ session }: { session?: Session }) {
         .agent-backdrop {
           position: fixed;
           inset: 0;
-          z-index: 99;
+          z-index: 150;
         }
         .agent-panel {
           position: absolute;
           top: calc(100% + 6px);
           left: 0;
-          z-index: 100;
+          z-index: 151;
           min-width: 240px;
           background: var(--bg-secondary);
           border: 1px solid var(--border-color);
