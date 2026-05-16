@@ -12,6 +12,7 @@ use super::{
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -243,12 +244,30 @@ impl GeminiProvider {
 
 // ── Message conversion ───────────────────────────────────────────────
 
+/// Build a map from tool_use_id → function name by scanning all ToolUse blocks.
+///
+/// Gemini requires `functionResponse.name` to exactly match the `functionCall.name`
+/// it's responding to. Our internal `tool_use_id` is an opaque UUID; this map lets
+/// the converter look up the real function name for each response.
+fn tool_name_map(messages: &[Message]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for msg in messages {
+        for block in &msg.content {
+            if let ContentBlock::ToolUse { id, name, .. } = block {
+                map.insert(id.clone(), name.clone());
+            }
+        }
+    }
+    map
+}
+
 /// Convert our canonical `Message` slice to Gemini `contents` + optional system prompt.
 ///
 /// Consecutive messages with the same role are coalesced into a single `GeminiContent` entry
 /// by concatenating their `parts[]`. Gemini requires strict role alternation; our agent loop
 /// emits two consecutive user messages (tool_results then labeled images) in the same turn.
 fn to_gemini_contents(messages: &[Message]) -> Vec<GeminiContent> {
+    let names = tool_name_map(messages);
     let mut out: Vec<GeminiContent> = Vec::new();
     for msg in messages {
         let role = match msg.role.as_str() {
@@ -287,9 +306,15 @@ fn to_gemini_contents(messages: &[Message]) -> Vec<GeminiContent> {
                     } else {
                         serde_json::json!({ "output": content })
                     };
+                    // Use the actual function name so Gemini can match call↔response.
+                    // Falling back to tool_use_id is safe but should never happen in practice.
+                    let fn_name = names
+                        .get(tool_use_id)
+                        .map(|s| s.as_str())
+                        .unwrap_or(tool_use_id.as_str());
                     parts.push(GeminiPart::FunctionResponse(GeminiFunctionResponse {
                         function_response: GeminiFnResponse {
-                            name: tool_use_id.clone(),
+                            name: fn_name.to_string(),
                             response,
                         },
                     }));
@@ -684,6 +709,39 @@ mod tests {
         match &contents[0].parts[0] {
             GeminiPart::FunctionResponse(fr) => {
                 assert_eq!(fr.function_response.response["error"], "not found");
+            }
+            _ => panic!("expected FunctionResponse part"),
+        }
+    }
+
+    /// Regression test: functionResponse.name must be the function name ("grab_frame"),
+    /// not the internal tool_use_id UUID. Gemini matches call↔response by name.
+    #[test]
+    fn to_gemini_contents_function_response_uses_function_name_not_id() {
+        let uuid_id = "gemini-550e8400-e29b-41d4-a716-446655440000";
+        let msgs = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::ToolUse {
+                    id: uuid_id.to_string(),
+                    name: "grab_frame".to_string(),
+                    input: json!({"node_name": "tapo-terrace"}),
+                }],
+            },
+            Message::tool_results(vec![(
+                uuid_id.to_string(),
+                r#"{"camera":"tapo-terrace"}"#.to_string(),
+                None,
+            )]),
+        ];
+        let contents = to_gemini_contents(&msgs);
+        // contents[1] is the user turn with function_response
+        match &contents[1].parts[0] {
+            GeminiPart::FunctionResponse(fr) => {
+                assert_eq!(
+                    fr.function_response.name, "grab_frame",
+                    "functionResponse.name must be the function name, not the UUID"
+                );
             }
             _ => panic!("expected FunctionResponse part"),
         }
