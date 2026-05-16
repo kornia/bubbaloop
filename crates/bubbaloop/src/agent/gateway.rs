@@ -34,6 +34,8 @@ pub enum AgentEventType {
     Tool,
     /// Tool call result.
     ToolResult,
+    /// Camera frame captured by grab_frame (base64-encoded JPEG in `image` field).
+    Image,
     /// Error message.
     Error,
     /// Turn complete — no more events for this correlation ID.
@@ -59,6 +61,12 @@ pub struct AgentEvent {
     /// Truncated tool input JSON (only present on Tool events).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
+    /// Base64-encoded image data (only present on Image events).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// MIME type for the image (e.g. "image/jpeg"). Only present on Image events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
 }
 
 impl AgentEvent {
@@ -69,6 +77,20 @@ impl AgentEvent {
             event_type: AgentEventType::Delta,
             text: Some(text.to_string()),
             input: None,
+            image: None,
+            media_type: None,
+        }
+    }
+
+    /// Create an Image event (camera frame captured by grab_frame).
+    pub fn image(id: &str, media_type: &str, base64: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            event_type: AgentEventType::Image,
+            text: None,
+            input: None,
+            image: Some(base64.to_string()),
+            media_type: Some(media_type.to_string()),
         }
     }
 
@@ -81,6 +103,8 @@ impl AgentEvent {
             event_type: AgentEventType::Tool,
             text: Some(tool_name.to_string()),
             input: input.map(|s| s.to_string()),
+            image: None,
+            media_type: None,
         }
     }
 
@@ -91,6 +115,8 @@ impl AgentEvent {
             event_type: AgentEventType::ToolResult,
             text: Some(result.to_string()),
             input: None,
+            image: None,
+            media_type: None,
         }
     }
 
@@ -101,6 +127,8 @@ impl AgentEvent {
             event_type: AgentEventType::Error,
             text: Some(message.to_string()),
             input: None,
+            image: None,
+            media_type: None,
         }
     }
 
@@ -111,6 +139,8 @@ impl AgentEvent {
             event_type: AgentEventType::Done,
             text: None,
             input: None,
+            image: None,
+            media_type: None,
         }
     }
 
@@ -124,6 +154,8 @@ impl AgentEvent {
             event_type: AgentEventType::System,
             text: Some(message.to_string()),
             input: None,
+            image: None,
+            media_type: None,
         }
     }
 }

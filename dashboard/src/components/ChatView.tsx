@@ -16,6 +16,7 @@ type ChatEntry =
   | { kind: "assistant"; text: string }
   | { kind: "tool"; name: string; input: string }
   | { kind: "tool_result"; text: string }
+  | { kind: "image"; src: string }
   | { kind: "error"; text: string }
   | { kind: "system"; text: string }
   | { kind: "connection_lost" }
@@ -184,6 +185,12 @@ function EntryRow({ entry, onDismissOauth }: { entry: ChatEntry; onDismissOauth:
         </div>
       );
     }
+    case "image":
+      return (
+        <div className="chat-entry chat-image">
+          <img src={entry.src} className="chat-frame" alt="Camera frame" />
+        </div>
+      );
     case "error":
       return (
         <div className="chat-entry chat-error">
@@ -379,6 +386,16 @@ export function ChatView({ session }: { session?: Session }) {
           case "tool_result":
             flushDeltaBuffer();
             setEntries((prev) => [...prev, { kind: "tool_result", text: event.text ?? "" }]);
+            break;
+
+          case "image":
+            if (event.image && event.media_type) {
+              flushDeltaBuffer();
+              setEntries((prev) => [
+                ...prev,
+                { kind: "image", src: `data:${event.media_type};base64,${event.image}` },
+              ]);
+            }
             break;
 
           case "error":
@@ -934,6 +951,19 @@ export function ChatView({ session }: { session?: Session }) {
           font-size: 12px;
           color: var(--text-muted);
           font-style: italic;
+        }
+
+        .chat-image {
+          background: transparent;
+          border: none;
+          padding: 2px 14px;
+        }
+        .chat-frame {
+          max-width: 420px;
+          width: 100%;
+          border-radius: 8px;
+          border: 1px solid var(--border-color);
+          display: block;
         }
 
         .chat-connection-lost {

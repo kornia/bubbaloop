@@ -69,6 +69,9 @@ impl EventSink for StdoutSink {
                     log::warn!("Error: {}", msg);
                 }
             }
+            AgentEventType::Image => {
+                // Image frames are dashboard-only; stdout mode silently ignores them
+            }
             AgentEventType::Done => {
                 // Done is implicit in stdout mode
             }
@@ -286,6 +289,12 @@ pub async fn run_agent_turn<
         input.soul_path,
         &world_state,
     );
+
+    // Heal any dangling function_call turns left from a prior incomplete turn
+    // (e.g. SSE connection dropped after the assistant message was stored but
+    // before tool_results were pushed). Without this, Gemini returns HTTP 400
+    // "function response must come immediately after function call turn".
+    sanitize_dangling_tool_use(memory);
 
     // Add user input to short-term memory
     if let Some(input) = user_input {
@@ -600,6 +609,15 @@ async fn run_turn_loop<
         // Images are stashed out-of-band by grab_frame (base64 never enters ToolResult).
         let attachments = dispatcher.drain_images(&tool_use_ids);
         if !attachments.is_empty() {
+            // Stream each frame to the dashboard so it appears in the chat.
+            for attachment in &attachments {
+                sink.emit(AgentEvent::image(
+                    correlation_id,
+                    &attachment.media_type,
+                    &attachment.base64,
+                ))
+                .await;
+            }
             let pairs: Vec<(String, String, String)> = attachments
                 .into_iter()
                 .map(|a| (a.label, a.media_type, a.base64))

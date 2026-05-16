@@ -524,6 +524,20 @@ impl NodeManager {
             .map(|n| n.to_proto(&self.machine_id, &self.machine_hostname, &self.machine_ips))
     }
 
+    /// Return the published Zenoh instance name for a node (from its config YAML `name:` field).
+    /// Falls back to the registry name when no config_override is set.
+    pub async fn get_instance_name(&self, name: &str) -> Option<String> {
+        let nodes = self.nodes.read().await;
+        nodes
+            .values()
+            .find(|n| n.effective_name() == name)
+            .map(|n| {
+                n.published_instance_name
+                    .clone()
+                    .unwrap_or_else(|| n.effective_name())
+            })
+    }
+
     /// Execute a command
     pub async fn execute_command(self: &Arc<Self>, cmd: NodeCommand) -> CommandResult {
         let command_type = CommandType::try_from(cmd.command).unwrap_or(CommandType::Refresh);

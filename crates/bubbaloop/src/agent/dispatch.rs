@@ -1807,8 +1807,16 @@ impl<P: PlatformOperations> Dispatcher<P> {
             }
         };
 
-        log::info!("[Agent] grab_frame: {}/{}", machine_id, node_name);
-        match crate::agent::camera::grab_frame(&session, &node_name, &machine_id).await {
+        // Registry name may differ from the Zenoh instance name (e.g. "tapo-terrace" vs
+        // "tapo_terrace_camera" when a config_override sets a different `name:` field).
+        let instance_name = self.platform.get_node_instance_name(&node_name).await;
+        log::info!(
+            "[Agent] grab_frame: {}/{} (instance: {})",
+            machine_id,
+            node_name,
+            instance_name
+        );
+        match crate::agent::camera::grab_frame(&session, &instance_name, &machine_id).await {
             Ok((receipt, attachment)) => {
                 self.stash_image(tool_use_id.to_string(), attachment);
                 ToolResult::success(receipt)
