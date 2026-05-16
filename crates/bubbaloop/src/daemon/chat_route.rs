@@ -216,12 +216,15 @@ pub async fn agent_turn_handler(
                         .data(data);
 
                     if tx.send(Ok(sse_event)).await.is_err() {
-                        // Receiver dropped — browser closed the connection
+                        // Receiver dropped — browser closed the connection.
+                        // Publish cancel so the agent loop can abort the running turn.
                         log::debug!(
-                            "[CHAT] agent={} corr={} receiver dropped, stopping drain",
+                            "[CHAT] agent={} corr={} receiver dropped, cancelling turn",
                             agent_id,
                             corr_id
                         );
+                        let cancel = gateway::cancel_topic(&machine_id, &agent_id);
+                        let _ = session.put(&cancel, corr_id.as_bytes().to_vec()).await;
                         break;
                     }
 

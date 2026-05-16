@@ -117,6 +117,8 @@ pub struct AgentTurnInput<'a> {
     pub correlation_id: &'a str,
     /// When set, triggers first-run onboarding prompt (path to identity.md).
     pub soul_path: Option<&'a str>,
+    /// When set, the turn is cancelled if the token fires (e.g. browser disconnected).
+    pub cancel_token: Option<tokio_util::sync::CancellationToken>,
 }
 
 /// Internal context passed to `run_turn_loop`, grouping agent-config parameters.
@@ -297,27 +299,42 @@ pub async fn run_agent_turn<
 
     let tools = Dispatcher::<P>::tool_definitions();
 
-    // 2. Turn cycle (max_turns) — wrapped in a turn-level timeout
-    let turn_result = tokio::time::timeout(
+    // 2. Turn cycle (max_turns) — wrapped in a turn-level timeout.
+    //    If a CancellationToken is present (HTTP dashboard turn), also race
+    //    against client disconnect: None = cancelled, Some(r) = normal result.
+    let ctx = TurnContext {
+        soul,
+        system_prompt: &system_prompt,
+        tools: &tools,
+    };
+    let turn_future = tokio::time::timeout(
         Duration::from_secs(TURN_TIMEOUT_SECS),
-        run_turn_loop(
-            provider,
-            dispatcher,
-            memory,
-            &TurnContext {
-                soul,
-                system_prompt: &system_prompt,
-                tools: &tools,
-            },
-            sink,
-            input,
-        ),
-    )
-    .await;
+        run_turn_loop(provider, dispatcher, memory, &ctx, sink, input),
+    );
+
+    let turn_result = if let Some(ref token) = input.cancel_token {
+        tokio::select! {
+            r = turn_future => Some(r),
+            _ = token.cancelled() => None,
+        }
+    } else {
+        Some(turn_future.await)
+    };
 
     match turn_result {
-        Ok(inner) => inner?,
-        Err(_elapsed) => {
+        None => {
+            // Browser disconnected — cancel the turn cleanly.
+            log::info!("[Agent] Turn cancelled by client (corr={})", correlation_id);
+            sanitize_dangling_tool_use(memory);
+            sink.emit(AgentEvent::error(
+                correlation_id,
+                "turn cancelled by client",
+            ))
+            .await;
+            return Ok(());
+        }
+        Some(Ok(inner)) => inner?,
+        Some(Err(_elapsed)) => {
             log::error!("[Agent] Turn timed out after {}s", TURN_TIMEOUT_SECS);
             // Sanitize: the turn loop may have pushed an assistant message with
             // tool_use blocks but was cancelled before pushing matching tool_results.

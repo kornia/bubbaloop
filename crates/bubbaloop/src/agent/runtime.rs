@@ -675,6 +675,8 @@ impl AgentRuntime {
                 job_notify,
                 identity_path,
                 onboarding_marker,
+                session.clone(),
+                machine_id.clone(),
             ));
 
             log::info!(
@@ -824,6 +826,8 @@ async fn agent_loop(
     job_notify: Arc<Notify>,
     identity_path: std::path::PathBuf,
     onboarding_marker: std::path::PathBuf,
+    session: Arc<zenoh::Session>,
+    machine_id: String,
 ) {
     let initial_caps = soul.read().await.capabilities.clone();
     let mut arousal = ArousalState::new(&initial_caps);
@@ -921,6 +925,33 @@ async fn agent_loop(
                 };
 
                 last_turn_time = Some(tokio::time::Instant::now());
+
+                // Subscribe to cancel topic before starting the turn so the
+                // dashboard can abort via session.put(cancel_topic, corr_id).
+                let cancel_token = tokio_util::sync::CancellationToken::new();
+                let cancel_topic = gateway::cancel_topic(&machine_id, &agent_id);
+                let corr_id_for_cancel = msg.id.clone();
+                {
+                    let token = cancel_token.clone();
+                    let session_c = session.clone();
+                    tokio::spawn(async move {
+                        match session_c.declare_subscriber(&cancel_topic).await {
+                            Ok(sub) => {
+                                while let Ok(sample) = sub.recv_async().await {
+                                    let bytes = sample.payload().to_bytes();
+                                    if bytes.as_ref() == corr_id_for_cancel.as_bytes() {
+                                        token.cancel();
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("[Agent] Failed to subscribe to cancel topic: {}", e);
+                            }
+                        }
+                    });
+                }
+
                 if let Err(e) = run_agent_turn(
                     &provider,
                     &dispatcher,
@@ -932,6 +963,7 @@ async fn agent_loop(
                         job_id: None,
                         correlation_id: &msg.id,
                         soul_path: onboarding_path,
+                        cancel_token: Some(cancel_token),
                     },
                 ).await {
                     log::error!("[Agent:{}] Turn failed: {}", agent_id, e);
@@ -1125,6 +1157,7 @@ async fn agent_loop(
                         job_id: None,
                         correlation_id: &cid,
                         soul_path: None, // Reactive turns never trigger onboarding
+                        cancel_token: None,
                     },
                 )
                 .await;
@@ -1204,6 +1237,7 @@ async fn agent_loop(
                         job_id: Some(&job.id),
                         correlation_id: &cid,
                         soul_path: None, // Jobs don't trigger onboarding
+                        cancel_token: None,
                     },
                 )
                 .await
