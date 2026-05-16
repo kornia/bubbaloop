@@ -312,13 +312,11 @@ pub async fn run_agent_turn<
         run_turn_loop(provider, dispatcher, memory, &ctx, sink, input),
     );
 
-    let turn_result = if let Some(ref token) = input.cancel_token {
-        tokio::select! {
-            r = turn_future => Some(r),
-            _ = token.cancelled() => None,
-        }
-    } else {
-        Some(turn_future.await)
+    let never_cancel = tokio_util::sync::CancellationToken::new();
+    let cancel = input.cancel_token.as_ref().unwrap_or(&never_cancel);
+    let turn_result = tokio::select! {
+        r = turn_future => Some(r),
+        _ = cancel.cancelled() => None,
     };
 
     match turn_result {
