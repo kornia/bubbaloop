@@ -168,18 +168,21 @@ fn list_sources(args: ListArgs) -> Result<()> {
     }
 
     if registry.sources.is_empty() {
-        println!("No marketplace sources configured.");
-        println!("Add one with: bubbaloop marketplace add <name> <path>");
+        log::info!("No marketplace sources configured.");
+        log::info!("Add one with: bubbaloop marketplace add <name> <path>");
         return Ok(());
     }
 
-    println!("{:<3} {:<20} {:<10} PATH", "ON", "NAME", "TYPE");
-    println!("{}", "-".repeat(70));
+    log::info!("{:<3} {:<20} {:<10} PATH", "ON", "NAME", "TYPE");
+    log::info!("{}", "-".repeat(70));
     for source in &registry.sources {
         let enabled = if source.enabled { "yes" } else { "no" };
-        println!(
+        log::info!(
             "{:<3} {:<20} {:<10} {}",
-            enabled, source.name, source.source_type, source.path
+            enabled,
+            source.name,
+            source.source_type,
+            source.path
         );
     }
 
@@ -203,7 +206,7 @@ fn add_source(args: AddArgs) -> Result<()> {
     });
 
     save_sources(&registry)?;
-    println!("Added marketplace source: {}", args.name);
+    log::info!("Added marketplace source: {}", args.name);
     Ok(())
 }
 
@@ -236,7 +239,7 @@ fn remove_source(args: RemoveArgs) -> Result<()> {
     }
 
     save_sources(&registry)?;
-    println!("Removed marketplace source: {}", args.name_or_path);
+    log::info!("Removed marketplace source: {}", args.name_or_path);
     Ok(())
 }
 
@@ -256,7 +259,7 @@ fn update_source_enabled(name_or_path: &str, enabled: bool, action: &str) -> Res
 
     source.enabled = enabled;
     save_sources(&registry)?;
-    println!("{} marketplace source: {}", action, name_or_path);
+    log::info!("{} marketplace source: {}", action, name_or_path);
     Ok(())
 }
 

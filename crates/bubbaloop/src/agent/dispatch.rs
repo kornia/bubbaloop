@@ -1856,7 +1856,7 @@ mod tests {
                         ("unknown-agent".to_owned(), payload)
                     };
                 let content = format!("[agent_message from {}] {}", sender, msg);
-                eprintln!("[{}] inbox received → \"{}\"", label, content);
+                log::debug!("[{}] inbox received → \"{}\"", label, content);
                 let entry = crate::agent::memory::episodic::EpisodicLog::make_entry(
                     "system", &content, None,
                 );

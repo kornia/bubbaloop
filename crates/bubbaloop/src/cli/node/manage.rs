@@ -38,7 +38,7 @@ pub(crate) async fn add_node(
     // Add to daemon via Zenoh gateway
     let client = crate::cli::daemon_client::DaemonClient::connect().await?;
     let _resp = client.add_node(&node_path, name, config).await?;
-    println!("Added node from: {}", node_path);
+    log::info!("Added node from: {}", node_path);
 
     // Use the registered name (override or extracted) for any follow-up commands.
     let registered_name = name
@@ -47,14 +47,14 @@ pub(crate) async fn add_node(
 
     if build {
         if let Some(ref n) = registered_name {
-            println!("Building node...");
+            log::info!("Building node...");
             send_command(n, "build").await?;
         }
     }
 
     if do_install {
         if let Some(ref n) = registered_name {
-            println!("Installing as service...");
+            log::info!("Installing as service...");
             send_command(n, "install").await?;
         }
     }
@@ -65,10 +65,10 @@ pub(crate) async fn add_node(
 pub(crate) async fn remove_node(name: &str, delete_files: bool) -> Result<()> {
     let client = crate::cli::daemon_client::DaemonClient::connect().await?;
     client.remove_node(name).await?;
-    println!("Removed node: {}", name);
+    log::info!("Removed node: {}", name);
 
     if delete_files {
-        eprintln!("Note: File deletion not implemented yet. Remove files manually.");
+        log::info!("Note: File deletion not implemented yet. Remove files manually.");
     }
 
     Ok(())
@@ -163,8 +163,8 @@ pub(crate) async fn create_instance(
                                     let dest_path =
                                         dest_dir.join(format!("{}.yaml", instance_name));
                                     std::fs::copy(&example_config, &dest_path)?;
-                                    println!("Copied example config to: {}", dest_path.display());
-                                    println!(
+                                    log::info!("Copied example config to: {}", dest_path.display());
+                                    log::info!(
                                         "Edit this file to configure your instance before starting."
                                     );
                                     found_config = Some(dest_path.to_string_lossy().to_string());
@@ -202,19 +202,20 @@ pub(crate) async fn create_instance(
     client
         .add_node(base_node, Some(&instance_name), config_path.as_deref())
         .await?;
-    println!(
+    log::info!(
         "Created instance '{}' from base node '{}'",
-        instance_name, base_node
+        instance_name,
+        base_node
     );
 
     // Optional: install and/or start
     if start || do_install {
-        println!("Installing instance as systemd service...");
+        log::info!("Installing instance as systemd service...");
         send_command(&instance_name, "install").await?;
     }
 
     if start {
-        println!("Starting instance...");
+        log::info!("Starting instance...");
         send_command(&instance_name, "start").await?;
     }
 

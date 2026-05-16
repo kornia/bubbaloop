@@ -11,7 +11,7 @@ pub(crate) async fn list_nodes(format: &str, _base: bool, _instances: bool) -> R
     if format == "json" {
         println!("{}", result);
     } else if result.contains("[]") || result.is_empty() {
-        println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
+        log::info!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
     } else {
         // Parse the JSON node list from the gateway response
         let nodes: Vec<crate::mcp::platform::NodeInfo> =
@@ -19,18 +19,25 @@ pub(crate) async fn list_nodes(format: &str, _base: bool, _instances: bool) -> R
                 super::NodeError::CommandFailed(format!("Invalid daemon response: {}", e))
             })?;
         if nodes.is_empty() {
-            println!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
+            log::info!("No nodes registered. Use 'bubbaloop node add <path>' to add one.");
         } else {
-            println!(
+            log::info!(
                 "{:<20} {:<10} {:<12} {:<8} HEALTH",
-                "NAME", "STATUS", "TYPE", "BUILT"
+                "NAME",
+                "STATUS",
+                "TYPE",
+                "BUILT"
             );
-            println!("{}", "-".repeat(70));
+            log::info!("{}", "-".repeat(70));
             for node in &nodes {
                 let built = if node.is_built { "yes" } else { "no" };
-                println!(
+                log::info!(
                     "{:<20} {:<10} {:<12} {:<8} {}",
-                    node.name, node.status, node.node_type, built, node.health,
+                    node.name,
+                    node.status,
+                    node.node_type,
+                    built,
+                    node.health,
                 );
             }
         }
@@ -46,36 +53,39 @@ pub(crate) fn search_nodes(query: &str, category: Option<&str>, tag: Option<&str
         category,
         tag
     );
-    println!("Refreshing marketplace registry...");
+    log::info!("Refreshing marketplace registry...");
     if let Err(e) = registry::refresh_cache() {
-        log::warn!("registry refresh failed: {}", e);
-        eprintln!("Warning: could not refresh registry (using cache): {}", e);
+        log::warn!("Warning: could not refresh registry (using cache): {}", e);
     }
     let all_nodes = registry::load_cached_registry();
 
     if all_nodes.is_empty() {
-        println!("No nodes found in marketplace registry.");
-        println!("The registry cache may not have been fetched yet.");
+        log::info!("No nodes found in marketplace registry.");
+        log::info!("The registry cache may not have been fetched yet.");
         return Ok(());
     }
 
     let results = registry::search_registry(&all_nodes, query, category, tag);
 
     if results.is_empty() {
-        println!("No nodes matching your search.");
+        log::info!("No nodes matching your search.");
         if !query.is_empty() || category.is_some() || tag.is_some() {
-            println!("Try: bubbaloop node search  (no arguments to list all)");
+            log::info!("Try: bubbaloop node search  (no arguments to list all)");
         }
         return Ok(());
     }
 
-    println!(
+    log::info!(
         "{:<20} {:<10} {:<8} {:<12} {:<30} REPO",
-        "NAME", "VERSION", "TYPE", "CATEGORY", "DESCRIPTION"
+        "NAME",
+        "VERSION",
+        "TYPE",
+        "CATEGORY",
+        "DESCRIPTION"
     );
-    println!("{}", "-".repeat(110));
+    log::info!("{}", "-".repeat(110));
     for node in &results {
-        println!(
+        log::info!(
             "{:<20} {:<10} {:<8} {:<12} {:<30} {}",
             node.name,
             node.version,
@@ -85,8 +95,7 @@ pub(crate) fn search_nodes(query: &str, category: Option<&str>, tag: Option<&str
             node.repo
         );
     }
-    println!();
-    println!("Install with: bubbaloop node install <name>");
+    log::info!("Install with: bubbaloop node install <name>");
 
     Ok(())
 }
@@ -94,8 +103,7 @@ pub(crate) fn search_nodes(query: &str, category: Option<&str>, tag: Option<&str
 pub(crate) async fn discover_nodes(format: &str) -> Result<()> {
     // Refresh marketplace cache
     if let Err(e) = registry::refresh_cache() {
-        log::warn!("registry refresh failed: {}", e);
-        eprintln!("Warning: could not refresh registry (using cache): {}", e);
+        log::warn!("Warning: could not refresh registry (using cache): {}", e);
     }
     let all_marketplace = registry::load_cached_registry();
 
@@ -113,7 +121,7 @@ pub(crate) async fn discover_nodes(format: &str) -> Result<()> {
         };
 
     if all_marketplace.is_empty() {
-        println!(
+        log::info!(
             "No nodes found in marketplace. The registry cache may not have been fetched yet."
         );
         return Ok(());
@@ -154,11 +162,17 @@ pub(crate) async fn discover_nodes(format: &str) -> Result<()> {
     if format == "json" {
         println!("{}", serde_json::to_string_pretty(&entries)?);
     } else {
-        println!(
+        log::info!(
             "{:<20} {:<10} {:<8} {:<6} {:<6} {:<5} {:<30} DESCRIPTION",
-            "NAME", "VERSION", "TYPE", "ADDED", "BUILT", "INST", "REPO"
+            "NAME",
+            "VERSION",
+            "TYPE",
+            "ADDED",
+            "BUILT",
+            "INST",
+            "REPO"
         );
-        println!("{}", "-".repeat(115));
+        log::info!("{}", "-".repeat(115));
         for e in &entries {
             let added = if e.is_added { "yes" } else { "-" };
             let built = if e.is_added && e.is_built {
@@ -173,14 +187,20 @@ pub(crate) async fn discover_nodes(format: &str) -> Result<()> {
             } else {
                 "-".to_string()
             };
-            println!(
+            log::info!(
                 "{:<20} {:<10} {:<8} {:<6} {:<6} {:<5} {:<30} {}",
-                e.name, e.version, e.node_type, added, built, inst, e.repo, e.description
+                e.name,
+                e.version,
+                e.node_type,
+                added,
+                built,
+                inst,
+                e.repo,
+                e.description
             );
         }
-        println!();
-        println!("Add with: bubbaloop node add <name>");
-        println!("Create instance: bubbaloop node add <path> --name <instance-name>");
+        log::info!("Add with: bubbaloop node add <name>");
+        log::info!("Create instance: bubbaloop node add <path> --name <instance-name>");
     }
 
     Ok(())

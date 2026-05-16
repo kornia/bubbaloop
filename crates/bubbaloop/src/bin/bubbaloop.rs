@@ -193,8 +193,10 @@ async fn try_zenoh_session(endpoint: Option<&str>) -> Option<std::sync::Arc<zeno
     match bubbaloop::cli::zenoh_session::create_zenoh_session(endpoint).await {
         Ok(s) => Some(s),
         Err(e) => {
-            eprintln!("Error: Cannot connect to Zenoh — is zenohd running?");
-            eprintln!("  {}", e);
+            log::warn!(
+                "Error: Cannot connect to Zenoh — is zenohd running?\n  {}",
+                e
+            );
             None
         }
     }
@@ -202,10 +204,12 @@ async fn try_zenoh_session(endpoint: Option<&str>) -> Option<std::sync::Arc<zeno
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging — warn level by default; subcommands may override via init_logger().
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .target(env_logger::Target::Stderr)
-        .init();
+    // bubbaloop=info shows user-facing CLI output; other crates stay at warn to avoid noise.
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("bubbaloop=info,warn"),
+    )
+    .target(env_logger::Target::Stderr)
+    .init();
 
     let args: Args = argh::from_env();
 
@@ -218,58 +222,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.command {
         // No subcommand = show help
         None => {
-            eprintln!("Bubbaloop - AI-native orchestration for Physical AI\n");
-            eprintln!("Usage: bubbaloop <command>\n");
-            eprintln!("Commands:");
-            eprintln!("  status    Show services status (non-interactive)");
-            eprintln!("  doctor    Run system diagnostics and health checks");
-            eprintln!("              --json: Output as JSON");
-            eprintln!("              -c, --check <type>: all|zenoh|daemon (default: all)");
-            eprintln!("              --fix: Auto-fix issues");
-            eprintln!("  daemon    Manage the daemon lifecycle:");
-            eprintln!("              run: Run in foreground (default)");
-            eprintln!("              start: Start as systemd service");
-            eprintln!("              stop: Graceful shutdown via Zenoh");
-            eprintln!("              restart: Stop + start");
-            eprintln!("              status: Show uptime, nodes, agents");
-            eprintln!("              logs: Follow daemon logs");
-            eprintln!("              fix: Auto-fix daemon issues");
-            eprintln!("  mcp       Run MCP server for AI agent integration:");
-            eprintln!("              --stdio: JSON-RPC over stdin/stdout");
-            eprintln!("              -p, --port <port>: HTTP mode (default: 8088)");
-            eprintln!("              --token: Print bearer token (for BUBBALOOP_MCP_TOKEN)");
-            eprintln!("  node      Manage nodes:");
-            eprintln!("              init, validate, list, add, remove");
-            eprintln!("              install, uninstall, start, stop, restart");
-            eprintln!("              logs, build");
-            eprintln!("  launch    Launch node instances from a YAML file");
-            eprintln!("              (default: ~/.bubbaloop/launch.yaml)");
-            eprintln!("  marketplace  Manage marketplace sources:");
-            eprintln!("              list, add, remove, enable, disable");
-            eprintln!("  login     Authenticate with Anthropic API:");
-            eprintln!("              --status: Show current auth status");
-            eprintln!("  logout    Remove saved Anthropic API key");
-            eprintln!("  agent     Interact with AI agents via the daemon:");
-            eprintln!("              setup [-a <id>]: Configure provider, model, and identity (no daemon needed)");
-            eprintln!("              chat [-a agent[@machine]] [message]: Send messages to agents");
-            eprintln!("              list [--all]: Show running agents and capabilities");
-            eprintln!("  up        Load skills and ensure sensor nodes are running:");
-            eprintln!("              -s, --skills-dir <path>: Skills directory");
-            eprintln!("              --dry-run: Show what would be done");
-            eprintln!("  debug     Debug Zenoh connectivity:");
-            eprintln!("              info, topics, query, subscribe");
-            eprintln!("  init-tls  Print TLS/mTLS certificate generation guide");
-            eprintln!("\nRun 'bubbaloop <command> --help' for more information.");
+            log::info!(
+                "Bubbaloop - AI-native orchestration for Physical AI\n\
+                 \n\
+                 Usage: bubbaloop <command>\n\
+                 \n\
+                 Commands:\n\
+                   status       Show services status (non-interactive)\n\
+                   doctor       Run system diagnostics: --json, -c all|zenoh|daemon, --fix\n\
+                   daemon       Manage daemon: run, start, stop, restart, status, logs, fix\n\
+                   mcp          MCP server: --stdio, -p <port>, --token\n\
+                   node         Manage nodes: init, create, validate, list, add, remove,\n\
+                                  instance, install, uninstall, start, stop, restart, logs, build\n\
+                   launch       Launch node instances from a YAML file\n\
+                   marketplace  Manage marketplace sources: list, add, remove, enable, disable\n\
+                   login        Authenticate: --status to show current auth\n\
+                   logout       Remove saved Anthropic API key\n\
+                   agent        AI agents: setup [-a <id>], chat [-a agent[@machine]] [msg], list\n\
+                   up           Load skills and ensure nodes are running: -s <dir>, --dry-run\n\
+                   debug        Debug Zenoh: info, topics, query, subscribe\n\
+                   init-tls     Print TLS/mTLS certificate generation guide\n\
+                 \n\
+                 Run 'bubbaloop <command> --help' for more information."
+            );
             return Ok(());
         }
         Some(Command::Login(cmd)) => {
             if let Err(e) = cmd.run().await {
-                eprintln!("Error: {}", e);
+                log::warn!("Error: {}", e);
             }
         }
         Some(Command::Logout(cmd)) => {
             if let Err(e) = cmd.run() {
-                eprintln!("Error: {}", e);
+                log::warn!("Error: {}", e);
             }
         }
         Some(Command::Status(status_args)) => {
@@ -358,7 +343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(e) =
                     bubbaloop::cli::agent_setup::run_setup(setup_cmd.agent.as_deref()).await
                 {
-                    eprintln!("Error: {}", e);
+                    log::warn!("Error: {}", e);
                 }
                 return Ok(());
             }
@@ -388,7 +373,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        eprintln!("Warning: onboarding failed: {}", e);
+                        log::warn!("Warning: onboarding failed: {}", e);
                     }
                 }
             }
@@ -405,8 +390,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Check daemon is reachable
             if !bubbaloop::cli::agent_client::is_daemon_running(&session, &local_machine_id).await {
-                eprintln!("Error: Daemon is not running.");
-                eprintln!("  Start it with: bubbaloop daemon start");
+                log::warn!("Error: Daemon is not running.");
+                log::warn!("  Start it with: bubbaloop daemon start");
                 return Ok(());
             }
 
@@ -425,7 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         let err_str = e.to_string();
                         if err_str != "timeout" {
-                            eprintln!("Error: {}", e);
+                            log::warn!("Error: {}", e);
                         }
                     }
                 }
@@ -437,7 +422,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .await
                     {
-                        eprintln!("Error: {}", e);
+                        log::warn!("Error: {}", e);
                     }
                 }
                 bubbaloop::cli::agent::AgentSubcommand::Setup(_) => unreachable!(),
@@ -458,38 +443,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/home/user"));
                 home.join(".bubbaloop/certs").to_string_lossy().to_string()
             });
-            println!("TLS/mTLS Certificate Setup Guide");
-            println!("=================================\n");
-            println!("Target directory: {}\n", cert_dir);
-            println!("1. Generate a CA key and certificate:");
-            println!("   openssl genrsa -out {}/ca-key.pem 4096", cert_dir);
-            println!(
-                "   openssl req -new -x509 -key {}/ca-key.pem -sha256 \\",
-                cert_dir
+            log::info!(
+                "TLS/mTLS Certificate Setup Guide\n\
+                 =================================\n\
+                 Target directory: {cert_dir}\n\
+                 \n\
+                 1. Generate a CA key and certificate:\n\
+                    openssl genrsa -out {cert_dir}/ca-key.pem 4096\n\
+                    openssl req -new -x509 -key {cert_dir}/ca-key.pem -sha256 \\\n\
+                      -subj \"/CN=bubbaloop-ca\" -days 3650 -out {cert_dir}/ca.pem\n\
+                 \n\
+                 2. Generate a server key and certificate:\n\
+                    openssl genrsa -out {cert_dir}/server-key.pem 4096\n\
+                    openssl req -new -key {cert_dir}/server-key.pem \\\n\
+                      -subj \"/CN=$(hostname)\" -out {cert_dir}/server.csr\n\
+                    openssl x509 -req -in {cert_dir}/server.csr \\\n\
+                      -CA {cert_dir}/ca.pem -CAkey {cert_dir}/ca-key.pem -CAcreateserial \\\n\
+                      -days 365 -sha256 -out {cert_dir}/server-cert.pem\n\
+                 \n\
+                 3. Copy ca.pem to ALL machines in the deployment.\n\
+                 \n\
+                 4. Update Zenoh config (~/.bubbaloop/zenoh/zenohd.json5):\n\
+                    See: configs/zenoh/tls-example.json5\n\
+                 \n\
+                 5. Set BUBBALOOP_ZENOH_ENDPOINT on clients:\n\
+                    export BUBBALOOP_ZENOH_ENDPOINT=\"tls/<router-ip>:7447\"\n\
+                 \n\
+                 6. Verify with: bubbaloop doctor -c security"
             );
-            println!(
-                "     -subj \"/CN=bubbaloop-ca\" -days 3650 -out {}/ca.pem\n",
-                cert_dir
-            );
-            println!("2. Generate a server key and certificate:");
-            println!("   openssl genrsa -out {}/server-key.pem 4096", cert_dir);
-            println!("   openssl req -new -key {}/server-key.pem \\", cert_dir);
-            println!(
-                "     -subj \"/CN=$(hostname)\" -out {}/server.csr",
-                cert_dir
-            );
-            println!("   openssl x509 -req -in {}/server.csr \\", cert_dir);
-            println!(
-                "     -CA {}/ca.pem -CAkey {}/ca-key.pem -CAcreateserial \\",
-                cert_dir, cert_dir
-            );
-            println!("     -days 365 -sha256 -out {}/server-cert.pem\n", cert_dir);
-            println!("3. Copy ca.pem to ALL machines in the deployment.\n");
-            println!("4. Update Zenoh config (~/.bubbaloop/zenoh/zenohd.json5):");
-            println!("   See: configs/zenoh/tls-example.json5\n");
-            println!("5. Set BUBBALOOP_ZENOH_ENDPOINT on clients:");
-            println!("   export BUBBALOOP_ZENOH_ENDPOINT=\"tls/<router-ip>:7447\"\n");
-            println!("6. Verify with: bubbaloop doctor -c security");
         }
     }
 

@@ -245,7 +245,7 @@ fn print_tree(
     include_declared_but_unused: bool,
 ) {
     if manifests.is_empty() {
-        println!("(no nodes responded — is the daemon running and are nodes started?)");
+        log::info!("(no nodes responded — is the daemon running and are nodes started?)");
         return;
     }
     let mut by_pub: BTreeMap<&str, BTreeMap<&str, Vec<&str>>> = BTreeMap::new();
@@ -260,9 +260,12 @@ fn print_tree(
     let mut sorted: Vec<&WireManifest> = manifests.iter().collect();
     sorted.sort_by(|a, b| a.instance_name.cmp(&b.instance_name));
     for m in sorted {
-        println!(
+        log::info!(
             "{} [{}]  ({}, {})",
-            m.instance_name, m.role, m.node_kind, m.machine_id
+            m.instance_name,
+            m.role,
+            m.node_kind,
+            m.machine_id
         );
         let active_outputs: Vec<&IoEntry> = m
             .outputs
@@ -280,23 +283,23 @@ fn print_tree(
                 .cloned()
                 .unwrap_or_default();
             if consumers.is_empty() {
-                println!("  └─ {}{}  (no subscribers)", out.topic, tag);
+                log::info!("  └─ {}{}  (no subscribers)", out.topic, tag);
             } else {
                 let mut iter = consumers.into_iter();
                 if let Some(first) = iter.next() {
-                    println!("  └─ {}{} → {}", out.topic, tag, first);
+                    log::info!("  └─ {}{} → {}", out.topic, tag, first);
                     for rest in iter {
                         let pad = " ".repeat(out.topic.len() + 5);
-                        println!("  {}→ {}", pad, rest);
+                        log::info!("  {}→ {}", pad, rest);
                     }
                 }
             }
         }
     }
     if !graph.orphan_inputs.is_empty() {
-        println!("\norphan inputs (no producer):");
+        log::info!("\norphan inputs (no producer):");
         for d in &graph.orphan_inputs {
-            println!("  {} ← {}", d.instance, d.topic);
+            log::info!("  {} ← {}", d.instance, d.topic);
         }
     }
 }

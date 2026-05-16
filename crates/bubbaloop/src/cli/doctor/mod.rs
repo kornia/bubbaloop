@@ -80,13 +80,13 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
 
     if !json {
         if fix {
-            println!("bubbaloop doctor --fix");
-            println!("=====================");
+            log::info!("bubbaloop doctor --fix");
+            log::info!("=====================");
         } else {
-            println!("bubbaloop doctor");
-            println!("================");
+            log::info!("bubbaloop doctor");
+            log::info!("================");
         }
-        println!();
+        log::info!("");
     }
 
     let mut results = Vec::new();
@@ -101,7 +101,7 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
     // 0. Check configuration files
     if run_config {
         if !json {
-            println!("[1/6] Checking configuration...");
+            log::info!("[1/6] Checking configuration...");
         }
         results.extend(checks::check_configuration().await);
 
@@ -109,14 +109,14 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
             fixes_applied += apply_fixes(&mut results).await;
         }
         if !json {
-            println!();
+            log::info!("");
         }
     }
 
     // 1. Check system services
     if run_services {
         if !json {
-            println!("[2/6] Checking system services...");
+            log::info!("[2/6] Checking system services...");
         }
         results.extend(checks::check_system_services().await);
 
@@ -124,56 +124,56 @@ pub async fn run(fix: bool, json: bool, check: &str) -> Result<()> {
             fixes_applied += apply_fixes(&mut results).await;
         }
         if !json {
-            println!();
+            log::info!("");
         }
     }
 
     // 2. Check daemon connectivity via Zenoh manifest
     if run_connectivity {
         if !json {
-            println!("[3/6] Checking daemon connectivity...");
+            log::info!("[3/6] Checking daemon connectivity...");
         }
         results.extend(checks::check_daemon_connectivity().await);
 
         if !json {
-            println!();
+            log::info!("");
         }
     }
 
     // 3. Check daemon health
     if run_daemon {
         if !json {
-            println!("[4/6] Checking daemon health...");
+            log::info!("[4/6] Checking daemon health...");
         }
         results.extend(checks::check_daemon_health().await);
 
         if !json {
-            println!();
+            log::info!("");
         }
     }
 
     // 4. Check Zenoh data plane (optional, for streaming)
     if check_type == "all" {
         if !json {
-            println!("[5/6] Checking Zenoh data plane...");
+            log::info!("[5/6] Checking Zenoh data plane...");
         }
         results.extend(checks::check_node_subscriptions().await);
         results.extend(checks::check_dataflow_compliance().await);
         results.extend(checks::check_static_compliance().await);
 
         if !json {
-            println!();
+            log::info!("");
         }
     }
 
     // 5. Security checks
     if run_security {
         if !json {
-            println!("[6/6] Checking security posture...");
+            log::info!("[6/6] Checking security posture...");
         }
         results.extend(checks::check_security().await);
         if !json {
-            println!();
+            log::info!("");
         }
     }
 
@@ -209,23 +209,23 @@ fn print_human_results(
     fixes_applied: usize,
     fix: bool,
 ) -> Result<()> {
-    println!("Summary");
-    println!("=======");
-    println!();
+    log::info!("Summary");
+    log::info!("=======");
+    log::info!("");
 
     let mut issues_found = 0;
 
     for result in results {
         let symbol = if result.passed { "✓" } else { "✗" };
-        println!("[{}] {}: {}", symbol, result.check, result.message);
+        log::info!("[{}] {}: {}", symbol, result.check, result.message);
 
         if !result.passed {
             issues_found += 1;
             if let Some(fix_hint) = &result.fix {
                 if result.fix_action.is_some() {
-                    println!("    → Auto-fixable: {}", fix_hint);
+                    log::info!("    → Auto-fixable: {}", fix_hint);
                 } else {
-                    println!("    → Fix: {}", fix_hint);
+                    log::info!("    → Fix: {}", fix_hint);
                 }
             }
         }
@@ -234,23 +234,23 @@ fn print_human_results(
         if let Some(details) = &result.details {
             if let Some(obj) = details.as_object() {
                 for (key, value) in obj {
-                    println!("    {} = {}", key, value);
+                    log::info!("    {} = {}", key, value);
                 }
             }
         }
     }
 
-    println!();
+    log::info!("");
     if issues_found == 0 {
-        println!("All checks passed!");
+        log::info!("All checks passed!");
     } else {
-        println!(
+        log::info!(
             "Found {} issue{}",
             issues_found,
             if issues_found == 1 { "" } else { "s" }
         );
         if fixes_applied > 0 {
-            println!(
+            log::info!(
                 "Applied {} fix{}",
                 fixes_applied,
                 if fixes_applied == 1 { "" } else { "es" }
@@ -262,8 +262,8 @@ fn print_human_results(
                 .filter(|r| !r.passed && r.fix_action.is_some())
                 .count();
             if auto_fixable > 0 {
-                println!();
-                println!(
+                log::info!("");
+                log::info!(
                     "Tip: Run 'bubbaloop doctor --fix' to automatically fix {} issue{}",
                     auto_fixable,
                     if auto_fixable == 1 { "" } else { "s" }
@@ -285,17 +285,17 @@ async fn apply_fixes(results: &mut [DiagnosticResult]) -> usize {
         }
 
         let action = result.fix_action.clone().unwrap();
-        println!("    → Fixing: {}", action.description());
+        log::info!("    → Fixing: {}", action.description());
 
         match action.execute().await {
             Ok(msg) => {
-                println!("      ✓ {}", msg);
+                log::info!("      ✓ {}", msg);
                 result.passed = true;
                 result.message = format!("{} (fixed)", result.message);
                 fixes_applied += 1;
             }
             Err(e) => {
-                println!("      ✗ Failed: {}", e);
+                log::warn!("      ✗ Failed: {}", e);
             }
         }
     }

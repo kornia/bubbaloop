@@ -125,7 +125,7 @@ cargo test --features test-harness --test integration_mcp  # 47 integration test
 - `log` + `env_logger` — NOT tracing (`log::info!()`, logs to stderr)
 - `thiserror` for library errors, `anyhow` for CLI — module-specific `type Result<T>`
 - `zbus` for systemd — NEVER spawn `systemctl` as subprocess
-- `println!()` only for CLI user output — all other output via `log` macros
+- Never use `println!()`/`print!()`/`eprintln!()` — all output via `log` macros (`log::info!()` for user-facing CLI output, `log::warn!()`/`log::error!()` for problems). Main binary defaults to `"bubbaloop=info,warn"` so CLI info is visible without setting `RUST_LOG`.
 - `tempfile::tempdir()` for filesystem tests, co-located `#[cfg(test)] mod tests`
 - 100% safe Rust — no `unsafe`
 

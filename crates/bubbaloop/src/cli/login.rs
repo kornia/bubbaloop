@@ -97,25 +97,25 @@ impl LogoutCommand {
 
         if key_path.exists() {
             std::fs::remove_file(&key_path)?;
-            println!("Removed API key from {}", key_path.display());
+            log::info!("Removed API key from {}", key_path.display());
             removed = true;
         }
 
         if let Some(ref oauth_path) = oauth_path {
             if oauth_path.exists() {
                 std::fs::remove_file(oauth_path)?;
-                println!("Removed OAuth credentials from {}", oauth_path.display());
+                log::info!("Removed OAuth credentials from {}", oauth_path.display());
                 removed = true;
             }
         }
 
         if !removed {
-            println!("No credentials found");
+            log::info!("No credentials found");
         }
 
         if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-            println!(
-                "\nNote: ANTHROPIC_API_KEY environment variable is still set.\n\
+            log::warn!(
+                "ANTHROPIC_API_KEY environment variable is still set. \
                  Unset it to fully log out: unset ANTHROPIC_API_KEY"
             );
         }
@@ -127,21 +127,21 @@ impl LogoutCommand {
 // ── Interactive login flow ──────────────────────────────────────────
 
 async fn run_login(skip_validation: bool) -> Result<()> {
-    println!("\n  Bubbaloop Login\n");
-    println!("  Choose authentication method:\n");
-    println!("  [1] API Key (from console.anthropic.com)");
-    println!("  [2] Claude Subscription (via 'claude setup-token')\n");
+    log::info!(
+        "Bubbaloop Login\n\
+         Choose authentication method:\n\
+           [1] API Key (from console.anthropic.com)\n\
+           [2] Claude Subscription (via 'claude setup-token')"
+    );
 
     let choice = loop {
-        print!("  Enter choice (1 or 2): ");
-        use std::io::Write;
-        std::io::stdout().flush()?;
+        log::info!("Enter choice (1 or 2):");
         let mut line = String::new();
         std::io::stdin().read_line(&mut line)?;
         match line.trim() {
             "1" => break 1,
             "2" => break 2,
-            _ => println!("  Please enter 1 or 2."),
+            _ => log::info!("Please enter 1 or 2."),
         }
     };
 
@@ -153,19 +153,12 @@ async fn run_login(skip_validation: bool) -> Result<()> {
 }
 
 async fn run_api_key_login(skip_validation: bool) -> Result<()> {
-    println!("\n  API Key Login\n");
-    println!("  To use the agent, you need an Anthropic API key.\n");
-
-    // Step 1: Open browser
-    println!("  1. Opening {}", CONSOLE_URL);
+    log::info!("API Key Login — opening {} ...", CONSOLE_URL);
     if open::that(CONSOLE_URL).is_err() {
-        println!("     (Could not open browser — copy the URL above)");
+        log::info!("Could not open browser — copy the URL above");
     }
 
-    println!("\n  2. Create a new API key and copy it.\n");
-
-    // Step 2: Prompt for key (hidden input, requires real terminal)
-    let key = match rpassword::prompt_password("  Paste your API key: ") {
+    let key = match rpassword::prompt_password("Paste your API key: ") {
         Ok(k) => k.trim().to_string(),
         Err(_) => {
             return Err(LoginError::Io(std::io::Error::other(
@@ -178,49 +171,41 @@ async fn run_api_key_login(skip_validation: bool) -> Result<()> {
         return Err(LoginError::InvalidKey("empty input".to_string()));
     }
 
-    // Step 3: Validate (unless skipped)
     if skip_validation {
-        println!("\n  Skipping validation (--skip-validation)");
+        log::info!("Skipping validation (--skip-validation)");
     } else {
-        print!("\n  Validating... ");
         match validate_api_key(&key).await {
-            Ok(model_name) => {
-                println!("Key is valid ({} available)", model_name);
-            }
+            Ok(model_name) => log::info!("Key is valid ({} available)", model_name),
             Err(LoginError::InvalidKey(msg)) => {
-                println!("Invalid key: {}", msg);
+                log::warn!("Invalid key: {}", msg);
                 return Err(LoginError::InvalidKey(msg));
             }
             Err(e) => {
-                // Network error — save anyway, warn user
-                println!(
-                    "Could not validate ({})\n  Saving key anyway — check later with: bubbaloop login --status",
+                log::warn!(
+                    "Could not validate ({}). Saving key anyway — check later with: bubbaloop login --status",
                     e
                 );
             }
         }
     }
 
-    // Step 4: Save
     let path = key_file_path()?;
     save_key_file(&path, &key)?;
-    println!("\n  Saved to {}\n", path.display());
-    println!("  You're all set! Run 'bubbaloop agent' to start chatting.\n");
+    log::info!("Saved to {}", path.display());
+    log::info!("You're all set! Run 'bubbaloop agent' to start chatting.");
 
     Ok(())
 }
 
 async fn run_setup_token_login() -> Result<()> {
-    println!("\n  Claude Subscription Login (setup-token)\n");
-    println!("  This method uses Claude Code to generate an auth token.");
-    println!("  You need Claude Code installed (npm install -g @anthropic-ai/claude-code).\n");
-    println!("  1. Run this command in another terminal:\n");
-    println!("     claude setup-token\n");
-    println!("  2. Follow the prompts in Claude Code to authenticate.");
-    println!("     It will generate a token starting with 'sk-ant-oat01-'.\n");
+    log::info!(
+        "Claude Subscription Login (setup-token)\n\
+         Requires Claude Code (npm install -g @anthropic-ai/claude-code).\n\
+         Run 'claude setup-token' in another terminal, follow its prompts,\n\
+         then paste the token starting with 'sk-ant-oat01-' below."
+    );
 
-    // Prompt for the setup token
-    let token = match rpassword::prompt_password("  Paste the setup-token: ") {
+    let token = match rpassword::prompt_password("Paste the setup-token: ") {
         Ok(t) => t.trim().to_string(),
         Err(_) => {
             return Err(LoginError::Io(std::io::Error::other(
@@ -233,7 +218,6 @@ async fn run_setup_token_login() -> Result<()> {
         return Err(LoginError::OAuth("empty token".to_string()));
     }
 
-    // Validate token format
     if !token.starts_with(SETUP_TOKEN_PREFIX) {
         return Err(LoginError::OAuth(format!(
             "expected token starting with '{}', got '{}'",
@@ -248,39 +232,31 @@ async fn run_setup_token_login() -> Result<()> {
         ));
     }
 
-    // Validate the token against the API
-    print!("\n  Validating token... ");
     match validate_bearer_token(&token).await {
-        Ok(model_name) => {
-            println!("Valid ({} available)", model_name);
-        }
+        Ok(model_name) => log::info!("Token valid ({} available)", model_name),
         Err(LoginError::OAuth(msg)) => {
-            println!("Invalid: {}", msg);
+            log::warn!("Invalid token: {}", msg);
             return Err(LoginError::OAuth(msg));
         }
         Err(e) => {
-            println!(
-                "Could not validate ({})\n  Saving token anyway — check later with: bubbaloop login --status",
+            log::warn!(
+                "Could not validate ({}). Saving token anyway — check later with: bubbaloop login --status",
                 e
             );
         }
     }
 
-    // Save as OAuth credentials (bearer token)
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let now = unix_now();
     let credentials = OAuthCredentials {
         access_token: token,
-        refresh_token: String::new(), // setup-tokens don't have refresh tokens
-        expires_at: now + 365 * 24 * 3600, // Long-lived (1 year placeholder)
+        refresh_token: String::new(),
+        expires_at: now + 365 * 24 * 3600,
     };
 
     let path = oauth_credentials_path()?;
     save_oauth_credentials(&path, &credentials)?;
-    println!("\n  Saved to {}", path.display());
-    println!("\n  You're all set! Run 'bubbaloop agent' to start chatting.\n");
+    log::info!("Saved to {}", path.display());
+    log::info!("You're all set! Run 'bubbaloop agent' to start chatting.");
 
     Ok(())
 }
@@ -288,75 +264,108 @@ async fn run_setup_token_login() -> Result<()> {
 // ── Status check ────────────────────────────────────────────────────
 
 async fn show_status() -> Result<()> {
-    let path = key_file_path()?;
+    let mut any = false;
 
-    // Check env var first
-    if let Ok(env_key) = std::env::var("ANTHROPIC_API_KEY") {
-        println!("API key source: ANTHROPIC_API_KEY environment variable");
-        print!("Validating... ");
-        match validate_api_key(&env_key).await {
-            Ok(model) => println!("Valid ({} available)", model),
-            Err(LoginError::InvalidKey(msg)) => println!("Invalid: {}", msg),
-            Err(e) => println!("Could not validate: {}", e),
-        }
-        return Ok(());
+    // ── Gemini ───────────────────────────────────────────────────────
+    let gemini_key = std::env::var("GEMINI_API_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| read_key_file(dirs::home_dir()?.join(".bubbaloop").join("gemini-key")));
+
+    if let Some(ref key) = gemini_key {
+        log::info!("Gemini: configured ({})", mask_key(key));
+        any = true;
+    } else {
+        log::info!("Gemini: not configured  (set GEMINI_API_KEY or ~/.bubbaloop/gemini-key)");
     }
 
-    // Check API key file
-    if path.exists() {
-        let content = std::fs::read_to_string(&path)?;
-        let key = content.lines().next().unwrap_or("").trim();
-        if key.is_empty() {
-            println!("Key file exists but is empty: {}", path.display());
-            println!("Run 'bubbaloop login' to set up your API key.");
-            return Ok(());
-        }
+    // ── Claude ───────────────────────────────────────────────────────
+    let claude_key = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| read_key_file(key_file_path().ok()?));
 
-        println!("API key source: {}", path.display());
-        let masked = mask_key(key);
-        println!("Key: {}", masked);
-        print!("Validating... ");
-        match validate_api_key(key).await {
-            Ok(model) => println!("Valid ({} available)", model),
-            Err(LoginError::InvalidKey(msg)) => println!("Invalid: {}", msg),
-            Err(e) => println!("Could not validate: {}", e),
-        }
-        return Ok(());
-    }
-
-    // Check OAuth credentials
-    match load_oauth_credentials() {
-        Ok(Some(creds)) => {
-            let oauth_path = oauth_credentials_path()?;
-            println!("API key source: {} (OAuth)", oauth_path.display());
-            let masked = mask_key(&creds.access_token);
-            println!("Access token: {}", masked);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            if creds.expires_at > now {
-                let remaining = creds.expires_at - now;
-                let hours = remaining / 3600;
-                let minutes = (remaining % 3600) / 60;
-                println!("Token expires in: {}h {}m", hours, minutes);
-            } else {
-                println!("Token expired — run 'bubbaloop login' to refresh");
+    if let Some(ref key) = claude_key {
+        let status = match validate_api_key(key).await {
+            Ok(model) => format!("valid ({} available)", model),
+            Err(LoginError::InvalidKey(msg)) => format!("invalid: {}", msg),
+            Err(e) => format!("could not validate: {}", e),
+        };
+        log::info!("Claude: configured ({})  {}", mask_key(key), status);
+        any = true;
+    } else {
+        match load_oauth_credentials() {
+            Ok(Some(creds)) => {
+                let now = unix_now();
+                let expiry = if creds.expires_at > now {
+                    let r = creds.expires_at - now;
+                    format!("expires in {}h {}m", r / 3600, (r % 3600) / 60)
+                } else {
+                    "EXPIRED — run 'bubbaloop login' to refresh".to_string()
+                };
+                let token_status = match validate_bearer_token(&creds.access_token).await {
+                    Ok(model) => format!("valid ({} available)", model),
+                    Err(e) => format!("invalid: {}", e),
+                };
+                log::info!("Claude: OAuth ({})  {}", expiry, token_status);
+                log::warn!(
+                    "OAuth blocked for dashboard chat (Anthropic Feb 2026 ToS). \
+                     Use GEMINI_API_KEY (free) or ANTHROPIC_API_KEY instead."
+                );
+                any = true;
             }
-            print!("Validating... ");
-            match validate_bearer_token(&creds.access_token).await {
-                Ok(model) => println!("Valid ({} available)", model),
-                Err(e) => println!("Invalid: {}", e),
+            Ok(None) => {
+                log::info!(
+                    "Claude: not configured  (run 'bubbaloop login' or set ANTHROPIC_API_KEY)"
+                );
             }
-            return Ok(());
+            Err(e) => log::warn!("Failed to read OAuth credentials: {}", e),
         }
-        Ok(None) => {} // No OAuth credentials, fall through to "no key"
-        Err(e) => log::warn!("Failed to read OAuth credentials: {}", e),
     }
 
-    println!("No API key configured.");
-    println!("Run 'bubbaloop login' to set up your API key.");
+    // ── Ollama ───────────────────────────────────────────────────────
+    let host =
+        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let reachable = reqwest::Client::new()
+        .get(format!("{}/api/tags", host.trim_end_matches('/')))
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+    log::info!(
+        "Ollama:  {} at {}",
+        if reachable {
+            "reachable"
+        } else {
+            "not reachable (optional)"
+        },
+        host
+    );
+    if reachable {
+        any = true;
+    }
+
+    if !any {
+        log::warn!(
+            "No providers configured. Recommended: set GEMINI_API_KEY (free tier) — \
+             https://aistudio.google.com/app/apikey"
+        );
+    }
     Ok(())
+}
+
+fn read_key_file(path: std::path::PathBuf) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let key = content.lines().next()?.trim().to_string();
+    (!key.is_empty()).then_some(key)
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 // ── Bearer token validation ─────────────────────────────────────────

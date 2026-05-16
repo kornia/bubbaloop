@@ -5,7 +5,7 @@
 
 use crate::agent::runtime::{agent_directory, AgentEntry, AgentsConfig};
 use crate::cli::login;
-use std::io::{self, Write};
+use std::io;
 
 /// Known Claude models for interactive selection.
 const CLAUDE_MODELS: &[(&str, &str)] = &[
@@ -27,7 +27,7 @@ const GEMINI_MODELS: &[(&str, &str)] = &[
 pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     let mut config = AgentsConfig::load_or_default();
 
-    println!("\n  Agent Model Setup\n");
+    log::info!("Agent Model Setup");
 
     // Select which agent to configure
     let is_new_agent;
@@ -35,7 +35,7 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
         Some(id) => {
             is_new_agent = !config.agents.contains_key(id);
             if is_new_agent {
-                println!("  Creating new agent '{}'.\n", id);
+                log::info!("Creating new agent '{}'.", id);
                 config.agents.insert(
                     id.to_string(),
                     AgentEntry {
@@ -59,18 +59,16 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
     if !is_new_agent {
         if let Some(entry) = config.agents.get(&agent_id) {
             let model_display = entry.model.as_deref().unwrap_or("(from soul defaults)");
-            println!(
+            log::info!(
                 "  Current: provider={}, model={}",
-                entry.provider, model_display
+                entry.provider,
+                model_display
             );
         }
     }
 
     // Choose provider (Gemini first — recommended, free tier, no ToS concerns)
-    println!("\n  Choose provider:\n");
-    println!("  [1] Gemini (recommended — free tier, strong vision)");
-    println!("  [2] Claude API (cloud, pay-per-token)");
-    println!("  [3] Ollama (local, no cloud bill)\n");
+    log::info!("Choose provider:\n  [1] Gemini (recommended — free tier, strong vision)\n  [2] Claude API (cloud, pay-per-token)\n  [3] Ollama (local, no cloud bill)");
 
     let provider_choice = prompt_choice("  Enter choice (1, 2, or 3)", &["1", "2", "3"])?;
     let provider = match provider_choice.as_str() {
@@ -81,31 +79,29 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
 
     // Nudge setup if credentials are missing for cloud providers
     if provider == "gemini" && !crate::agent::provider::gemini::GeminiProvider::has_credentials() {
-        println!("\n  No Gemini API key found.");
-        println!("  Set GEMINI_API_KEY or place key in ~/.bubbaloop/gemini-key");
-        println!("  Get a free key at: https://aistudio.google.com/app/apikey");
-        println!("\n  Continue anyway? Model config will be saved. [y/N]");
+        log::info!(
+            "No Gemini API key found. Set GEMINI_API_KEY or place key in ~/.bubbaloop/gemini-key\n\
+             Get a free key at: https://aistudio.google.com/app/apikey\n\
+             Continue anyway? Model config will be saved. [y/N]"
+        );
         let mut line = String::new();
-        print!("  ");
-        io::stdout().flush()?;
         io::stdin().read_line(&mut line)?;
         if !line.trim().eq_ignore_ascii_case("y") {
-            println!("  Setup paused. Set GEMINI_API_KEY then run setup again.");
+            log::info!("Setup paused. Set GEMINI_API_KEY then run setup again.");
             return Ok(());
         }
     }
 
     if provider == "claude" && !login::has_claude_credentials() {
-        println!("\n  No Claude API credentials found.");
-        println!("  Run 'bubbaloop login' first to authenticate.");
-        println!("  Tip: GEMINI_API_KEY has a free tier — try provider [1] instead.\n");
-        println!("  Continue anyway? Model config will be saved. [y/N]");
+        log::info!(
+            "No Claude API credentials found. Run 'bubbaloop login' first to authenticate.\n\
+             Tip: GEMINI_API_KEY has a free tier — try provider [1] instead.\n\
+             Continue anyway? Model config will be saved. [y/N]"
+        );
         let mut line = String::new();
-        print!("  ");
-        io::stdout().flush()?;
         io::stdin().read_line(&mut line)?;
         if !line.trim().eq_ignore_ascii_case("y") {
-            println!("  Setup cancelled. Run 'bubbaloop login' then try again.");
+            log::info!("Setup cancelled. Run 'bubbaloop login' then try again.");
             return Ok(());
         }
     }
@@ -126,16 +122,18 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
     // Save
     config.save()?;
 
-    println!("\n  Updated agent '{}':", agent_id);
-    println!("    provider: {}", provider);
-    println!("    model: {}", model);
+    log::info!(
+        "Updated agent '{}': provider={}, model={}",
+        agent_id,
+        provider,
+        model
+    );
     // For new agents, ask for a quick identity description and write identity.md
     if is_new_agent {
         let soul_dir = agent_directory(&agent_id).join("soul");
         std::fs::create_dir_all(&soul_dir).ok();
 
-        println!("\n  Describe this agent's role in one sentence");
-        println!("  (e.g., \"analyzes camera images and produces captions\"):\n");
+        log::info!("Describe this agent's role in one sentence\n  (e.g., \"analyzes camera images and produces captions\"):");
         let description = prompt_line("  Role")?;
 
         let identity = format!(
@@ -145,31 +143,31 @@ pub async fn run_setup(target_agent: Option<&str>) -> Result<(), Box<dyn std::er
         );
         let identity_path = soul_dir.join("identity.md");
         std::fs::write(&identity_path, &identity)?;
-        println!("  Wrote identity to {}", identity_path.display());
+        log::info!("Wrote identity to {}", identity_path.display());
     }
 
-    println!("\n  Saved to ~/.bubbaloop/agents.toml");
+    log::info!("Saved to ~/.bubbaloop/agents.toml");
 
     // Offer to restart the daemon so changes take effect immediately
-    println!("\n  Restart daemon for changes to take effect? [Y/n]");
+    log::info!("Restart daemon for changes to take effect? [Y/n]");
     let mut line = String::new();
-    print!("  ");
-    io::stdout().flush()?;
     io::stdin().read_line(&mut line)?;
     let should_restart = line.trim().is_empty() || line.trim().eq_ignore_ascii_case("y");
 
     if should_restart {
         restart_daemon().await;
-        println!("\n  Chat with your agent:");
-        println!("    bubbaloop agent chat -a {}", agent_id);
+        log::info!(
+            "Chat with your agent:  bubbaloop agent chat -a {}",
+            agent_id
+        );
     } else if is_new_agent {
-        println!("  When ready, restart the daemon then chat:");
-        println!("    bubbaloop daemon restart");
-        println!("    bubbaloop agent chat -a {}", agent_id);
+        log::info!(
+            "When ready, restart the daemon then chat:\n  bubbaloop daemon restart\n  bubbaloop agent chat -a {}",
+            agent_id
+        );
     } else {
-        println!("  Run 'bubbaloop daemon restart' for changes to take effect.");
+        log::info!("Run 'bubbaloop daemon restart' for changes to take effect.");
     }
-    println!();
 
     Ok(())
 }
@@ -184,15 +182,15 @@ fn select_agent(config: &AgentsConfig) -> Result<String, Box<dyn std::error::Err
 
     if agents.len() == 1 {
         let id = agents[0].0.clone();
-        println!("  Agent: {}", id);
+        log::info!("Agent: {}", id);
         return Ok(id);
     }
 
-    println!("  Available agents:\n");
+    log::info!("Available agents:");
     for (i, (id, entry)) in agents.iter().enumerate() {
         let default_tag = if entry.default { " (default)" } else { "" };
         let model_display = entry.model.as_deref().unwrap_or("soul default");
-        println!(
+        log::info!(
             "  [{}] {}{} — {} / {}",
             i + 1,
             id,
@@ -201,7 +199,6 @@ fn select_agent(config: &AgentsConfig) -> Result<String, Box<dyn std::error::Err
             model_display
         );
     }
-    println!();
 
     let valid: Vec<String> = (1..=agents.len()).map(|i| i.to_string()).collect();
     let valid_refs: Vec<&str> = valid.iter().map(|s| s.as_str()).collect();
@@ -212,11 +209,11 @@ fn select_agent(config: &AgentsConfig) -> Result<String, Box<dyn std::error::Err
 
 /// Interactive Claude model selection.
 fn select_claude_model() -> Result<String, Box<dyn std::error::Error>> {
-    println!("\n  Available Claude models:\n");
+    log::info!("Available Claude models:");
     for (i, (id, desc)) in CLAUDE_MODELS.iter().enumerate() {
-        println!("  [{}] {} — {}", i + 1, id, desc);
+        log::info!("  [{}] {} — {}", i + 1, id, desc);
     }
-    println!("  [{}] Custom (enter model ID)\n", CLAUDE_MODELS.len() + 1);
+    log::info!("  [{}] Custom (enter model ID)", CLAUDE_MODELS.len() + 1);
 
     let valid: Vec<String> = (1..=CLAUDE_MODELS.len() + 1)
         .map(|i| i.to_string())
@@ -234,11 +231,11 @@ fn select_claude_model() -> Result<String, Box<dyn std::error::Error>> {
 
 /// Interactive Gemini model selection.
 fn select_gemini_model() -> Result<String, Box<dyn std::error::Error>> {
-    println!("\n  Available Gemini models:\n");
+    log::info!("Available Gemini models:");
     for (i, (id, desc)) in GEMINI_MODELS.iter().enumerate() {
-        println!("  [{}] {} — {}", i + 1, id, desc);
+        log::info!("  [{}] {} — {}", i + 1, id, desc);
     }
-    println!("  [{}] Custom (enter model ID)\n", GEMINI_MODELS.len() + 1);
+    log::info!("  [{}] Custom (enter model ID)", GEMINI_MODELS.len() + 1);
 
     let valid: Vec<String> = (1..=GEMINI_MODELS.len() + 1)
         .map(|i| i.to_string())
@@ -271,9 +268,6 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
         std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
     let url = format!("{}/api/tags", endpoint.trim_end_matches('/'));
 
-    print!("  Checking Ollama at {}... ", endpoint);
-    io::stdout().flush()?;
-
     let client = reqwest::Client::new();
     let resp = match client
         .get(&url)
@@ -283,7 +277,7 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
     {
         Ok(r) => r,
         Err(e) => {
-            println!("failed");
+            log::warn!("  Checking Ollama at {}... failed", endpoint);
             return Err(format!(
                 "Cannot reach Ollama at {}. Is it running?\n  Error: {}",
                 endpoint, e
@@ -293,9 +287,14 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
     };
 
     if !resp.status().is_success() {
-        println!("failed (status {})", resp.status());
+        log::warn!(
+            "  Checking Ollama at {}... failed (status {})",
+            endpoint,
+            resp.status()
+        );
         return Err("Ollama returned an error".into());
     }
+    log::info!("  Checking Ollama at {}... OK", endpoint);
 
     let body: serde_json::Value = resp.json().await?;
     let local_models: Vec<OllamaModel> = body
@@ -321,14 +320,12 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
         })
         .unwrap_or_default();
 
-    println!("OK\n");
-
     // Build unified menu: local models + recommended (not yet pulled) + custom
     let mut menu_idx: usize = 0;
 
     // Section 1: Local models
     if !local_models.is_empty() {
-        println!("  Local models:\n");
+        log::info!("  Local models:");
         for m in &local_models {
             menu_idx += 1;
             let quant_display = if m.quant.is_empty() {
@@ -336,7 +333,7 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
             } else {
                 format!(", {}", m.quant)
             };
-            println!("  [{}] {} ({}{})", menu_idx, m.name, m.size, quant_display);
+            log::info!("  [{}] {} ({}{})", menu_idx, m.name, m.size, quant_display);
         }
     }
 
@@ -353,17 +350,17 @@ async fn select_ollama_model() -> Result<String, Box<dyn std::error::Error>> {
 
     let recommended_start = menu_idx;
     if !recommended.is_empty() {
-        println!("\n  Recommended (will be downloaded):\n");
+        log::info!("  Recommended (will be downloaded):");
         for &(name, desc) in &recommended {
             menu_idx += 1;
-            println!("  [{}] \u{2B07} {} — {}", menu_idx, name, desc);
+            log::info!("  [{}] \u{2B07} {} — {}", menu_idx, name, desc);
         }
     }
 
     // Section 3: Custom
     menu_idx += 1;
     let custom_idx = menu_idx;
-    println!("\n  [{}] Custom (enter model name)\n", custom_idx);
+    log::info!("  [{}] Custom (enter model name)", custom_idx);
 
     let valid: Vec<String> = (1..=custom_idx).map(|i| i.to_string()).collect();
     let valid_refs: Vec<&str> = valid.iter().map(|s| s.as_str()).collect();
@@ -413,7 +410,7 @@ fn find_ollama() -> std::path::PathBuf {
 
 /// Pull an Ollama model, showing progress via the CLI `ollama pull` command.
 async fn pull_ollama_model(model: &str, _endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
-    println!("\n  Pulling {}...\n", model);
+    log::info!("Pulling {}...", model);
 
     let ollama_bin = find_ollama();
     let status = tokio::process::Command::new(&ollama_bin)
@@ -427,7 +424,7 @@ async fn pull_ollama_model(model: &str, _endpoint: &str) -> Result<(), Box<dyn s
         return Err(format!("Failed to pull model '{}'. Check your connection.", model).into());
     }
 
-    println!("\n  Pull complete.");
+    log::info!("Pull complete.");
     Ok(())
 }
 
@@ -442,9 +439,6 @@ async fn restart_daemon() {
     use crate::cli::daemon_client;
     use crate::cli::zenoh_session;
 
-    print!("  Restarting daemon... ");
-    io::stdout().flush().ok();
-
     // Try graceful stop via Zenoh (best-effort — daemon might not be running)
     if let Ok(session) = zenoh_session::create_zenoh_session(None).await {
         let _ = daemon_client::run_daemon_stop(session).await;
@@ -452,38 +446,36 @@ async fn restart_daemon() {
     }
 
     match daemon_client::run_daemon_start().await {
-        Ok(()) => println!("done."),
-        Err(e) => eprintln!("failed: {}", e),
+        Ok(()) => log::info!("  Restarting daemon... done."),
+        Err(e) => log::warn!("  Restarting daemon... failed: {}", e),
     }
 }
 
 /// Prompt for a choice from a set of valid values.
 fn prompt_choice(prompt: &str, valid: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
     loop {
-        print!("{}: ", prompt);
-        io::stdout().flush()?;
+        log::info!("{}: ", prompt);
         let mut line = String::new();
         io::stdin().read_line(&mut line)?;
         let trimmed = line.trim();
         if valid.contains(&trimmed) {
             return Ok(trimmed.to_string());
         }
-        println!("  Please enter one of: {}", valid.join(", "));
+        log::info!("  Please enter one of: {}", valid.join(", "));
     }
 }
 
 /// Prompt for a non-empty line of input.
 fn prompt_line(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
     loop {
-        print!("{}: ", prompt);
-        io::stdout().flush()?;
+        log::info!("{}: ", prompt);
         let mut line = String::new();
         io::stdin().read_line(&mut line)?;
         let trimmed = line.trim().to_string();
         if !trimmed.is_empty() {
             return Ok(trimmed);
         }
-        println!("  Input cannot be empty.");
+        log::info!("  Input cannot be empty.");
     }
 }
 
