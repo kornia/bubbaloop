@@ -9,6 +9,7 @@
 //! - `prompt` — System prompt builder
 //! - `scheduler` — Job poller integrated with heartbeat
 
+pub mod camera;
 pub mod dispatch;
 pub(crate) mod dispatch_security;
 pub mod gateway;
@@ -324,6 +325,7 @@ pub async fn run_agent_turn<
             // Browser disconnected — cancel the turn cleanly.
             log::info!("[Agent] Turn cancelled by client (corr={})", correlation_id);
             sanitize_dangling_tool_use(memory);
+            dispatcher.clear_image_stash();
             sink.emit(AgentEvent::error(
                 correlation_id,
                 "turn cancelled by client",
@@ -339,6 +341,7 @@ pub async fn run_agent_turn<
             // The Claude API returns 400 "unexpected tool_use" on the next turn if
             // those blocks are left dangling. Add synthetic error tool_results.
             sanitize_dangling_tool_use(memory);
+            dispatcher.clear_image_stash();
             sink.emit(AgentEvent::error(
                 correlation_id,
                 &format!("Turn timed out after {}s", TURN_TIMEOUT_SECS),
@@ -590,7 +593,21 @@ async fn run_turn_loop<
         }
 
         // Add tool results to short-term memory
+        let tool_use_ids: Vec<String> = tool_results.iter().map(|(id, _, _)| id.clone()).collect();
         memory.short_term.push(Message::tool_results(tool_results));
+
+        // Inject captured camera frames as a follow-up user message with labeled images.
+        // Images are stashed out-of-band by grab_frame (base64 never enters ToolResult).
+        let attachments = dispatcher.drain_images(&tool_use_ids);
+        if !attachments.is_empty() {
+            let pairs: Vec<(String, String, String)> = attachments
+                .into_iter()
+                .map(|a| (a.label, a.media_type, a.base64))
+                .collect();
+            memory
+                .short_term
+                .push(Message::user_with_labeled_images(pairs));
+        }
     }
 
     // 2.5. Pre-compaction flush (design Section 5.5)

@@ -56,8 +56,20 @@ struct GeminiContent {
 #[serde(untagged)]
 enum GeminiPart {
     Text(GeminiTextPartOwned),
+    InlineData(GeminiInlineDataPart),
     FunctionCall(GeminiFunctionCall),
     FunctionResponse(GeminiFunctionResponse),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct GeminiInlineDataPart {
+    inline_data: GeminiInlineData,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct GeminiInlineData {
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Serialize)]
@@ -232,8 +244,12 @@ impl GeminiProvider {
 // ── Message conversion ───────────────────────────────────────────────
 
 /// Convert our canonical `Message` slice to Gemini `contents` + optional system prompt.
+///
+/// Consecutive messages with the same role are coalesced into a single `GeminiContent` entry
+/// by concatenating their `parts[]`. Gemini requires strict role alternation; our agent loop
+/// emits two consecutive user messages (tool_results then labeled images) in the same turn.
 fn to_gemini_contents(messages: &[Message]) -> Vec<GeminiContent> {
-    let mut out = Vec::new();
+    let mut out: Vec<GeminiContent> = Vec::new();
     for msg in messages {
         let role = match msg.role.as_str() {
             "assistant" => "model",
@@ -244,6 +260,14 @@ fn to_gemini_contents(messages: &[Message]) -> Vec<GeminiContent> {
             match block {
                 ContentBlock::Text { text } => {
                     parts.push(GeminiPart::Text(GeminiTextPartOwned { text: text.clone() }));
+                }
+                ContentBlock::Image { source } => {
+                    parts.push(GeminiPart::InlineData(GeminiInlineDataPart {
+                        inline_data: GeminiInlineData {
+                            mime_type: source.media_type.clone(),
+                            data: source.data.clone(),
+                        },
+                    }));
                 }
                 ContentBlock::ToolUse { name, input, .. } => {
                     parts.push(GeminiPart::FunctionCall(GeminiFunctionCall {
@@ -272,12 +296,20 @@ fn to_gemini_contents(messages: &[Message]) -> Vec<GeminiContent> {
                 }
             }
         }
-        if !parts.is_empty() {
-            out.push(GeminiContent {
-                role: role.to_string(),
-                parts,
-            });
+        if parts.is_empty() {
+            continue;
         }
+        // Coalesce consecutive same-role entries (Gemini requires strict alternation).
+        if let Some(last) = out.last_mut() {
+            if last.role == role {
+                last.parts.extend(parts);
+                continue;
+            }
+        }
+        out.push(GeminiContent {
+            role: role.to_string(),
+            parts,
+        });
     }
     out
 }
@@ -319,6 +351,7 @@ fn parse_candidate(candidate: &GeminiCandidate) -> (Vec<ContentBlock>, Option<St
                 });
             }
             GeminiPart::FunctionResponse(_) => {}
+            GeminiPart::InlineData(_) => {} // images in responses are not yet surfaced
         }
     }
     let stop_reason = candidate.finish_reason.as_deref().map(|r| match r {
@@ -530,6 +563,7 @@ async fn process_gemini_sse(
                         }
                     }
                     GeminiPart::FunctionResponse(_) => {}
+                    GeminiPart::InlineData(_) => {} // images in responses not yet surfaced
                 }
             }
 

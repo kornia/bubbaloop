@@ -5,6 +5,7 @@
 //! exposes 47 tools to external clients; the agent here uses the subset it
 //! needs for its own reasoning loop.
 
+use crate::agent::camera::ImageAttachment;
 use crate::agent::dispatch_security;
 use crate::agent::provider::{ContentBlock, ToolDefinition};
 use crate::mcp::platform::{
@@ -12,6 +13,7 @@ use crate::mcp::platform::{
 };
 use crate::validation;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Result of a tool handler: text output and whether it was an error.
@@ -44,6 +46,8 @@ pub struct Dispatcher<P: PlatformOperations> {
     job_notify: Option<Arc<tokio::sync::Notify>>,
     episodic_decay_half_life_days: u32,
     telemetry: Option<Arc<crate::daemon::telemetry::TelemetryService>>,
+    /// Images captured by `grab_frame` during a turn, keyed by tool_use_id.
+    image_stash: std::sync::Mutex<HashMap<String, ImageAttachment>>,
 }
 
 impl<P: PlatformOperations> Dispatcher<P> {
@@ -57,6 +61,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             job_notify: None,
             episodic_decay_half_life_days: 7,
             telemetry: None,
+            image_stash: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -95,6 +100,30 @@ impl<P: PlatformOperations> Dispatcher<P> {
             job_notify,
             episodic_decay_half_life_days,
             telemetry: None,
+            image_stash: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Stash an image attachment captured by `grab_frame` for the current turn.
+    pub fn stash_image(&self, tool_use_id: String, attachment: ImageAttachment) {
+        if let Ok(mut stash) = self.image_stash.lock() {
+            stash.insert(tool_use_id, attachment);
+        }
+    }
+
+    /// Drain all stashed images for the given tool_use_ids (in order).
+    pub fn drain_images(&self, tool_use_ids: &[String]) -> Vec<ImageAttachment> {
+        let mut stash = self.image_stash.lock().unwrap_or_else(|e| e.into_inner());
+        tool_use_ids
+            .iter()
+            .filter_map(|id| stash.remove(id))
+            .collect()
+    }
+
+    /// Clear the image stash (called at the end of each turn).
+    pub fn clear_image_stash(&self) {
+        if let Ok(mut stash) = self.image_stash.lock() {
+            stash.clear();
         }
     }
 
@@ -663,6 +692,29 @@ impl<P: PlatformOperations> Dispatcher<P> {
                     "required": ["topic", "message"]
                 }),
             },
+            ToolDefinition {
+                name: "grab_frame".to_string(),
+                description: "Capture the latest JPEG frame from a camera sensor node. \
+                    The frame is delivered as an image content block in the next turn so \
+                    you can inspect it directly. Check the Current Sensor Inventory for \
+                    available camera node names. Returns a JSON receipt with capture \
+                    metadata (timestamp, resolution, frame_id)."
+                    .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "node_name": {
+                            "type": "string",
+                            "description": "Name of the camera node (e.g. 'tapo-terrace', 'tapo-entrance')"
+                        },
+                        "machine_id": {
+                            "type": "string",
+                            "description": "Machine ID override (defaults to the local machine)"
+                        }
+                    },
+                    "required": ["node_name"]
+                }),
+            },
         ]
     }
 
@@ -723,6 +775,7 @@ impl<P: PlatformOperations> Dispatcher<P> {
             "telemetry_history" => self.handle_get_telemetry_history(input).await,
             "telemetry_config_update" => self.handle_update_telemetry_config(input).await,
             "publish_to_topic" => self.handle_publish_to_topic(input).await,
+            "grab_frame" => self.handle_grab_frame(tool_use_id, input).await,
             _ => ToolResult::error(format!(
                 "Unknown tool: {}. Use your available tools: node management \
                  (node_list, node_start, etc.), system (read_file, write_file, \
@@ -1733,6 +1786,36 @@ impl<P: PlatformOperations> Dispatcher<P> {
             Err(e) => ToolResult::error(format!("Error: {}", e)),
         }
     }
+
+    async fn handle_grab_frame(&self, tool_use_id: &str, input: &Value) -> ToolResult {
+        let node_name = match input.get("node_name").and_then(|v| v.as_str()) {
+            Some(n) => n.to_string(),
+            None => return ToolResult::error("Missing required parameter: node_name".to_string()),
+        };
+        let machine_id = input
+            .get("machine_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&self.machine_id)
+            .to_string();
+
+        let session = match self.platform.zenoh_session() {
+            Some(s) => s,
+            None => {
+                return ToolResult::error(
+                    "grab_frame is not available in this context (no Zenoh session)".to_string(),
+                )
+            }
+        };
+
+        log::info!("[Agent] grab_frame: {}/{}", machine_id, node_name);
+        match crate::agent::camera::grab_frame(&session, &node_name, &machine_id).await {
+            Ok((receipt, attachment)) => {
+                self.stash_image(tool_use_id.to_string(), attachment);
+                ToolResult::success(receipt)
+            }
+            Err(e) => ToolResult::error(format!("grab_frame failed for '{}': {}", node_name, e)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1743,7 +1826,7 @@ mod tests {
     use zenoh::pubsub::Subscriber;
     use zenoh::sample::Sample;
 
-    const TOOL_COUNT: usize = 42;
+    const TOOL_COUNT: usize = 43;
 
     #[test]
     fn tool_definitions_count() {

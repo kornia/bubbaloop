@@ -356,6 +356,7 @@ dependencies = [
  "anyhow",
  "argh",
  "axum",
+ "base64",
  "chrono",
  "ciborium",
  "cron",

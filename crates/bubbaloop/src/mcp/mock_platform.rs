@@ -450,6 +450,10 @@ impl PlatformOperations for MockPlatform {
         log::debug!("[MockPlatform] publish_to_topic: {}", topic);
         Ok(())
     }
+
+    fn zenoh_session(&self) -> Option<Arc<zenoh::Session>> {
+        self.zenoh_session.clone()
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────

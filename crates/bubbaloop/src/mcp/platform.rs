@@ -281,6 +281,12 @@ pub trait PlatformOperations: Send + Sync + 'static {
         topic: &str,
         message: &str,
     ) -> impl std::future::Future<Output = PlatformResult<()>> + Send;
+
+    /// Return the underlying Zenoh session, if available.
+    ///
+    /// `DaemonPlatform` returns `Some`; `MockPlatform` returns `None`.
+    /// Used by `grab_frame` to pull camera samples directly from SHM.
+    fn zenoh_session(&self) -> Option<std::sync::Arc<zenoh::Session>>;
 }
 
 /// Parameters for creating or updating a belief.

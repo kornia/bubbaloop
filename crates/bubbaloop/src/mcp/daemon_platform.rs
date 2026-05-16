@@ -809,6 +809,10 @@ impl PlatformOperations for DaemonPlatform {
             .map_err(|e| PlatformError::Internal(format!("Zenoh put failed: {}", e)))
     }
 
+    fn zenoh_session(&self) -> Option<Arc<Session>> {
+        Some(self.session.clone())
+    }
+
     async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {
         let base = self
             .agent_db_path

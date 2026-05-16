@@ -84,6 +84,9 @@ chrono.workspace = true
 notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
 toml = "0.8"
 
+# Camera vision: base64 for encoding grab_frame JPEG responses
+base64 = "0.22"
+
 # TUI for agent chat REPL
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
