@@ -195,6 +195,17 @@ pub fn outbox_wildcard(machine_id: &str) -> String {
     format!("bubbaloop/global/{}/agent/*/outbox", machine_id)
 }
 
+/// Build the per-agent cancel topic.
+///
+/// The dashboard HTTP handler publishes here (payload = corr_id bytes) when
+/// the browser disconnects mid-turn. The agent loop fires the CancellationToken
+/// for the matching turn.
+///
+/// Format: `bubbaloop/global/{machine}/agent/{agent_id}/cancel`
+pub fn cancel_topic(machine_id: &str, agent_id: &str) -> String {
+    format!("bubbaloop/global/{}/agent/{}/cancel", machine_id, agent_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
