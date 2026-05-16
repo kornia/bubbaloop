@@ -931,26 +931,19 @@ async fn agent_loop(
                 let cancel_token = tokio_util::sync::CancellationToken::new();
                 let cancel_topic = gateway::cancel_topic(&machine_id, &agent_id);
                 let corr_id_for_cancel = msg.id.clone();
-                {
-                    let token = cancel_token.clone();
-                    let session_c = session.clone();
-                    tokio::spawn(async move {
-                        match session_c.declare_subscriber(&cancel_topic).await {
-                            Ok(sub) => {
-                                while let Ok(sample) = sub.recv_async().await {
-                                    let bytes = sample.payload().to_bytes();
-                                    if bytes.as_ref() == corr_id_for_cancel.as_bytes() {
-                                        token.cancel();
-                                        break;
-                                    }
-                                }
+                let token = cancel_token.clone();
+                let session_c = session.clone();
+                tokio::spawn(async move {
+                    match session_c.declare_subscriber(&cancel_topic).await {
+                        Ok(sub) => while let Ok(sample) = sub.recv_async().await {
+                            if sample.payload().to_bytes().as_ref() == corr_id_for_cancel.as_bytes() {
+                                token.cancel();
+                                break;
                             }
-                            Err(e) => {
-                                log::warn!("[Agent] Failed to subscribe to cancel topic: {}", e);
-                            }
-                        }
-                    });
-                }
+                        },
+                        Err(e) => log::warn!("[Agent] Failed to subscribe to cancel topic: {}", e),
+                    }
+                });
 
                 if let Err(e) = run_agent_turn(
                     &provider,
