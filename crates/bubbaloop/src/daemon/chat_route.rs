@@ -285,6 +285,7 @@ fn event_type_str(t: &AgentEventType) -> &'static str {
         AgentEventType::Delta => "delta",
         AgentEventType::Tool => "tool",
         AgentEventType::ToolResult => "tool_result",
+        AgentEventType::Image => "image",
         AgentEventType::Error => "error",
         AgentEventType::Done => "done",
         AgentEventType::System => "system",

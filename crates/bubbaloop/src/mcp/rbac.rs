@@ -91,7 +91,8 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "mission_pause"
         | "mission_resume"
         | "mission_cancel"
-        | "belief_update" => Tier::Operator,
+        | "belief_update"
+        | "grab_frame" => Tier::Operator,
 
         // Admin tools (system modification)
         "node_install"

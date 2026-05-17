@@ -219,7 +219,11 @@ pub fn build_system_prompt_with_soul_path(
              3. **Evaluate** — After each step, check: did it work? Is the goal met?\n\
              4. **Iterate** — If not done, adjust and continue. If done, report results.\n\n\
              ### Rules\n\n\
-             - **Act, don't ask.** Never say \"Would you like me to...?\" or \"Should I...?\" — do it.\n\
+             - **Only call tools when the user explicitly requests an action or investigation.** \
+               Greetings, chitchat, or conversational messages (\"Hi\", \"How are you?\", \"Thanks\") \
+               get a plain text reply — no tool calls.\n\
+             - **Act, don't ask.** When the user asks you to do something, do it — never say \
+               \"Would you like me to...?\" or \"Should I...?\".\n\
              - **Keep going.** Don't stop after one tool call if the task needs more.\n\
              - **Verify.** After making a change, confirm it worked (check health, read output, etc).\n\
              - **Be concise.** Report what you did and the result. Skip preamble.\n\
@@ -239,14 +243,21 @@ pub fn build_system_prompt_with_soul_path(
     // Scope — tells the LLM what tools it has
     parts.push(
         "\n## Tools\n\n\
-         You have 49 tools across categories:\n\
+         You have 43 tools across categories:\n\
          - **Node management:** install, build, start, stop, restart, configure, monitor, query nodes\n\
          - **System:** read and write files, run shell commands\n\
          - **Memory:** search episodic memory, update beliefs, read world state\n\
          - **Missions:** list, pause, resume, cancel missions\n\
-         - **Safety:** register and list constraints per mission\n\n\
+         - **Safety:** register and list constraints per mission\n\
+         - **Vision:** `grab_frame` captures a JPEG from a camera sensor node — the image is \
+           delivered directly in the next turn for you to inspect. \
+           **Only call grab_frame when the user explicitly asks to see, show, visualize, \
+           or analyze a camera feed.** Never call it proactively or for general status checks.\n\n\
          Use the right tool for the job. For node operations, use the dedicated node tools.\n\
          For everything else, use read_file, write_file, or run_command.\n\n\
+         To analyze what cameras see, call `grab_frame` for each sensor — the JPEG frame\n\
+         is delivered as an image content block in the next turn for you to inspect directly.\n\
+         Do NOT call grab_frame unless the user's message explicitly requests visual information.\n\n\
          ### Important: recurring vs one-off actions\n\n\
          - **run_command** blocks until the command exits. NEVER use shell loops (`while true`, `watch`, `for i in`) \
          with run_command — they block for the full 30-second timeout and produce no output until they time out.\n\
@@ -427,7 +438,9 @@ mod tests {
             })
             .collect();
         let prompt = build_system_prompt(&soul, "", &[], &episodes, None, None, None);
-        let count = prompt.matches("message ").count();
+        let count = (0..10)
+            .filter(|i| prompt.contains(&format!("message {}", i)))
+            .count();
         assert_eq!(count, 5, "should limit episodic context to 5 entries");
     }
 

@@ -36,6 +36,7 @@ impl MockPlatform {
                 node_type: "rust".to_string(),
                 installed: true,
                 is_built: true,
+                instance_name: None,
             }]),
             configs: Mutex::new(HashMap::new()),
             missions: Mutex::new(Vec::new()),
@@ -450,6 +451,14 @@ impl PlatformOperations for MockPlatform {
         log::debug!("[MockPlatform] publish_to_topic: {}", topic);
         Ok(())
     }
+
+    fn zenoh_session(&self) -> Option<Arc<zenoh::Session>> {
+        self.zenoh_session.clone()
+    }
+
+    async fn get_node_instance_name(&self, name: &str) -> String {
+        name.to_string()
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -508,6 +517,7 @@ mod tests {
                 node_type: "python".to_string(),
                 installed: true,
                 is_built: true,
+                instance_name: None,
             },
             NodeInfo {
                 name: "detector".to_string(),
@@ -516,6 +526,7 @@ mod tests {
                 node_type: "rust".to_string(),
                 installed: true,
                 is_built: false,
+                instance_name: None,
             },
             NodeInfo {
                 name: "tracker".to_string(),
@@ -524,6 +535,7 @@ mod tests {
                 node_type: "python".to_string(),
                 installed: false,
                 is_built: false,
+                instance_name: None,
             },
         ];
         let mock = mock_with_nodes(nodes);
@@ -566,6 +578,7 @@ mod tests {
                 node_type: "rust".to_string(),
                 installed: true,
                 is_built: true,
+                instance_name: None,
             },
             NodeInfo {
                 name: "beta".to_string(),
@@ -574,6 +587,7 @@ mod tests {
                 node_type: "python".to_string(),
                 installed: false,
                 is_built: false,
+                instance_name: None,
             },
         ];
         let mock = mock_with_nodes(nodes);
@@ -1133,6 +1147,7 @@ mod tests {
             node_type: "rust".to_string(),
             installed: true,
             is_built: true,
+            instance_name: None,
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["name"], "test");

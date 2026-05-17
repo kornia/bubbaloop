@@ -14,8 +14,8 @@ import { parseSseStream } from "../lib/sse";
 type ChatEntry =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
-  | { kind: "tool"; name: string; input: string }
-  | { kind: "tool_result"; text: string }
+  | { kind: "tool_call"; name: string; input: string; result: string | null; turn: number; episodes: number }
+  | { kind: "image"; src: string }
   | { kind: "error"; text: string }
   | { kind: "system"; text: string }
   | { kind: "connection_lost" }
@@ -33,6 +33,20 @@ function providerFromModel(model: string): string {
   if (model.startsWith("gemini")) return "gemini";
   if (model.startsWith("claude")) return "claude";
   return "ollama";
+}
+
+function agentColor(model: string): string {
+  return PROVIDER_COLORS[providerFromModel(model)] ?? "#888";
+}
+
+function AgentTriggerContent({ agent }: { agent: ResolvedAgent }) {
+  return (
+    <>
+      <span className="trigger-dot" style={{ background: agentColor(agent.agent.model) }} />
+      <span className="trigger-name">{agent.agent.agent_id}</span>
+      <span className="trigger-model">{agent.agent.model.split("-")[0]}</span>
+    </>
+  );
 }
 
 function AgentSelector({
@@ -62,33 +76,22 @@ function AgentSelector({
     );
   }
   if (agents.length === 1) {
-    const a = agents[0];
     return (
       <div className="agent-trigger agent-trigger-single">
-        <span className="trigger-dot" style={{ background: PROVIDER_COLORS[providerFromModel(a.agent.model)] ?? "#888" }} />
-        <span className="trigger-name">{a.agent.agent_id}</span>
-        <span className="trigger-model">{a.agent.model.split("-")[0]}</span>
+        <AgentTriggerContent agent={agents[0]} />
       </div>
     );
   }
 
   return (
     <div className="agent-selector-wrap">
-      {/* Trigger chip showing the active agent */}
       <button
         className="agent-trigger"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
         {selected ? (
-          <>
-            <span
-              className="trigger-dot"
-              style={{ background: PROVIDER_COLORS[providerFromModel(selected.agent.model)] ?? "#888" }}
-            />
-            <span className="trigger-name">{selected.agent.agent_id}</span>
-            <span className="trigger-model">{selected.agent.model.split("-")[0]}</span>
-          </>
+          <AgentTriggerContent agent={selected} />
         ) : (
           <span className="trigger-name">Select agent</span>
         )}
@@ -101,25 +104,22 @@ function AgentSelector({
         </svg>
       </button>
 
-      {/* Dropdown panel */}
       {open && (
         <>
           <div className="agent-backdrop" onClick={() => setOpen(false)} />
           <div className="agent-panel">
             <div className="agent-panel-header">
-              <span style={{flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>Agents on {agents[0]?.agent.machine_id}</span>
+              <span className="agent-panel-title">Agents on {agents[0]?.agent.machine_id}</span>
               <button className="agent-refresh-btn" onClick={() => { setOpen(false); onRefresh(); }} title="Refresh">↻</button>
             </div>
             {agents.map((a) => {
-              const provider = providerFromModel(a.agent.model);
-              const color = PROVIDER_COLORS[provider] ?? "#888";
               const isSelected = a.agent.agent_id === selected?.agent.agent_id;
               return (
                 <button
                   key={a.agent.agent_id}
                   className={`agent-pill${isSelected ? " agent-pill-selected" : ""}`}
                   onClick={() => { onSelect(a); setOpen(false); }}
-                  style={{ "--pill-color": color } as React.CSSProperties}
+                  style={{ "--pill-color": agentColor(a.agent.model) } as React.CSSProperties}
                 >
                   <span className="pill-dot" />
                   <span className="pill-name">{a.agent.agent_id}</span>
@@ -130,6 +130,88 @@ function AgentSelector({
             })}
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+function parseEpisodes(text: string): number {
+  const m = text.match(/(\d+)\s+episode/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+function ToolCallRow({ entry }: { entry: Extract<ChatEntry, { kind: "tool_call" }> }) {
+  const [expanded, setExpanded] = useState(false);
+  const pending = entry.result === null;
+  return (
+    <div className="chat-tool-call">
+      <button className="tool-call-header" onClick={() => setExpanded((v) => !v)}>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
+          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+        </svg>
+        <span className="tool-call-name">{entry.name}</span>
+        <span className="tool-call-meta">turn {entry.turn} · {entry.episodes} ep</span>
+        <span className={`tool-call-status${pending ? " pending" : ""}`}>{pending ? "…" : "✓"}</span>
+        <svg className={`tool-call-chevron${expanded ? " open" : ""}`} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      {expanded && (
+        <div className="tool-call-body">
+          {entry.input && (
+            <div className="tool-call-section">
+              <span className="tool-call-label">args</span>
+              <pre className="tool-json">{entry.input}</pre>
+            </div>
+          )}
+          {entry.result !== null && (
+            <div className="tool-call-section">
+              <span className="tool-call-label">result</span>
+              <pre className="tool-json">{entry.result}</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ImageGallery({ srcs }: { srcs: string[] }) {
+  const [lightbox, setLightbox] = useState<string | null>(null);
+
+  const openLightbox = (src: string) => setLightbox(src);
+  const closeLightbox = () => setLightbox(null);
+
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeLightbox(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox]);
+
+  return (
+    <div className="chat-image-gallery">
+      <div className={`image-grid${srcs.length === 1 ? " single" : ""}`}>
+        {srcs.map((src, i) => (
+          <img
+            key={i}
+            src={src}
+            className="image-thumb"
+            alt={`Camera frame ${i + 1}`}
+            onClick={() => openLightbox(src)}
+          />
+        ))}
+      </div>
+      {lightbox && (
+        <div className="lightbox-overlay" onClick={closeLightbox}>
+          <img
+            src={lightbox}
+            className="lightbox-img"
+            alt="Camera frame full size"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button className="lightbox-close" onClick={closeLightbox}>✕</button>
+        </div>
       )}
     </div>
   );
@@ -151,39 +233,10 @@ function EntryRow({ entry, onDismissOauth }: { entry: ChatEntry; onDismissOauth:
           <span className="entry-text">{entry.text}</span>
         </div>
       );
-    case "tool":
-      return (
-        <div className="chat-entry chat-tool">
-          <div className="tool-tool-row">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{flexShrink:0,opacity:0.5}}>
-              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-            </svg>
-            <span className="tool-name">{entry.name}</span>
-          </div>
-          {entry.input && (
-            <details className="tool-details">
-              <summary className="tool-summary">args</summary>
-              <pre className="tool-json">{entry.input}</pre>
-            </details>
-          )}
-        </div>
-      );
-    case "tool_result": {
-      const preview = entry.text.length > 80 ? entry.text.slice(0, 80) + "…" : entry.text;
-      const hasMore = entry.text.length > 80;
-      return (
-        <div className="chat-entry chat-tool-result">
-          {hasMore ? (
-            <details className="tool-details" style={{width:"100%"}}>
-              <summary className="tool-summary tool-result-summary">{preview}</summary>
-              <pre className="tool-json">{entry.text}</pre>
-            </details>
-          ) : (
-            <span className="tool-result-text">{entry.text}</span>
-          )}
-        </div>
-      );
-    }
+    case "tool_call":
+      return <ToolCallRow entry={entry} />;
+    case "image":
+      return null;
     case "error":
       return (
         <div className="chat-entry chat-error">
@@ -243,6 +296,29 @@ function EntryRow({ entry, onDismissOauth }: { entry: ChatEntry; onDismissOauth:
   }
 }
 
+function renderEntries(entries: ChatEntry[], onDismissOauth: () => void): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  let i = 0;
+  while (i < entries.length) {
+    const entry = entries[i];
+    if (entry.kind === "image") {
+      const start = i;
+      const srcs: string[] = [];
+      while (i < entries.length) {
+        const next = entries[i];
+        if (next.kind !== "image") break;
+        srcs.push(next.src);
+        i++;
+      }
+      nodes.push(<ImageGallery key={`gallery-${start}`} srcs={srcs} />);
+    } else {
+      nodes.push(<EntryRow key={i} entry={entry} onDismissOauth={onDismissOauth} />);
+      i++;
+    }
+  }
+  return nodes;
+}
+
 // ── Main component ────────────────────────────────────────────────────
 
 export function ChatView({ session }: { session?: Session }) {
@@ -256,29 +332,55 @@ export function ChatView({ session }: { session?: Session }) {
   const [streaming, setStreaming] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const streamingRef = useRef(false);
+  const programmaticScrollRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement>(null);
   const chatBodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
-  // Accumulates assistant delta text across SSE frames before flushing to state
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const deltaBufferRef = useRef("");
+  const turnRef = useRef(0);
+  const episodesRef = useRef(0);
 
-  // Abort any in-flight SSE stream when the component unmounts
-  useEffect(() => () => { abortRef.current?.abort(); }, []);
+  useEffect(() => () => { mountedRef.current = false; abortRef.current?.abort(); }, []);
 
-  // Auto-scroll to bottom when new entries arrive, unless user has scrolled up
+  // Auto-scroll; stamp a 600ms window so handleScroll ignores programmatic events
   useEffect(() => {
     if (userScrolledRef.current) return;
+    programmaticScrollRef.current = Date.now() + 600;
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries]);
+
+  const handleScroll = useCallback(() => {
+    if (Date.now() < programmaticScrollRef.current) return;
+    const el = chatBodyRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distFromBottom < 80;
+    userScrolledRef.current = !atBottom;
+    setShowScrollBtn(!atBottom);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    userScrolledRef.current = false;
+    setShowScrollBtn(false);
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
 
   const runDiscovery = useCallback((s: Session) => {
     setDiscovering(true);
     discoverAgents(s)
       .then((found) => {
         setAgents(found);
-        const def = found.find((a) => a.agent.is_default) ?? found[0] ?? null;
-        setSelectedAgent(def);
+        setSelectedAgent((cur) =>
+          found.find((a) => a.agent.agent_id === cur?.agent.agent_id)
+          ?? found.find((a) => a.agent.is_default)
+          ?? found[0]
+          ?? null
+        );
       })
+      .catch(() => setAgents([]))
       .finally(() => setDiscovering(false));
   }, []);
 
@@ -295,21 +397,27 @@ export function ChatView({ session }: { session?: Session }) {
     setEntries((prev) => {
       const last = prev[prev.length - 1];
       if (last?.kind === "assistant") {
-        return [...prev.slice(0, -1), { kind: "assistant", text: last.text + text }];
+        const updated = [...prev];
+        updated[updated.length - 1] = { kind: "assistant", text: last.text + text };
+        return updated;
       }
       return [...prev, { kind: "assistant", text }];
     });
   }, []);
 
   const handleSend = useCallback(async () => {
-    if (!selectedAgent || !input.trim() || streaming) return;
+    if (!selectedAgent || !input.trim() || streamingRef.current) return;
+    streamingRef.current = true;
 
     const message = input.trim();
     setInput("");
     setEntries((prev) => [...prev, { kind: "user", text: message }]);
     userScrolledRef.current = false;
+    setShowScrollBtn(false);
     setStreaming(true);
     deltaBufferRef.current = "";
+    turnRef.current = 0;
+    episodesRef.current = 0;
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -370,15 +478,43 @@ export function ChatView({ session }: { session?: Session }) {
 
           case "tool":
             flushDeltaBuffer();
+            turnRef.current += 1;
             setEntries((prev) => [
               ...prev,
-              { kind: "tool", name: event.text ?? "tool", input: event.input ?? "" },
+              {
+                kind: "tool_call",
+                name: event.text ?? "tool",
+                input: event.input ?? "",
+                result: null,
+                turn: turnRef.current,
+                episodes: episodesRef.current,
+              },
             ]);
             break;
 
           case "tool_result":
             flushDeltaBuffer();
-            setEntries((prev) => [...prev, { kind: "tool_result", text: event.text ?? "" }]);
+            setEntries((prev) => {
+              for (let j = prev.length - 1; j >= 0; j--) {
+                const e = prev[j];
+                if (e.kind === "tool_call" && e.result === null) {
+                  const updated = [...prev];
+                  updated[j] = { ...e, result: event.text ?? "" };
+                  return updated;
+                }
+              }
+              return prev;
+            });
+            break;
+
+          case "image":
+            if (event.image && event.media_type) {
+              flushDeltaBuffer();
+              setEntries((prev) => [
+                ...prev,
+                { kind: "image", src: `data:${event.media_type};base64,${event.image}` },
+              ]);
+            }
             break;
 
           case "error":
@@ -386,10 +522,13 @@ export function ChatView({ session }: { session?: Session }) {
             setEntries((prev) => [...prev, { kind: "error", text: event.text ?? "Unknown error" }]);
             break;
 
-          case "system":
+          case "system": {
             flushDeltaBuffer();
-            setEntries((prev) => [...prev, { kind: "system", text: event.text ?? "" }]);
+            const ep = parseEpisodes(event.text ?? "");
+            if (ep > 0) episodesRef.current = ep;
+            turnRef.current = 0;
             break;
+          }
 
           case "done":
             flushDeltaBuffer();
@@ -405,12 +544,19 @@ export function ChatView({ session }: { session?: Session }) {
       }
     } catch (err) {
       if (ctrl.signal.aborted) return;
+      if (!mountedRef.current) return;
       flushDeltaBuffer();
-      const msg = err instanceof Error ? err.message : String(err);
-      setEntries((prev) => [...prev, { kind: "error", text: msg }]);
+      const isNetworkDrop = err instanceof TypeError && err.message.toLowerCase().includes("network");
+      if (isNetworkDrop) {
+        setEntries((prev) => [...prev, { kind: "connection_lost" }]);
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        setEntries((prev) => [...prev, { kind: "error", text: msg }]);
+      }
     } finally {
+      streamingRef.current = false;
       abortRef.current = null;
-      setStreaming(false);
+      if (mountedRef.current) setStreaming(false);
     }
   }, [selectedAgent, input, streaming, token, flushDeltaBuffer]);
 
@@ -419,8 +565,9 @@ export function ChatView({ session }: { session?: Session }) {
   }, []);
 
   const handleTokenSave = useCallback(() => {
-    saveToken(tokenDraft);
-    setToken(tokenDraft.trim());
+    const t = tokenDraft.trim();
+    saveToken(t);
+    setToken(t);
   }, [tokenDraft]);
 
   const handleRefresh = useCallback(() => {
@@ -432,9 +579,14 @@ export function ChatView({ session }: { session?: Session }) {
     setEntries((prev) => prev.filter((e) => e.kind !== "oauth_blocked"));
   }, []);
 
+  const handleSelectAgent = useCallback((a: ResolvedAgent) => {
+    if (streamingRef.current) abortRef.current?.abort();
+    setSelectedAgent(a);
+  }, []);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
         e.preventDefault();
         handleSend();
       }
@@ -448,7 +600,7 @@ export function ChatView({ session }: { session?: Session }) {
     <div className="chat-view">
 
       {/* Scrollable area: token setup + agent bar + messages */}
-      <div className="chat-body" ref={chatBodyRef} onScroll={() => { userScrolledRef.current = true; }}>
+      <div className="chat-body" ref={chatBodyRef} onScroll={handleScroll}>
 
         {!token && (
           <div className="token-setup">
@@ -478,7 +630,7 @@ export function ChatView({ session }: { session?: Session }) {
             <AgentSelector
               agents={agents}
               selected={selectedAgent}
-              onSelect={setSelectedAgent}
+              onSelect={handleSelectAgent}
               discovering={discovering}
               onRefresh={handleRefresh}
             />
@@ -510,13 +662,20 @@ export function ChatView({ session }: { session?: Session }) {
               <p className="chat-empty-hint">Try: "what nodes are running?" or "describe the current system state"</p>
             </div>
           )}
-          {entries.map((entry, i) => (
-            <EntryRow key={i} entry={entry} onDismissOauth={dismissOauth} />
-          ))}
+          {renderEntries(entries, dismissOauth)}
           <div ref={logEndRef} />
         </div>
 
       </div>
+
+      {/* Scroll-to-bottom button — appears when user has scrolled up */}
+      {showScrollBtn && (
+        <button className="scroll-to-bottom" onClick={scrollToBottom} title="Scroll to latest">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+      )}
 
       {/* Input bar — full width, always pinned at bottom */}
       <div className="chat-input-bar">
@@ -563,6 +722,36 @@ export function ChatView({ session }: { session?: Session }) {
           min-height: 0;
           overflow: hidden;
           width: 100%;
+          position: relative;
+        }
+
+        .scroll-to-bottom {
+          position: absolute;
+          bottom: 74px;
+          right: 24px;
+          width: 34px;
+          height: 34px;
+          border-radius: 50%;
+          background: var(--bg-secondary);
+          border: 1px solid var(--border-color);
+          color: var(--text-secondary);
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 2px 12px rgba(0,0,0,0.35);
+          transition: border-color 0.15s, color 0.15s, transform 0.15s;
+          z-index: 10;
+          animation: scroll-btn-in 0.15s ease;
+        }
+        .scroll-to-bottom:hover {
+          border-color: var(--accent-primary);
+          color: var(--accent-primary);
+          transform: translateY(-2px);
+        }
+        @keyframes scroll-btn-in {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
         }
 
         /* Token setup */
@@ -716,6 +905,13 @@ export function ChatView({ session }: { session?: Session }) {
           text-transform: uppercase;
           letter-spacing: 0.06em;
         }
+        .agent-panel-title {
+          flex: 1;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
         .agent-refresh-btn {
           background: none;
           border: none;
@@ -858,42 +1054,69 @@ export function ChatView({ session }: { session?: Session }) {
           font-size: 10px;
         }
 
-        .chat-tool {
-          background: transparent;
-          border: none;
-          padding: 2px 14px;
-          gap: 6px;
-          align-items: flex-start;
-          flex-direction: column;
+        .chat-tool-call {
+          padding: 0 14px;
         }
-        .tool-tool-row {
+        .tool-call-header {
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 7px;
+          width: 100%;
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 4px 0;
+          color: var(--text-muted);
+          font-family: inherit;
+          text-align: left;
         }
-        .tool-name {
+        .tool-call-header:hover .tool-call-name { color: var(--accent-secondary); }
+        .tool-call-name {
           font-size: 12px;
           font-weight: 600;
           font-family: 'JetBrains Mono', monospace;
-          color: var(--accent-secondary);
+          color: var(--text-secondary);
+          transition: color 0.15s;
         }
-        .tool-details { display: block; width: 100%; }
-        .tool-summary {
+        .tool-call-meta {
           font-size: 11px;
           color: var(--text-muted);
-          cursor: pointer;
-          user-select: none;
-          list-style: none;
-          padding: 1px 7px;
-          border: 1px solid var(--border-color);
-          border-radius: 10px;
-          transition: border-color 0.15s, color 0.15s;
+          font-family: 'JetBrains Mono', monospace;
+          opacity: 0.7;
         }
-        .tool-summary:hover { border-color: var(--accent-secondary); color: var(--text-secondary); }
-        .tool-summary::-webkit-details-marker { display: none; }
+        .tool-call-status {
+          font-size: 10px;
+          color: var(--accent-secondary);
+          font-family: 'JetBrains Mono', monospace;
+          margin-left: auto;
+        }
+        .tool-call-status.pending { color: var(--text-muted); }
+        .tool-call-chevron {
+          flex-shrink: 0;
+          transition: transform 0.15s;
+          color: var(--text-muted);
+        }
+        .tool-call-chevron.open { transform: rotate(180deg); }
+        .tool-call-body {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          padding: 4px 0 6px 18px;
+        }
+        .tool-call-section {
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+        }
+        .tool-call-label {
+          font-size: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          color: var(--text-muted);
+          font-family: 'JetBrains Mono', monospace;
+        }
         .tool-json {
-          width: 100%;
-          margin: 4px 0 2px;
+          margin: 0;
           padding: 8px 10px;
           background: var(--bg-primary);
           border-radius: 6px;
@@ -903,22 +1126,6 @@ export function ChatView({ session }: { session?: Session }) {
           white-space: pre-wrap;
           word-break: break-all;
           overflow: hidden;
-        }
-
-        .chat-tool-result {
-          background: transparent;
-          border: none;
-          padding: 1px 14px 3px 30px;
-        }
-        .tool-result-summary {
-          font-family: 'JetBrains Mono', monospace;
-        }
-        .tool-result-text {
-          font-size: 12px;
-          color: var(--text-secondary);
-          font-family: 'JetBrains Mono', monospace;
-          white-space: pre-wrap;
-          word-break: break-all;
         }
 
         .chat-error {
@@ -935,6 +1142,81 @@ export function ChatView({ session }: { session?: Session }) {
           color: var(--text-muted);
           font-style: italic;
         }
+
+        /* Image gallery */
+        .chat-image-gallery {
+          padding: 4px 14px;
+        }
+        .image-grid {
+          display: flex;
+          flex-direction: row;
+          flex-wrap: nowrap;
+          gap: 6px;
+          overflow-x: auto;
+          padding-bottom: 2px;
+        }
+        .image-grid.single .image-thumb {
+          width: auto;
+          max-width: 320px;
+          height: 100px;
+        }
+        .image-thumb {
+          flex-shrink: 0;
+          width: 110px;
+          height: 62px;
+          object-fit: cover;
+          border-radius: 6px;
+          border: 1px solid var(--border-color);
+          cursor: pointer;
+          transition: border-color 0.15s, transform 0.15s;
+          display: block;
+        }
+        .image-thumb:hover {
+          border-color: var(--accent-primary);
+          transform: scale(1.04);
+        }
+
+        /* Lightbox */
+        .lightbox-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 500;
+          background: rgba(0, 0, 0, 0.82);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          animation: lb-fade 0.15s ease;
+        }
+        @keyframes lb-fade {
+          from { opacity: 0; }
+          to   { opacity: 1; }
+        }
+        .lightbox-img {
+          max-width: 90vw;
+          max-height: 85vh;
+          border-radius: 8px;
+          border: 1px solid rgba(255,255,255,0.12);
+          box-shadow: 0 8px 48px rgba(0,0,0,0.7);
+          display: block;
+        }
+        .lightbox-close {
+          position: absolute;
+          top: 18px;
+          right: 22px;
+          background: rgba(255,255,255,0.1);
+          border: 1px solid rgba(255,255,255,0.2);
+          border-radius: 50%;
+          color: #fff;
+          width: 32px;
+          height: 32px;
+          font-size: 14px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: background 0.15s;
+        }
+        .lightbox-close:hover { background: rgba(255,255,255,0.2); }
 
         .chat-connection-lost {
           justify-content: center;

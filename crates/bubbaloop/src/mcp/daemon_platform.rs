@@ -95,6 +95,7 @@ impl PlatformOperations for DaemonPlatform {
                     node_type: n.node_type.clone(),
                     installed: n.installed,
                     is_built: n.is_built,
+                    instance_name: None,
                 }
             })
             .collect();
@@ -807,6 +808,17 @@ impl PlatformOperations for DaemonPlatform {
             .put(topic, message)
             .await
             .map_err(|e| PlatformError::Internal(format!("Zenoh put failed: {}", e)))
+    }
+
+    fn zenoh_session(&self) -> Option<Arc<Session>> {
+        Some(self.session.clone())
+    }
+
+    async fn get_node_instance_name(&self, name: &str) -> String {
+        self.node_manager
+            .get_instance_name(name)
+            .await
+            .unwrap_or_else(|| name.to_string())
     }
 
     async fn clear_episodic_memory(&self, older_than_days: u32) -> PlatformResult<String> {

@@ -12,6 +12,7 @@ export type AgentEventType =
   | "delta"
   | "tool"
   | "tool_result"
+  | "image"
   | "error"
   | "done"
   | "system";
@@ -24,6 +25,10 @@ export interface AgentEvent {
   text?: string;
   /** Tool input JSON snippet (only on "tool" events) */
   input?: string;
+  /** Base64-encoded image data (only on "image" events) */
+  image?: string;
+  /** MIME type for the image, e.g. "image/jpeg" (only on "image" events) */
+  media_type?: string;
 }
 
 export interface AgentManifest {
@@ -84,7 +89,9 @@ async function queryWithTimeout(
   selector: string,
   timeoutMs: number
 ): Promise<string[]> {
-  try {
+  // Collect replies from the receiver into the array, stopping after timeoutMs
+  // regardless of whether the zenoh-js async iterator closes on its own.
+  const collect = async (): Promise<string[]> => {
     const receiver = await session.get(selector, {
       timeout: Duration.milliseconds.of(timeoutMs),
     });
@@ -106,6 +113,16 @@ async function queryWithTimeout(
       replies.push(new TextDecoder().decode(bytes));
     }
     return replies;
+  };
+
+  // Race against a hard deadline — zenoh-js receivers don't always close when
+  // the server-side timeout fires, which leaves the for-await loop hanging.
+  const deadline = new Promise<string[]>((resolve) =>
+    setTimeout(() => resolve([]), timeoutMs + 500)
+  );
+
+  try {
+    return await Promise.race([collect(), deadline]);
   } catch {
     return [];
   }

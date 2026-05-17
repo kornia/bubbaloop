@@ -30,6 +30,10 @@ pub struct NodeInfo {
     pub node_type: String,
     pub installed: bool,
     pub is_built: bool,
+    /// The Zenoh instance name (from the node's config YAML `name:` field).
+    /// May differ from `name` when a config_override is used (e.g. multi-instance cameras).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_name: Option<String>,
 }
 
 /// Command to execute on a node.
@@ -281,6 +285,23 @@ pub trait PlatformOperations: Send + Sync + 'static {
         topic: &str,
         message: &str,
     ) -> impl std::future::Future<Output = PlatformResult<()>> + Send;
+
+    /// Return the underlying Zenoh session, if available.
+    ///
+    /// `DaemonPlatform` returns `Some`; `MockPlatform` returns `None`.
+    /// Used by `grab_frame` to pull camera samples directly from SHM.
+    fn zenoh_session(&self) -> Option<std::sync::Arc<zenoh::Session>>;
+
+    /// Resolve the Zenoh instance name for a node registered under `name`.
+    ///
+    /// Returns the `name:` field from the node's config YAML (published_instance_name)
+    /// when a config_override is set; otherwise returns `name` unchanged.
+    /// Used by `grab_frame` to build the correct Zenoh key when the registry
+    /// name differs from the node's published topic prefix.
+    fn get_node_instance_name(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = String> + Send;
 }
 
 /// Parameters for creating or updating a belief.

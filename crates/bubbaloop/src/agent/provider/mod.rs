@@ -90,7 +90,7 @@ pub type Result<T> = std::result::Result<T, ProviderError>;
 
 // ── Content blocks ──────────────────────────────────────────────────
 
-/// A single content block in a message (text, tool_use, or tool_result).
+/// A single content block in a message (text, tool_use, tool_result, or image).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum ContentBlock {
@@ -111,6 +111,19 @@ pub enum ContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
     },
+
+    /// Base64-encoded image (Anthropic wire format; Gemini converts to inline_data).
+    #[serde(rename = "image")]
+    Image { source: ImageSource },
+}
+
+/// Image source for `ContentBlock::Image`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImageSource {
+    #[serde(rename = "type")]
+    pub kind: String, // "base64"
+    pub media_type: String, // e.g. "image/jpeg"
+    pub data: String,       // base64-encoded bytes
 }
 
 // ── Message ─────────────────────────────────────────────────────────
@@ -162,6 +175,28 @@ impl Message {
             })
             .collect::<Vec<_>>()
             .join("")
+    }
+
+    /// Build a user message with interleaved text labels and images.
+    ///
+    /// `pairs` is `Vec<(label_text, media_type, base64_data)>`.
+    /// Produces content = `[Text(label_1), Image(img_1), Text(label_2), Image(img_2), ...]`.
+    pub fn user_with_labeled_images(pairs: Vec<(String, String, String)>) -> Self {
+        let mut content = Vec::with_capacity(pairs.len() * 2);
+        for (label, media_type, data) in pairs {
+            content.push(ContentBlock::Text { text: label });
+            content.push(ContentBlock::Image {
+                source: ImageSource {
+                    kind: "base64".to_string(),
+                    media_type,
+                    data,
+                },
+            });
+        }
+        Self {
+            role: "user".to_string(),
+            content,
+        }
     }
 
     /// Extract all tool_use blocks as `(id, name, input)` tuples.

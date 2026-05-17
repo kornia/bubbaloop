@@ -149,6 +149,9 @@ async fn send_and_render(
                                         log::warn!("Error: {}", msg);
                                     }
                                 }
+                                AgentEventType::Image => {
+                                    // Image frames are dashboard-only; CLI ignores them
+                                }
                                 AgentEventType::Done => {
                                     log::info!("");
                                     return Ok(());
@@ -485,6 +488,9 @@ async fn run_tui_repl(
                                 output.push(OutputLine::SystemInfo(format!("  ⟳ {}", msg)));
                                 scroll_offset = 0;
                             }
+                        }
+                        AgentEventType::Image => {
+                            // Image frames are dashboard-only; TUI skips them
                         }
                         AgentEventType::Done => {
                             waiting_for_agent = false;

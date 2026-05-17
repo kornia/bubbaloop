@@ -9,6 +9,7 @@
 //! - `prompt` — System prompt builder
 //! - `scheduler` — Job poller integrated with heartbeat
 
+pub mod camera;
 pub mod dispatch;
 pub(crate) mod dispatch_security;
 pub mod gateway;
@@ -67,6 +68,9 @@ impl EventSink for StdoutSink {
                 if let Some(msg) = &event.text {
                     log::warn!("Error: {}", msg);
                 }
+            }
+            AgentEventType::Image => {
+                // Image frames are dashboard-only; stdout mode silently ignores them
             }
             AgentEventType::Done => {
                 // Done is implicit in stdout mode
@@ -286,6 +290,12 @@ pub async fn run_agent_turn<
         &world_state,
     );
 
+    // Heal any dangling function_call turns left from a prior incomplete turn
+    // (e.g. SSE connection dropped after the assistant message was stored but
+    // before tool_results were pushed). Without this, Gemini returns HTTP 400
+    // "function response must come immediately after function call turn".
+    sanitize_dangling_tool_use(memory);
+
     // Add user input to short-term memory
     if let Some(input) = user_input {
         memory.short_term.push(Message::user(input));
@@ -324,6 +334,7 @@ pub async fn run_agent_turn<
             // Browser disconnected — cancel the turn cleanly.
             log::info!("[Agent] Turn cancelled by client (corr={})", correlation_id);
             sanitize_dangling_tool_use(memory);
+            dispatcher.clear_image_stash();
             sink.emit(AgentEvent::error(
                 correlation_id,
                 "turn cancelled by client",
@@ -339,6 +350,7 @@ pub async fn run_agent_turn<
             // The Claude API returns 400 "unexpected tool_use" on the next turn if
             // those blocks are left dangling. Add synthetic error tool_results.
             sanitize_dangling_tool_use(memory);
+            dispatcher.clear_image_stash();
             sink.emit(AgentEvent::error(
                 correlation_id,
                 &format!("Turn timed out after {}s", TURN_TIMEOUT_SECS),
@@ -382,6 +394,11 @@ async fn run_turn_loop<
     let mut tool_call_counts: HashMap<u64, u32> = HashMap::new();
     let mut loop_detected = false;
     let max_turns = soul.capabilities.max_turns;
+    // Transient camera frames for the current inner iteration only.
+    // Grab_frame stashes base64 JPEGs here; they are appended to the provider
+    // call slice but NOT stored in short_term, so they don't accumulate across
+    // outer conversation turns (each turn starts fresh without historical blobs).
+    let mut pending_image_msg: Option<Message> = None;
     for _turn in 0..max_turns {
         if loop_detected {
             break;
@@ -393,9 +410,18 @@ async fn run_turn_loop<
             ))
             .await;
         }
+        // Build effective message slice: short_term + optional transient camera frames.
+        // Cow-like: only clones when there's a pending image (rare), otherwise borrows.
+        let extended_opt: Option<Vec<Message>> = pending_image_msg.take().map(|img| {
+            let mut m = memory.short_term.clone();
+            m.push(img);
+            m
+        });
+        let provider_messages = extended_opt.as_deref().unwrap_or(&memory.short_term);
+
         // Stream response from provider (retry handled inside ClaudeProvider)
         let mut rx = match provider
-            .generate_stream(Some(system_prompt), &memory.short_term, tools)
+            .generate_stream(Some(system_prompt), provider_messages, tools)
             .await
         {
             Ok(r) => r,
@@ -590,7 +616,32 @@ async fn run_turn_loop<
         }
 
         // Add tool results to short-term memory
+        let tool_use_ids: Vec<String> = tool_results.iter().map(|(id, _, _)| id.clone()).collect();
         memory.short_term.push(Message::tool_results(tool_results));
+
+        // Inject captured camera frames as a transient follow-up for the next provider call.
+        // Images are stashed out-of-band by grab_frame (base64 never enters ToolResult).
+        // We do NOT push to short_term: storing large base64 blobs permanently causes
+        // Gemini's function_call/response name validator to fail on multi-turn sessions
+        // as the accumulated image messages break the expected sequence structure.
+        let attachments = dispatcher.drain_images(&tool_use_ids);
+        if !attachments.is_empty() {
+            // Stream each frame to the dashboard so it appears in the chat.
+            for attachment in &attachments {
+                sink.emit(AgentEvent::image(
+                    correlation_id,
+                    &attachment.media_type,
+                    &attachment.base64,
+                ))
+                .await;
+            }
+            let pairs: Vec<(String, String, String)> = attachments
+                .into_iter()
+                .map(|a| (a.label, a.media_type, a.base64))
+                .collect();
+            // Queued for the next generate_stream call (analysis turn); dropped after use.
+            pending_image_msg = Some(Message::user_with_labeled_images(pairs));
+        }
     }
 
     // 2.5. Pre-compaction flush (design Section 5.5)

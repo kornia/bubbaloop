@@ -212,6 +212,7 @@ async fn list_nodes_multiple() {
             node_type: "python".to_string(),
             installed: true,
             is_built: true,
+            instance_name: None,
         },
         NodeInfo {
             name: "detector".to_string(),
@@ -220,6 +221,7 @@ async fn list_nodes_multiple() {
             node_type: "rust".to_string(),
             installed: true,
             is_built: false,
+            instance_name: None,
         },
     ];
     let h = TestHarness::with_mock(mock_with_nodes(nodes)).await;
