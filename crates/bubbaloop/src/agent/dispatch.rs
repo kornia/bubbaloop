@@ -529,14 +529,17 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 name: "memory_search".to_string(),
                 description: "Search episodic memory for past conversations, tool results, and \
                     agent observations. Uses BM25 full-text search with temporal decay. Returns \
-                    the most relevant entries."
+                    the most relevant entries. \
+                    IMPORTANT: combine all related keywords into ONE query (e.g. \"camera grab_frame terrace\") \
+                    rather than calling this tool multiple times with separate queries. \
+                    One broad query is faster and covers more results than several narrow ones."
                     .to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Search query (keywords or phrases)"
+                            "description": "Search query — combine multiple keywords with spaces for a single broad search"
                         },
                         "limit": {
                             "type": "integer",
