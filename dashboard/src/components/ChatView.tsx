@@ -332,26 +332,28 @@ export function ChatView({ session }: { session?: Session }) {
   const [streaming, setStreaming] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const streamingRef = useRef(false);
+  const programmaticScrollRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement>(null);
   const chatBodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
-  // Accumulates assistant delta text across SSE frames before flushing to state
   const deltaBufferRef = useRef("");
-  // Turn counter and episode count for the current agent response
   const turnRef = useRef(0);
   const episodesRef = useRef(0);
 
-  // Abort any in-flight SSE stream when the component unmounts
-  useEffect(() => () => { abortRef.current?.abort(); }, []);
+  useEffect(() => () => { mountedRef.current = false; abortRef.current?.abort(); }, []);
 
-  // Auto-scroll to bottom when new entries arrive, unless user has scrolled up
+  // Auto-scroll; stamp a 600ms window so handleScroll ignores programmatic events
   useEffect(() => {
     if (userScrolledRef.current) return;
+    programmaticScrollRef.current = Date.now() + 600;
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries]);
 
   const handleScroll = useCallback(() => {
+    if (Date.now() < programmaticScrollRef.current) return;
     const el = chatBodyRef.current;
     if (!el) return;
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -371,9 +373,14 @@ export function ChatView({ session }: { session?: Session }) {
     discoverAgents(s)
       .then((found) => {
         setAgents(found);
-        const def = found.find((a) => a.agent.is_default) ?? found[0] ?? null;
-        setSelectedAgent(def);
+        setSelectedAgent((cur) =>
+          found.find((a) => a.agent.agent_id === cur?.agent.agent_id)
+          ?? found.find((a) => a.agent.is_default)
+          ?? found[0]
+          ?? null
+        );
       })
+      .catch(() => setAgents([]))
       .finally(() => setDiscovering(false));
   }, []);
 
@@ -399,7 +406,8 @@ export function ChatView({ session }: { session?: Session }) {
   }, []);
 
   const handleSend = useCallback(async () => {
-    if (!selectedAgent || !input.trim() || streaming) return;
+    if (!selectedAgent || !input.trim() || streamingRef.current) return;
+    streamingRef.current = true;
 
     const message = input.trim();
     setInput("");
@@ -516,8 +524,8 @@ export function ChatView({ session }: { session?: Session }) {
 
           case "system": {
             flushDeltaBuffer();
-            const sysText = event.text ?? "";
-            episodesRef.current = parseEpisodes(sysText);
+            const ep = parseEpisodes(event.text ?? "");
+            if (ep > 0) episodesRef.current = ep;
             turnRef.current = 0;
             break;
           }
@@ -536,12 +544,19 @@ export function ChatView({ session }: { session?: Session }) {
       }
     } catch (err) {
       if (ctrl.signal.aborted) return;
+      if (!mountedRef.current) return;
       flushDeltaBuffer();
-      const msg = err instanceof Error ? err.message : String(err);
-      setEntries((prev) => [...prev, { kind: "error", text: msg }]);
+      const isNetworkDrop = err instanceof TypeError && err.message.toLowerCase().includes("network");
+      if (isNetworkDrop) {
+        setEntries((prev) => [...prev, { kind: "connection_lost" }]);
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        setEntries((prev) => [...prev, { kind: "error", text: msg }]);
+      }
     } finally {
+      streamingRef.current = false;
       abortRef.current = null;
-      setStreaming(false);
+      if (mountedRef.current) setStreaming(false);
     }
   }, [selectedAgent, input, streaming, token, flushDeltaBuffer]);
 
@@ -550,8 +565,9 @@ export function ChatView({ session }: { session?: Session }) {
   }, []);
 
   const handleTokenSave = useCallback(() => {
-    saveToken(tokenDraft);
-    setToken(tokenDraft.trim());
+    const t = tokenDraft.trim();
+    saveToken(t);
+    setToken(t);
   }, [tokenDraft]);
 
   const handleRefresh = useCallback(() => {
@@ -563,9 +579,14 @@ export function ChatView({ session }: { session?: Session }) {
     setEntries((prev) => prev.filter((e) => e.kind !== "oauth_blocked"));
   }, []);
 
+  const handleSelectAgent = useCallback((a: ResolvedAgent) => {
+    if (streamingRef.current) abortRef.current?.abort();
+    setSelectedAgent(a);
+  }, []);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
         e.preventDefault();
         handleSend();
       }
@@ -609,7 +630,7 @@ export function ChatView({ session }: { session?: Session }) {
             <AgentSelector
               agents={agents}
               selected={selectedAgent}
-              onSelect={setSelectedAgent}
+              onSelect={handleSelectAgent}
               discovering={discovering}
               onRefresh={handleRefresh}
             />
