@@ -438,7 +438,9 @@ mod tests {
             })
             .collect();
         let prompt = build_system_prompt(&soul, "", &[], &episodes, None, None, None);
-        let count = prompt.matches("message ").count();
+        let count = (0..10)
+            .filter(|i| prompt.contains(&format!("message {}", i)))
+            .count();
         assert_eq!(count, 5, "should limit episodic context to 5 entries");
     }
 
