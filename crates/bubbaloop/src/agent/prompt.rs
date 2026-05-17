@@ -246,11 +246,14 @@ pub fn build_system_prompt_with_soul_path(
          - **Missions:** list, pause, resume, cancel missions\n\
          - **Safety:** register and list constraints per mission\n\
          - **Vision:** `grab_frame` captures a JPEG from a camera sensor node — the image is \
-           delivered directly in the next turn for you to inspect\n\n\
+           delivered directly in the next turn for you to inspect. \
+           **Only call grab_frame when the user explicitly asks to see, show, visualize, \
+           or analyze a camera feed.** Never call it proactively or for general status checks.\n\n\
          Use the right tool for the job. For node operations, use the dedicated node tools.\n\
          For everything else, use read_file, write_file, or run_command.\n\n\
          To analyze what cameras see, call `grab_frame` for each sensor — the JPEG frame\n\
-         is delivered as an image content block in the next turn for you to inspect directly.\n\n\
+         is delivered as an image content block in the next turn for you to inspect directly.\n\
+         Do NOT call grab_frame unless the user's message explicitly requests visual information.\n\n\
          ### Important: recurring vs one-off actions\n\n\
          - **run_command** blocks until the command exits. NEVER use shell loops (`while true`, `watch`, `for i in`) \
          with run_command — they block for the full 30-second timeout and produce no output until they time out.\n\
