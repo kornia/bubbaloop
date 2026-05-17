@@ -35,6 +35,20 @@ function providerFromModel(model: string): string {
   return "ollama";
 }
 
+function agentColor(model: string): string {
+  return PROVIDER_COLORS[providerFromModel(model)] ?? "#888";
+}
+
+function AgentTriggerContent({ agent }: { agent: ResolvedAgent }) {
+  return (
+    <>
+      <span className="trigger-dot" style={{ background: agentColor(agent.agent.model) }} />
+      <span className="trigger-name">{agent.agent.agent_id}</span>
+      <span className="trigger-model">{agent.agent.model.split("-")[0]}</span>
+    </>
+  );
+}
+
 function AgentSelector({
   agents,
   selected,
@@ -62,33 +76,22 @@ function AgentSelector({
     );
   }
   if (agents.length === 1) {
-    const a = agents[0];
     return (
       <div className="agent-trigger agent-trigger-single">
-        <span className="trigger-dot" style={{ background: PROVIDER_COLORS[providerFromModel(a.agent.model)] ?? "#888" }} />
-        <span className="trigger-name">{a.agent.agent_id}</span>
-        <span className="trigger-model">{a.agent.model.split("-")[0]}</span>
+        <AgentTriggerContent agent={agents[0]} />
       </div>
     );
   }
 
   return (
     <div className="agent-selector-wrap">
-      {/* Trigger chip showing the active agent */}
       <button
         className="agent-trigger"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
         {selected ? (
-          <>
-            <span
-              className="trigger-dot"
-              style={{ background: PROVIDER_COLORS[providerFromModel(selected.agent.model)] ?? "#888" }}
-            />
-            <span className="trigger-name">{selected.agent.agent_id}</span>
-            <span className="trigger-model">{selected.agent.model.split("-")[0]}</span>
-          </>
+          <AgentTriggerContent agent={selected} />
         ) : (
           <span className="trigger-name">Select agent</span>
         )}
@@ -101,25 +104,22 @@ function AgentSelector({
         </svg>
       </button>
 
-      {/* Dropdown panel */}
       {open && (
         <>
           <div className="agent-backdrop" onClick={() => setOpen(false)} />
           <div className="agent-panel">
             <div className="agent-panel-header">
-              <span style={{flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>Agents on {agents[0]?.agent.machine_id}</span>
+              <span className="agent-panel-title">Agents on {agents[0]?.agent.machine_id}</span>
               <button className="agent-refresh-btn" onClick={() => { setOpen(false); onRefresh(); }} title="Refresh">↻</button>
             </div>
             {agents.map((a) => {
-              const provider = providerFromModel(a.agent.model);
-              const color = PROVIDER_COLORS[provider] ?? "#888";
               const isSelected = a.agent.agent_id === selected?.agent.agent_id;
               return (
                 <button
                   key={a.agent.agent_id}
                   className={`agent-pill${isSelected ? " agent-pill-selected" : ""}`}
                   onClick={() => { onSelect(a); setOpen(false); }}
-                  style={{ "--pill-color": color } as React.CSSProperties}
+                  style={{ "--pill-color": agentColor(a.agent.model) } as React.CSSProperties}
                 >
                   <span className="pill-dot" />
                   <span className="pill-name">{a.agent.agent_id}</span>
@@ -296,6 +296,29 @@ function EntryRow({ entry, onDismissOauth }: { entry: ChatEntry; onDismissOauth:
   }
 }
 
+function renderEntries(entries: ChatEntry[], onDismissOauth: () => void): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  let i = 0;
+  while (i < entries.length) {
+    const entry = entries[i];
+    if (entry.kind === "image") {
+      const start = i;
+      const srcs: string[] = [];
+      while (i < entries.length) {
+        const next = entries[i];
+        if (next.kind !== "image") break;
+        srcs.push(next.src);
+        i++;
+      }
+      nodes.push(<ImageGallery key={`gallery-${start}`} srcs={srcs} />);
+    } else {
+      nodes.push(<EntryRow key={i} entry={entry} onDismissOauth={onDismissOauth} />);
+      i++;
+    }
+  }
+  return nodes;
+}
+
 // ── Main component ────────────────────────────────────────────────────
 
 export function ChatView({ session }: { session?: Session }) {
@@ -367,7 +390,9 @@ export function ChatView({ session }: { session?: Session }) {
     setEntries((prev) => {
       const last = prev[prev.length - 1];
       if (last?.kind === "assistant") {
-        return [...prev.slice(0, -1), { kind: "assistant", text: last.text + text }];
+        const updated = [...prev];
+        updated[updated.length - 1] = { kind: "assistant", text: last.text + text };
+        return updated;
       }
       return [...prev, { kind: "assistant", text }];
     });
@@ -462,17 +487,15 @@ export function ChatView({ session }: { session?: Session }) {
           case "tool_result":
             flushDeltaBuffer();
             setEntries((prev) => {
-              const idx = [...prev].reverse().findIndex(
-                (e) => e.kind === "tool_call" && e.result === null
-              );
-              if (idx === -1) return prev;
-              const realIdx = prev.length - 1 - idx;
-              const updated = [...prev];
-              updated[realIdx] = {
-                ...(updated[realIdx] as Extract<ChatEntry, { kind: "tool_call" }>),
-                result: event.text ?? "",
-              };
-              return updated;
+              for (let j = prev.length - 1; j >= 0; j--) {
+                const e = prev[j];
+                if (e.kind === "tool_call" && e.result === null) {
+                  const updated = [...prev];
+                  updated[j] = { ...e, result: event.text ?? "" };
+                  return updated;
+                }
+              }
+              return prev;
             });
             break;
 
@@ -618,26 +641,7 @@ export function ChatView({ session }: { session?: Session }) {
               <p className="chat-empty-hint">Try: "what nodes are running?" or "describe the current system state"</p>
             </div>
           )}
-          {(() => {
-            const nodes: React.ReactNode[] = [];
-            let i = 0;
-            while (i < entries.length) {
-              const entry = entries[i];
-              if (entry.kind === "image") {
-                const start = i;
-                const srcs: string[] = [];
-                while (i < entries.length && entries[i].kind === "image") {
-                  srcs.push((entries[i] as Extract<ChatEntry, { kind: "image" }>).src);
-                  i++;
-                }
-                nodes.push(<ImageGallery key={`gallery-${start}`} srcs={srcs} />);
-              } else {
-                nodes.push(<EntryRow key={i} entry={entry} onDismissOauth={dismissOauth} />);
-                i++;
-              }
-            }
-            return nodes;
-          })()}
+          {renderEntries(entries, dismissOauth)}
           <div ref={logEndRef} />
         </div>
 
@@ -879,6 +883,13 @@ export function ChatView({ session }: { session?: Session }) {
           border-bottom: 1px solid var(--border-color);
           text-transform: uppercase;
           letter-spacing: 0.06em;
+        }
+        .agent-panel-title {
+          flex: 1;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         .agent-refresh-btn {
           background: none;
