@@ -2,8 +2,9 @@
 //!
 //! Sends a Zenoh query to the camera node's `grab_frame` queryable and returns
 //! the JPEG frame + metadata. The actual image encoding (RGBA→JPEG via kornia-rs)
-//! lives in the camera node itself — the daemon receives only the base64 result.
+//! lives in the camera node itself — the daemon base64-encodes the raw JPEG for the LLM.
 
+use base64::Engine as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,41 +46,49 @@ pub async fn grab_frame(
         .result()
         .map_err(|e| anyhow::anyhow!("grab_frame reply error for '{}': {:?}", node_name, e))?;
 
-    let payload = sample.payload().to_bytes();
-    let v: serde_json::Value = serde_json::from_slice(payload.as_ref())
-        .map_err(|e| anyhow::anyhow!("grab_frame JSON parse failed: {}", e))?;
+    // Camera nodes send raw JPEG bytes as payload and small JSON metadata as attachment.
+    let jpeg_bytes = sample.payload().to_bytes().to_vec();
 
-    // Surface error from camera node
-    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
-        return Err(anyhow::anyhow!("camera '{}' error: {}", node_name, err));
+    let meta: serde_json::Value = sample
+        .attachment()
+        .and_then(|a| serde_json::from_slice(a.to_bytes().as_ref()).ok())
+        .unwrap_or_default();
+
+    // Surface error from camera node (legacy text error path)
+    if let Ok(err_json) = serde_json::from_slice::<serde_json::Value>(&jpeg_bytes) {
+        if let Some(err) = err_json.get("error").and_then(|e| e.as_str()) {
+            return Err(anyhow::anyhow!("camera '{}' error: {}", node_name, err));
+        }
     }
 
-    let jpeg_b64 = v
-        .get("jpeg_b64")
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| anyhow::anyhow!("grab_frame response missing jpeg_b64"))?
-        .to_string();
+    // Reject stale frames — 10s is generous for live cameras.
+    const MAX_AGE_MS: u64 = 10_000;
+    if let Some(age_ms) = meta.get("age_ms").and_then(|a| a.as_u64()) {
+        if age_ms > MAX_AGE_MS {
+            return Err(anyhow::anyhow!(
+                "camera '{}' frame is stale ({}ms old, max {}ms) — node may not be streaming",
+                node_name,
+                age_ms,
+                MAX_AGE_MS
+            ));
+        }
+    }
 
-    let media_type = v
+    let jpeg_b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes);
+
+    let media_type = meta
         .get("media_type")
         .and_then(|s| s.as_str())
         .unwrap_or("image/jpeg")
         .to_string();
 
-    let label = v
+    let label = meta
         .get("label")
         .and_then(|s| s.as_str())
         .unwrap_or(node_name)
         .to_string();
 
-    // Build receipt JSON from metadata fields (strip the large jpeg_b64 field)
-    let receipt = {
-        let mut r = v.clone();
-        if let serde_json::Value::Object(ref mut m) = r {
-            m.remove("jpeg_b64");
-        }
-        r.to_string()
-    };
+    let receipt = meta.to_string();
 
     Ok((
         receipt,
