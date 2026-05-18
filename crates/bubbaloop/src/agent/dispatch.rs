@@ -699,16 +699,18 @@ impl<P: PlatformOperations> Dispatcher<P> {
                 name: "grab_frame".to_string(),
                 description: "Capture the latest JPEG frame from a camera sensor node. \
                     The frame is delivered as an image content block in the next turn so \
-                    you can inspect it directly. Check the Current Sensor Inventory for \
-                    available camera node names. Returns a JSON receipt with capture \
-                    metadata (timestamp, resolution, frame_id)."
+                    you can inspect it directly. \
+                    Use the exact node name from the Current Sensor Inventory. \
+                    When the user asks about cameras without naming one, call grab_frame \
+                    for EVERY camera node in the inventory — do not pick just one. \
+                    Returns a JSON receipt with capture metadata (timestamp, resolution, frame_id)."
                     .to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "node_name": {
                             "type": "string",
-                            "description": "Name of the camera node (e.g. 'tapo-terrace', 'tapo-entrance')"
+                            "description": "Exact name of the camera node from the Current Sensor Inventory"
                         },
                         "machine_id": {
                             "type": "string",

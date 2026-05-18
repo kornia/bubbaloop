@@ -343,7 +343,10 @@ export function ChatView({ session }: { session?: Session }) {
   const turnRef = useRef(0);
   const episodesRef = useRef(0);
 
-  useEffect(() => () => { mountedRef.current = false; abortRef.current?.abort(); }, []);
+  useEffect(() => {
+    mountedRef.current = true; // reset on (re)mount — React StrictMode double-invokes cleanup
+    return () => { mountedRef.current = false; abortRef.current?.abort(); };
+  }, []);
 
   // Auto-scroll; stamp a 600ms window so handleScroll ignores programmatic events
   useEffect(() => {
@@ -459,7 +462,7 @@ export function ChatView({ session }: { session?: Session }) {
         return;
       }
 
-      for await (const frame of parseSseStream(res.body)) {
+      sseLoop: for await (const frame of parseSseStream(res.body, ctrl.signal)) {
         if (ctrl.signal.aborted) break;
 
         let event: AgentEvent;
@@ -520,7 +523,8 @@ export function ChatView({ session }: { session?: Session }) {
           case "error":
             flushDeltaBuffer();
             setEntries((prev) => [...prev, { kind: "error", text: event.text ?? "Unknown error" }]);
-            break;
+            ctrl.abort(); // unblock any pending reader.read() inside parseSseStream
+            break sseLoop;
 
           case "system": {
             flushDeltaBuffer();
@@ -533,7 +537,8 @@ export function ChatView({ session }: { session?: Session }) {
           case "done":
             flushDeltaBuffer();
             gotDone = true;
-            break;
+            ctrl.abort(); // unblock any pending reader.read() inside parseSseStream
+            break sseLoop;
         }
       }
 
@@ -556,7 +561,7 @@ export function ChatView({ session }: { session?: Session }) {
     } finally {
       streamingRef.current = false;
       abortRef.current = null;
-      if (mountedRef.current) setStreaming(false);
+      setStreaming(false); // safe in React 18 even if unmounted; mountedRef no longer guards this
     }
   }, [selectedAgent, input, streaming, token, flushDeltaBuffer]);
 

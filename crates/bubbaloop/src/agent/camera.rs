@@ -54,6 +54,21 @@ pub async fn grab_frame(
         return Err(anyhow::anyhow!("camera '{}' error: {}", node_name, err));
     }
 
+    // Reject stale frames — camera is likely stopped or not streaming.
+    // 10 s is generous for live cameras; anything older means the cached
+    // frame is from a previous run and would mislead vision analysis.
+    const MAX_AGE_MS: u64 = 10_000;
+    if let Some(age_ms) = v.get("age_ms").and_then(|a| a.as_u64()) {
+        if age_ms > MAX_AGE_MS {
+            return Err(anyhow::anyhow!(
+                "camera '{}' frame is stale ({}ms old, max {}ms) — node may not be streaming",
+                node_name,
+                age_ms,
+                MAX_AGE_MS
+            ));
+        }
+    }
+
     let jpeg_b64 = v
         .get("jpeg_b64")
         .and_then(|s| s.as_str())
