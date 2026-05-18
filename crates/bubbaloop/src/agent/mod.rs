@@ -363,10 +363,18 @@ pub async fn run_agent_turn<
     // 3. Signal turn complete
     sink.emit(AgentEvent::done(correlation_id)).await;
 
-    // 4. Trim short-term memory
+    // 4. Trim short-term memory.
+    // After draining, advance past any leading non-user messages so the slice
+    // always starts with a user turn (Gemini requires contents[0].role == "user").
     if memory.short_term.len() > MAX_CONVERSATION_MESSAGES {
         let drain_count = memory.short_term.len() - MAX_CONVERSATION_MESSAGES;
         memory.short_term.drain(..drain_count);
+    }
+    // Advance past any leading non-user messages left by trimming.
+    if let Some(first_user) = memory.short_term.iter().position(|m| m.role == "user") {
+        if first_user > 0 {
+            memory.short_term.drain(..first_user);
+        }
     }
 
     Ok(())

@@ -14,7 +14,7 @@ const STORAGE_KEYS = {
   CAMERA_ORDER: 'bubbaloop-camera-order',
 } as const;
 
-export type PanelType = 'camera' | 'json' | 'rawdata' | 'weather' | 'stats' | 'nodes' | 'telemetry' | 'network';
+export type PanelType = 'camera' | 'json' | 'rawdata' | 'weather' | 'stats' | 'nodes' | 'telemetry' | 'network' | 'timeseries';
 
 export interface BasePanelConfig {
   id: string;
@@ -55,7 +55,12 @@ export interface NetworkPanelConfig extends BasePanelConfig {
   type: 'network';
 }
 
-export type PanelConfig = CameraPanelConfig | JsonPanelConfig | RawDataPanelConfig | WeatherPanelConfig | StatsPanelConfig | NodesPanelConfig | TelemetryPanelConfig | NetworkPanelConfig;
+export interface TimeseriesPanelConfig extends BasePanelConfig {
+  type: 'timeseries';
+  windowSecs?: number;
+}
+
+export type PanelConfig = CameraPanelConfig | JsonPanelConfig | RawDataPanelConfig | WeatherPanelConfig | StatsPanelConfig | NodesPanelConfig | TelemetryPanelConfig | NetworkPanelConfig | TimeseriesPanelConfig;
 
 // Legacy type for migration
 export interface LegacyCameraConfig {
@@ -181,6 +186,7 @@ export function generatePanelId(type: PanelType): string {
     nodes: 'nodes',
     telemetry: 'telemetry',
     network: 'network',
+    timeseries: 'ts',
   };
   const prefix = prefixes[type];
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
