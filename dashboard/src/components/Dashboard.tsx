@@ -439,7 +439,7 @@ export function Dashboard({ cameras: initialCameras, availableTopics: staticTopi
                         topic={panel.topic}
                         windowSecs={(panel as { windowSecs?: number }).windowSecs}
                         isHidden={isHidden}
-                        onTopicChange={(topic) => updatePanel(panel.id, { topic })}
+                        onTopicChange={(topic: string) => updatePanel(panel.id, { topic })}
                         onRemove={() => removePanel(panel.id)}
                         availableTopics={availableTopics}
                       />
