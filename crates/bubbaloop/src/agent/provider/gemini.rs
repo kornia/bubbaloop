@@ -424,6 +424,11 @@ impl ModelProvider for GeminiProvider {
         let status = response.status();
         if !status.is_success() {
             let msg = response.text().await.unwrap_or_default();
+            if status.as_u16() == 400 {
+                if let Ok(debug_json) = serde_json::to_string(&body.contents) {
+                    log::error!("[Gemini] 400 contents dump: {}", debug_json);
+                }
+            }
             return Err(ProviderError::Api {
                 status: status.as_u16(),
                 message: msg,
@@ -470,6 +475,11 @@ impl ModelProvider for GeminiProvider {
         let status = response.status();
         if !status.is_success() {
             let msg = response.text().await.unwrap_or_default();
+            if status.as_u16() == 400 {
+                if let Ok(debug_json) = serde_json::to_string(&body.contents) {
+                    log::error!("[Gemini] 400 contents dump: {}", debug_json);
+                }
+            }
             return Err(ProviderError::Api {
                 status: status.as_u16(),
                 message: msg,

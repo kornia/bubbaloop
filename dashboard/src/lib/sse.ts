@@ -1,9 +1,3 @@
-/**
- * Minimal SSE frame parser for ReadableStream bodies.
- *
- * Handles the server-sent events format: lines prefixed with `data:` or `event:`.
- * Each complete event block (terminated by blank line) is yielded.
- */
 export interface SseFrame {
   event: string;
   data: string;
@@ -12,26 +6,44 @@ export interface SseFrame {
 /**
  * Parse an SSE ReadableStream body into an async iterable of SseFrame objects.
  *
- * Usage:
- *   const res = await fetch(url, { method: 'POST', ... });
- *   for await (const frame of parseSseStream(res.body!)) { ... }
+ * Pass an AbortSignal so every reader.read() races against it — without this,
+ * a pending read() blocks generator.return() indefinitely when the server keeps
+ * the TCP connection alive (e.g. Vite dev proxy), preventing setStreaming(false).
  */
 export async function* parseSseStream(
-  body: ReadableStream<Uint8Array>
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal
 ): AsyncGenerator<SseFrame> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let currentEvent = "";
 
+  // Rejects when the signal fires; raced against reader.read() each iteration.
+  // Suppressed in finally so a late-firing signal doesn't become an unhandled rejection.
+  const abortPromise: Promise<never> | null = signal
+    ? new Promise<never>((_, reject) => {
+        if (signal.aborted) {
+          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+        } else {
+          signal.addEventListener(
+            "abort",
+            () => reject(signal.reason ?? new DOMException("Aborted", "AbortError")),
+            { once: true }
+          );
+        }
+      })
+    : null;
+
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = abortPromise
+        ? await Promise.race([reader.read(), abortPromise])
+        : await reader.read();
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
 
-      // Process complete lines
       let nl: number;
       while ((nl = buffer.indexOf("\n")) !== -1) {
         const rawLine = buffer.slice(0, nl);
@@ -39,7 +51,6 @@ export async function* parseSseStream(
         const line = rawLine.replace(/\r$/, "");
 
         if (line === "") {
-          // Blank line = end of event block; reset event type
           currentEvent = "";
           continue;
         }
@@ -59,6 +70,7 @@ export async function* parseSseStream(
       }
     }
   } finally {
-    reader.releaseLock();
+    abortPromise?.catch(() => {}); // suppress late-firing signal rejection
+    reader.cancel().catch(() => {});
   }
 }

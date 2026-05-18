@@ -21,6 +21,7 @@ import { SortableStatsCard } from './SortableStatsCard';
 import { SortableNodesCard } from './SortableNodesCard';
 import { SortableSystemTelemetryCard } from './SortableSystemTelemetryCard';
 import { SortableNetworkMonitorCard } from './SortableNetworkMonitorCard';
+import { SortableTimeseriesCard } from './SortableTimeseriesCard';
 import {
   PanelConfig,
   PanelType,
@@ -224,6 +225,15 @@ export function Dashboard({ cameras: initialCameras, availableTopics: staticTopi
           type: 'network',
         };
         break;
+      case 'timeseries':
+        newPanel = {
+          id: newId,
+          name: `Plot ${count}`,
+          topic: '',
+          type: 'timeseries',
+          windowSecs: 10,
+        };
+        break;
       default:
         return;
     }
@@ -312,6 +322,12 @@ export function Dashboard({ cameras: initialCameras, availableTopics: staticTopi
                   <circle cx="12" cy="12" r="3" />
                 </svg>
                 Network Panel
+              </button>
+              <button className="add-panel-option" onClick={() => addPanel('timeseries')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                </svg>
+                Timeseries Plot
               </button>
             </div>
           )}
@@ -412,6 +428,20 @@ export function Dashboard({ cameras: initialCameras, availableTopics: staticTopi
                         panelName={panel.name}
                         isHidden={isHidden}
                         onRemove={() => removePanel(panel.id)}
+                      />
+                    );
+                  case 'timeseries':
+                    return (
+                      <SortableTimeseriesCard
+                        key={panel.id}
+                        id={panel.id}
+                        panelName={panel.name}
+                        topic={panel.topic}
+                        windowSecs={(panel as { windowSecs?: number }).windowSecs}
+                        isHidden={isHidden}
+                        onTopicChange={(topic: string) => updatePanel(panel.id, { topic })}
+                        onRemove={() => removePanel(panel.id)}
+                        availableTopics={availableTopics}
                       />
                     );
                   default:
