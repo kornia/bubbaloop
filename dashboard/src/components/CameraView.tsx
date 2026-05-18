@@ -124,11 +124,28 @@ export function CameraView({
     };
   }, [cameraName, handleFrame]);
 
+  // Render a JPEG frame directly to canvas via createImageBitmap (no H264 decoder needed).
+  const renderJpeg = useCallback((data: Uint8Array) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const blob = new Blob([data], { type: 'image/jpeg' });
+    createImageBitmap(blob).then((bitmap) => {
+      if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        setDimensions({ width: bitmap.width, height: bitmap.height });
+      }
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(bitmap, 0, 0);
+        frameCountRef.current++;
+      }
+      bitmap.close();
+    }).catch((e) => console.error('[CameraView] JPEG render error:', e));
+  }, []);
+
   // Handle incoming samples from Zenoh. Camera frames are CBOR-only.
   const handleSample = useCallback((sample: Sample) => {
-    const decoder = decoderRef.current;
-    if (!decoder) return;
-
     try {
       const payload = getSamplePayload(sample);
       const encodingInfo = getEncodingInfo(sample);
@@ -156,7 +173,8 @@ export function CameraView({
         msg = msg.body;
       }
 
-      const format: string = msg.format ?? '';
+      // Support both `format` (rtsp-camera/H264) and `encoding` (oak-camera/JPEG) field names.
+      const format: string = msg.format ?? msg.encoding ?? '';
       const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data ?? []);
       const rawHeader = msg.header;
       const header = rawHeader ? {
@@ -169,11 +187,19 @@ export function CameraView({
       // Store latest metadata in ref (no re-render)
       lastMetaRef.current = { header, format, dataSize: data.length };
 
+      if (format === 'jpeg') {
+        renderJpeg(data);
+        return;
+      }
+
       // Skip non-h264 formats (but allow empty format in case field is missing)
       if (format && format !== 'h264') {
         console.warn(`[CameraView] Unexpected format: ${format}`);
         return;
       }
+
+      const decoder = decoderRef.current;
+      if (!decoder) return;
 
       // Use pub_time as timestamp (convert from nanoseconds to microseconds)
       const timestamp = header
@@ -187,7 +213,7 @@ export function CameraView({
     } catch (e) {
       console.error('[CameraView] Failed to process sample:', e);
     }
-  }, []);
+  }, [renderJpeg]);
 
   // Auto-detect correct topic from discovered topics.
   // Priority: 1) exact name match, 2) first camera/*/compressed topic found.

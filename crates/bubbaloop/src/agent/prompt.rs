@@ -255,8 +255,13 @@ pub fn build_system_prompt_with_soul_path(
            or analyze a camera feed.** Never call it proactively or for general status checks.\n\n\
          Use the right tool for the job. For node operations, use the dedicated node tools.\n\
          For everything else, use read_file, write_file, or run_command.\n\n\
-         To analyze what cameras see, call `grab_frame` for each sensor — the JPEG frame\n\
-         is delivered as an image content block in the next turn for you to inspect directly.\n\
+         To analyze what cameras see, call `grab_frame` for **each** camera sensor node \
+         listed in the Current Sensor Inventory — the JPEG frame is delivered as an image \
+         content block in the next turn for you to inspect directly. \
+         When the user asks generically (\"grab a frame\", \"what do cameras see\", \
+         \"show me the cameras\") without naming a specific camera, \
+         call grab_frame for ALL camera nodes, not just one. \
+         Only target a single camera if the user names it explicitly.\n\
          Do NOT call grab_frame unless the user's message explicitly requests visual information.\n\n\
          ### Important: recurring vs one-off actions\n\n\
          - **run_command** blocks until the command exits. NEVER use shell loops (`while true`, `watch`, `for i in`) \
