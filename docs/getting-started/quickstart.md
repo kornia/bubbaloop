@@ -66,8 +66,9 @@ bubbaloop debug subscribe "camera/entrance/compressed"  # See frames
 ## Step 5: Talk to Your Hardware
 
 ```bash
-# Authenticate with Anthropic (needed for AI agent)
-bubbaloop login
+# Authenticate with an LLM provider — Gemini recommended (free tier):
+export GEMINI_API_KEY=...     # from https://aistudio.google.com/apikey
+# Alternatively, for Claude: `bubbaloop login` (paste an Anthropic API key or sk-ant-oat01-* token)
 
 # Start nodes and load skills (start the daemon first via systemd or `bubbaloop daemon start`)
 bubbaloop up
@@ -91,7 +92,7 @@ bubbaloop agent setup              # Configure the default agent
 bubbaloop agent setup -a my-agent  # Create a named agent
 ```
 
-The wizard asks you to choose a provider (Claude or Ollama) and model, then prompts for a one-sentence role description and writes `identity.md`. On the first `agent chat` turn, the daemon injects an onboarding interview so the LLM can refine its own identity and write it back — no restart needed.
+The wizard asks you to choose a provider (Gemini, Claude, or Ollama) and model, then prompts for a one-sentence role description and writes `identity.md`. Gemini is the default recommendation (free tier, strong vision). On the first `agent chat` turn, the daemon injects an onboarding interview so the LLM can refine its own identity and write it back — no restart needed.
 
 ### Custom Agents (Optional)
 
@@ -101,8 +102,8 @@ Create `~/.bubbaloop/agents.toml` to configure multiple agents:
 [agents.jean-clawd]
 enabled = true
 default = true
-provider = "claude"
-model = "claude-sonnet-4-20250514"  # optional: overrides soul/capabilities.toml
+provider = "gemini"
+model = "gemini-2.5-flash"          # optional: overrides soul/capabilities.toml
 
 [agents.camera-expert]
 enabled = true
@@ -128,7 +129,7 @@ I specialize in camera feeds and sensor monitoring.
 
 **Capabilities** (`~/.bubbaloop/agents/{id}/soul/capabilities.toml`):
 ```toml
-model_name = "claude-sonnet-4-20250514"
+model_name = "gemini-2.5-flash"   # or "claude-sonnet-4-20250514" / "qwen3.5:9b"
 heartbeat_base_interval = 60
 compaction_flush_threshold_tokens = 4000
 ```
@@ -173,8 +174,9 @@ Access at: http://localhost:5173
 
 ### Dashboard Features
 
-| Panel | Description |
-|-------|-------------|
+| Tab / Panel | Description |
+|-------------|-------------|
+| Chat | Talk to agents in the browser via HTTP+SSE — tool-call traces, image-in-chat (`grab_frame` → Gemini Vision), turn cancellation. See [Chat tab](../dashboard/chat.md). |
 | Cameras | Live H264 video streams |
 | Nodes | Service management |
 | Weather | Current conditions and forecasts |

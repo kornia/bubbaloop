@@ -1,5 +1,5 @@
 ---
-description: "Bubbaloop 3-tier agent memory system. Short-term RAM, episodic NDJSON with FTS5 search, and long-term SQLite semantic memory for persistent context."
+description: "Bubbaloop 4-tier agent memory system. Live world state (SQLite), short-term RAM, episodic NDJSON with FTS5 search, and long-term SQLite semantic memory for persistent context."
 ---
 
 # Memory & Mission Engine

@@ -69,6 +69,9 @@ The agent runtime uses dedicated topics for multi-agent messaging:
 | `bubbaloop/global/{machine}/agent/inbox` | CLI → Daemon | Shared intake for all agent messages |
 | `bubbaloop/global/{machine}/agent/{agent_id}/outbox` | Daemon → CLI | Per-agent streamed responses |
 | `bubbaloop/global/{machine}/agent/{agent_id}/manifest` | Queryable | Agent capabilities and model info |
+| `bubbaloop/global/{machine}/agent/{agent_id}/cancel` | CLI → Daemon | Abort the in-flight turn for this agent (Ctrl-C in REPL) |
+
+The dashboard's Chat tab uses HTTP+SSE to the daemon's agent gateway instead of Zenoh. Both transports surface the same `AgentEvent` stream and share the same cancel semantics.
 
 ## Topic Discovery
 

@@ -28,12 +28,15 @@ Key source files in `crates/bubbaloop/src/`:
 - `agent/runtime.rs` — Multi-agent runtime: AgentsConfig, AgentRuntime, ZenohSink, agent_loop; `agent_directory()` (pub)
 - `agent/prompt.rs` — System prompt builder; `build_system_prompt_with_soul_path()` injects onboarding prompt for new agents
 - `agent/soul.rs` — Soul struct, first-run onboarding, notify hot-reload (`~/.bubbaloop/soul/`)
-- `agent/provider/mod.rs` — ModelProvider trait, Message, ContentBlock, ToolDefinition, StreamEvent
+- `agent/provider/mod.rs` — ModelProvider trait, Message, ContentBlock (incl. `Image`), ToolDefinition, StreamEvent
+- `agent/provider/gemini.rs` — Gemini API client (recommended default — free tier, vision-capable)
 - `agent/provider/claude.rs` — Claude API client with dual auth (API key + OAuth bearer token)
 - `agent/provider/ollama.rs` — Ollama local LLM client with tool calling (`/api/chat`)
+- `agent/camera.rs` — `grab_frame` implementation: Zenoh query for one JPEG frame + JSON metadata attachment, emits `ContentBlock::Image`
+- `agent/gateway.rs` — Zenoh + HTTP+SSE agent gateway; per-agent cancel topic `bubbaloop/global/{machine_id}/agent/{agent_id}/cancel`
 - `agent/memory/` — 4-tier: world state (live SQLite) + short-term (RAM) + episodic (NDJSON) + semantic (SQLite)
 - `agent/heartbeat.rs` — Adaptive heartbeat: arousal + decay + state collection
-- `agent/dispatch.rs` — Internal MCP tool dispatch (42 MCP + agent-internal tools, includes telemetry + beliefs + constraints + missions)
+- `agent/dispatch.rs` — Internal tool dispatch (47 public MCP tools + ~43 agent-internal tools incl. `grab_frame`, telemetry, beliefs, constraints, missions)
 - `cli/node/mod.rs` — node CRUD, validation, list/add/remove
 - `cli/node/install.rs` — install, precompiled binary download, GitHub clone
 - `cli/node/lifecycle.rs` — start, stop, restart, logs

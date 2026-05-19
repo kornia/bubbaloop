@@ -41,7 +41,7 @@ If a workflow only improves the workflow itself, **delete it**. The sensor nodes
 
 1. Check argh conventions in CLAUDE.md (`#[derive(FromArgs)]`, `#[argh(subcommand)]`)
 2. Write command + unit tests (co-located `#[cfg(test)] mod tests`)
-3. Verify 298+ Rust tests pass
+3. Verify 2400+ Rust tests pass
 4. Zero clippy warnings enforced
 
 **Security**: Node names `[a-zA-Z0-9_-]{1,64}`, no null bytes.
@@ -52,7 +52,7 @@ If a workflow only improves the workflow itself, **delete it**. The sensor nodes
 2. Update proto + rebuild BOTH descriptor pipelines (`bubbaloop-schemas` AND `bubbaloop`)
 3. Update MCP tool handlers in `mcp/mod.rs`, add integration tests
 4. Update dashboard types if applicable
-5. Full system check (298+ Rust + 47 MCP integration tests)
+5. Full system check (2400+ Rust unit tests + 47 MCP integration tests)
 
 **Critical**: Proto changes require rebuilding both descriptor pipelines.
 
@@ -80,7 +80,7 @@ Start at the lowest tier. Escalate only on failure. Haiku costs ~10x less than O
 | Command | When | Why |
 |---------|------|-----|
 | `pixi run check` | After every Rust change | Fast compilation check |
-| `cargo test --lib -p bubbaloop` | Before commits | 298+ Rust tests |
+| `cargo test --lib -p bubbaloop` | Before commits | 2400+ Rust tests |
 | `cargo test --features test-harness --test integration_mcp` | After MCP changes | 47 integration tests |
 | `pixi run clippy` | Before PRs | Zero warnings (`-D warnings`) |
 
@@ -107,7 +107,7 @@ See `CLAUDE.md` for full conventions. Critical rules:
 ## Pull Request Checklist
 
 - [ ] `pixi run check` passes
-- [ ] `cargo test --lib -p bubbaloop` (298+ tests)
+- [ ] `cargo test --lib -p bubbaloop` (2400+ tests)
 - [ ] `cargo test --features test-harness --test integration_mcp` (47 tests)
 - [ ] `pixi run clippy` zero warnings
 - [ ] `CLAUDE.md` updated if conventions changed

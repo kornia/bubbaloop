@@ -216,7 +216,10 @@ The daemon hosts a multi-agent runtime. All LLM processing is daemon-side. The C
 bubbaloop/global/{machine}/agent/inbox                   <- shared inbox (all agents)
 bubbaloop/global/{machine}/agent/{agent_id}/outbox       <- per-agent event stream
 bubbaloop/global/{machine}/agent/{agent_id}/manifest     <- queryable: agent metadata
+bubbaloop/global/{machine}/agent/{agent_id}/cancel       <- client cancels in-flight turn
 ```
+
+The dashboard's Chat tab speaks HTTP+SSE to the daemon's agent gateway instead of Zenoh, but emits the same `AgentMessage` / `AgentEvent` shapes and shares the same cancel semantics.
 
 ### Wire Format
 

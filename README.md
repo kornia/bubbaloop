@@ -16,7 +16,7 @@ AI agents revolutionized software engineering. **Bubbaloop brings that same powe
 | **Data plane** | None | **Zenoh (zero-copy pub/sub)** |
 | **Hardware** | None | **Self-describing sensor nodes** |
 | **Runs on** | Desktop / cloud | **Jetson, RPi, any Linux ARM64/x86** |
-| **MCP role** | Client (consumes tools) | **Server (42+ tools, 3-tier RBAC)** |
+| **MCP role** | Client (consumes tools) | **Server (47 tools, 3-tier RBAC)** |
 | **Scheduling** | Always-on LLM (~$5-10/day) | **Offline Tier 1 + LLM Tier 2 (~$0.05/day)** |
 
 ## Quick Install
@@ -43,20 +43,29 @@ All run as systemd user services with autostart enabled.
 
 ## Login & Authentication
 
+Bubbaloop supports three providers — **Gemini** (recommended for new users), **Claude**, and **Ollama** (local).
+
 ```bash
-# Option 1: API Key (pay-as-you-go)
+# Option 1 (Recommended): Gemini — free tier, strong vision support
+export GEMINI_API_KEY=...           # from https://aistudio.google.com/apikey
+# or write the key to ~/.bubbaloop/gemini-key
+
+# Option 2: Claude API Key (pay-as-you-go)
 bubbaloop login
 # → Choose [1], paste your key from console.anthropic.com
 
-# Option 2: Claude Subscription (Pro/Max/Team)
+# Option 3: Claude Subscription (Pro/Max/Team)
 claude setup-token    # Run in Claude Code CLI first
 bubbaloop login
 # → Choose [2], paste the sk-ant-oat01-* token
 
-# Check auth status
+# Option 4: Ollama — fully local, no cloud bill
+ollama serve          # in a separate terminal
+
+# Check auth status (shows all configured providers)
 bubbaloop login --status
 
-# Remove credentials
+# Remove Claude credentials (Gemini/Ollama have no stored secret)
 bubbaloop logout
 ```
 
@@ -69,11 +78,14 @@ bubbaloop status
 # Start daemon (runs agent runtime + MCP server + node manager)
 bubbaloop up
 
-# Talk to your hardware via Claude AI (agents run daemon-side)
+# Talk to your hardware (Gemini by default; agents run daemon-side)
 bubbaloop agent chat "What sensors do I have?"
-bubbaloop agent chat                   # Interactive REPL
-bubbaloop agent chat -a camera-expert "describe the video feed"
+bubbaloop agent chat                   # Interactive REPL (Ctrl-C cancels the in-flight turn)
+bubbaloop agent chat -a camera-expert "describe what the terrace camera sees"
 bubbaloop agent list                   # Show running agents + models
+
+# Or open the dashboard's Chat tab in a browser — same agent runtime,
+# rich tool-call traces, and image-in-chat when the agent calls grab_frame.
 
 # System diagnostics with auto-fix
 bubbaloop doctor --fix
@@ -161,13 +173,13 @@ export BUBBALOOP_MCP_TOKEN=$(bubbaloop mcp --token)
 
 47 MCP tools + agent-internal tools. Configure Claude Code via `.mcp.json` (already in project root).
 
-**Agent-internal tools** (daemon-side only, not exposed via MCP): `memory_search`, `memory_forget`, `schedule_task`, `create_proposal`, `read_file`, `write_file`, `run_command`.
+**Agent-internal tools** (daemon-side only, not exposed via MCP): `grab_frame` (Zenoh-query a camera node for one JPEG → fed to a vision-capable provider), `memory_search`, `memory_forget`, `schedule_task`, `create_proposal`, `read_file`, `write_file`, `run_command`, `publish_to_topic`.
 
 ## Architecture
 
 ```
                     ┌──────────────────────────────────┐
-                    │   AI Agent (Claude via MCP)       │
+                    │   AI Agent (Gemini/Claude via MCP)│
                     │   http://127.0.0.1:8088/mcp      │
                     └──────────────┬───────────────────┘
                                    │

@@ -34,19 +34,25 @@ One binary. Four subsystems. One data plane.
 
 ---
 
-## Three Entry Points
+## Entry Points
 
-All three share the same daemon-side agent runtime and MCP tools.
+All entry points share the same daemon-side agent runtime and MCP tools.
 
 **CLI** (`bubbaloop agent chat`)
 - Thin Zenoh client. No LLM on the CLI side.
 - Publishes to the agent's inbox topic, subscribes to its outbox.
+- Ctrl-C during a turn publishes to the cancel topic and aborts the in-flight LLM call.
 - All LLM processing happens inside the daemon.
+
+**Dashboard Chat tab** (browser → daemon HTTP+SSE)
+- Same agent runtime, different transport: the browser talks to the daemon's `/api/agent/...` endpoints over HTTP, and streams events back via SSE.
+- Renders tool-call traces inline; surfaces images returned by `grab_frame` as inline chat entries (Gemini Vision).
+- Multi-provider login status (Gemini / Claude / Ollama) visible from the tab.
 
 **MCP stdio** (`bubbaloop mcp --stdio`)
 - For Claude Code and local AI agents.
 - No auth required — inherits user permissions (Admin tier).
-- Launch: add `bubbaloop mcp --stdio` to your Claude Code config.
+- Launch: add `bubbaloop mcp --stdio` to your Claude Code config. Use `bubbaloop mcp --token` to print the bearer token if you need it for `.mcp.json`.
 
 **MCP HTTP** (daemon auto-starts on `:8088`)
 - For remote agents, dashboards, and external integrations.
@@ -73,6 +79,7 @@ CLI client                Daemon (agent runtime)
 
 - Shared inbox topic: `bubbaloop/global/{machine_id}/agent/inbox`
 - Per-agent outbox: `bubbaloop/global/{machine_id}/agent/{agent_id}/outbox`
+- Per-agent cancel topic: `bubbaloop/global/{machine_id}/agent/{agent_id}/cancel` (clients publish here to abort an in-flight turn)
 - Wire format: JSON (`AgentMessage`, `AgentEvent`)
 
 **Per-agent state**

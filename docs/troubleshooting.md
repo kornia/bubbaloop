@@ -1061,7 +1061,10 @@ systemctl --user restart bubbaloop-daemon
 bubbaloop login --status
 ```
 
-**Fix:** Authenticate with `bubbaloop login`. Choose API key or Claude subscription.
+**Fix:** Pick a provider:
+- **Gemini** (recommended, free tier): `export GEMINI_API_KEY=...` or write the key to `~/.bubbaloop/gemini-key`
+- **Claude**: `bubbaloop login` and choose API key or subscription
+- **Ollama**: run `ollama serve` (no credentials needed)
 
 ### Agent stuck / not finishing turn
 
@@ -1070,7 +1073,7 @@ Turn timeout is 120s, tool call timeout is 30s. Check daemon logs:
 journalctl --user -u bubbaloop-daemon | grep -i timeout
 ```
 
-May indicate API rate limiting (HTTP 429). Wait and retry, or check your Anthropic usage dashboard.
+May indicate API rate limiting (HTTP 429). Wait and retry, or check the provider quota dashboard — [Google AI Studio](https://aistudio.google.com/) for Gemini, [Anthropic Console](https://console.anthropic.com/) for Claude.
 
 ### Agent lost context
 

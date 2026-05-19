@@ -1,5 +1,87 @@
 # Changelog
 
+## [0.0.14](https://github.com/kornia/bubbaloop/compare/v0.0.13...v0.0.14) (2026-05-19)
+
+### Features
+
+* **agent:** `grab_frame` tool — agent fetches a single JPEG frame from a camera node and feeds it to a vision-capable provider for analysis. Multi-camera fan-out supported. ([ff7fe08](https://github.com/kornia/bubbaloop/commit/ff7fe08), [85dff9c](https://github.com/kornia/bubbaloop/commit/85dff9c))
+* **agent:** Gemini Vision provider (`crates/bubbaloop/src/agent/provider/gemini.rs`) — recommended default for new users (free tier, strong vision support). ([ff7fe08](https://github.com/kornia/bubbaloop/commit/ff7fe08))
+* **agent:** client-side turn cancellation via Zenoh `bubbaloop/global/{machine_id}/agent/{agent_id}/cancel` topic; Ctrl-C in the REPL aborts the in-flight turn. ([2ea9176](https://github.com/kornia/bubbaloop/commit/2ea9176), [ac384dc](https://github.com/kornia/bubbaloop/commit/ac384dc))
+* **dashboard:** Chat tab — talk to agents from the browser via HTTP+SSE to the daemon's agent gateway. Includes tool-call trace rendering and image-in-chat from `grab_frame`. ([4140a1a](https://github.com/kornia/bubbaloop/commit/4140a1a))
+* **chat:** multi-provider login status (Gemini / Claude / Ollama), 404 on unknown agent, Claude OAuth risk warning. ([fe76d67](https://github.com/kornia/bubbaloop/commit/fe76d67))
+* **mcp:** `bubbaloop mcp --token` prints the stored bearer token so `.mcp.json` can pick it up without a race. ([4dadb64](https://github.com/kornia/bubbaloop/commit/4dadb64))
+
+### Bug Fixes
+
+* **agent:** `grab_frame` reads binary JPEG payload + JSON metadata attachment from camera nodes (was: base64-in-JSON). ([326a9dd](https://github.com/kornia/bubbaloop/commit/326a9dd))
+* **chat:** clear Responding state after multi-camera `grab_frame` completes. ([85dff9c](https://github.com/kornia/bubbaloop/commit/85dff9c))
+* **mcp:** eliminate token race between gateway and agent runtime. ([d03efba](https://github.com/kornia/bubbaloop/commit/d03efba))
+
+### Chores
+
+* **dashboard:** remove LibraryView component (replaced by Chat tab). ([5d687be](https://github.com/kornia/bubbaloop/commit/5d687be))
+
+### Docs
+
+* Prioritize Gemini as the recommended default provider across README, agent-guide, quickstart, configuration, and CLI reference (#100).
+* Sync CHANGELOG, CLAUDE.md, ARCHITECTURE.md, ROADMAP.md, concept docs with v0.0.14 features.
+
+## [0.0.13](https://github.com/kornia/bubbaloop/compare/v0.0.12...v0.0.13) (2026-05-04)
+
+### Features
+
+* **mcp:** `install_node` accepts name + config flags (#87)
+
+Released as `chore(release): v0.0.13` (#88) — install-flow polish from the e2e exercise.
+
+## [0.0.12](https://github.com/kornia/bubbaloop/compare/v0.0.11...v0.0.12) (2026-05-04)
+
+### Features
+
+* **agent:** recorder pipeline overhaul — MCP plugin + production refinements + install + SDK testing (#85)
+* **agent:** Phase 3 — reactive alerts end-to-end (rule-based world-state monitoring with debounce, circuit breaker, world-state sweeper, hard reqwest timeout for stuck LLM generations)
+* **sdk:** `publisher_cbor(local=True)` for CBOR+SHM in the Python SDK (#78)
+
+### Refactors
+
+* **wire-format:** remove protobuf in favor of CBOR + manifest schemas across the dataplane (#76)
+
+## [0.0.11](https://github.com/kornia/bubbaloop/compare/v0.0.10...v0.0.11) (2026-04-06)
+
+### Features
+
+* **agent:** Physical AI Memory & Mission system — scheduled tasks for recurring actions, missions vs tasks distinction
+* **tui:** real-time agent context visibility with System event type; show tool results by default (full detail with `-v`)
+
+### Bug Fixes
+
+* **agent:** prevent 400 'unexpected tool_use' errors
+* **tui:** drain subscriber and improve tool-result contrast
+* **build:** binary size reduction (`panic=abort`, `rusqlite` bundled, axum without `ws`)
+
+## [0.0.10](https://github.com/kornia/bubbaloop/compare/v0.0.9...v0.0.10) (2026-03-30)
+
+### Features
+
+* **agent:** `bubbaloop agent setup` command with first-run onboarding (#51)
+
+## [0.0.9](https://github.com/kornia/bubbaloop/compare/v0.0.8...v0.0.9) (2026-03-29)
+
+### Features
+
+* **agent:** OpenClaw-inspired agent rewrite with multi-agent runtime (#47)
+* **agent:** minimal opt-in Ollama support for local inference (#49)
+
+### Docs
+
+* Premium theme redesign, factual fixes against Rust source, agent-first narrative
+
+## [0.0.8](https://github.com/kornia/bubbaloop/compare/v0.0.7...v0.0.8) (2026-03-10)
+
+### Features
+
+* **cli:** Claude subscription login via `setup-token` (#36)
+
 ## [0.0.7](https://github.com/kornia/bubbaloop/compare/v0.0.6...v0.0.7) (2026-03-01)
 
 ### Features
