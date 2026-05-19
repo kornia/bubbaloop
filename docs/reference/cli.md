@@ -19,7 +19,7 @@ The `bubbaloop` binary is a single ~13 MB Rust executable that includes CLI, dae
 | `bubbaloop status` | Show service and node status |
 | `bubbaloop doctor` | Run system diagnostics |
 | `bubbaloop daemon` | Run the daemon (node manager) |
-| `bubbaloop login` | Authenticate with Anthropic (API key or OAuth) |
+| `bubbaloop login` | Authenticate with Anthropic Claude (API key or OAuth). Gemini uses `GEMINI_API_KEY` env var. |
 | `bubbaloop logout` | Remove stored credentials |
 | `bubbaloop login --status` | Check authentication status |
 
@@ -84,6 +84,9 @@ bubbaloop login [OPTIONS]
 
 **Authentication methods:**
 
+`bubbaloop login` covers **Claude** (Anthropic). For **Gemini** (recommended — free tier), set `GEMINI_API_KEY` env var or write the key to `~/.bubbaloop/gemini-key`. For **Ollama**, just run an Ollama server locally.
+
+Claude options:
 1. **API Key** (pay-as-you-go): Paste key from console.anthropic.com
 2. **Claude Subscription** (Pro/Max/Team): Run `claude setup-token` first, then paste the `sk-ant-oat01-*` token
 
@@ -417,6 +420,7 @@ pixi run up                  # Start all services via process-compose
 | `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
 | `BUBBALOOP_MACHINE_ID` | Machine identifier | hostname |
 | `BUBBALOOP_MCP_PORT` | MCP HTTP server port | `8088` |
+| `GEMINI_API_KEY` | Gemini API key (recommended — free tier) | — |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude agents | — |
 | `RUST_LOG` | Log level | `info` |
 

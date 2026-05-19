@@ -184,12 +184,12 @@ Agents are configured in `~/.bubbaloop/agents.toml`:
 [agents.jean-clawd]
 enabled = true
 default = true
-provider = "claude"      # "claude" or "ollama"
+provider = "gemini"      # "gemini" (recommended), "claude", or "ollama"
 
 [agents.camera-expert]
 enabled = true
 capabilities = ["camera", "rtsp", "video"]
-provider = "claude"
+provider = "gemini"
 ```
 
 | Field | Type | Default | Description |
@@ -197,8 +197,8 @@ provider = "claude"
 | `enabled` | bool | `true` | Whether agent starts with daemon |
 | `default` | bool | `false` | Receives messages when no agent specified |
 | `capabilities` | list | `[]` | Tags for agent routing |
-| `provider` | string | `"claude"` | LLM provider: `"claude"` or `"ollama"` |
-| `model` | string | — | Model name override (e.g., `"claude-haiku-4-5-20251001"`, `"qwen3.5:9b"`). Overrides `soul/capabilities.toml` `model_name` when set. |
+| `provider` | string | `"gemini"` | LLM provider: `"gemini"` (recommended — free tier, strong vision), `"claude"`, or `"ollama"` |
+| `model` | string | — | Model name override (e.g., `"gemini-2.5-flash"`, `"claude-haiku-4-5-20251001"`, `"qwen3.5:9b"`). Overrides `soul/capabilities.toml` `model_name` when set. |
 
 When no `agents.toml` exists, a single default agent named `jean-clawd` is created automatically.
 
@@ -224,7 +224,7 @@ When I greet users, I always include a shrimp pun.
 Model and behavior settings:
 
 ```toml
-model_name = "claude-sonnet-4-20250514"
+model_name = "gemini-2.5-flash"   # or "claude-sonnet-4-20250514" / "qwen3.5:9b"
 max_turns = 15
 allow_internet = true
 
@@ -251,7 +251,7 @@ episodic_decay_half_life_days = 30
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `model_name` | `claude-sonnet-4-20250514` | LLM model identifier |
+| `model_name` | `gemini-2.5-flash` | LLM model identifier |
 | `max_turns` | `15` | Maximum tool-use turns per agent job |
 | `allow_internet` | `true` | Whether the agent can make internet requests |
 | `heartbeat_base_interval` | `60` | Resting heartbeat interval in seconds |
@@ -316,6 +316,7 @@ See [Remote Access](../dashboard/remote-access.md) for detailed setup instructio
 | `ZENOH_ENDPOINT` | Zenoh router endpoint (highest priority) | `tcp/127.0.0.1:7447` |
 | `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint (fallback) | `tcp/127.0.0.1:7447` |
 | `RUST_LOG` | Logging level | `info` |
+| `GEMINI_API_KEY` | Gemini API key (recommended — free tier) | — |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude | — |
 | `BUBBALOOP_MCP_PORT` | MCP HTTP server port | `8088` |
 | `BUBBALOOP_MACHINE_ID` | Machine identifier | hostname |

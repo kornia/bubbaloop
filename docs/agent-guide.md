@@ -26,7 +26,11 @@ MCP server runs on `http://127.0.0.1:8088/mcp` when daemon is active.
 
 **Rate limits:** 100 request burst, ~1 req/sec sustained replenishment.
 
-**Agent model authentication** resolves in order: API key (`ANTHROPIC_API_KEY` env var) → OAuth bearer token (from `bubbaloop login`). API key takes precedence when both are configured.
+**Agent model authentication** depends on the provider:
+
+- **Gemini** (recommended, free tier): `GEMINI_API_KEY` env var, or key file at `~/.bubbaloop/gemini-key`. Get a key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+- **Claude**: API key (`ANTHROPIC_API_KEY` env var) → OAuth bearer token (from `bubbaloop login`). API key takes precedence when both are configured.
+- **Ollama**: no credentials; expects an Ollama server reachable at `http://localhost:11434`.
 
 ## Creating and Managing Agents
 
@@ -75,8 +79,8 @@ capabilities = ["camera", "rtsp", "video"]
 | `enabled` | bool | `true` | Whether the agent starts with the daemon |
 | `default` | bool | `false` | Routes unaddressed messages here (exactly one should be `true`) |
 | `capabilities` | string[] | `[]` | Keyword tags (future: capability-based routing) |
-| `provider` | string | `"claude"` | LLM provider: `"claude"` or `"ollama"` |
-| `model` | string | — | Model override (e.g., `"claude-haiku-4-5-20251001"`). Overrides `soul/capabilities.toml` model_name when set. |
+| `provider` | string | `"gemini"` | LLM provider: `"gemini"` (recommended), `"claude"`, or `"ollama"` |
+| `model` | string | — | Model override (e.g., `"gemini-2.5-flash"`, `"claude-haiku-4-5-20251001"`). Overrides `soul/capabilities.toml` model_name when set. |
 
 If no `agents.toml` exists, the runtime creates a single default agent named `jean-clawd`.
 
@@ -87,7 +91,7 @@ bubbaloop agent setup              # Configure existing agent (interactive selec
 bubbaloop agent setup -a my-agent  # Create or configure a specific agent
 ```
 
-The wizard lets you choose provider (Claude or Ollama), pick a model, and — for new agents — write an initial `identity.md`. No daemon required.
+The wizard lets you choose provider (Gemini, Claude, or Ollama), pick a model, and — for new agents — write an initial `identity.md`. No daemon required. Gemini is the default recommendation (free tier, strong vision support).
 
 ### Step 2: Customize the Agent's Soul
 
@@ -108,7 +112,7 @@ Be concise. Report what you did and the result.
 **`~/.bubbaloop/agents/camera-expert/soul/capabilities.toml`** — model and tuning:
 
 ```toml
-model_name = "claude-sonnet-4-20250514"
+model_name = "gemini-2.5-flash"   # or "claude-sonnet-4-20250514" if using Claude
 max_turns = 15
 allow_internet = true
 
@@ -147,7 +151,7 @@ bubbaloop up
 
 The daemon starts the agent runtime, which:
 1. Reads `~/.bubbaloop/agents.toml` (or uses default config)
-2. For each enabled agent: creates `~/.bubbaloop/agents/{id}/` directory, loads Soul, initializes Claude provider, opens per-agent Memory (episodic NDJSON + semantic SQLite)
+2. For each enabled agent: creates `~/.bubbaloop/agents/{id}/` directory, loads Soul, initializes the configured provider (Gemini/Claude/Ollama), opens per-agent Memory (episodic NDJSON + semantic SQLite)
 3. Subscribes to the shared Zenoh inbox
 4. Registers per-agent manifest queryables
 5. Spawns per-agent tokio tasks (event loops)
@@ -186,7 +190,7 @@ bubbaloop agent list
 ```
 ID                   NAME                      DEFAULT    MODEL                          CAPABILITIES
 -----------------------------------------------------------------------------------------------
-jean-clawd           Bubbaloop                 yes        claude-sonnet-4-20250514
+jean-clawd           Bubbaloop                 yes        gemini-2.5-flash
 camera-expert        CamBot                               claude-sonnet-4-20250514       camera, rtsp, video
 ```
 
