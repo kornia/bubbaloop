@@ -65,7 +65,44 @@ detect_os() {
     esac
 }
 
-# Check for required dependencies
+# Try to install a missing OS package via the host's package manager.
+# Returns 0 on success, 1 if no recognized PM is available or sudo is missing.
+try_install_pkg() {
+    local pkg="$1"
+    local sudo_cmd=""
+
+    if [ "$(id -u)" -ne 0 ]; then
+        if command -v sudo &> /dev/null; then
+            sudo_cmd="sudo"
+        else
+            return 1
+        fi
+    fi
+
+    if command -v apt-get &> /dev/null; then
+        info "Installing $pkg via apt-get..."
+        DEBIAN_FRONTEND=noninteractive $sudo_cmd apt-get update -qq \
+            && DEBIAN_FRONTEND=noninteractive $sudo_cmd apt-get install -y -qq "$pkg"
+    elif command -v dnf &> /dev/null; then
+        info "Installing $pkg via dnf..."
+        $sudo_cmd dnf install -y "$pkg"
+    elif command -v yum &> /dev/null; then
+        info "Installing $pkg via yum..."
+        $sudo_cmd yum install -y "$pkg"
+    elif command -v apk &> /dev/null; then
+        info "Installing $pkg via apk..."
+        $sudo_cmd apk add --no-cache "$pkg"
+    elif command -v pacman &> /dev/null; then
+        info "Installing $pkg via pacman..."
+        $sudo_cmd pacman -Sy --noconfirm "$pkg"
+    else
+        return 1
+    fi
+}
+
+# Check for required dependencies; auto-install missing ones via the host's
+# package manager when possible. Bails with a clear manual-install hint
+# only if auto-install fails (no PM, no sudo, or the install itself errors).
 check_deps() {
     local missing=()
 
@@ -77,8 +114,27 @@ check_deps() {
         missing+=("unzip")
     fi
 
-    if [ ${#missing[@]} -gt 0 ]; then
-        error "Missing required dependencies: ${missing[*]}"
+    if [ ${#missing[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    info "Missing dependencies: ${missing[*]} — attempting to install..."
+
+    local still_missing=()
+    for pkg in "${missing[@]}"; do
+        if try_install_pkg "$pkg" && command -v "$pkg" &> /dev/null; then
+            info "Installed $pkg"
+        else
+            still_missing+=("$pkg")
+        fi
+    done
+
+    if [ ${#still_missing[@]} -gt 0 ]; then
+        error "Could not auto-install: ${still_missing[*]}. Install manually and re-run:
+       Debian/Ubuntu:   sudo apt-get install -y ${still_missing[*]}
+       Fedora/RHEL:     sudo dnf install -y ${still_missing[*]}
+       Alpine:          sudo apk add ${still_missing[*]}
+       Arch:            sudo pacman -S ${still_missing[*]}"
     fi
 }
 
