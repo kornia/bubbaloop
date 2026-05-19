@@ -15,7 +15,7 @@ Plugin auto-loads in every new Claude Code session. Slash commands, subagents, a
 
 ```bash
 git clone https://github.com/kornia/bubbaloop
-export BUBBALOOP_MCP_TOKEN="$(cat ~/.bubbaloop/mcp-token)"
+export BUBBALOOP_MCP_TOKEN="$(bubbaloop mcp --token)"   # or: cat ~/.bubbaloop/mcp-token
 claude --plugin-dir /home/nvidia/bubbaloop/bubbaloop-mcp
 ```
 
@@ -38,7 +38,7 @@ cat > .mcp.json << 'EOF'
   }
 }
 EOF
-export BUBBALOOP_MCP_TOKEN="$(cat ~/.bubbaloop/mcp-token)"
+export BUBBALOOP_MCP_TOKEN="$(bubbaloop mcp --token)"   # or: cat ~/.bubbaloop/mcp-token
 claude
 ```
 
@@ -114,7 +114,7 @@ If `/bubbaloop:doctor` returns all green, you're done.
 
 | Error | Likely cause | Fix |
 |---|---|---|
-| `401 Unauthorized` | `BUBBALOOP_MCP_TOKEN` env unset or stale | `export BUBBALOOP_MCP_TOKEN="$(cat ~/.bubbaloop/mcp-token)"` |
+| `401 Unauthorized` | `BUBBALOOP_MCP_TOKEN` env unset or stale | `export BUBBALOOP_MCP_TOKEN="$(bubbaloop mcp --token)"   # or: cat ~/.bubbaloop/mcp-token` |
 | `Connection refused on :8088` | Daemon not running | `bubbaloop daemon run &` |
 | `Connection refused on :7447` | Zenoh router not running | `~/.bubbaloop/bin/zenohd &` |
 | `tool not found: list_nodes` | Old name pre-rename PR | use `node_list` (see naming map in alignment-notes.md) |

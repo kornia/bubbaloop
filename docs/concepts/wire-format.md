@@ -4,7 +4,9 @@ description: "Canonical CBOR envelope used by Bubbaloop nodes on the data plane.
 
 # Wire Format
 
-Every payload published on the data plane is a **CBOR-encoded envelope**. The envelope splits transport metadata (delivery, ordering, source) from schema metadata (sensor timestamps, frame IDs, codec). This separation is what lets the same MCAP recorder, dashboard subscriber, or replayer node consume frames from any sensor without baking in per-sensor decoders.
+Every **streaming** payload published on the data plane is a **CBOR-encoded envelope**. The envelope splits transport metadata (delivery, ordering, source) from schema metadata (sensor timestamps, frame IDs, codec). This separation is what lets the same MCAP recorder, dashboard subscriber, or replayer node consume frames from any sensor without baking in per-sensor decoders.
+
+> **Queryable exception**: the `grab_frame` queryable reply on `{camera}/grab_frame` is **not** a CBOR envelope. The reply payload is raw JPEG bytes and the Zenoh `attachment` carries JSON metadata (camera name, capture timestamp, dimensions). This keeps the agent's vision path zero-copy from the camera publisher all the way to the LLM, without the envelope overhead. Replayers and MCAP recorders should detect the encoding via Zenoh's `Encoding` field rather than assuming CBOR everywhere.
 
 For the topic-key layout (`bubbaloop/{global,local}/{machine}/{instance}/{suffix}`) and Zenoh routing, see [Messaging → Topic Convention](messaging.md#topic-convention). This document focuses on what's *inside* a payload at any of those keys.
 

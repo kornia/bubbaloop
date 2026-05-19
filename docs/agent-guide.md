@@ -184,6 +184,8 @@ bubbaloop agent list
 
 **TUI layout:** The top panel shows scrollable conversation history. The bottom panel (always visible, green border) is the input line. Use ↑/↓ or PageUp/PageDown to scroll history while the agent is responding. Press Ctrl-C or type `q` on an empty input line to exit.
 
+**Turn cancellation:** While the agent is responding, pressing Ctrl-C publishes a message to the per-agent Zenoh cancel topic `bubbaloop/global/{machine_id}/agent/{agent_id}/cancel`. The daemon aborts the in-flight LLM call and surfaces a cancellation event to the client. The dashboard's Chat tab does the same via its HTTP+SSE adapter.
+
 **TUI colours:** cyan = agent name, green = agent text, yellow = tool calls, gray = tool results, red = errors, bold white = your messages.
 
 `agent list` queries all manifest Zenoh queryables and prints:
@@ -1113,6 +1115,7 @@ system_status → node_logs
 
 **Agent-internal tools** (available only to the LLM agent via dispatch, not exposed via MCP):
 
+- `grab_frame` — Zenoh-query a camera node for one JPEG frame; the daemon decodes the binary payload + JSON metadata attachment and feeds the image to the LLM as a `ContentBlock::Image` on the next turn. Requires a vision-capable provider (Gemini / Claude). Multi-camera fan-out: the agent can call `grab_frame` N times in one turn to cover multiple cameras.
 - `memory_search`, `memory_forget`, `schedule_task`, `create_proposal`, `read_file`, `write_file`, `run_command`, `publish_to_topic`
 
 Note: `telemetry_get`, `telemetry_history`, and `telemetry_config_update` are available via both the MCP server and the agent dispatch.

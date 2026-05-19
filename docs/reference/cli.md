@@ -19,9 +19,10 @@ The `bubbaloop` binary is a single ~13 MB Rust executable that includes CLI, dae
 | `bubbaloop status` | Show service and node status |
 | `bubbaloop doctor` | Run system diagnostics |
 | `bubbaloop daemon` | Run the daemon (node manager) |
-| `bubbaloop login` | Authenticate with Anthropic Claude (API key or OAuth). Gemini uses `GEMINI_API_KEY` env var. |
-| `bubbaloop logout` | Remove stored credentials |
-| `bubbaloop login --status` | Check authentication status |
+| `bubbaloop mcp` | MCP server. Flags: `--stdio` (local), `-p <port>` (HTTP), `--token` (print bearer token for `.mcp.json`) |
+| `bubbaloop login` | Authenticate Claude (API key or OAuth). Gemini uses `GEMINI_API_KEY` env var; Ollama needs no credentials. |
+| `bubbaloop logout` | Remove stored Claude credentials |
+| `bubbaloop login --status` | Check status across all providers (Gemini / Claude / Ollama) |
 
 ### Agent Commands
 
@@ -420,8 +421,12 @@ pixi run up                  # Start all services via process-compose
 | `BUBBALOOP_ZENOH_ENDPOINT` | Zenoh router endpoint | `tcp/127.0.0.1:7447` |
 | `BUBBALOOP_MACHINE_ID` | Machine identifier | hostname |
 | `BUBBALOOP_MCP_PORT` | MCP HTTP server port | `8088` |
+| `BUBBALOOP_MCP_TOKEN` | MCP HTTP bearer token (consumed by `.mcp.json`); read with `bubbaloop mcp --token` | — |
+| `BUBBALOOP_MCP_MODE` | MCP transport mode (`stdio` / `http`) | — |
+| `BUBBALOOP_MCP_TOOLSETS` | Comma-separated list of MCP toolsets to expose (default: all 11) | — |
 | `GEMINI_API_KEY` | Gemini API key (recommended — free tier) | — |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude agents | — |
+| `OLLAMA_HOST` | Ollama server base URL | `http://localhost:11434` |
 | `RUST_LOG` | Log level | `info` |
 
 **Examples:**

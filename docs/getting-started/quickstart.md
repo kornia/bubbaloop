@@ -174,8 +174,9 @@ Access at: http://localhost:5173
 
 ### Dashboard Features
 
-| Panel | Description |
-|-------|-------------|
+| Tab / Panel | Description |
+|-------------|-------------|
+| Chat | Talk to agents in the browser via HTTP+SSE — tool-call traces, image-in-chat (`grab_frame` → Gemini Vision), turn cancellation. See [Chat tab](../dashboard/chat.md). |
 | Cameras | Live H264 video streams |
 | Nodes | Service management |
 | Weather | Current conditions and forecasts |

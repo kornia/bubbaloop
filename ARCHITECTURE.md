@@ -49,7 +49,7 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 │  │  Episodic (NDJSON/FTS5) | Semantic (SQLite)         │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (42 tools) — sole control interface     │  │
+│  │  MCP Server (47 tools) — sole control interface     │  │
 │  │  RBAC (Viewer/Operator/Admin) | Bearer token auth   │  │
 │  │  PlatformOperations trait | Rate limiting            │  │
 │  └──────────────────────┬─────────────────────────────┘  │
@@ -332,7 +332,7 @@ BUBBALOOP_ZENOH_ENDPOINT=tcp/127.0.0.1:7447  # Optional override
 
 ## MCP Server
 
-MCP is the **sole control interface**. 42 MCP tools + agent-internal tools across categories:
+MCP is the **sole control interface**. 47 MCP tools + ~43 agent-internal tools across categories:
 
 | Category | Tools |
 |----------|-------|
@@ -347,7 +347,7 @@ MCP is the **sole control interface**. 42 MCP tools + agent-internal tools acros
 | **Missions** | list_missions, pause_mission, resume_mission, cancel_mission — YAML-file-driven (`~/.bubbaloop/agents/{id}/missions/`) |
 | **Constraints** | register_constraint, list_constraints — per-mission safety limits; params_json formats: `workspace={"x":[-1,1],"y":[-1,1],"z":[0,2]}`, `max_velocity=1.5`, `forbidden_zone={"center":[0,0,0],"radius":0.3}`, `max_force=50.0` |
 | **Alerts** | register_alert, unregister_alert — reactive arousal triggers when world state predicate matches |
-| **Agent-internal** | read_file, write_file, run_command, memory_search, memory_forget, schedule_task, create_proposal, publish_to_topic, get_system_telemetry, get_telemetry_history, update_telemetry_config |
+| **Agent-internal** | grab_frame (Zenoh-query camera node for one JPEG → fed to vision-capable provider), read_file, write_file, run_command, memory_search, memory_forget, schedule_task, create_proposal, publish_to_topic, get_system_telemetry, get_telemetry_history, update_telemetry_config |
 
 ### Transport Options
 
@@ -435,12 +435,12 @@ MCP is the **sole control interface**. 42 MCP tools + agent-internal tools acros
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 42 MCP tools + agent-internal tools |
+| Control | MCP (rmcp) | Standard AI agent interface, 47 MCP tools + ~43 agent-internal tools |
 | Memory | SQLite (rusqlite) + NDJSON | 4-tier: world state (live SQLite) + RAM + episodic (NDJSON/FTS5) + semantic (SQLite). World state updated by context providers, not LLM. |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
 | systemd | zbus (D-Bus) | No subprocess spawning, safe |
-| LLM | ModelProvider trait (reqwest) | Claude (OAuth + API key) and Ollama (local, tool calling) |
+| LLM | ModelProvider trait (reqwest) | Gemini (recommended — free tier, vision), Claude (OAuth + API key, vision), Ollama (local, tool calling, text-only) |
 | HTTP | axum | Dashboard + MCP HTTP transport |
 | Telemetry | sysinfo | CPU/RAM/disk monitoring, cross-platform |
 

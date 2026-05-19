@@ -39,6 +39,7 @@ flowchart LR
 | Topic discovery | Auto-discover available topics |
 | WebCodecs decoding | Hardware-accelerated H264 decoding |
 | HTTPS support | Secure remote access |
+| Chat tab | Multi-agent chat via HTTP+SSE — tool-call traces, image-in-chat (e.g. `grab_frame` → Gemini Vision), in-flight turn cancellation. See [Chat tab](chat.md). |
 | Responsive design | Works on desktop and mobile |
 
 ## Quick Start

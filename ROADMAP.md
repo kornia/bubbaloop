@@ -63,7 +63,7 @@ bubbaloop agent chat   # interactive REPL
 │  │  World State | Short-term | Episodic | Semantic     │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
-│  │  MCP Server (42 tools) — sole control interface     │  │
+│  │  MCP Server (47 tools) — sole control interface     │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  Daemon (skill runtime + agent host)                │  │
@@ -91,7 +91,7 @@ bubbaloop agent chat   # interactive REPL
 ### v0.0.1–v0.0.6: MCP-Native Sensor Runtime
 
 - [x] Single binary: CLI + daemon + MCP server
-- [x] 42 MCP tools (discovery, lifecycle, data, config, system, memory, telemetry, beliefs, missions, constraints, alerts)
+- [x] 47 MCP tools (discovery, lifecycle, data, config, system, memory, telemetry, beliefs, missions, constraints, alerts, toolsets)
 - [x] MCP is sole control interface — Zenoh for data only
 - [x] Marketplace with precompiled binaries (ARM64 + x86_64)
 - [x] Full node lifecycle via MCP: install, uninstall, start, stop, restart, autostart
@@ -163,7 +163,7 @@ config:
 **Deliverables:**
 - [x] `bubbaloop agent chat` CLI command (thin Zenoh client, LLM runs daemon-side)
 - [x] `bubbaloop agent list` — discover running agents via manifest queryables
-- [x] `bubbaloop agent setup` — interactive wizard: provider (Claude/Ollama), model, identity
+- [x] `bubbaloop agent setup` — interactive wizard: provider (Gemini/Claude/Ollama), model, identity
 - [x] Multi-agent runtime: agents run as tokio tasks inside daemon
 - [x] Agent gateway: Zenoh pub/sub wire format (inbox/outbox/manifest topics)
 - [x] Per-agent config via `~/.bubbaloop/agents.toml` (provider, model override, capabilities)
@@ -174,8 +174,11 @@ config:
 - [x] Internal MCP tool dispatch (call tools without HTTP round-trip)
 - [x] System prompt injection: sensor inventory, node status, active schedules
 - [x] First-run LLM onboarding: marker file triggers interview prompt; agent writes its own `identity.md`
+- [x] HTTP+SSE chat endpoint — dashboard Chat tab talks to daemon's agent gateway (PR #91)
+- [x] Gemini Vision provider — `ContentBlock::Image` + `grab_frame` agent tool (PR #96)
+- [x] Client-side turn cancellation via Zenoh `agent/{id}/cancel` topic (PR #94/95)
+- [x] Multi-provider login status (Gemini / Claude / Ollama) in `bubbaloop login --status` (PR #93)
 - [ ] Capability-based message routing (currently falls back to default agent)
-- [ ] HTTP chat endpoint for future dashboard integration
 
 **New deps:** None (`reqwest` already in dep tree). **New code:** ~500-800 lines.
 
@@ -373,7 +376,7 @@ Memory confirmed or contradicted by sensor readings — not just conversation hi
 | Runtime | Rust + Tokio | Memory safety, small binary, edge-ready |
 | Data plane | Zenoh | Zero-copy pub/sub, decentralized, Rust-native |
 | Schemas | Protobuf + prost | Self-describing, runtime introspection |
-| Control | MCP (rmcp) | Standard AI agent interface, 42 MCP tools + agent-internal tools |
+| Control | MCP (rmcp) | Standard AI agent interface, 47 MCP tools + ~43 agent-internal tools |
 | Memory | SQLite (rusqlite) | Embedded, +1-2 MB, battle-tested everywhere |
 | CLI | argh | Minimal, fast compile |
 | Logging | log + env_logger | Simple, stderr-only |
