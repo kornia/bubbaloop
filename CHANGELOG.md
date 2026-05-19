@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.0.15](https://github.com/kornia/bubbaloop/compare/v0.0.14...v0.0.15) (2026-05-19)
+
+### Bug Fixes
+
+* **install:** auto-install missing `unzip` (and `curl`) via the host package manager — apt-get / dnf / yum / apk / pacman. Previously the installer bailed with `Missing required dependencies: unzip` on every minimal Ubuntu/Debian box, because `unzip` isn't installed by default there. Falls back to a clear per-distro install hint if no recognized package manager or sudo is available. ([#102](https://github.com/kornia/bubbaloop/pull/102))
+
 ## [0.0.14](https://github.com/kornia/bubbaloop/compare/v0.0.13...v0.0.14) (2026-05-19)
 
 ### Features
