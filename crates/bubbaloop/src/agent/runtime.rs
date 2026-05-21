@@ -1420,13 +1420,25 @@ default = true
     }
 
     #[test]
-    fn agents_config_provider_defaults_to_claude() {
+    fn agents_config_provider_defaults_follow_env_cascade() {
+        // `default_provider()` prefers gemini if GEMINI_API_KEY is set or a key file
+        // exists; otherwise falls back to claude. The test must mirror that cascade
+        // so it stays correct in both developer-machine and CI environments.
         let toml_str = r#"
 [agents.agent1]
 enabled = true
 "#;
         let config: AgentsConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.agents["agent1"].provider, "claude");
+        let expected = if std::env::var("GEMINI_API_KEY").is_ok()
+            || dirs::home_dir()
+                .map(|h| h.join(".bubbaloop").join("gemini-key").exists())
+                .unwrap_or(false)
+        {
+            "gemini"
+        } else {
+            "claude"
+        };
+        assert_eq!(config.agents["agent1"].provider, expected);
     }
 
     #[test]

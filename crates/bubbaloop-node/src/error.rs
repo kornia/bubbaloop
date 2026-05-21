@@ -71,3 +71,51 @@ pub enum NodeError {
 
 /// Convenience alias used throughout the SDK internals.
 pub type Result<T> = std::result::Result<T, NodeError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_error_converts_via_from() {
+        // ?-operator usage relies on the `From<serde_json::Error>` impl.
+        let bad: serde_json::Result<serde_json::Value> = serde_json::from_str("{not json");
+        let err: NodeError = bad.unwrap_err().into();
+        assert!(matches!(err, NodeError::Json(_)));
+    }
+
+    #[test]
+    fn get_sample_timeout_display_contains_topic() {
+        let err = NodeError::GetSampleTimeout {
+            topic: "bubbaloop/global/host/node/data".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("bubbaloop/global/host/node/data"));
+        assert!(msg.contains("timed out"));
+    }
+
+    #[test]
+    fn config_read_display_contains_path() {
+        let err = NodeError::ConfigRead {
+            path: "/tmp/missing.yaml".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "no such file"),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("/tmp/missing.yaml"));
+        assert!(msg.contains("no such file"));
+    }
+
+    #[test]
+    fn cbor_encode_display_includes_inner_message() {
+        let err = NodeError::CborEncode("buffer overflow".into());
+        assert!(err.to_string().contains("buffer overflow"));
+    }
+
+    #[test]
+    fn result_alias_compiles_with_error_variant() {
+        fn returns_err() -> Result<u32> {
+            Err(NodeError::CborEncode("test".into()))
+        }
+        assert!(returns_err().is_err());
+    }
+}

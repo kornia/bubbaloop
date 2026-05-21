@@ -400,7 +400,7 @@ async fn node_stream_info() {
     let json = result_json(&result);
 
     assert!(json["zenoh_topic"].as_str().unwrap().contains("test-node"));
-    assert_eq!(json["encoding"], "protobuf");
+    assert_eq!(json["encoding"], "cbor");
     assert_eq!(json["endpoint"], "tcp/localhost:7447");
 
     h.shutdown().await.unwrap();
@@ -486,7 +486,8 @@ async fn get_node_logs_existing() {
         .unwrap();
     let text = result_text(&result);
 
-    assert_eq!(text, "mock: GetLogs executed");
+    // Mock formats NodeCommand::GetLogs { lines: 0 } via Debug.
+    assert_eq!(text, "mock: GetLogs { lines: 0 } executed");
 
     h.shutdown().await.unwrap();
 }
