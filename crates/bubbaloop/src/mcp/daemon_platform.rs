@@ -883,3 +883,56 @@ fn now_ms() -> i64 {
         .unwrap_or_default()
         .as_millis() as i64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn now_ms_is_post_2020() {
+        // Sanity: catches the unwrap_or_default() fallback firing (would return 0).
+        let jan_2020_ms: i64 = 1_577_836_800_000;
+        assert!(now_ms() > jan_2020_ms);
+    }
+
+    #[test]
+    fn build_node_command_populates_required_fields() {
+        let cmd = build_node_command(CommandType::Start, "test-node");
+        assert_eq!(cmd.command, CommandType::Start as i32);
+        assert_eq!(cmd.node_name, "test-node");
+        assert_eq!(cmd.source_machine, "mcp-platform");
+        // Empty placeholder fields stay empty — no silent garbage.
+        assert!(cmd.target_machine.is_empty());
+        assert!(cmd.node_path.is_empty());
+        assert!(cmd.name_override.is_empty());
+        assert!(cmd.config_override.is_empty());
+        assert_eq!(cmd.log_lines, 0);
+        // Timestamp uses now_ms(), so it must look like a real epoch ms value.
+        assert!(cmd.timestamp_ms > 1_577_836_800_000);
+        // request_id must be a valid UUID v4 string.
+        assert_eq!(cmd.request_id.len(), 36);
+        assert_eq!(cmd.request_id.matches('-').count(), 4);
+    }
+
+    #[test]
+    fn build_node_command_request_ids_are_unique() {
+        // UUID v4 collision would silently break MCP request correlation.
+        let a = build_node_command(CommandType::Stop, "n");
+        let b = build_node_command(CommandType::Stop, "n");
+        assert_ne!(a.request_id, b.request_id);
+    }
+
+    #[test]
+    fn build_node_command_preserves_command_type() {
+        for cmd_type in [
+            CommandType::Start,
+            CommandType::Stop,
+            CommandType::Restart,
+            CommandType::Build,
+            CommandType::GetLogs,
+        ] {
+            let cmd = build_node_command(cmd_type, "x");
+            assert_eq!(cmd.command, cmd_type as i32);
+        }
+    }
+}
