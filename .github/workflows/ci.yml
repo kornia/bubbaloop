@@ -67,12 +67,14 @@ jobs:
   security-audit:
     name: cargo-audit
     runs-on: ubuntu-latest
-    # Report-only for now — GitHub already lists ~20 known advisories on main.
-    # Flip to required once the team has triaged them (add to deny.toml or upgrade).
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+      # Report-only for now — GitHub already lists ~20 known advisories on main.
+      # `continue-on-error: true` keeps the check itself green so the PR isn't
+      # blocked; the action still annotates findings in the job log. Flip to a
+      # required gate once the team triages (upgrade deps or add deny.toml ignores).
       - uses: rustsec/audit-check@v2.0.0
+        continue-on-error: true
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
