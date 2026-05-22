@@ -200,12 +200,30 @@ Both endpoints are gated behind `require_bearer_token` to match sibling map rout
 
 ### `sensor_placements` coord migration
 
-Current columns (`x, y, z REAL`, `range_pixels REAL`). Migration:
+Current columns (`x, y, z REAL`, `range_pixels REAL`). Migration **reinterprets** `x, y, z` as meters instead of pixels, and introduces a new `range REAL` column to replace `range_pixels`:
 
-1. Add columns `x_m, y_m, z_m, range_m REAL` (NULL allowed during migration).
-2. Backfill all four with the **same divisor of 20.0** (the existing `METER_TO_PIXELS = 20` hack): `x_m = x / 20.0, y_m = y / 20.0, z_m = z / 20.0, range_m = range_pixels / 20.0`. This preserves the visual scale during transition — a sensor at pixel `(300, 400)` becomes `(15 m, 20 m)`, which lines up with what the previous 20 px/m render produced.
-3. Drop old columns in a follow-up migration after dust settles. For v1, both sets exist; the API serves only the `_m` set.
-4. API DTO field names switch to `x_m, y_m, z_m, range_m`. Old field names removed from response.
+1. Add column `range REAL` to `sensor_placements` (NULL during transition).
+2. Backfill: `UPDATE sensor_placements SET x = x / 20.0, y = y / 20.0, z = z / 20.0, range = range_pixels / 20.0`. (20 px/m is the existing `METER_TO_PIXELS` hack. Numerically a sensor at pixel `(300, 400)` becomes `(15, 20)` meters, which matches the previous 20 px/m render exactly.)
+3. Drop `range_pixels` column in a follow-up migration after dust settles. For v1, both `range` and `range_pixels` exist on the row; the API serves only `range`.
+4. **Unit convention** (documented at the schema definition + in the API response): `x, y, z, range` are **world meters**. Short names because every consumer is in the same coord space and unit suffixes get noisy fast. The schema comment + Pydantic model field descriptions make units explicit.
+
+```python
+# backend/src/dash/db/sqlite.py — schema definition gains a comment line
+"""sensor_placements: positions and ranges are in world meters. The world
+frame is anchored by the SLAM map's YAML origin when SLAM is present;
+otherwise it's user-relative."""
+```
+
+```python
+# backend/src/dash/api/map.py — Pydantic field descriptions
+class PlacementOut(BaseModel):
+    x: float = Field(description="world meters")
+    y: float = Field(description="world meters")
+    z: float = Field(description="world meters")
+    yaw: float = Field(description="degrees, 0 = +x (east)")
+    range: float = Field(description="world meters")
+    # ...
+```
 
 Migration applied idempotently on `Db.open()` via `_ensure_*_columns` style helpers (matches the anchor-columns pattern from P1.5).
 
@@ -230,7 +248,7 @@ Delete entirely:
 **Modify:**
 - `frontend/src/components/MapTab.tsx` — remove floorplan branch + HEAD probe; replace with `useSlamMap()` hook; always render `<MapCanvas>` (no more empty-state component switch)
 - `frontend/src/components/MapCanvas.tsx` — accept `background: SlamBackground | MetersGridBackground` prop; render the right Konva layer underneath the existing placements layer. Apply a single scale transform on the Stage so children draw in meter units.
-- `frontend/src/components/SensorMarker.tsx`, `FOVCone.tsx`, `RotationHandle.tsx` — accept `range_m` instead of `range_pixels`. Drop any pixel math; positions and ranges are in world meters.
+- `frontend/src/components/SensorMarker.tsx`, `FOVCone.tsx`, `RotationHandle.tsx` — accept `range` instead of `range_pixels`. Drop any pixel math; positions and ranges are in world meters per the schema convention.
 - `frontend/src/components/NodeSidebar.tsx` — no shape change; drag payload still carries `rangeMeters`.
 - `frontend/src/components/__tests__/MapTab.test.tsx` — drop floorplan-upload tests; add background-mode tests.
 - `frontend/src/components/__tests__/MapCanvas.test.tsx` — drop floorplan-related test scaffolding; add tests for the two background modes.
@@ -267,7 +285,7 @@ The Konva `Stage` applies a single scale transform `scaleX = scaleY = pxPerMeter
 - With SLAM background: `pxPerMeter = 1 / meta.resolution`. For a typical 0.05 m/px occupancy grid, `pxPerMeter = 20`. The SlamLayer image is rendered with its native pixel dimensions; the Stage scale converts to meters.
 - Without SLAM background: `pxPerMeter = 50` (configurable default). A 1 m grid cell is 50 px on screen.
 
-Sensors, FOV cones, rotation handles use `range_m`, `x_m`, `y_m` directly. No conversions.
+Sensors, FOV cones, rotation handles use `range`, `x`, `y` directly (values in meters per the schema convention). No conversions.
 
 ### Tests
 
@@ -285,14 +303,14 @@ Sensors, FOV cones, rotation handles use `range_m`, `x_m`, `y_m` directly. No co
 - All of `backend/tests/test_map_floorplan.py`
 
 **Backend** — modify:
-- `backend/tests/test_sensor_placements.py` — add migration test (old `range_pixels` → `range_m` conversion); rename DTO field tests
+- `backend/tests/test_sensor_placements.py` — add migration test (old `range_pixels` → new `range`; `x,y,z` reinterpreted as meters); update DTO field tests
 - `backend/tests/test_map_placements.py` — update DTO field names
 
 **Frontend** — `frontend/src/components/__tests__/MapTab.test.tsx` (UPDATE):
 - Renders `MetersGrid` background when `/api/map/slam/meta` returns 404
 - Renders `SlamLayer` background when meta returns 200
 - SLAM map image src is `/api/map/slam?ts=<updated_at>`
-- Sensor drag fires PATCH with `x_m, y_m` (meters, not pixels)
+- Sensor drag fires PATCH with `{x, y}` in meters (e.g., world (5.5, 3) → `{"x": 5.5, "y": 3}`)
 
 **Frontend** — `frontend/src/hooks/__tests__/useSlamMap.test.ts` (NEW):
 - Returns null when fetch 404s
@@ -334,7 +352,7 @@ Sensors, FOV cones, rotation handles use `range_m`, `x_m`, `y_m` directly. No co
 - `backend/tests/test_map_placements.py` — field-name updates
 - `frontend/src/components/MapTab.tsx` — drop floorplan branch, use `useSlamMap`
 - `frontend/src/components/MapCanvas.tsx` — accept `background` prop; apply Stage scale transform
-- `frontend/src/components/SensorMarker.tsx`, `FOVCone.tsx`, `RotationHandle.tsx` — convert `range_pixels` → `range_m`
+- `frontend/src/components/SensorMarker.tsx`, `FOVCone.tsx`, `RotationHandle.tsx` — convert `range_pixels` prop → `range` (meters)
 - `frontend/src/components/NodeSidebar.tsx` — minor: drag payload field renames if needed
 - `frontend/src/components/__tests__/MapTab.test.tsx`, `MapCanvas.test.tsx` — update to new shape
 
