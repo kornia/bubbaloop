@@ -33,6 +33,7 @@ pub mod replay;
 pub mod ring_buffer;
 pub mod secrets;
 pub mod sync;
+pub mod sync_driver;
 
 use std::path::{Path, PathBuf};
 
@@ -50,6 +51,10 @@ pub use ring_buffer::{seal_samples, McapWriteConfig, RingBuffer, RingBufferError
 pub use sync::{
     classify, BackoffSchedule, DeadLetterEntry, DeadLetterList, ErrorClass, SharedBackoff,
     SyncError, UploadJob, UploadOutcome,
+};
+pub use sync_driver::{
+    run_driver, scan_pending, scan_pending_in, spawn as spawn_sync, ChunkFinalized, EnqueueResult,
+    SyncConfig, SyncHandle, SyncQueue,
 };
 
 /// Base bubbaloop directory: `~/.bubbaloop`.

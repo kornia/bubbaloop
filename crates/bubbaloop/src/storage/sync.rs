@@ -19,12 +19,13 @@
 //! - [`pending_jobs`] / [`mark_chunk_uploaded`] — the startup-scan enqueue and
 //!   the manifest mutation that records `uploaded_at_ns`.
 //!
-//! The async **queue driver** (the bounded `VecDeque`, the concurrency
-//! semaphore, and the in-process MPSC of `ChunkFinalized` events) is intentionally
-//! *not* here: it consumes events the recorder emits, and the recorder lands in a
-//! later PR. Everything the driver needs to make decisions lives in this module
-//! and is unit-tested against [`LocalFs`](super::backend::local) as a stand-in
-//! remote, with no clock or network dependency (callers pass `now_ns`).
+//! The async **queue driver** (the bounded queue, the concurrency cap, and the
+//! in-process MPSC of `ChunkFinalized` events) lives in
+//! [`sync_driver`](super::sync_driver), built on this core. The recorder will
+//! emit those events; until then the driver is exercised end-to-end against
+//! [`LocalFs`](super::backend::local) as a stand-in remote. Everything the driver
+//! needs to make decisions lives in this module with no clock or network
+//! dependency (callers pass `now_ns`).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
