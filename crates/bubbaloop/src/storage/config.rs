@@ -111,6 +111,50 @@ impl StorageConfig {
         self.backend != "local"
     }
 
+    /// Write this config as the `[storage]` table of `~/.bubbaloop/config.toml`,
+    /// preserving any other tables already in the file. Atomic (tmp + rename).
+    pub fn save(&self) -> Result<(), ConfigError> {
+        self.save_to(&bubbaloop_dir()?.join("config.toml"))
+    }
+
+    /// As [`save`](Self::save) but to an explicit path (testable).
+    pub fn save_to(&self, path: &std::path::Path) -> Result<(), ConfigError> {
+        // Read the existing document (so unrelated tables survive), replace just
+        // the `[storage]` table.
+        let mut doc: toml::Table = match std::fs::read_to_string(path) {
+            Ok(s) => toml::from_str(&s).map_err(|e| ConfigError::Parse(e.to_string()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+            Err(e) => {
+                return Err(ConfigError::Io {
+                    path: path.display().to_string(),
+                    detail: e.to_string(),
+                })
+            }
+        };
+        let storage = toml::Value::try_from(self)
+            .map_err(|e| ConfigError::Parse(format!("serializing [storage]: {e}")))?;
+        doc.insert("storage".to_string(), storage);
+        let body = toml::to_string(&doc)
+            .map_err(|e| ConfigError::Parse(format!("encoding config: {e}")))?;
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| ConfigError::Io {
+                path: parent.display().to_string(),
+                detail: e.to_string(),
+            })?;
+        }
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, body.as_bytes()).map_err(|e| ConfigError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        std::fs::rename(&tmp, path).map_err(|e| ConfigError::Io {
+            path: path.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        Ok(())
+    }
+
     /// Resolve the `local` backend's object-store root.
     pub fn local_root(&self) -> Result<PathBuf, ConfigError> {
         match &self.local_path {
@@ -237,6 +281,33 @@ mod tests {
             };
             assert!(cfg.is_remote());
         }
+    }
+
+    #[test]
+    fn save_roundtrips_and_preserves_other_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Pre-existing unrelated table must survive the write.
+        std::fs::write(&path, "[agent]\nmodel = \"claude\"\n").unwrap();
+
+        let cfg = StorageConfig {
+            backend: "r2".into(),
+            endpoint: Some("https://acct.r2.cloudflarestorage.com".into()),
+            region: Some("auto".into()),
+            bucket: Some("kornia-recordings".into()),
+            retention_days_local: Some(7),
+            ..Default::default()
+        };
+        cfg.save_to(&path).unwrap();
+
+        let reloaded = StorageConfig::load_from(&path).unwrap();
+        assert_eq!(reloaded.backend, "r2");
+        assert_eq!(reloaded.bucket.as_deref(), Some("kornia-recordings"));
+        assert_eq!(reloaded.retention_days_local, Some(7));
+        // The unrelated [agent] table is still present.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("[agent]"));
+        assert!(raw.contains("model = \"claude\""));
     }
 
     #[test]

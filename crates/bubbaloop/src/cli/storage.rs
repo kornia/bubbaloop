@@ -60,6 +60,7 @@ enum StorageAction {
     Reconcile(ReconcileArgs),
     Rm(RmArgs),
     Profile(ProfileCommand),
+    Configure(ConfigureArgs),
 }
 
 /// List recordings.
@@ -151,6 +152,7 @@ impl StorageCommand {
             StorageAction::Reconcile(a) => run_reconcile(a).await,
             StorageAction::Rm(a) => run_rm(a).await,
             StorageAction::Profile(c) => run_profile(c),
+            StorageAction::Configure(a) => run_configure(a),
         }
     }
 }
@@ -650,6 +652,103 @@ async fn run_rm(args: RmArgs) -> Result<()> {
             "no local directory"
         };
         bail!("no recording named '{}' found ({scope})", args.name);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// configure
+// ---------------------------------------------------------------------------
+
+/// Configure the storage backend (writes the `[storage]` table of config.toml,
+/// and `secrets.toml` when credentials are supplied).
+///
+/// Flag-driven and non-interactive so it is scriptable and testable; the
+/// interactive wizard (a later slice) collects the same fields and calls this
+/// same handler (spec §6.2).
+#[derive(FromArgs)]
+#[argh(subcommand, name = "configure")]
+pub struct ConfigureArgs {
+    /// backend: r2 | s3 | gcs | minio | local
+    #[argh(option)]
+    backend: String,
+    /// S3-compatible endpoint URL (cloud backends)
+    #[argh(option)]
+    endpoint: Option<String>,
+    /// region (R2 uses "auto")
+    #[argh(option)]
+    region: Option<String>,
+    /// bucket name (the sharing unit; required for cloud backends)
+    #[argh(option)]
+    bucket: Option<String>,
+    /// disable background sync of finalized chunks
+    #[argh(switch)]
+    no_auto_upload: bool,
+    /// auto-delete local recordings N days after successful upload
+    #[argh(option)]
+    retention_days_local: Option<u32>,
+    /// soft cap on the local recordings directory (GiB)
+    #[argh(option)]
+    disk_quota_gb: Option<u32>,
+    /// object-store root for the local backend
+    #[argh(option)]
+    local_path: Option<String>,
+    /// access key id (written to secrets.toml, chmod 0600)
+    #[argh(option)]
+    access_key_id: Option<String>,
+    /// secret access key (written to secrets.toml, chmod 0600)
+    #[argh(option)]
+    secret_access_key: Option<String>,
+}
+
+fn run_configure(args: ConfigureArgs) -> Result<()> {
+    const BACKENDS: [&str; 5] = ["r2", "s3", "gcs", "minio", "local"];
+    if !BACKENDS.contains(&args.backend.as_str()) {
+        bail!(
+            "unknown backend {:?} (expected one of: {})",
+            args.backend,
+            BACKENDS.join(", ")
+        );
+    }
+    let is_remote = args.backend != "local";
+    if is_remote && args.bucket.is_none() {
+        bail!("--bucket is required for the {:?} backend", args.backend);
+    }
+
+    let cfg = StorageConfig {
+        backend: args.backend.clone(),
+        endpoint: args.endpoint,
+        region: args.region,
+        bucket: args.bucket,
+        auto_upload: !args.no_auto_upload,
+        retention_days_local: args.retention_days_local,
+        disk_quota_gb: args.disk_quota_gb,
+        recorder_instance: None,
+        local_path: args.local_path.map(PathBuf::from),
+    };
+    cfg.save().context("writing config.toml")?;
+    log::info!("Wrote [storage] config (backend = {}).", cfg.backend);
+
+    // Credentials: write secrets.toml only when both halves are supplied.
+    match (args.access_key_id, args.secret_access_key) {
+        (Some(id), Some(secret)) => {
+            use storage::secrets::{R2Credentials, Secret};
+            let creds = R2Credentials {
+                access_key_id: Secret::new(id),
+                secret_access_key: Secret::new(secret),
+            };
+            let path = storage::secrets::default_path()?;
+            storage::secrets::save_r2(&path, &creds).context("writing secrets.toml")?;
+            log::info!("Wrote credentials to {} (chmod 0600).", path.display());
+        }
+        (None, None) => {
+            if is_remote {
+                log::warn!(
+                    "no credentials supplied; set --access-key-id/--secret-access-key (or edit ~/.bubbaloop/secrets.toml) before uploading"
+                );
+            }
+        }
+        _ => bail!("--access-key-id and --secret-access-key must be provided together"),
     }
     Ok(())
 }
