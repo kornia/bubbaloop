@@ -91,6 +91,9 @@ base64 = "0.22"
 sha2 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
 async-trait = "0.1"
+# Storage: MCAP container read/write (replay + ring-buffer). Matches rosbag2's
+# on-disk format; zstd compression for chunks.
+mcap = "0.24"
 # Storage: S3-compatible backend (R2/AWS/GCS/MinIO), behind the optional `s3`
 # feature so default builds stay lean. Routed through rustls+ring (no aws-lc /
 # cmake); behavior-version is set explicitly in code.

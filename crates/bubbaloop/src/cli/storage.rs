@@ -62,6 +62,7 @@ enum StorageAction {
     Download(DownloadArgs),
     Reconcile(ReconcileArgs),
     Rm(RmArgs),
+    Replay(ReplayArgs),
     Profile(ProfileCommand),
     Configure(ConfigureArgs),
     Topics(TopicsArgs),
@@ -145,6 +146,42 @@ struct RmArgs {
     machine: Option<String>,
 }
 
+/// Replay a recording back into Zenoh (ros2 bag-style).
+#[derive(FromArgs)]
+#[argh(subcommand, name = "replay")]
+struct ReplayArgs {
+    /// recording name
+    #[argh(positional)]
+    name: String,
+    /// playback speed multiplier (default 1.0; 2.0 = twice as fast)
+    #[argh(option, default = "1.0")]
+    rate: f64,
+    /// loop the recording until interrupted
+    #[argh(switch, long = "loop")]
+    loop_playback: bool,
+    /// start offset into the recording, in seconds (skip earlier messages)
+    #[argh(option)]
+    start_time: Option<f64>,
+    /// end offset into the recording, in seconds (skip later messages)
+    #[argh(option)]
+    end_time: Option<f64>,
+    /// only replay topics intersecting these key patterns (comma-separated)
+    #[argh(option)]
+    topics: Option<String>,
+    /// drop topics intersecting these key patterns (comma-separated)
+    #[argh(option)]
+    exclude: Option<String>,
+    /// remap a topic on publish; repeatable, form `from:=to`
+    #[argh(option)]
+    remap: Vec<String>,
+    /// schedule by recorder log_time instead of publish_time
+    #[argh(switch)]
+    use_log_time: bool,
+    /// zenoh router endpoint (defaults to BUBBALOOP_ZENOH_ENDPOINT or localhost)
+    #[argh(option)]
+    zenoh_endpoint: Option<String>,
+}
+
 impl StorageCommand {
     /// Dispatch the chosen verb.
     pub async fn run(self) -> Result<()> {
@@ -155,6 +192,7 @@ impl StorageCommand {
             StorageAction::Download(a) => run_download(a).await,
             StorageAction::Reconcile(a) => run_reconcile(a).await,
             StorageAction::Rm(a) => run_rm(a).await,
+            StorageAction::Replay(a) => run_replay_cmd(a).await,
             StorageAction::Profile(c) => run_profile(c),
             StorageAction::Configure(a) => run_configure(a),
             StorageAction::Topics(a) => run_topics(a).await,
@@ -658,6 +696,116 @@ async fn run_rm(args: RmArgs) -> Result<()> {
         };
         bail!("no recording named '{}' found ({scope})", args.name);
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// replay
+// ---------------------------------------------------------------------------
+
+/// A [`ReplaySink`] that re-publishes onto a live Zenoh session, preserving the
+/// recorded encoding (§4.5).
+struct ZenohReplaySink {
+    session: std::sync::Arc<zenoh::Session>,
+}
+
+#[async_trait::async_trait]
+impl storage::ReplaySink for ZenohReplaySink {
+    async fn publish(
+        &self,
+        topic: &str,
+        encoding: &str,
+        payload: &[u8],
+    ) -> std::result::Result<(), storage::ReplayError> {
+        self.session
+            .put(topic, payload.to_vec())
+            .encoding(zenoh::bytes::Encoding::from(encoding))
+            .await
+            .map_err(|e| storage::ReplayError::Publish {
+                topic: topic.to_string(),
+                detail: e.to_string(),
+            })
+    }
+}
+
+async fn run_replay_cmd(args: ReplayArgs) -> Result<()> {
+    // Load the local recording and recover its messages from the MCAP chunks.
+    let dir = storage::recording_dir(&args.name)?;
+    let recording = manifest::load_dir(&dir)
+        .with_context(|| format!("no recording named '{}' at {}", args.name, dir.display()))?;
+    let messages = storage::read_recording_messages(&dir, &recording)
+        .with_context(|| format!("reading MCAP chunks for '{}'", args.name))?;
+    if messages.is_empty() {
+        log::warn!("recording '{}' has no messages to replay", args.name);
+        return Ok(());
+    }
+
+    // `--start-time`/`--end-time` are offsets in seconds from the recording's
+    // first message (on the selected timeline); convert to absolute ns for the
+    // planner, which trims against the recorded timestamps.
+    let base = messages
+        .iter()
+        .map(|m| {
+            if args.use_log_time {
+                m.log_time_ns
+            } else {
+                m.publish_time_ns
+            }
+        })
+        .min()
+        .unwrap_or(0);
+    let to_abs = |secs: f64| -> u64 { base.saturating_add((secs.max(0.0) * 1e9) as u64) };
+
+    let remap = args
+        .remap
+        .iter()
+        .map(|r| storage::replay::parse_remap(r))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let opts = storage::ReplayOptions {
+        rate: args.rate,
+        loop_playback: args.loop_playback,
+        start_time_ns: args.start_time.map(to_abs),
+        end_time_ns: args.end_time.map(to_abs),
+        topics: split_csv(args.topics.as_deref()),
+        exclude: split_csv(args.exclude.as_deref()),
+        remap,
+        use_log_time: args.use_log_time,
+    };
+
+    let session = crate::cli::zenoh_session::create_zenoh_session(args.zenoh_endpoint.as_deref())
+        .await
+        .context("connecting to zenoh")?;
+    let sink = ZenohReplaySink {
+        session: session.clone(),
+    };
+
+    // Ctrl-C cancels the replay (and is the only way to stop `--loop`).
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel_handle = cancel.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            cancel_handle.cancel();
+        }
+    });
+
+    log::info!(
+        "replaying '{}' ({} messages, rate {}x{}){}",
+        args.name,
+        messages.len(),
+        args.rate,
+        if args.use_log_time { ", log-time" } else { "" },
+        if args.loop_playback { ", looping" } else { "" },
+    );
+    let stats = storage::run_replay(&messages, &opts, &sink, cancel)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    log::info!(
+        "replay finished: {} messages published across {} pass(es)",
+        stats.messages_published,
+        stats.loops_completed,
+    );
     Ok(())
 }
 

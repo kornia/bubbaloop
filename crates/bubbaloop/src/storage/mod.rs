@@ -13,10 +13,13 @@
 //! - [`reconcile`] — the diff-matrix healing primitive (§3.5), backend-agnostic.
 //! - [`sync`] — the background-upload core (§3.4): backoff, dead-letter,
 //!   per-chunk upload sequence (the async queue driver lands with the recorder).
+//! - [`ring_buffer`] — the sliding in-memory window (§3.3.5) + the circular MCAP
+//!   writer (`seal_samples`) that materializes a snapshot into a recording.
+//! - [`replay`] — read a recording's MCAP chunks and re-publish into Zenoh,
+//!   preserving both timestamps (§4.5).
 //!
-//! Still to come (later PRs from the spec): `discover`, the S3Compat backend, the
-//! sync queue driver, `replay`, `ring_buffer`, the `mcap-recorder` node, the
-//! CLI/MCP surfaces, and the dashboard tab.
+//! Still to come (later PRs from the spec): the sync queue driver, the daemon-side
+//! `record` path + `mcap-recorder` node, the MCP surface, and the dashboard tab.
 
 pub mod backend;
 pub mod config;
@@ -26,6 +29,8 @@ pub mod manifest;
 pub mod profile;
 pub mod reconcile;
 pub mod recording;
+pub mod replay;
+pub mod ring_buffer;
 pub mod secrets;
 pub mod sync;
 
@@ -37,6 +42,11 @@ pub use config::{ConfigError, StorageConfig};
 pub use profile::Profile;
 pub use reconcile::{reconcile, ReconcileError, ReconcileOptions, ReconcileReport};
 pub use recording::{Channel, Chunk, Lifecycle, Recording, RecordingMode, Selection, Trigger};
+pub use replay::{
+    plan as plan_replay, read_recording_messages, run_replay, ReplayError, ReplayMessage,
+    ReplayOptions, ReplaySink, ReplayStats,
+};
+pub use ring_buffer::{seal_samples, McapWriteConfig, RingBuffer, RingBufferError, Sample};
 pub use sync::{
     classify, BackoffSchedule, DeadLetterEntry, DeadLetterList, ErrorClass, SharedBackoff,
     SyncError, UploadJob, UploadOutcome,
