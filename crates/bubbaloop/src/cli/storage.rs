@@ -10,11 +10,14 @@
 //! - `download` — pull + SHA-256-verify each chunk,
 //! - `reconcile` — heal local/remote divergence (§3.5),
 //! - `rm` — delete a recording locally (and `--remote`).
+//! - `profile create/list/show/rm` — manage recording profiles.
+//! - `configure` — write the `[storage]` config (+ `secrets.toml`).
+//! - `topics` — list live fleet topics via the node manifest queryables (Zenoh).
 //!
-//! The recording-control verbs (`configure`, `topics`, `profile`, `record`,
-//! `replay`) and the cloud backends land in later slices. Per CLAUDE.md this uses
-//! `argh` (not clap) and emits all user-facing output via `log` (never
-//! `println!`).
+//! The cloud backend is reached via `configure --backend r2 …` (built with the
+//! `s3` feature). The recording-control verbs (`record`, `replay`) land with the
+//! recorder in a later PR. Per CLAUDE.md this uses `argh` (not clap) and emits
+//! all user-facing output via `log` (never `println!`).
 
 use std::path::{Path, PathBuf};
 
