@@ -7,10 +7,11 @@
 //! holds the non-secret connection shape (backend kind, endpoint, region,
 //! bucket) plus local-store knobs.
 //!
-//! In this slice only the `local` backend is constructible; the cloud backends
-//! (`r2`/`s3`/`gcs`/`minio`) parse fine but [`StorageConfig::build_backend`]
-//! returns [`ConfigError::BackendNotImplemented`] until the S3-compatible backend
-//! lands.
+//! The `local` backend is always available; the cloud backends
+//! (`r2`/`s3`/`gcs`/`minio`) are built via [`backend::s3_compat`] when the `s3`
+//! feature is enabled, reading credentials from `secrets.toml`. Without the
+//! feature, [`StorageConfig::build_backend`] returns
+//! [`ConfigError::BackendNotImplemented`].
 
 use std::path::PathBuf;
 
@@ -163,15 +164,51 @@ impl StorageConfig {
         }
     }
 
-    /// Build a live [`StorageBackend`] from this config.
+    /// Build a live [`StorageBackend`] from this config. Cloud backends read
+    /// credentials from `secrets.toml` (never from this config, §4.2) and require
+    /// the `s3` feature.
     pub fn build_backend(&self) -> Result<Box<dyn StorageBackend>, ConfigError> {
         match self.backend.as_str() {
             "local" => Ok(Box::new(LocalFs::new(self.local_root()?))),
-            "r2" | "s3" | "gcs" | "minio" => {
-                Err(ConfigError::BackendNotImplemented(self.backend.clone()))
-            }
+            "r2" | "s3" | "gcs" | "minio" => self.build_s3_backend(),
             other => Err(ConfigError::UnknownBackend(other.to_string())),
         }
+    }
+
+    #[cfg(feature = "s3")]
+    fn build_s3_backend(&self) -> Result<Box<dyn StorageBackend>, ConfigError> {
+        use super::backend::s3_compat::S3Compat;
+        use super::secrets;
+
+        let endpoint = self
+            .endpoint
+            .as_deref()
+            .ok_or(ConfigError::MissingField("endpoint"))?;
+        let bucket = self
+            .bucket
+            .as_deref()
+            .ok_or(ConfigError::MissingField("bucket"))?;
+        let region = self.region.as_deref().unwrap_or("auto");
+
+        let loaded = secrets::load(secrets::default_path()?)?;
+        let creds = loaded.r2().ok_or(ConfigError::MissingCredentials)?;
+        let path_style = self.backend == "minio";
+        Ok(Box::new(S3Compat::new(
+            endpoint,
+            region,
+            bucket,
+            creds.access_key_id.expose(),
+            creds.secret_access_key.expose(),
+            path_style,
+        )))
+    }
+
+    #[cfg(not(feature = "s3"))]
+    fn build_s3_backend(&self) -> Result<Box<dyn StorageBackend>, ConfigError> {
+        Err(ConfigError::BackendNotImplemented(format!(
+            "{} (rebuild with --features s3)",
+            self.backend
+        )))
     }
 }
 
@@ -194,12 +231,21 @@ pub enum ConfigError {
     /// Storage path could not be resolved.
     #[error("storage path error: {0}")]
     Path(#[from] StoragePathError),
-    /// The backend kind is recognised but not yet implemented in this build.
-    #[error("storage backend '{0}' is not yet implemented (only 'local' is available so far)")]
+    /// The backend kind is recognised but not built in (the `s3` feature is off).
+    #[error("storage backend '{0}' is not available in this build")]
     BackendNotImplemented(String),
     /// The backend kind is not one of r2/s3/gcs/minio/local.
     #[error("unknown storage backend '{0}' (expected one of: r2, s3, gcs, minio, local)")]
     UnknownBackend(String),
+    /// A required cloud-backend config field is missing.
+    #[error("missing required [storage] field: {0}")]
+    MissingField(&'static str),
+    /// No credentials in secrets.toml for the configured cloud backend.
+    #[error("no credentials in secrets.toml — run `bubbaloop storage configure` with --access-key-id/--secret-access-key")]
+    MissingCredentials,
+    /// Failed to read secrets.toml.
+    #[error("secrets error: {0}")]
+    Secrets(#[from] super::secrets::SecretsError),
 }
 
 #[cfg(test)]
@@ -258,16 +304,15 @@ mod tests {
     }
 
     #[test]
-    fn cloud_backends_are_not_yet_implemented() {
+    fn cloud_backends_need_config_or_feature() {
         for backend in ["r2", "s3", "gcs", "minio"] {
             let cfg = StorageConfig {
                 backend: backend.into(),
                 ..Default::default()
             };
-            assert!(matches!(
-                cfg.build_backend(),
-                Err(ConfigError::BackendNotImplemented(_))
-            ));
+            // Without the `s3` feature: not built in. With it: a bare config is
+            // missing endpoint/bucket/credentials. Either way it must not build.
+            assert!(cfg.build_backend().is_err());
         }
     }
 

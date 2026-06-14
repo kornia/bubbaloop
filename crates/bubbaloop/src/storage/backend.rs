@@ -1,15 +1,16 @@
 //! Storage backend abstraction (spec §3.2, §3.5).
 //!
 //! A [`StorageBackend`] is the put/get/list/delete/head surface that `sync` and
-//! `reconcile` drive. Two implementations are planned: [`local::LocalFs`] (this
-//! slice) and an `S3Compat` backend over `aws-sdk-s3` for R2/AWS/GCS/MinIO
-//! (deferred to PR2 — it pulls a heavy SDK and needs network/credential plumbing
-//! that belongs with the sync work).
+//! `reconcile` drive. Two implementations: [`local::LocalFs`] (always available)
+//! and [`s3_compat::S3Compat`] over `aws-sdk-s3` for R2/AWS/GCS/MinIO (behind the
+//! optional `s3` feature).
 //!
 //! The trait is async and object-safe (via `async-trait`) so the daemon can hold
 //! a `Box<dyn StorageBackend>` chosen at runtime from `[storage].backend`.
 
 pub mod local;
+#[cfg(feature = "s3")]
+pub mod s3_compat;
 
 use async_trait::async_trait;
 
