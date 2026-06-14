@@ -19,6 +19,7 @@
 //! CLI/MCP surfaces, and the dashboard tab.
 
 pub mod backend;
+pub mod config;
 pub mod integrity;
 pub mod manifest;
 pub mod profile;
@@ -31,6 +32,7 @@ use std::path::{Path, PathBuf};
 
 // Re-export the most commonly used types at the subsystem root.
 pub use backend::{local::LocalFs, BackendError, ObjectMeta, PutResult, StorageBackend};
+pub use config::{ConfigError, StorageConfig};
 pub use profile::Profile;
 pub use reconcile::{reconcile, ReconcileError, ReconcileOptions, ReconcileReport};
 pub use recording::{Channel, Chunk, Lifecycle, Recording, RecordingMode, Selection, Trigger};
