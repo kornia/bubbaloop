@@ -59,6 +59,11 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
 │  │  Telemetry watchdog (memory/CPU/disk monitoring)    │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
+│  │  Storage (fleet recording subsystem)                │  │
+│  │  mcap-recorder sink | content-addressed sync        │  │
+│  │  reconcile | replay | S3-compatible backends        │  │
+│  └──────────────────────┬─────────────────────────────┘  │
+│  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  Zenoh Data Plane (zero-copy, real-time)            │  │
 │  └──────┬───────────┬───────────┬─────────────────────┘  │
 └─────────┼───────────┼───────────┼────────────────────────┘
@@ -67,6 +72,11 @@ If it's app-layer complexity → reject it. If it strengthens sensor drivers →
      │ Camera │  │  IMU   │  │ Motor  │   Sensor drivers (nodes)
      └────────┘  └────────┘  └────────┘
 ```
+
+**Three pillars on the data plane:** the **node runtime** produces live data, the
+**agent runtime** reasons over it, and **storage** captures the fleet's Zenoh
+traffic to disk, ships it to an S3-compatible backend, and replays it
+byte-identically. See [docs/concepts/storage.md](docs/concepts/storage.md).
 
 **Entry points:**
 - `bubbaloop agent setup` — interactive wizard: configure provider, model, and identity. No daemon needed.
@@ -301,6 +311,37 @@ The daemon runs a cross-platform resource watchdog (`daemon/telemetry/`) that pr
 **Agent tools:** `get_system_telemetry`, `get_telemetry_history`, `update_telemetry_config`
 
 **Hot-reload:** Config at `~/.bubbaloop/telemetry.toml`, file-watched with guardrails (critical threshold 80-98%, min sampling 2s). Agent can tune thresholds at runtime.
+
+---
+
+## Storage (Fleet Recording)
+
+The third pillar alongside the node and agent runtimes. Storage records the
+fleet's Zenoh traffic into self-describing recordings, syncs them to an
+S3-compatible backend, and replays them. Full detail in
+[docs/concepts/storage.md](docs/concepts/storage.md) and
+[docs/concepts/storage-internals.md](docs/concepts/storage-internals.md).
+
+**Model:** a recording is `manifest.json` (the source of truth — no SQLite index)
+plus `chunks/` of MCAP (rosbag2 defaults: 786432-byte chunks, zstd, dual
+`publish_time`/`log_time`). Object keys are content-addressed
+(`{machine_id}/{recording}/chunk-{idx}-{sha256}`) so re-uploads are idempotent and
+a bucket is the sharing unit.
+
+| Concern | Implementation |
+|---------|----------------|
+| **Recorder** | `mcap-recorder` marketplace sink node (`role: sink`), one per fleet in `client` mode; idle until it receives a `start` command |
+| **Sync** | Daemon background task, chunk-finalize-driven, bounded FIFO + shared backoff that pauses the queue on failure; dead-letter list persisted to disk |
+| **Integrity** | Streaming SHA-256 per chunk — in filename, manifest, and `x-amz-checksum-sha256`; verified again on download. Mandatory, not configurable |
+| **Reconcile** | Diffs local manifest vs local files vs remote objects; heals partial uploads; never deletes (idempotent, safe to re-run) |
+| **Replay** | Pure planner + `ReplaySink` trait; paced Zenoh re-publish with `CongestionControl::Block` for faithful, lossless playback |
+| **Secrets** | Cloud credentials only in `~/.bubbaloop/secrets.toml` (0600), never in `config.toml` or logs |
+
+**Control surfaces:** the `bubbaloop storage` CLI
+(`configure | topics | profile | list | info | upload | download | reconcile |
+replay | rm`) and a paired `storage_*` MCP tool per verb (read = viewer,
+day-to-day = operator, config/remote-delete = admin). The dashboard Recordings
+tab is a control surface (list / start / stop / download), not a data aggregator.
 
 ---
 
