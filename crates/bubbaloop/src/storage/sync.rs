@@ -36,7 +36,7 @@ use super::backend::{BackendError, StorageBackend};
 use super::integrity;
 use super::profile::RetryOnFailure;
 use super::recording::{Chunk, Recording};
-use super::{manifest, object_key_chunk, StoragePathError};
+use super::{manifest, object_key_chunk, object_key_manifest, StoragePathError};
 
 // ---------------------------------------------------------------------------
 // Error classification (§3.4.3)
@@ -344,6 +344,90 @@ pub fn mark_chunk_uploaded(
     Ok(true)
 }
 
+/// Per-recording outcome counts from [`upload_pending`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct UploadSummary {
+    /// Chunks in the recording.
+    pub total_chunks: usize,
+    /// Chunks already uploaded before this call (skipped).
+    pub already_uploaded: usize,
+    /// Chunks freshly uploaded (or confirmed present) this call.
+    pub uploaded: usize,
+    /// Chunks whose key holds different remote content (skipped; needs reconcile).
+    pub conflicts: usize,
+    /// Chunks whose upload errored.
+    pub failed: usize,
+}
+
+impl UploadSummary {
+    /// Whether every pending chunk uploaded cleanly (no conflicts/failures).
+    pub fn is_complete(&self) -> bool {
+        self.conflicts == 0 && self.failed == 0
+    }
+}
+
+/// Upload every un-uploaded chunk of the recording at `recording_dir` to
+/// `backend`, following the §3.4.4 sequence per chunk, marking successes in the
+/// manifest and — if anything changed — persisting it and re-uploading
+/// `manifest.json` (§3.4.4 step 5).
+///
+/// Never bails mid-loop: conflicts and failures are tallied in the returned
+/// [`UploadSummary`] so the caller decides how to report them. Shared by the
+/// `storage upload` CLI verb and the `storage_upload` MCP tool so both behave
+/// identically (§6.1).
+pub async fn upload_pending(
+    backend: &dyn StorageBackend,
+    recording_dir: &Path,
+    now_ns: u64,
+) -> Result<UploadSummary, SyncError> {
+    let mut recording = manifest::load_dir(recording_dir)?;
+    let mut summary = UploadSummary {
+        total_chunks: recording.chunks.len(),
+        ..Default::default()
+    };
+    let mut changed = false;
+
+    for i in 0..recording.chunks.len() {
+        if recording.chunks[i].is_uploaded() {
+            summary.already_uploaded += 1;
+            continue;
+        }
+        let job = UploadJob::for_chunk(
+            &recording.machine_id,
+            recording_dir,
+            &recording.name,
+            &recording.chunks[i],
+        );
+        match upload_one(backend, &job).await {
+            Ok(UploadOutcome::Uploaded { etag }) | Ok(UploadOutcome::AlreadyPresent { etag }) => {
+                recording.chunks[i].uploaded_at_ns = Some(now_ns);
+                if etag.is_some() {
+                    recording.chunks[i].remote_etag = etag;
+                }
+                summary.uploaded += 1;
+                changed = true;
+            }
+            Ok(UploadOutcome::Conflict) => summary.conflicts += 1,
+            Err(_) => summary.failed += 1,
+        }
+    }
+
+    // Only persist + re-upload when something changed, so an all-failed run never
+    // clobbers newer remote manifest state.
+    if changed {
+        manifest::save_dir(recording_dir, &recording)?;
+        let path = manifest::manifest_path(recording_dir);
+        let bytes = std::fs::read(&path).map_err(|e| SyncError::Io {
+            path: path.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        let key = object_key_manifest(&recording.machine_id, &recording.name);
+        backend.put(&key, &bytes, None).await?;
+    }
+
+    Ok(summary)
+}
+
 // ---------------------------------------------------------------------------
 // Dead-letter list (§3.4.6)
 // ---------------------------------------------------------------------------
@@ -486,6 +570,9 @@ pub enum SyncError {
     /// Storage path could not be resolved.
     #[error("storage path error: {0}")]
     Path(#[from] StoragePathError),
+    /// A backend operation failed (e.g. the coalesced manifest re-upload).
+    #[error("backend error: {0}")]
+    Backend(#[from] BackendError),
 }
 
 #[cfg(test)]

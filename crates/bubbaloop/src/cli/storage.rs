@@ -23,12 +23,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use argh::FromArgs;
+use serde::Serialize;
 
 use crate::storage::{
     self, integrity, manifest, object_key_chunk, object_key_manifest,
     reconcile::ReconcileReport,
     recording::{Chunk, Recording},
-    ReconcileOptions, StorageBackend, StorageConfig, UploadJob, UploadOutcome,
+    ReconcileOptions, StorageBackend, StorageConfig,
 };
 
 /// Build the configured backend for a `--remote` operation, refusing to run
@@ -422,93 +423,33 @@ fn run_info(args: InfoArgs) -> Result<()> {
 
 async fn run_upload(args: UploadArgs) -> Result<()> {
     let dir = storage::recording_dir(&args.name)?;
-    let mut recording =
-        manifest::load_dir(&dir).with_context(|| format!("no recording named '{}'", args.name))?;
     let backend = StorageConfig::load()?.build_backend()?;
+    let summary = storage::upload_pending(&*backend, &dir, now_ns())
+        .await
+        .with_context(|| format!("uploading '{}'", args.name))?;
 
-    let pending: Vec<usize> = recording
-        .chunks
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| !c.is_uploaded())
-        .map(|(i, _)| i)
-        .collect();
-    if pending.is_empty() {
+    if summary.uploaded == 0 && summary.is_complete() {
         log::info!(
-            "'{}' is already fully uploaded ({} chunks).",
+            "'{}' is already fully uploaded ({} chunk(s)).",
             args.name,
-            recording.chunks.len()
+            summary.total_chunks
         );
         return Ok(());
     }
-
-    let ts = now_ns();
-    let mut uploaded = 0usize;
-    let mut conflicts = 0usize;
-    let mut failed = 0usize;
-    for i in pending {
-        let chunk = recording.chunks[i].clone();
-        let job = UploadJob::for_chunk(&recording.machine_id, &dir, &recording.name, &chunk);
-        match storage::sync::upload_one(&*backend, &job).await {
-            Ok(UploadOutcome::Uploaded { etag }) | Ok(UploadOutcome::AlreadyPresent { etag }) => {
-                // Mutate in memory; persist the manifest once after the loop
-                // rather than reloading + rewriting it per chunk.
-                recording.chunks[i].uploaded_at_ns = Some(ts);
-                if etag.is_some() {
-                    recording.chunks[i].remote_etag = etag;
-                }
-                uploaded += 1;
-            }
-            Ok(UploadOutcome::Conflict) => {
-                log::warn!(
-                    "chunk {} conflicts with different remote content at {} — skipping (run reconcile)",
-                    chunk.index,
-                    job.object_key
-                );
-                conflicts += 1;
-            }
-            Err(e) => {
-                log::error!(
-                    "chunk {} upload failed: {e} ({:?})",
-                    chunk.index,
-                    storage::classify(&e)
-                );
-                failed += 1;
-            }
-        }
-    }
-
-    // Only persist + re-upload the manifest when something actually changed, so
-    // an all-failed/all-conflict run never clobbers newer remote manifest state.
-    if uploaded > 0 {
-        manifest::save_dir(&dir, &recording).context("saving updated manifest")?;
-        upload_manifest(&*backend, &dir, &recording.machine_id, &recording.name).await?;
-    }
-
     log::info!(
-        "Uploaded {uploaded} chunk(s); {conflicts} conflict(s); {failed} failure(s) for '{}'.",
+        "Uploaded {} chunk(s); {} conflict(s); {} failure(s) for '{}'.",
+        summary.uploaded,
+        summary.conflicts,
+        summary.failed,
         args.name
     );
-    if failed > 0 || conflicts > 0 {
-        bail!("upload incomplete: {conflicts} conflict(s), {failed} failure(s)");
+    if !summary.is_complete() {
+        bail!(
+            "upload incomplete: {} conflict(s), {} failure(s)",
+            summary.conflicts,
+            summary.failed
+        );
     }
-    Ok(())
-}
-
-async fn upload_manifest(
-    backend: &dyn StorageBackend,
-    recording_dir: &Path,
-    machine_id: &str,
-    name: &str,
-) -> Result<()> {
-    let path = manifest::manifest_path(recording_dir);
-    let bytes = std::fs::read(&path).context("reading manifest for upload")?;
-    let digest = integrity::sha256(&bytes);
-    let key = object_key_manifest(machine_id, name);
-    backend
-        .put(&key, &bytes, Some(&digest))
-        .await
-        .context("uploading manifest")?;
     Ok(())
 }
 
@@ -516,9 +457,26 @@ async fn upload_manifest(
 // download
 // ---------------------------------------------------------------------------
 
-async fn run_download(args: DownloadArgs) -> Result<()> {
-    let local_dir = storage::recording_dir(&args.name)?;
-    let dest: PathBuf = match &args.to {
+/// Structured result of [`download_recording`].
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DownloadSummary {
+    pub name: String,
+    pub dest: String,
+    pub verified_chunks: usize,
+}
+
+/// Download + SHA-256-verify every chunk of `name` from the configured backend
+/// into `to` (default: the local recording dir), then persist the manifest
+/// alongside. `machine` is only needed when there is no local manifest from which
+/// to read the machine-scoped object keys. Shared by the `download` CLI verb and
+/// the `storage_download` MCP tool (§6.1).
+pub(crate) async fn download_recording(
+    name: &str,
+    to: Option<String>,
+    machine: Option<String>,
+) -> Result<DownloadSummary> {
+    let local_dir = storage::recording_dir(name)?;
+    let dest: PathBuf = match &to {
         Some(p) => PathBuf::from(p),
         None => local_dir.clone(),
     };
@@ -529,10 +487,10 @@ async fn run_download(args: DownloadArgs) -> Result<()> {
     let recording = match manifest::load_dir(&local_dir) {
         Ok(r) => r,
         Err(_) => {
-            let machine = args.machine.clone().context(
-                "no local manifest; pass --machine <id> so the remote manifest key can be built",
+            let machine = machine.clone().context(
+                "no local manifest; pass machine id so the remote manifest key can be built",
             )?;
-            let key = object_key_manifest(&machine, &args.name);
+            let key = object_key_manifest(&machine, name);
             let bytes = backend
                 .get(&key)
                 .await
@@ -581,10 +539,20 @@ async fn run_download(args: DownloadArgs) -> Result<()> {
     // Persist the manifest alongside the chunks.
     manifest::save_dir(&dest, &recording).context("writing manifest")?;
 
+    Ok(DownloadSummary {
+        name: name.to_string(),
+        dest: dest.display().to_string(),
+        verified_chunks: verified,
+    })
+}
+
+async fn run_download(args: DownloadArgs) -> Result<()> {
+    let summary = download_recording(&args.name, args.to, args.machine).await?;
     log::info!(
-        "Downloaded and verified {verified} chunk(s) for '{}' to {}.",
-        args.name,
-        dest.display()
+        "Downloaded and verified {} chunk(s) for '{}' to {}.",
+        summary.verified_chunks,
+        summary.name,
+        summary.dest
     );
     Ok(())
 }
@@ -646,55 +614,84 @@ fn format_reconcile(r: &ReconcileReport) -> Vec<String> {
 // rm
 // ---------------------------------------------------------------------------
 
-async fn run_rm(args: RmArgs) -> Result<()> {
+/// Structured result of [`remove_recording`].
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct RemoveSummary {
+    pub name: String,
+    pub removed_local: bool,
+    pub removed_remote_objects: usize,
+}
+
+/// Delete a recording locally and (when `remote`) its remote objects. `machine`
+/// is only consulted for remote deletion when there is no local manifest. A name
+/// that matches nothing (local or remote) is an error. Shared by the `rm` CLI
+/// verb and the `storage_rm` MCP tool (§6.1).
+pub(crate) async fn remove_recording(
+    name: &str,
+    remote: bool,
+    machine: Option<String>,
+) -> Result<RemoveSummary> {
     // recording_dir validates the name, so a traversal name can't reach
     // remove_dir_all or a remote prefix.
-    let dir = storage::recording_dir(&args.name)?;
-    let mut removed_anything = false;
+    let dir = storage::recording_dir(name)?;
+    let mut removed_remote_objects = 0usize;
 
-    if args.remote {
+    if remote {
         let backend = require_remote_backend()?;
         // Determine the machine id (object keys are machine-scoped).
         let machine = match manifest::load_dir(&dir) {
             Ok(r) => r.machine_id,
-            Err(_) => args
-                .machine
+            Err(_) => machine
                 .clone()
-                .context("no local manifest; pass --machine <id> to delete remote objects")?,
+                .context("no local manifest; pass machine id to delete remote objects")?,
         };
-        let prefix = format!("{machine}/{}/", args.name);
+        let prefix = format!("{machine}/{name}/");
         let objects = backend
             .list(&prefix)
             .await
             .context("listing remote objects")?;
-        let count = objects.len();
         for obj in objects {
             backend
                 .delete(&obj.key)
                 .await
                 .with_context(|| format!("deleting {}", obj.key))?;
+            removed_remote_objects += 1;
         }
-        if count > 0 {
-            removed_anything = true;
-        }
-        log::info!("Deleted {count} remote object(s) for '{}'.", args.name);
     }
 
-    if dir.exists() {
+    let removed_local = dir.exists();
+    if removed_local {
         std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
-        removed_anything = true;
-        log::info!("Deleted local recording '{}'.", args.name);
     }
 
     // A name that matched nothing (local or remote) is an error, not a silent
     // success — otherwise a typo with --remote exits 0 having done nothing.
-    if !removed_anything {
-        let scope = if args.remote {
+    if !removed_local && removed_remote_objects == 0 {
+        let scope = if remote {
             "no local directory and no matching remote objects"
         } else {
             "no local directory"
         };
-        bail!("no recording named '{}' found ({scope})", args.name);
+        bail!("no recording named '{name}' found ({scope})");
+    }
+    Ok(RemoveSummary {
+        name: name.to_string(),
+        removed_local,
+        removed_remote_objects,
+    })
+}
+
+async fn run_rm(args: RmArgs) -> Result<()> {
+    let summary = remove_recording(&args.name, args.remote, args.machine).await?;
+    if summary.removed_remote_objects > 0 {
+        log::info!(
+            "Deleted {} remote object(s) for '{}'.",
+            summary.removed_remote_objects,
+            summary.name
+        );
+    }
+    if summary.removed_local {
+        log::info!("Deleted local recording '{}'.", summary.name);
     }
     Ok(())
 }
@@ -704,9 +701,10 @@ async fn run_rm(args: RmArgs) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// A [`ReplaySink`] that re-publishes onto a live Zenoh session, preserving the
-/// recorded encoding (§4.5).
-struct ZenohReplaySink {
-    session: std::sync::Arc<zenoh::Session>,
+/// recorded encoding (§4.5). Shared with the `storage_replay_start` MCP tool so
+/// CLI and agent replay are byte-identical (§6.1).
+pub(crate) struct ZenohReplaySink {
+    pub(crate) session: std::sync::Arc<zenoh::Session>,
 }
 
 #[async_trait::async_trait]
@@ -920,54 +918,113 @@ pub struct ConfigureArgs {
     secret_access_key: Option<String>,
 }
 
-fn run_configure(args: ConfigureArgs) -> Result<()> {
+/// Flag/field-driven inputs to [`apply_configure`] — the shared core behind the
+/// `configure` CLI verb and the `storage_configure` MCP tool (§6.1).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ConfigureParams {
+    pub backend: String,
+    pub endpoint: Option<String>,
+    pub region: Option<String>,
+    pub bucket: Option<String>,
+    pub no_auto_upload: bool,
+    pub retention_days_local: Option<u32>,
+    pub disk_quota_gb: Option<u32>,
+    pub local_path: Option<String>,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+}
+
+/// Structured result of [`apply_configure`] (no secrets — those only ever touch
+/// `secrets.toml`).
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ConfigureSummary {
+    pub backend: String,
+    pub bucket: Option<String>,
+    pub auto_upload: bool,
+    pub secrets_written: bool,
+    /// Set when a remote backend was configured without credentials.
+    pub credentials_warning: Option<String>,
+}
+
+/// Validate inputs, write the `[storage]` config (and `secrets.toml` when both
+/// credential halves are supplied), and return a structured summary. Performs no
+/// user-facing logging so it composes cleanly into both the CLI and MCP.
+pub(crate) fn apply_configure(p: ConfigureParams) -> Result<ConfigureSummary> {
     const BACKENDS: [&str; 5] = ["r2", "s3", "gcs", "minio", "local"];
-    if !BACKENDS.contains(&args.backend.as_str()) {
+    if !BACKENDS.contains(&p.backend.as_str()) {
         bail!(
             "unknown backend {:?} (expected one of: {})",
-            args.backend,
+            p.backend,
             BACKENDS.join(", ")
         );
     }
-    let is_remote = args.backend != "local";
-    if is_remote && args.bucket.is_none() {
-        bail!("--bucket is required for the {:?} backend", args.backend);
+    let is_remote = p.backend != "local";
+    if is_remote && p.bucket.is_none() {
+        bail!("bucket is required for the {:?} backend", p.backend);
+    }
+    // Reject a lone credential half before writing anything.
+    if p.access_key_id.is_some() != p.secret_access_key.is_some() {
+        bail!("access_key_id and secret_access_key must be provided together");
     }
 
     let cfg = StorageConfig {
-        backend: args.backend.clone(),
+        backend: p.backend.clone(),
+        endpoint: p.endpoint,
+        region: p.region,
+        bucket: p.bucket.clone(),
+        auto_upload: !p.no_auto_upload,
+        retention_days_local: p.retention_days_local,
+        disk_quota_gb: p.disk_quota_gb,
+        recorder_instance: None,
+        local_path: p.local_path.map(PathBuf::from),
+    };
+    cfg.save().context("writing config.toml")?;
+
+    let mut secrets_written = false;
+    if let (Some(id), Some(secret)) = (p.access_key_id, p.secret_access_key) {
+        use storage::secrets::{R2Credentials, Secret};
+        let creds = R2Credentials {
+            access_key_id: Secret::new(id),
+            secret_access_key: Secret::new(secret),
+        };
+        let path = storage::secrets::default_path()?;
+        storage::secrets::save_r2(&path, &creds).context("writing secrets.toml")?;
+        secrets_written = true;
+    }
+
+    let credentials_warning = (is_remote && !secrets_written).then(|| {
+        "no credentials configured; set them (secrets.toml, chmod 0600) before uploading"
+            .to_string()
+    });
+
+    Ok(ConfigureSummary {
+        backend: cfg.backend,
+        bucket: cfg.bucket,
+        auto_upload: cfg.auto_upload,
+        secrets_written,
+        credentials_warning,
+    })
+}
+
+fn run_configure(args: ConfigureArgs) -> Result<()> {
+    let summary = apply_configure(ConfigureParams {
+        backend: args.backend,
         endpoint: args.endpoint,
         region: args.region,
         bucket: args.bucket,
-        auto_upload: !args.no_auto_upload,
+        no_auto_upload: args.no_auto_upload,
         retention_days_local: args.retention_days_local,
         disk_quota_gb: args.disk_quota_gb,
-        recorder_instance: None,
-        local_path: args.local_path.map(PathBuf::from),
-    };
-    cfg.save().context("writing config.toml")?;
-    log::info!("Wrote [storage] config (backend = {}).", cfg.backend);
-
-    // Credentials: write secrets.toml only when both halves are supplied.
-    match (args.access_key_id, args.secret_access_key) {
-        (Some(id), Some(secret)) => {
-            use storage::secrets::{R2Credentials, Secret};
-            let creds = R2Credentials {
-                access_key_id: Secret::new(id),
-                secret_access_key: Secret::new(secret),
-            };
-            let path = storage::secrets::default_path()?;
-            storage::secrets::save_r2(&path, &creds).context("writing secrets.toml")?;
-            log::info!("Wrote credentials to {} (chmod 0600).", path.display());
-        }
-        (None, None) => {
-            if is_remote {
-                log::warn!(
-                    "no credentials supplied; set --access-key-id/--secret-access-key (or edit ~/.bubbaloop/secrets.toml) before uploading"
-                );
-            }
-        }
-        _ => bail!("--access-key-id and --secret-access-key must be provided together"),
+        local_path: args.local_path,
+        access_key_id: args.access_key_id,
+        secret_access_key: args.secret_access_key,
+    })?;
+    log::info!("Wrote [storage] config (backend = {}).", summary.backend);
+    if summary.secrets_written {
+        log::info!("Wrote credentials to secrets.toml (chmod 0600).");
+    }
+    if let Some(warn) = &summary.credentials_warning {
+        log::warn!("{warn}");
     }
     Ok(())
 }
@@ -1075,62 +1132,111 @@ fn profile_path(name: &str) -> Result<PathBuf> {
     Ok(storage::profile::profiles_dir()?.join(format!("{name}.yaml")))
 }
 
-fn run_profile_create(args: ProfileCreateArgs) -> Result<()> {
+/// Inputs to [`apply_profile_create`] — shared by the `profile create` CLI verb
+/// and the `storage_profile_create` MCP tool (§6.1).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProfileCreateParams {
+    pub name: String,
+    pub description: Option<String>,
+    pub topics: Option<String>,
+    pub regex: Option<String>,
+    pub exclude: Option<String>,
+    pub include_local: bool,
+    pub chunk_size_bytes: Option<u32>,
+    pub compression: Option<String>,
+    pub mode: Option<String>,
+    pub window_secs: Option<u64>,
+    pub trigger: Option<String>,
+    pub force: bool,
+}
+
+/// Structured result of [`apply_profile_create`].
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ProfileSummary {
+    pub name: String,
+    pub path: String,
+    pub sha256: String,
+}
+
+/// Validate and write a profile (the v1 schema check happens in `profile::save`),
+/// returning a structured summary. No user-facing logging.
+pub(crate) fn apply_profile_create(p: ProfileCreateParams) -> Result<ProfileSummary> {
     use storage::profile::{CompressionKind, Profile, DEFAULT_CHUNK_SIZE_BYTES};
     use storage::recording::{RecordingMode, Trigger};
 
-    let path = profile_path(&args.name)?;
-    if path.exists() && !args.force {
+    let path = profile_path(&p.name)?;
+    if path.exists() && !p.force {
         bail!(
-            "profile '{}' already exists (use --force to overwrite)",
-            args.name
+            "profile '{}' already exists (use force/--force to overwrite)",
+            p.name
         );
     }
 
-    let compression = match args.compression.as_deref() {
+    let compression = match p.compression.as_deref() {
         None | Some("zstd") => CompressionKind::Zstd,
         Some("lz4") => CompressionKind::Lz4,
         Some("none") => CompressionKind::None,
-        Some(other) => bail!("unknown --compression {other:?} (expected zstd|lz4|none)"),
+        Some(other) => bail!("unknown compression {other:?} (expected zstd|lz4|none)"),
     };
-    let mode = match args.mode.as_deref() {
+    let mode = match p.mode.as_deref() {
         None | Some("streaming") => RecordingMode::Streaming,
         Some("ring_buffer") => RecordingMode::RingBuffer,
-        Some(other) => bail!("unknown --mode {other:?} (expected streaming|ring_buffer)"),
+        Some(other) => bail!("unknown mode {other:?} (expected streaming|ring_buffer)"),
     };
-    let trigger = match args.trigger.as_deref() {
+    let trigger = match p.trigger.as_deref() {
         None => None,
         Some("manual") => Some(Trigger::Manual),
         Some("on-event") => Some(Trigger::OnEvent),
-        Some(other) => bail!("unknown --trigger {other:?} (expected manual|on-event)"),
+        Some(other) => bail!("unknown trigger {other:?} (expected manual|on-event)"),
     };
 
     let profile = Profile {
-        name: args.name.clone(),
-        description: args.description,
-        topics: split_csv(args.topics.as_deref()),
-        regex: args.regex,
-        exclude: split_csv(args.exclude.as_deref()),
-        include_local: args.include_local,
-        chunk_size_bytes: args.chunk_size_bytes.unwrap_or(DEFAULT_CHUNK_SIZE_BYTES),
+        name: p.name.clone(),
+        description: p.description,
+        topics: split_csv(p.topics.as_deref()),
+        regex: p.regex,
+        exclude: split_csv(p.exclude.as_deref()),
+        include_local: p.include_local,
+        chunk_size_bytes: p.chunk_size_bytes.unwrap_or(DEFAULT_CHUNK_SIZE_BYTES),
         compression,
         compression_level: Default::default(),
         chunk_crc: true,
         mode,
-        window_secs: args.window_secs,
+        window_secs: p.window_secs,
         trigger,
         sending_queue: Default::default(),
         retry_on_failure: Default::default(),
     };
 
-    // save() validates against the v1 schema before writing.
     storage::profile::save(&path, &profile)
-        .with_context(|| format!("saving profile '{}'", args.name))?;
+        .with_context(|| format!("saving profile '{}'", p.name))?;
+    Ok(ProfileSummary {
+        name: p.name,
+        path: path.display().to_string(),
+        sha256: storage::profile::canonical_sha256(&profile),
+    })
+}
+
+fn run_profile_create(args: ProfileCreateArgs) -> Result<()> {
+    let summary = apply_profile_create(ProfileCreateParams {
+        name: args.name,
+        description: args.description,
+        topics: args.topics,
+        regex: args.regex,
+        exclude: args.exclude,
+        include_local: args.include_local,
+        chunk_size_bytes: args.chunk_size_bytes,
+        compression: args.compression,
+        mode: args.mode,
+        window_secs: args.window_secs,
+        trigger: args.trigger,
+        force: args.force,
+    })?;
     log::info!(
         "Created profile '{}' at {} (sha256 {}).",
-        args.name,
-        path.display(),
-        storage::profile::canonical_sha256(&profile)
+        summary.name,
+        summary.path,
+        summary.sha256
     );
     Ok(())
 }
@@ -1209,7 +1315,7 @@ fn split_csv(value: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn now_ns() -> u64 {
+pub(crate) fn now_ns() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

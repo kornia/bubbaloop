@@ -10,6 +10,7 @@ pub mod mock_platform;
 pub mod platform;
 pub mod rbac;
 pub mod storage_tools;
+pub mod storage_tools_write;
 mod tools;
 pub mod toolsets;
 
@@ -118,6 +119,9 @@ pub struct BubbaLoopMcpServer<P: PlatformOperations = platform::DaemonPlatform> 
     /// `Arc<RwLock<...>>` because reads (every `list_tools` / `get_tool`
     /// call) vastly outnumber writes (only `toolset_enable` mutates).
     pub(crate) enabled_toolsets: Arc<RwLock<HashSet<String>>>,
+    /// Live/finished replay sessions backing `storage_replay_*` (§6). Shared via
+    /// `Arc` across server clones so `start` and `status` see the same registry.
+    pub(crate) replay_sessions: storage_tools_write::ReplayRegistry,
 }
 
 // Manual Clone impl: P doesn't need Clone because it's behind Arc.
@@ -131,6 +135,8 @@ impl<P: PlatformOperations> Clone for BubbaLoopMcpServer<P> {
             mode_ceiling: self.mode_ceiling,
             // Share toolset state via Arc — clones see the same enable/disable mutations.
             enabled_toolsets: self.enabled_toolsets.clone(),
+            // Share the replay registry so status/stop reach start's sessions.
+            replay_sessions: self.replay_sessions.clone(),
         }
     }
 }

@@ -80,7 +80,10 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "storage_list"
         | "storage_info"
         | "storage_profile_list"
-        | "storage_profile_show" => Tier::Viewer,
+        | "storage_profile_show"
+        // Storage observability over Zenoh / replay status — read-only, viewer.
+        | "storage_topics_list"
+        | "storage_replay_status" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
         "node_start"
@@ -98,7 +101,15 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "mission_resume"
         | "mission_cancel"
         | "belief_update"
-        | "grab_frame" => Tier::Operator,
+        | "grab_frame"
+        // Storage day-to-day operations (§6.2) — operator tier.
+        | "storage_upload"
+        | "storage_download"
+        | "storage_reconcile"
+        | "storage_profile_create"
+        | "storage_profile_rm"
+        | "storage_replay_start"
+        | "storage_replay_stop" => Tier::Operator,
 
         // Admin tools (system modification)
         "node_install"
@@ -112,7 +123,10 @@ pub fn required_tier(tool_name: &str) -> Tier {
         | "context_configure"
         | "alert_register"
         | "alert_unregister"
-        | "constraint_register" => Tier::Admin,
+        | "constraint_register"
+        // Storage system modification (§6.2) — admin tier.
+        | "storage_configure"
+        | "storage_rm" => Tier::Admin,
 
         // Unknown tools default to admin (principle of least privilege)
         _ => Tier::Admin,
@@ -161,6 +175,36 @@ mod tests {
         // not the unknown-defaults-to-Admin fallback (§6.4).
         for name in crate::mcp::storage_tools::STORAGE_READ_TOOLS {
             assert_eq!(required_tier(name), Tier::Viewer, "tool {name}");
+        }
+    }
+
+    #[test]
+    fn storage_write_tools_have_expected_tiers() {
+        // The mutating / Zenoh / replay storage tools must each have an explicit,
+        // non-default tier matching the spec §6.2 RBAC table.
+        let expected = [
+            ("storage_topics_list", Tier::Viewer),
+            ("storage_replay_status", Tier::Viewer),
+            ("storage_upload", Tier::Operator),
+            ("storage_download", Tier::Operator),
+            ("storage_reconcile", Tier::Operator),
+            ("storage_profile_create", Tier::Operator),
+            ("storage_profile_rm", Tier::Operator),
+            ("storage_replay_start", Tier::Operator),
+            ("storage_replay_stop", Tier::Operator),
+            ("storage_configure", Tier::Admin),
+            ("storage_rm", Tier::Admin),
+        ];
+        for (name, tier) in expected {
+            assert_eq!(required_tier(name), tier, "tool {name}");
+        }
+        // Every registered write tool must appear in the expected table — so a new
+        // tool can't slip in with the unknown-defaults-to-Admin fallback.
+        for name in crate::mcp::storage_tools_write::STORAGE_WRITE_TOOLS {
+            assert!(
+                expected.iter().any(|(n, _)| n == name),
+                "no RBAC tier asserted for storage tool {name}"
+            );
         }
     }
 

@@ -49,8 +49,8 @@ pub use replay::{
 };
 pub use ring_buffer::{seal_samples, McapWriteConfig, RingBuffer, RingBufferError, Sample};
 pub use sync::{
-    classify, BackoffSchedule, DeadLetterEntry, DeadLetterList, ErrorClass, SharedBackoff,
-    SyncError, UploadJob, UploadOutcome,
+    classify, upload_pending, BackoffSchedule, DeadLetterEntry, DeadLetterList, ErrorClass,
+    SharedBackoff, SyncError, UploadJob, UploadOutcome, UploadSummary,
 };
 pub use sync_driver::{
     run_driver, scan_pending, scan_pending_in, spawn as spawn_sync, ChunkFinalized, EnqueueResult,

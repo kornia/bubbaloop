@@ -39,7 +39,7 @@ pub(crate) const STORAGE_READ_TOOLS: &[&str] = &[
 pub(crate) struct StorageNameRequest {
     /// Name of the recording (for `storage_info`) or profile (for
     /// `storage_profile_show`).
-    name: String,
+    pub(crate) name: String,
 }
 
 #[derive(Deserialize, JsonSchema, Default)]
@@ -55,8 +55,9 @@ pub(crate) struct StorageListRequest {
     limit: Option<u32>,
 }
 
-/// Serialize `v` as pretty JSON into a successful tool result.
-fn ok_json<T: serde::Serialize>(v: &T) -> CallToolResult {
+/// Serialize `v` as pretty JSON into a successful tool result. Shared with the
+/// mutating storage tools in [`storage_tools_write`](super::storage_tools_write).
+pub(crate) fn ok_json<T: serde::Serialize>(v: &T) -> CallToolResult {
     CallToolResult::success(vec![Content::text(
         serde_json::to_string_pretty(v).unwrap_or_else(|_| "null".to_string()),
     )])
@@ -64,7 +65,7 @@ fn ok_json<T: serde::Serialize>(v: &T) -> CallToolResult {
 
 /// A user-facing error returned as tool text (matches the existing tool
 /// convention of surfacing errors as content rather than protocol errors).
-fn err_text(msg: impl Into<String>) -> CallToolResult {
+pub(crate) fn err_text(msg: impl Into<String>) -> CallToolResult {
     CallToolResult::success(vec![Content::text(format!("Error: {}", msg.into()))])
 }
 
