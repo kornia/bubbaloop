@@ -10,15 +10,17 @@
 //! - [`profile`] — `~/.bubbaloop/profiles/*.yaml` with the v1 validator + canonical hash.
 //! - [`secrets`] — opaque, zeroize-on-drop credentials in `secrets.toml` (chmod 0600).
 //! - [`backend`] — the `StorageBackend` trait + `LocalFs` (S3Compat lands in PR2).
+//! - [`reconcile`] — the diff-matrix healing primitive (§3.5), backend-agnostic.
 //!
-//! Still to come (later PRs from the spec): `discover`, `sync`, `reconcile`,
-//! `replay`, `ring_buffer`, the `mcap-recorder` node, the CLI/MCP surfaces, and
-//! the dashboard tab.
+//! Still to come (later PRs from the spec): `discover`, `sync`, the S3Compat
+//! backend, `replay`, `ring_buffer`, the `mcap-recorder` node, the CLI/MCP
+//! surfaces, and the dashboard tab.
 
 pub mod backend;
 pub mod integrity;
 pub mod manifest;
 pub mod profile;
+pub mod reconcile;
 pub mod recording;
 pub mod secrets;
 
@@ -27,6 +29,7 @@ use std::path::{Path, PathBuf};
 // Re-export the most commonly used types at the subsystem root.
 pub use backend::{local::LocalFs, BackendError, ObjectMeta, PutResult, StorageBackend};
 pub use profile::Profile;
+pub use reconcile::{reconcile, ReconcileError, ReconcileOptions, ReconcileReport};
 pub use recording::{Channel, Chunk, Lifecycle, Recording, RecordingMode, Selection, Trigger};
 
 /// Base bubbaloop directory: `~/.bubbaloop`.
