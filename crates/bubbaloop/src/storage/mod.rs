@@ -52,8 +52,38 @@ pub fn recordings_dir() -> Result<PathBuf, StoragePathError> {
     Ok(bubbaloop_dir()?.join("recordings"))
 }
 
+/// Maximum length of a recording name.
+pub const MAX_RECORDING_NAME_LEN: usize = 128;
+
+/// Validate a caller-supplied recording name before it is used as a filesystem
+/// path segment or remote object-key component.
+///
+/// Allowed: 1..=[`MAX_RECORDING_NAME_LEN`] characters of `[A-Za-z0-9._-]`, and
+/// not the traversal segments `.` / `..`. This is the single guard that every
+/// path builder funnels through, so no caller can smuggle a `..`, `/`, or NUL
+/// into [`recording_dir`]/[`chunks_dir`] (and thence into `remove_dir_all`,
+/// reads, or a remote prefix). Mirrors the node-name rules in CLAUDE.md.
+pub fn validate_recording_name(name: &str) -> Result<(), StoragePathError> {
+    let valid_chars = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if name.is_empty()
+        || name.len() > MAX_RECORDING_NAME_LEN
+        || !valid_chars
+        || name == "."
+        || name == ".."
+    {
+        return Err(StoragePathError::InvalidName(name.to_string()));
+    }
+    Ok(())
+}
+
 /// Directory for one recording: `~/.bubbaloop/recordings/{name}`.
+///
+/// Rejects names that fail [`validate_recording_name`] so the returned path can
+/// never escape the recordings root.
 pub fn recording_dir(name: &str) -> Result<PathBuf, StoragePathError> {
+    validate_recording_name(name)?;
     Ok(recordings_dir()?.join(name))
 }
 
@@ -101,6 +131,10 @@ pub enum StoragePathError {
     /// No home directory could be determined.
     #[error("could not determine home directory")]
     NoHomeDir,
+    /// The recording name is empty, too long, or contains illegal characters
+    /// (allowed: `[A-Za-z0-9._-]`, and not `.`/`..`).
+    #[error("invalid recording name: {0:?}")]
+    InvalidName(String),
 }
 
 #[cfg(test)]
@@ -122,6 +156,29 @@ mod tests {
             object_key_chunk("jetson_alpha", "rec", 7, hex),
             "jetson_alpha/rec/chunks/chunk-000007-a1b2c3d4.mcap"
         );
+    }
+
+    #[test]
+    fn recording_name_validation_blocks_traversal() {
+        assert!(validate_recording_name("rec_2026-05-26T12.34.56_jetson").is_ok());
+        assert!(validate_recording_name("a").is_ok());
+        // Traversal and separators must be rejected.
+        assert!(validate_recording_name("..").is_err());
+        assert!(validate_recording_name(".").is_err());
+        assert!(validate_recording_name("../../etc").is_err());
+        assert!(validate_recording_name("a/b").is_err());
+        assert!(validate_recording_name("/abs").is_err());
+        assert!(validate_recording_name("a\0b").is_err());
+        assert!(validate_recording_name("").is_err());
+        assert!(validate_recording_name(&"x".repeat(MAX_RECORDING_NAME_LEN + 1)).is_err());
+        // A `..` substring inside a single segment is fine (not a traversal).
+        assert!(validate_recording_name("a..b").is_ok());
+    }
+
+    #[test]
+    fn recording_dir_rejects_traversal_names() {
+        assert!(recording_dir("../../escape").is_err());
+        assert!(chunks_dir("..").is_err());
     }
 
     #[test]

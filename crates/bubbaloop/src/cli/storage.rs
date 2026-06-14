@@ -22,10 +22,25 @@ use anyhow::{bail, Context, Result};
 use argh::FromArgs;
 
 use crate::storage::{
-    self, integrity, manifest, object_key_chunk, object_key_manifest, reconcile::ReconcileReport,
-    recording::Recording, ReconcileOptions, StorageBackend, StorageConfig, UploadJob,
-    UploadOutcome,
+    self, integrity, manifest, object_key_chunk, object_key_manifest,
+    reconcile::ReconcileReport,
+    recording::{Chunk, Recording},
+    ReconcileOptions, StorageBackend, StorageConfig, UploadJob, UploadOutcome,
 };
+
+/// Build the configured backend for a `--remote` operation, refusing to run
+/// against a non-remote (local) backend so `--remote` can't silently target the
+/// local object store.
+fn require_remote_backend() -> Result<Box<dyn StorageBackend>> {
+    let cfg = StorageConfig::load()?;
+    if !cfg.is_remote() {
+        bail!(
+            "no remote backend configured ([storage].backend = {:?}); set it to r2/s3/gcs/minio to use --remote",
+            cfg.backend
+        );
+    }
+    Ok(cfg.build_backend()?)
+}
 
 /// Manage fleet recordings (list/info/upload/download/reconcile/rm).
 #[derive(FromArgs)]
@@ -154,6 +169,7 @@ pub struct RecordingSummary {
     pub started_at_ns: u64,
     pub ended_at_ns: Option<u64>,
     pub tags: Vec<String>,
+    pub corrupt: bool,
 }
 
 impl RecordingSummary {
@@ -168,6 +184,7 @@ impl RecordingSummary {
             started_at_ns: r.started_at_ns,
             ended_at_ns: r.ended_at_ns,
             tags: r.tags.clone(),
+            corrupt: r.corrupt,
         }
     }
 
@@ -180,9 +197,12 @@ impl RecordingSummary {
         }
     }
 
-    /// `complete` once the manifest is closed, else `open`.
+    /// `corrupt` if reconcile flagged it, else `complete` once the manifest is
+    /// closed, else `open`.
     fn status(&self) -> &'static str {
-        if self.ended_at_ns.is_some() {
+        if self.corrupt {
+            "corrupt"
+        } else if self.ended_at_ns.is_some() {
             "complete"
         } else {
             "open"
@@ -282,8 +302,18 @@ async fn run_list(args: ListArgs) -> Result<()> {
 
 /// Gather summaries from the configured backend by listing + fetching manifests.
 async fn collect_remote(filter: &ListFilter) -> Result<Vec<RecordingSummary>> {
-    let backend = StorageConfig::load()?.build_backend()?;
-    let objects = backend.list("").await.context("listing remote objects")?;
+    let backend = require_remote_backend()?;
+    // Scope the listing to one machine's prefix when --machine is given, instead
+    // of enumerating the whole (cross-machine) bucket and filtering after.
+    let prefix = filter
+        .machine
+        .as_deref()
+        .map(|m| format!("{m}/"))
+        .unwrap_or_default();
+    let objects = backend
+        .list(&prefix)
+        .await
+        .context("listing remote objects")?;
     let mut out = Vec::new();
     for obj in objects {
         if !obj.key.ends_with("/manifest.json") {
@@ -345,15 +375,16 @@ fn run_info(args: InfoArgs) -> Result<()> {
 
 async fn run_upload(args: UploadArgs) -> Result<()> {
     let dir = storage::recording_dir(&args.name)?;
-    let recording =
+    let mut recording =
         manifest::load_dir(&dir).with_context(|| format!("no recording named '{}'", args.name))?;
     let backend = StorageConfig::load()?.build_backend()?;
 
-    let pending: Vec<_> = recording
+    let pending: Vec<usize> = recording
         .chunks
         .iter()
-        .filter(|c| !c.is_uploaded())
-        .cloned()
+        .enumerate()
+        .filter(|(_, c)| !c.is_uploaded())
+        .map(|(i, _)| i)
         .collect();
     if pending.is_empty() {
         log::info!(
@@ -364,15 +395,21 @@ async fn run_upload(args: UploadArgs) -> Result<()> {
         return Ok(());
     }
 
+    let ts = now_ns();
     let mut uploaded = 0usize;
     let mut conflicts = 0usize;
     let mut failed = 0usize;
-    for chunk in &pending {
-        let job = UploadJob::for_chunk(&recording.machine_id, &dir, &recording.name, chunk);
+    for i in pending {
+        let chunk = recording.chunks[i].clone();
+        let job = UploadJob::for_chunk(&recording.machine_id, &dir, &recording.name, &chunk);
         match storage::sync::upload_one(&*backend, &job).await {
             Ok(UploadOutcome::Uploaded { etag }) | Ok(UploadOutcome::AlreadyPresent { etag }) => {
-                storage::sync::mark_chunk_uploaded(&dir, chunk.index, now_ns(), etag)
-                    .with_context(|| format!("recording chunk {} as uploaded", chunk.index))?;
+                // Mutate in memory; persist the manifest once after the loop
+                // rather than reloading + rewriting it per chunk.
+                recording.chunks[i].uploaded_at_ns = Some(ts);
+                if etag.is_some() {
+                    recording.chunks[i].remote_etag = etag;
+                }
                 uploaded += 1;
             }
             Ok(UploadOutcome::Conflict) => {
@@ -394,8 +431,12 @@ async fn run_upload(args: UploadArgs) -> Result<()> {
         }
     }
 
-    // Push the manifest so remote state reflects the upload (§3.4.4 step 5).
-    upload_manifest(&*backend, &dir, &recording.machine_id, &recording.name).await?;
+    // Only persist + re-upload the manifest when something actually changed, so
+    // an all-failed/all-conflict run never clobbers newer remote manifest state.
+    if uploaded > 0 {
+        manifest::save_dir(&dir, &recording).context("saving updated manifest")?;
+        upload_manifest(&*backend, &dir, &recording.machine_id, &recording.name).await?;
+    }
 
     log::info!(
         "Uploaded {uploaded} chunk(s); {conflicts} conflict(s); {failed} failure(s) for '{}'.",
@@ -481,7 +522,11 @@ async fn run_download(args: DownloadArgs) -> Result<()> {
                 integrity::to_hex(&actual)
             );
         }
-        std::fs::write(chunks_dir.join(&chunk.name), &bytes)
+        // Derive the on-disk name from (index, sha256) rather than trusting the
+        // manifest's `name` field as a path segment. (Manifest validation already
+        // requires it to be canonical, but deriving here removes all doubt.)
+        let safe_name = Chunk::canonical_name(chunk.index, &chunk.sha256);
+        std::fs::write(chunks_dir.join(&safe_name), &bytes)
             .with_context(|| format!("writing chunk {}", chunk.index))?;
         verified += 1;
     }
@@ -555,9 +600,13 @@ fn format_reconcile(r: &ReconcileReport) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 async fn run_rm(args: RmArgs) -> Result<()> {
+    // recording_dir validates the name, so a traversal name can't reach
+    // remove_dir_all or a remote prefix.
     let dir = storage::recording_dir(&args.name)?;
+    let mut removed_anything = false;
 
     if args.remote {
+        let backend = require_remote_backend()?;
         // Determine the machine id (object keys are machine-scoped).
         let machine = match manifest::load_dir(&dir) {
             Ok(r) => r.machine_id,
@@ -566,7 +615,6 @@ async fn run_rm(args: RmArgs) -> Result<()> {
                 .clone()
                 .context("no local manifest; pass --machine <id> to delete remote objects")?,
         };
-        let backend = StorageConfig::load()?.build_backend()?;
         let prefix = format!("{machine}/{}/", args.name);
         let objects = backend
             .list(&prefix)
@@ -579,14 +627,27 @@ async fn run_rm(args: RmArgs) -> Result<()> {
                 .await
                 .with_context(|| format!("deleting {}", obj.key))?;
         }
+        if count > 0 {
+            removed_anything = true;
+        }
         log::info!("Deleted {count} remote object(s) for '{}'.", args.name);
     }
 
     if dir.exists() {
         std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
+        removed_anything = true;
         log::info!("Deleted local recording '{}'.", args.name);
-    } else if !args.remote {
-        bail!("no local recording named '{}'", args.name);
+    }
+
+    // A name that matched nothing (local or remote) is an error, not a silent
+    // success — otherwise a typo with --remote exits 0 having done nothing.
+    if !removed_anything {
+        let scope = if args.remote {
+            "no local directory and no matching remote objects"
+        } else {
+            "no local directory"
+        };
+        bail!("no recording named '{}' found ({scope})", args.name);
     }
     Ok(())
 }

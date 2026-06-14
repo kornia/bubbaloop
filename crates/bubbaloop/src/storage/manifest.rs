@@ -12,7 +12,7 @@
 //! digests), so a future writer's extra fields never trip an older reader.
 
 use super::integrity;
-use super::recording::{Recording, MANIFEST_SCHEMA_VERSION};
+use super::recording::{Chunk, Recording, MANIFEST_SCHEMA_VERSION};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -127,6 +127,17 @@ pub fn validate(r: &Recording) -> Result<(), ManifestError> {
                 chunk.index, chunk.sha256
             ))
         })?;
+        // The filename must be the canonical `chunk-{idx:06}-{prefix8}.mcap`
+        // (§3.3.6). Enforcing this here means no consumer can be tricked into
+        // treating a tampered/non-canonical `name` (e.g. one fetched from an
+        // untrusted remote manifest) as a path segment for a write.
+        let expected_name = Chunk::canonical_name(chunk.index, &chunk.sha256);
+        if chunk.name != expected_name {
+            return Err(ManifestError::Invalid(format!(
+                "chunk {} name {:?} is not canonical (expected {:?})",
+                chunk.index, chunk.name, expected_name
+            )));
+        }
     }
     Ok(())
 }
@@ -219,6 +230,20 @@ mod tests {
         r.chunks[1].index = 5; // gap
         let err = validate(&r).unwrap_err();
         assert!(matches!(err, ManifestError::Invalid(_)));
+    }
+
+    #[test]
+    fn rejects_non_canonical_chunk_name() {
+        // A manifest whose chunk name has been tampered into a path-traversal
+        // string must fail validation (it would otherwise be trusted as a write
+        // target on the download path).
+        let mut r = valid_recording();
+        r.chunks[0].name = "../../evil.mcap".to_string();
+        let err = validate(&r).unwrap_err();
+        assert!(matches!(err, ManifestError::Invalid(_)));
+        // Parsing also rejects it (download fetches remote manifests via parse).
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(parse(&json).is_err());
     }
 
     #[test]

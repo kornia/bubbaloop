@@ -197,6 +197,7 @@ pub async fn reconcile(
     let mut claimed_local: Vec<PathBuf> = Vec::new();
     let mut claimed_remote: Vec<String> = Vec::new();
     let mut manifest_dirty = false;
+    let mut found_missing_everywhere = false;
 
     // §3.5.3 step 4: apply the diff matrix to each manifest chunk.
     for i in 0..manifest.chunks.len() {
@@ -247,7 +248,27 @@ pub async fn reconcile(
                 match meta.sha256 {
                     Some(actual) if actual == expected_digest => RemoteState::Present,
                     Some(_) => RemoteState::Mismatch,
-                    None => RemoteState::Present, // backend can't verify; trust the key
+                    None => {
+                        // The backend gave no checksum (e.g. a pre-existing object,
+                        // or a backend that doesn't surface x-amz-checksum-sha256).
+                        // The key only embeds the first 8 hex chars, so we must not
+                        // mark the chunk synced on the key alone — fetch and verify
+                        // the full digest (§8 mandatory integrity).
+                        match backend.get(&expected_key).await {
+                            Ok(bytes) if integrity::sha256(&bytes) == expected_digest => {
+                                RemoteState::Present
+                            }
+                            Ok(_) => RemoteState::Mismatch,
+                            Err(e) => {
+                                report.errors.push(ChunkError {
+                                    index,
+                                    kind: ChunkErrorKind::Io,
+                                    detail: format!("verifying {expected_key}: {e}"),
+                                });
+                                continue;
+                            }
+                        }
+                    }
                 }
             }
             Ok(None) => RemoteState::Absent,
@@ -358,9 +379,14 @@ pub async fn reconcile(
                         }
                     }
                 } else {
+                    // Confirmed present remotely; record it in the report so the
+                    // manifest mutation isn't silent.
                     if manifest.chunks[i].uploaded_at_ns.is_none() {
                         manifest.chunks[i].uploaded_at_ns = Some(now_ns);
                         manifest_dirty = true;
+                        report.chunks_marked_uploaded += 1;
+                    } else {
+                        report.chunks_verified_ok += 1;
                     }
                     record(&mut report, index, ChunkOutcome::PresentRemoteOnly);
                 }
@@ -378,8 +404,9 @@ pub async fn reconcile(
                 });
             }
 
-            // Row 6: gone in both places — the manifest is broken.
+            // Row 6: gone in both places — the recording can't be made whole.
             (LocalState::Absent, RemoteState::Absent) => {
+                found_missing_everywhere = true;
                 report.errors.push(ChunkError {
                     index,
                     kind: ChunkErrorKind::MissingEverywhere,
@@ -392,6 +419,17 @@ pub async fn reconcile(
     // §3.5.2 rows 7–8: report (never touch) orphans.
     collect_local_orphans(&local_files, &claimed_local, &mut report);
     collect_remote_orphans(&remote_objects, &claimed_remote, &mut report);
+
+    // §3.5.2 row 6: a chunk gone in both places means the recording can never be
+    // made whole. Record that durably so `list`/`info` surface it instead of
+    // advertising the recording as healthy.
+    if found_missing_everywhere && !manifest.corrupt {
+        manifest.corrupt = true;
+        manifest_dirty = true;
+        log::warn!(
+            "reconcile {name}: marking recording corrupt (chunk missing both locally and remotely)"
+        );
+    }
 
     // §3.5.3 step 6: persist the (possibly mutated) manifest, then re-upload it
     // so the post-reconcile state is captured remotely.
@@ -781,6 +819,9 @@ mod tests {
             .unwrap();
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].kind, ChunkErrorKind::MissingEverywhere);
+        // The recording is durably marked corrupt so it isn't advertised healthy.
+        let reloaded = manifest::load_dir(&rec_dir).unwrap();
+        assert!(reloaded.corrupt);
     }
 
     #[tokio::test]
@@ -789,12 +830,20 @@ mod tests {
         let (_rd, fs) = remote();
         seed_remote(&fs, &rec, 0).await;
 
-        // Without restore: only reported, not fetched.
+        // Without restore: only reported, not fetched — but the manifest's null
+        // uploaded_at_ns is filled in from the remote and that is counted.
         let no_restore = reconcile(&rec_dir, &fs, &ReconcileOptions::default(), NOW)
             .await
             .unwrap();
         assert_eq!(no_restore.chunks_redownloaded, 0);
+        assert_eq!(no_restore.chunks_marked_uploaded, 1);
         assert!(!rec_dir.join("chunks").join(&rec.chunks[0].name).exists());
+        // The mutation was persisted, so a second run sees it as verified.
+        let second = reconcile(&rec_dir, &fs, &ReconcileOptions::default(), NOW)
+            .await
+            .unwrap();
+        assert_eq!(second.chunks_verified_ok, 1);
+        assert_eq!(second.chunks_marked_uploaded, 0);
 
         // With restore: the local file reappears and verifies.
         let restored = reconcile(&rec_dir, &fs, &ReconcileOptions { restore: true }, NOW)

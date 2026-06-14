@@ -169,9 +169,21 @@ impl SharedBackoff {
     /// Record a failure observed at `now_ns`. Returns the delay before the next
     /// attempt and whether the streak has run past `max_elapsed` (dead-letter).
     pub fn on_failure(&mut self, now_ns: u64) -> BackoffDecision {
-        let started = *self.streak_started_ns.get_or_insert(now_ns);
+        // Anchor the streak on the first failure, and *re-anchor* if the wall
+        // clock has jumped backward (now < start). Without this, a backward NTP
+        // step / suspend-resume would make `now - start` saturate to 0 forever,
+        // so `elapsed >= max_elapsed` could never fire and a hopeless job would
+        // retry indefinitely instead of dead-lettering. Re-anchoring restarts the
+        // dead-letter timer from the corrected clock, which always moves forward.
+        let started = match self.streak_started_ns {
+            Some(s) if s <= now_ns => s,
+            _ => {
+                self.streak_started_ns = Some(now_ns);
+                now_ns
+            }
+        };
         self.failures += 1;
-        let elapsed_ns = now_ns.saturating_sub(started) as u128;
+        let elapsed_ns = (now_ns - started) as u128;
         let dead_letter = elapsed_ns >= self.schedule.max_elapsed.as_nanos();
         // The next attempt number is failures + 1 (after one failure, attempt 2).
         let delay = self.schedule.delay_for_attempt(self.failures + 1);
@@ -560,6 +572,19 @@ mod tests {
         // 5 minutes later, still failing → dead-letter.
         let later = b.on_failure(NOW + 300 * SEC);
         assert!(later.dead_letter);
+    }
+
+    #[test]
+    fn backward_clock_jump_still_dead_letters() {
+        let mut b = SharedBackoff::new(BackoffSchedule::default());
+        b.on_failure(NOW);
+        // Clock steps backward: must not underflow, must not be "dead" yet, and
+        // must re-anchor so the timer makes forward progress again.
+        let back = b.on_failure(NOW - 100 * SEC);
+        assert!(!back.dead_letter);
+        // From the re-anchored start, 5 more minutes of forward time dead-letters.
+        let forward = b.on_failure(NOW - 100 * SEC + 300 * SEC);
+        assert!(forward.dead_letter);
     }
 
     // ---- upload sequence ----------------------------------------------------

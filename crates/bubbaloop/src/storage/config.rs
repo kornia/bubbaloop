@@ -104,6 +104,13 @@ impl StorageConfig {
         Ok(file.storage.unwrap_or_default())
     }
 
+    /// Whether the configured backend is an actual remote (i.e. not the local
+    /// object store). CLI `--remote` flags require this so they can't silently
+    /// operate on the local backend.
+    pub fn is_remote(&self) -> bool {
+        self.backend != "local"
+    }
+
     /// Resolve the `local` backend's object-store root.
     pub fn local_root(&self) -> Result<PathBuf, ConfigError> {
         match &self.local_path {
@@ -217,6 +224,18 @@ mod tests {
                 cfg.build_backend(),
                 Err(ConfigError::BackendNotImplemented(_))
             ));
+        }
+    }
+
+    #[test]
+    fn is_remote_only_for_cloud_backends() {
+        assert!(!StorageConfig::default().is_remote()); // default = local
+        for backend in ["r2", "s3", "gcs", "minio"] {
+            let cfg = StorageConfig {
+                backend: backend.into(),
+                ..Default::default()
+            };
+            assert!(cfg.is_remote());
         }
     }
 

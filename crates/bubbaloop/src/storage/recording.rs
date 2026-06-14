@@ -69,9 +69,19 @@ pub struct Recording {
     /// Free-form tags (Phase 3 search; carried through verbatim in v1).
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Set when reconcile finds a chunk missing both locally and remotely
+    /// (§3.5.2 row 6): the recording can no longer be made whole. Durable so
+    /// `list`/`info` can surface it instead of advertising a broken recording as
+    /// healthy. Defaults to `false` and is omitted from the manifest when unset.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub corrupt: bool,
     /// Unknown fields from newer schema versions, preserved on round-trip.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Capture mode (`mode` in the manifest). Distinct from the command-envelope
@@ -228,6 +238,7 @@ impl Recording {
             profile_sha256: None,
             recorder_version: String::new(),
             tags: Vec::new(),
+            corrupt: false,
             extra: BTreeMap::new(),
         }
     }
