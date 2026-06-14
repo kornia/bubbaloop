@@ -858,7 +858,7 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
     };
 
     // Start background storage sync (uploads finalized chunks; §3.4.2).
-    log::info!("Starting storage sync...");
+    // start_storage_sync logs its own outcome (started / disabled) in every branch.
     let storage_sync_task = start_storage_sync(shutdown_rx.clone());
 
     log::info!("Bubbaloop skill runtime started.");

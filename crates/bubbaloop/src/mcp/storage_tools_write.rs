@@ -65,6 +65,8 @@ pub(crate) const STORAGE_WRITE_TOOLS: &[&str] = &[
 #[derive(Clone, Default)]
 pub(crate) struct ReplayRegistry {
     sessions: Arc<Mutex<HashMap<String, ReplaySession>>>,
+    /// Monotonic sequence for collision-free session ids.
+    next_seq: Arc<std::sync::atomic::AtomicU64>,
 }
 
 struct ReplaySession {
@@ -73,6 +75,14 @@ struct ReplaySession {
     rate: f64,
     cancel: CancellationToken,
     state: Arc<Mutex<ReplayRunState>>,
+}
+
+impl ReplayRunState {
+    /// Whether the session has run to completion (success or failure) — used to
+    /// evict it from the registry so finished sessions can't accumulate forever.
+    fn is_terminal(&self) -> bool {
+        !matches!(self, ReplayRunState::Running)
+    }
 }
 
 /// Lifecycle of one replay session. `run_replay` only yields its totals at the
@@ -89,8 +99,25 @@ enum ReplayRunState {
 }
 
 impl ReplayRegistry {
+    /// A collision-free session id (`{recording}-{seq}`). Unlike a wall-clock
+    /// suffix, the monotonic counter can't repeat across rapid starts.
+    fn next_id(&self, recording_name: &str) -> String {
+        let seq = self
+            .next_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("{recording_name}-{seq}")
+    }
+
     fn insert(&self, id: String, session: ReplaySession) {
         if let Ok(mut g) = self.sessions.lock() {
+            // Evict completed sessions first so the registry can't grow without
+            // bound over a long-lived daemon (the leak a looping replay would cause).
+            g.retain(|_, s| {
+                !s.state
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_terminal()
+            });
             g.insert(id, session);
         }
     }
@@ -225,9 +252,6 @@ pub(crate) struct StorageProfileCreateRequest {
 pub(crate) struct StorageDownloadRequest {
     /// Recording name.
     name: String,
-    /// Destination directory (default: the local recording directory).
-    #[serde(default)]
-    to: Option<String>,
     /// Machine id, only needed when there is no local manifest to read it from.
     #[serde(default)]
     machine: Option<String>,
@@ -516,7 +540,7 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
 
     #[tool(
         name = "storage_download",
-        description = "Download + SHA-256-verify every chunk of a recording from the backend into `to` (default: the local recording dir). Pass `machine` only when there is no local manifest. Operator tier.",
+        description = "Download + SHA-256-verify every chunk of a recording from the backend into its local recording directory (~/.bubbaloop/recordings/<name>). Pass `machine` only when there is no local manifest. Operator tier.",
         annotations(
             title = "Download recording",
             read_only_hint = false,
@@ -530,7 +554,10 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Parameters(req): Parameters<StorageDownloadRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         log::info!("[MCP] tool=storage_download name={}", req.name);
-        match crate::cli::storage::download_recording(&req.name, req.to, req.machine).await {
+        // Force the canonical local recording dir: unlike the CLI (run by a trusted
+        // human), the MCP tool runs inside the daemon, so we never let a caller
+        // choose an arbitrary `to` path (would be an arbitrary-write primitive).
+        match crate::cli::storage::download_recording(&req.name, None, req.machine).await {
             Ok(summary) => Ok(ok_json(&summary)),
             Err(e) => Ok(err_text(e.to_string())),
         }
@@ -677,13 +704,26 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         };
 
         let started_at_ns = crate::cli::storage::now_ns();
-        let id = format!("{}-{}", req.name, started_at_ns);
+        let id = self.replay_sessions.next_id(&req.name);
         let cancel = CancellationToken::new();
         let state = Arc::new(Mutex::new(ReplayRunState::Running));
 
+        // Register the session BEFORE spawning so status/stop are authoritative the
+        // moment start returns (the task shares `state`/`cancel` via clones).
+        self.replay_sessions.insert(
+            id.clone(),
+            ReplaySession {
+                recording_name: req.name.clone(),
+                started_at_ns,
+                rate,
+                cancel: cancel.clone(),
+                state: state.clone(),
+            },
+        );
+
         // Capture everything the background task needs.
-        let task_state = state.clone();
-        let task_cancel = cancel.clone();
+        let task_state = state;
+        let task_cancel = cancel;
         let name = req.name.clone();
         let topics = split_csv(req.topics.as_deref());
         let exclude = split_csv(req.exclude.as_deref());
@@ -697,13 +737,26 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
                 *st.lock().unwrap_or_else(|p| p.into_inner()) =
                     ReplayRunState::Failed { error: msg };
             };
-            let recording = match manifest::load_dir(&dir) {
-                Ok(r) => r,
-                Err(e) => return set_failed(&task_state, format!("no recording '{name}': {e}")),
-            };
-            let messages = match storage::read_recording_messages(&dir, &recording) {
-                Ok(m) => m,
-                Err(e) => return set_failed(&task_state, format!("reading MCAP chunks: {e}")),
+            // Loading + decoding the MCAP chunks is synchronous, blocking IO that can
+            // buffer a large recording fully into memory — run it on the blocking
+            // pool so it never stalls an async worker thread.
+            let loaded = tokio::task::spawn_blocking(move || {
+                let recording =
+                    manifest::load_dir(&dir).map_err(|e| format!("no recording '{name}': {e}"))?;
+                if recording.size_bytes >= (1 << 30) {
+                    log::warn!(
+                        "replay '{name}' is {:.1} GiB; it loads fully into memory",
+                        recording.size_bytes as f64 / (1u64 << 30) as f64,
+                    );
+                }
+                storage::read_recording_messages(&dir, &recording)
+                    .map_err(|e| format!("reading MCAP chunks: {e}"))
+            })
+            .await;
+            let messages = match loaded {
+                Ok(Ok(m)) => m,
+                Ok(Err(e)) => return set_failed(&task_state, e),
+                Err(e) => return set_failed(&task_state, format!("replay read task failed: {e}")),
             };
             if messages.is_empty() {
                 *task_state.lock().unwrap_or_else(|p| p.into_inner()) = ReplayRunState::Finished {
@@ -749,16 +802,6 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
             }
         });
 
-        self.replay_sessions.insert(
-            id.clone(),
-            ReplaySession {
-                recording_name: req.name.clone(),
-                started_at_ns,
-                rate,
-                cancel,
-                state,
-            },
-        );
         Ok(ok_json(&serde_json::json!({
             "replay_id": id,
             "recording_name": req.name,
@@ -819,6 +862,47 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
 mod tests {
     use super::*;
     use crate::mcp::platform::DaemonPlatform;
+
+    fn session(state: ReplayRunState) -> ReplaySession {
+        ReplaySession {
+            recording_name: "rec".into(),
+            started_at_ns: 0,
+            rate: 1.0,
+            cancel: CancellationToken::new(),
+            state: Arc::new(Mutex::new(state)),
+        }
+    }
+
+    #[test]
+    fn registry_ids_are_unique_and_terminal_sessions_are_evicted() {
+        let reg = ReplayRegistry::default();
+        let a = reg.next_id("rec");
+        let b = reg.next_id("rec");
+        assert_ne!(a, b, "ids must not collide");
+
+        // A finished session, then a running one: the finished entry is pruned on
+        // the next insert so the registry can't grow without bound.
+        reg.insert(
+            a.clone(),
+            session(ReplayRunState::Finished {
+                messages_published: 1,
+                loops_completed: 1,
+            }),
+        );
+        reg.insert(b.clone(), session(ReplayRunState::Running));
+        assert!(reg.status_json(&a).is_none(), "finished session evicted");
+        assert!(reg.status_json(&b).is_some(), "running session retained");
+        assert_eq!(reg.all_json().len(), 1);
+    }
+
+    #[test]
+    fn stop_returns_false_for_unknown_session() {
+        let reg = ReplayRegistry::default();
+        assert!(!reg.stop("nope"));
+        let id = reg.next_id("rec");
+        reg.insert(id.clone(), session(ReplayRunState::Running));
+        assert!(reg.stop(&id));
+    }
 
     /// Collect every storage tool name registered across the read + write routers.
     fn registered_storage_tools() -> std::collections::HashSet<String> {

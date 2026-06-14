@@ -920,7 +920,7 @@ pub struct ConfigureArgs {
 
 /// Flag/field-driven inputs to [`apply_configure`] — the shared core behind the
 /// `configure` CLI verb and the `storage_configure` MCP tool (§6.1).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct ConfigureParams {
     pub backend: String,
     pub endpoint: Option<String>,
@@ -1134,7 +1134,7 @@ fn profile_path(name: &str) -> Result<PathBuf> {
 
 /// Inputs to [`apply_profile_create`] — shared by the `profile create` CLI verb
 /// and the `storage_profile_create` MCP tool (§6.1).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct ProfileCreateParams {
     pub name: String,
     pub description: Option<String>,

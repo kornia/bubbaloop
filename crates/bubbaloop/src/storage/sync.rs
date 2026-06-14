@@ -407,15 +407,46 @@ pub async fn upload_pending(
                 summary.uploaded += 1;
                 changed = true;
             }
-            Ok(UploadOutcome::Conflict) => summary.conflicts += 1,
-            Err(_) => summary.failed += 1,
+            Ok(UploadOutcome::Conflict) => {
+                // Surface the conflicting key + remediation, like the old per-chunk
+                // CLI warning — both the CLI verb and the MCP tool route through here.
+                log::warn!(
+                    "sync: chunk {} of '{}' conflicts with different remote content at {} — skipping (run reconcile)",
+                    recording.chunks[i].index,
+                    recording.name,
+                    job.object_key
+                );
+                summary.conflicts += 1;
+            }
+            Err(e) => {
+                // Preserve the error text + transient/terminal classification rather
+                // than collapsing every failure into an opaque count.
+                log::error!(
+                    "sync: chunk {} of '{}' upload failed: {e} ({:?})",
+                    recording.chunks[i].index,
+                    recording.name,
+                    classify(&e)
+                );
+                summary.failed += 1;
+            }
         }
     }
 
-    // Only persist + re-upload when something changed, so an all-failed run never
-    // clobbers newer remote manifest state.
+    // Persist locally only when a chunk actually changed, so an all-failed run
+    // never clobbers newer remote manifest state.
     if changed {
         manifest::save_dir(recording_dir, &recording)?;
+    }
+    // Re-upload manifest.json when a chunk changed, OR when the recording is fully
+    // uploaded with no failures. The latter heals a prior run that uploaded every
+    // chunk (marking them locally) but failed the final manifest PUT — without it
+    // the per-chunk skip on retry leaves `changed == false` and the stale remote
+    // manifest is never refreshed by the upload path (only by reconcile).
+    let fully_uploaded = summary.total_chunks > 0
+        && summary.failed == 0
+        && summary.conflicts == 0
+        && summary.uploaded + summary.already_uploaded == summary.total_chunks;
+    if changed || fully_uploaded {
         let path = manifest::manifest_path(recording_dir);
         let bytes = std::fs::read(&path).map_err(|e| SyncError::Io {
             path: path.display().to_string(),
