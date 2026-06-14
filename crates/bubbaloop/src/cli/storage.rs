@@ -59,6 +59,7 @@ enum StorageAction {
     Download(DownloadArgs),
     Reconcile(ReconcileArgs),
     Rm(RmArgs),
+    Profile(ProfileCommand),
 }
 
 /// List recordings.
@@ -149,6 +150,7 @@ impl StorageCommand {
             StorageAction::Download(a) => run_download(a).await,
             StorageAction::Reconcile(a) => run_reconcile(a).await,
             StorageAction::Rm(a) => run_rm(a).await,
+            StorageAction::Profile(c) => run_profile(c),
         }
     }
 }
@@ -653,8 +655,241 @@ async fn run_rm(args: RmArgs) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// profile create/list/show/rm
+// ---------------------------------------------------------------------------
+
+/// Manage recording profiles (`~/.bubbaloop/profiles/*.yaml`).
+#[derive(FromArgs)]
+#[argh(subcommand, name = "profile")]
+pub struct ProfileCommand {
+    #[argh(subcommand)]
+    action: ProfileAction,
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand)]
+enum ProfileAction {
+    Create(ProfileCreateArgs),
+    List(ProfileListArgs),
+    Show(ProfileShowArgs),
+    Rm(ProfileRmArgs),
+}
+
+/// Create a profile from flags, validating it against the v1 schema.
+#[derive(FromArgs)]
+#[argh(subcommand, name = "create")]
+struct ProfileCreateArgs {
+    /// profile name
+    #[argh(positional)]
+    name: String,
+    /// human description
+    #[argh(option)]
+    description: Option<String>,
+    /// additive include patterns (comma-separated)
+    #[argh(option)]
+    topics: Option<String>,
+    /// additive regex include
+    #[argh(option)]
+    regex: Option<String>,
+    /// subtractive exclude patterns (comma-separated)
+    #[argh(option)]
+    exclude: Option<String>,
+    /// also include SHM-only bubbaloop/local/** topics
+    #[argh(switch)]
+    include_local: bool,
+    /// target chunk size in bytes (default 786432)
+    #[argh(option)]
+    chunk_size_bytes: Option<u32>,
+    /// compression codec: zstd | lz4 | none (default zstd)
+    #[argh(option)]
+    compression: Option<String>,
+    /// capture mode: streaming | ring_buffer (default streaming)
+    #[argh(option)]
+    mode: Option<String>,
+    /// ring-buffer window length in seconds (required with --mode ring_buffer)
+    #[argh(option)]
+    window_secs: Option<u64>,
+    /// ring-buffer trigger: manual | on-event (required with --mode ring_buffer)
+    #[argh(option)]
+    trigger: Option<String>,
+    /// overwrite an existing profile of the same name
+    #[argh(switch)]
+    force: bool,
+}
+
+/// List profiles.
+#[derive(FromArgs)]
+#[argh(subcommand, name = "list")]
+struct ProfileListArgs {}
+
+/// Print a profile's YAML.
+#[derive(FromArgs)]
+#[argh(subcommand, name = "show")]
+struct ProfileShowArgs {
+    /// profile name
+    #[argh(positional)]
+    name: String,
+}
+
+/// Delete a profile.
+#[derive(FromArgs)]
+#[argh(subcommand, name = "rm")]
+struct ProfileRmArgs {
+    /// profile name
+    #[argh(positional)]
+    name: String,
+}
+
+fn run_profile(cmd: ProfileCommand) -> Result<()> {
+    match cmd.action {
+        ProfileAction::Create(a) => run_profile_create(a),
+        ProfileAction::List(_) => run_profile_list(),
+        ProfileAction::Show(a) => run_profile_show(a),
+        ProfileAction::Rm(a) => run_profile_rm(a),
+    }
+}
+
+/// Resolve a validated profile name to its `.yaml` path under the profiles dir.
+fn profile_path(name: &str) -> Result<PathBuf> {
+    // Reuse the recording-name guard so a profile name can't traverse the path.
+    storage::validate_recording_name(name)
+        .with_context(|| format!("invalid profile name {name:?}"))?;
+    Ok(storage::profile::profiles_dir()?.join(format!("{name}.yaml")))
+}
+
+fn run_profile_create(args: ProfileCreateArgs) -> Result<()> {
+    use storage::profile::{CompressionKind, Profile, DEFAULT_CHUNK_SIZE_BYTES};
+    use storage::recording::{RecordingMode, Trigger};
+
+    let path = profile_path(&args.name)?;
+    if path.exists() && !args.force {
+        bail!(
+            "profile '{}' already exists (use --force to overwrite)",
+            args.name
+        );
+    }
+
+    let compression = match args.compression.as_deref() {
+        None | Some("zstd") => CompressionKind::Zstd,
+        Some("lz4") => CompressionKind::Lz4,
+        Some("none") => CompressionKind::None,
+        Some(other) => bail!("unknown --compression {other:?} (expected zstd|lz4|none)"),
+    };
+    let mode = match args.mode.as_deref() {
+        None | Some("streaming") => RecordingMode::Streaming,
+        Some("ring_buffer") => RecordingMode::RingBuffer,
+        Some(other) => bail!("unknown --mode {other:?} (expected streaming|ring_buffer)"),
+    };
+    let trigger = match args.trigger.as_deref() {
+        None => None,
+        Some("manual") => Some(Trigger::Manual),
+        Some("on-event") => Some(Trigger::OnEvent),
+        Some(other) => bail!("unknown --trigger {other:?} (expected manual|on-event)"),
+    };
+
+    let profile = Profile {
+        name: args.name.clone(),
+        description: args.description,
+        topics: split_csv(args.topics.as_deref()),
+        regex: args.regex,
+        exclude: split_csv(args.exclude.as_deref()),
+        include_local: args.include_local,
+        chunk_size_bytes: args.chunk_size_bytes.unwrap_or(DEFAULT_CHUNK_SIZE_BYTES),
+        compression,
+        compression_level: Default::default(),
+        chunk_crc: true,
+        mode,
+        window_secs: args.window_secs,
+        trigger,
+        sending_queue: Default::default(),
+        retry_on_failure: Default::default(),
+    };
+
+    // save() validates against the v1 schema before writing.
+    storage::profile::save(&path, &profile)
+        .with_context(|| format!("saving profile '{}'", args.name))?;
+    log::info!(
+        "Created profile '{}' at {} (sha256 {}).",
+        args.name,
+        path.display(),
+        storage::profile::canonical_sha256(&profile)
+    );
+    Ok(())
+}
+
+fn run_profile_list() -> Result<()> {
+    let dir = storage::profile::profiles_dir()?;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => {
+            log::info!("No profiles found.");
+            return Ok(());
+        }
+    };
+    let mut names: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                names.push(stem.to_string());
+            }
+        }
+    }
+    names.sort();
+    if names.is_empty() {
+        log::info!("No profiles found.");
+        return Ok(());
+    }
+    log::info!("{:<24} {:<12} {}", "NAME", "SHA256", "DESCRIPTION");
+    for name in names {
+        match storage::profile::load_named(&name) {
+            Ok(p) => log::info!(
+                "{:<24} {:<12} {}",
+                truncate(&name, 24),
+                &storage::profile::canonical_sha256(&p)[..12],
+                p.description.as_deref().unwrap_or("")
+            ),
+            Err(e) => log::warn!("{name}: unreadable ({e})"),
+        }
+    }
+    Ok(())
+}
+
+fn run_profile_show(args: ProfileShowArgs) -> Result<()> {
+    let path = profile_path(&args.name)?;
+    // Validate it parses, then print the on-disk YAML verbatim.
+    storage::profile::load(&path).with_context(|| format!("no profile named '{}'", args.name))?;
+    let yaml = std::fs::read_to_string(&path).context("reading profile")?;
+    log::info!("{yaml}");
+    Ok(())
+}
+
+fn run_profile_rm(args: ProfileRmArgs) -> Result<()> {
+    let path = profile_path(&args.name)?;
+    if !path.exists() {
+        bail!("no profile named '{}'", args.name);
+    }
+    std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+    log::info!("Deleted profile '{}'.", args.name);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+/// Split a comma-separated flag value into trimmed, non-empty items.
+fn split_csv(value: Option<&str>) -> Vec<String> {
+    value
+        .map(|s| {
+            s.split(',')
+                .map(|x| x.trim())
+                .filter(|x| !x.is_empty())
+                .map(|x| x.to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 fn now_ns() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -814,6 +1049,16 @@ mod tests {
         // 2026-01-01T00:00:00Z is well after the epoch.
         assert!(ns > 1_700_000_000_000_000_000);
         assert!(parse_since("not-a-date").is_err());
+    }
+
+    #[test]
+    fn split_csv_trims_and_drops_empties() {
+        assert_eq!(split_csv(None), Vec::<String>::new());
+        assert_eq!(split_csv(Some("")), Vec::<String>::new());
+        assert_eq!(
+            split_csv(Some("cam_*/compressed, lidar/* ,, ")),
+            vec!["cam_*/compressed".to_string(), "lidar/*".to_string()]
+        );
     }
 
     #[test]
