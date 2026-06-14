@@ -9,6 +9,7 @@ pub mod daemon_platform;
 pub mod mock_platform;
 pub mod platform;
 pub mod rbac;
+pub mod storage_tools;
 mod tools;
 pub mod toolsets;
 

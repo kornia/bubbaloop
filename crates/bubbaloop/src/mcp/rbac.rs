@@ -74,7 +74,13 @@ pub fn required_tier(tool_name: &str) -> Tier {
         // structure but don't mutate state.
         | "toolset_list"
         | "toolset_get_tools"
-        | "toolset_enable" => Tier::Viewer,
+        | "toolset_enable"
+        // Storage read tools (§6.2) — inspection only, viewer tier.
+        | "storage_config_get"
+        | "storage_list"
+        | "storage_info"
+        | "storage_profile_list"
+        | "storage_profile_show" => Tier::Viewer,
 
         // Operator tools (day-to-day operations)
         "node_start"
@@ -147,6 +153,15 @@ mod tests {
         assert_eq!(required_tier("belief_get"), Tier::Viewer);
         assert_eq!(required_tier("alert_list"), Tier::Viewer);
         assert_eq!(required_tier("world_state_list"), Tier::Viewer);
+    }
+
+    #[test]
+    fn storage_read_tools_are_viewer() {
+        // Every read tool registered by storage_tools.rs must resolve to Viewer,
+        // not the unknown-defaults-to-Admin fallback (§6.4).
+        for name in crate::mcp::storage_tools::STORAGE_READ_TOOLS {
+            assert_eq!(required_tier(name), Tier::Viewer, "tool {name}");
+        }
     }
 
     #[test]
