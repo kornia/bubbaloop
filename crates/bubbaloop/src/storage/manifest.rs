@@ -13,7 +13,6 @@
 
 use super::integrity;
 use super::recording::{Chunk, Recording, MANIFEST_SCHEMA_VERSION};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Standard manifest filename at a recording's root.
@@ -58,36 +57,11 @@ pub fn save_atomic(path: impl AsRef<Path>, recording: &Recording) -> Result<(), 
     let bytes = serde_json::to_vec_pretty(recording)
         .map_err(|e| ManifestError::Serialize(e.to_string()))?;
 
-    let parent = path.parent().ok_or_else(|| ManifestError::Io {
-        path: path.display().to_string(),
-        detail: "manifest path has no parent directory".to_string(),
-    })?;
-    std::fs::create_dir_all(parent).map_err(|e| ManifestError::Io {
-        path: parent.display().to_string(),
-        detail: e.to_string(),
-    })?;
-
-    // Sibling temp file keeps the rename on the same filesystem.
-    let tmp = path.with_extension("json.tmp");
-    {
-        let mut f = std::fs::File::create(&tmp).map_err(|e| ManifestError::Io {
-            path: tmp.display().to_string(),
-            detail: e.to_string(),
-        })?;
-        f.write_all(&bytes).map_err(|e| ManifestError::Io {
-            path: tmp.display().to_string(),
-            detail: e.to_string(),
-        })?;
-        f.sync_all().map_err(|e| ManifestError::Io {
-            path: tmp.display().to_string(),
-            detail: e.to_string(),
-        })?;
-    }
-    std::fs::rename(&tmp, path).map_err(|e| ManifestError::Io {
+    // Durable write-tmp-fsync-rename lives in one shared place (§3.4.5).
+    crate::storage::atomic_write(path, &bytes).map_err(|e| ManifestError::Io {
         path: path.display().to_string(),
         detail: e.to_string(),
-    })?;
-    Ok(())
+    })
 }
 
 /// Save the manifest into a recording directory (`{dir}/manifest.json`).

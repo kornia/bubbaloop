@@ -165,7 +165,11 @@ impl RingBuffer {
 /// rosbag2 verbatim: 786 432-byte chunks, zstd, fast level, CRC on).
 #[derive(Debug, Clone, Copy)]
 pub struct McapWriteConfig {
-    /// Target size of one on-disk chunk file before rolling to the next.
+    /// Roll to a new chunk file once this many **uncompressed payload** bytes
+    /// have been written to the current one. This is the rosbag2 `chunk_size`
+    /// knob measured the same way (raw message bytes, pre-compression); the
+    /// on-disk `.mcap` is smaller after zstd, so file sizes will not equal this
+    /// value exactly.
     pub chunk_size_bytes: u32,
     /// Chunk compression codec.
     pub compression: CompressionKind,
@@ -440,25 +444,10 @@ pub fn seal_samples(
     Ok(manifest)
 }
 
-/// Atomically write `bytes` to `path` via a sibling temp file + rename.
+/// Atomically write a finalized chunk file, mapping IO failures to the module's
+/// error type. The write-tmp-fsync-rename mechanism is shared (§3.4.5).
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), RingBufferError> {
-    use std::io::Write;
-    let tmp = path.with_extension("mcap.tmp");
-    {
-        let mut f = std::fs::File::create(&tmp).map_err(|e| RingBufferError::Io {
-            path: tmp.display().to_string(),
-            detail: e.to_string(),
-        })?;
-        f.write_all(bytes).map_err(|e| RingBufferError::Io {
-            path: tmp.display().to_string(),
-            detail: e.to_string(),
-        })?;
-        f.sync_all().map_err(|e| RingBufferError::Io {
-            path: tmp.display().to_string(),
-            detail: e.to_string(),
-        })?;
-    }
-    std::fs::rename(&tmp, path).map_err(|e| RingBufferError::Io {
+    crate::storage::atomic_write(path, bytes).map_err(|e| RingBufferError::Io {
         path: path.display().to_string(),
         detail: e.to_string(),
     })

@@ -114,6 +114,29 @@ pub fn chunks_path(recording_dir: impl AsRef<Path>) -> PathBuf {
     recording_dir.as_ref().join("chunks")
 }
 
+/// Atomically write `bytes` to `path` via a sibling temp file + fsync + rename.
+///
+/// The temp file is `{path}.tmp` (same directory → same filesystem → the rename
+/// is atomic), fsynced before the rename, so a crash mid-write leaves either the
+/// old file or the complete new one — never a partial. Shared by every durable
+/// write in the subsystem (`manifest.json`, sealed chunk files) so the
+/// crash-atomicity guarantee lives in exactly one place.
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
+}
+
 /// Deterministic remote object key for a recording's manifest (spec §8):
 /// `{machine_id}/{recording_name}/manifest.json`.
 pub fn object_key_manifest(machine_id: &str, recording_name: &str) -> String {

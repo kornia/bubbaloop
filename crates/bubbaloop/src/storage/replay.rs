@@ -135,9 +135,31 @@ pub fn parse_remap(arg: &str) -> Result<(String, String), ReplayError> {
     Ok((from.to_string(), to.to_string()))
 }
 
-/// Whether `topic` is selected by `patterns` (any pattern whose key expression
-/// intersects the concrete topic key). An empty pattern list matches everything.
-fn matches_any(topic: &str, patterns: &[String]) -> Result<bool, ReplayError> {
+/// Parse each pattern string into an owned key expression once, up front, so the
+/// per-message filter never re-parses them (the planner runs this O(messages ×
+/// patterns) otherwise).
+fn parse_patterns(
+    patterns: &[String],
+) -> Result<Vec<zenoh::key_expr::KeyExpr<'static>>, ReplayError> {
+    patterns
+        .iter()
+        .map(|pat| {
+            zenoh::key_expr::KeyExpr::try_from(pat.clone()).map_err(|e| {
+                ReplayError::InvalidPattern {
+                    pattern: pat.clone(),
+                    detail: e.to_string(),
+                }
+            })
+        })
+        .collect()
+}
+
+/// Whether the concrete `topic` key intersects any of the pre-parsed `patterns`.
+/// An empty pattern list matches everything.
+fn matches_any(
+    topic: &str,
+    patterns: &[zenoh::key_expr::KeyExpr<'static>],
+) -> Result<bool, ReplayError> {
     if patterns.is_empty() {
         return Ok(true);
     }
@@ -146,18 +168,7 @@ fn matches_any(topic: &str, patterns: &[String]) -> Result<bool, ReplayError> {
             pattern: topic.to_string(),
             detail: e.to_string(),
         })?;
-    for pat in patterns {
-        let pat_ke = zenoh::key_expr::KeyExpr::try_from(pat.as_str()).map_err(|e| {
-            ReplayError::InvalidPattern {
-                pattern: pat.clone(),
-                detail: e.to_string(),
-            }
-        })?;
-        if pat_ke.intersects(&topic_ke) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(patterns.iter().any(|pat| pat.intersects(&topic_ke)))
 }
 
 /// Apply remaps to a topic (first matching `from` wins). Remaps match the full
@@ -185,6 +196,10 @@ pub fn plan(
         return Err(ReplayError::InvalidRate(opts.rate));
     }
 
+    // Pre-parse the include/exclude key patterns once (not per message).
+    let include = parse_patterns(&opts.topics)?;
+    let exclude = parse_patterns(&opts.exclude)?;
+
     // Filter: topic include/exclude and the time-window trim.
     let mut kept: Vec<&ReplayMessage> = Vec::new();
     for m in messages {
@@ -199,10 +214,10 @@ pub fn plan(
                 continue;
             }
         }
-        if !matches_any(&m.topic, &opts.topics)? {
+        if !matches_any(&m.topic, &include)? {
             continue;
         }
-        if !opts.exclude.is_empty() && matches_any(&m.topic, &opts.exclude)? {
+        if !exclude.is_empty() && matches_any(&m.topic, &exclude)? {
             continue;
         }
         kept.push(m);
@@ -327,6 +342,11 @@ pub async fn run_replay<S: ReplaySink + Sync>(
             tokio::select! {
                 _ = cancel.cancelled() => return Ok(stats),
                 _ = tokio::time::sleep_until(deadline) => {}
+            }
+            // A cancel may have fired in the gap between the sleep completing and
+            // here; honor it before emitting one more sample.
+            if cancel.is_cancelled() {
+                return Ok(stats);
             }
             sink.publish(&pm.topic, &pm.zenoh_encoding, &pm.data)
                 .await?;

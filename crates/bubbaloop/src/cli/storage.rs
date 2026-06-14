@@ -717,9 +717,14 @@ impl storage::ReplaySink for ZenohReplaySink {
         encoding: &str,
         payload: &[u8],
     ) -> std::result::Result<(), storage::ReplayError> {
+        // `CongestionControl::Block` (not the put-default `Drop`) so a slow link
+        // or subscriber back-pressures the replay instead of silently dropping
+        // samples — replay must be faithful (§4.5), and `run_replay` already
+        // paces publishes, so blocking only stretches timing, never loses data.
         self.session
             .put(topic, payload.to_vec())
             .encoding(zenoh::bytes::Encoding::from(encoding))
+            .congestion_control(zenoh::qos::CongestionControl::Block)
             .await
             .map_err(|e| storage::ReplayError::Publish {
                 topic: topic.to_string(),
@@ -733,6 +738,16 @@ async fn run_replay_cmd(args: ReplayArgs) -> Result<()> {
     let dir = storage::recording_dir(&args.name)?;
     let recording = manifest::load_dir(&dir)
         .with_context(|| format!("no recording named '{}' at {}", args.name, dir.display()))?;
+    // v1 buffers the whole recording in memory (no streaming reader yet); warn
+    // before pulling a large one in so an OOM is at least diagnosable.
+    const LARGE_RECORDING_BYTES: u64 = 1 << 30; // 1 GiB
+    if recording.size_bytes >= LARGE_RECORDING_BYTES {
+        log::warn!(
+            "recording '{}' is {:.1} GiB; replay loads it fully into memory",
+            args.name,
+            recording.size_bytes as f64 / (1u64 << 30) as f64,
+        );
+    }
     let messages = storage::read_recording_messages(&dir, &recording)
         .with_context(|| format!("reading MCAP chunks for '{}'", args.name))?;
     if messages.is_empty() {
