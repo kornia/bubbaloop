@@ -11,10 +11,12 @@
 //! - [`secrets`] — opaque, zeroize-on-drop credentials in `secrets.toml` (chmod 0600).
 //! - [`backend`] — the `StorageBackend` trait + `LocalFs` (S3Compat lands in PR2).
 //! - [`reconcile`] — the diff-matrix healing primitive (§3.5), backend-agnostic.
+//! - [`sync`] — the background-upload core (§3.4): backoff, dead-letter,
+//!   per-chunk upload sequence (the async queue driver lands with the recorder).
 //!
-//! Still to come (later PRs from the spec): `discover`, `sync`, the S3Compat
-//! backend, `replay`, `ring_buffer`, the `mcap-recorder` node, the CLI/MCP
-//! surfaces, and the dashboard tab.
+//! Still to come (later PRs from the spec): `discover`, the S3Compat backend, the
+//! sync queue driver, `replay`, `ring_buffer`, the `mcap-recorder` node, the
+//! CLI/MCP surfaces, and the dashboard tab.
 
 pub mod backend;
 pub mod integrity;
@@ -23,6 +25,7 @@ pub mod profile;
 pub mod reconcile;
 pub mod recording;
 pub mod secrets;
+pub mod sync;
 
 use std::path::{Path, PathBuf};
 
@@ -31,6 +34,10 @@ pub use backend::{local::LocalFs, BackendError, ObjectMeta, PutResult, StorageBa
 pub use profile::Profile;
 pub use reconcile::{reconcile, ReconcileError, ReconcileOptions, ReconcileReport};
 pub use recording::{Channel, Chunk, Lifecycle, Recording, RecordingMode, Selection, Trigger};
+pub use sync::{
+    classify, BackoffSchedule, DeadLetterEntry, DeadLetterList, ErrorClass, SharedBackoff,
+    SyncError, UploadJob, UploadOutcome,
+};
 
 /// Base bubbaloop directory: `~/.bubbaloop`.
 pub fn bubbaloop_dir() -> Result<PathBuf, StoragePathError> {

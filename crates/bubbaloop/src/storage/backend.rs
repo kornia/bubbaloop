@@ -80,6 +80,15 @@ pub enum BackendError {
     /// The key is invalid (e.g. path traversal, empty).
     #[error("invalid object key: {0}")]
     InvalidKey(String),
+    /// Authentication/authorization was rejected (terminal — credentials won't
+    /// fix themselves; sync dead-letters immediately, §3.4.3). Produced by cloud
+    /// backends; `LocalFs` never returns it.
+    #[error("forbidden for {key}")]
+    Forbidden { key: String },
+    /// The configured bucket does not exist (terminal misconfiguration — sync
+    /// pauses entirely until reconfigured, §3.4.3). Produced by cloud backends.
+    #[error("no such bucket: {bucket}")]
+    NoSuchBucket { bucket: String },
     /// Filesystem / transport error (generally retryable).
     #[error("backend io error for {key}: {detail}")]
     Io { key: String, detail: String },
