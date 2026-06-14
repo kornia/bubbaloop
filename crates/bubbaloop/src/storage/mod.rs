@@ -20,6 +20,7 @@
 
 pub mod backend;
 pub mod config;
+pub mod discover;
 pub mod integrity;
 pub mod manifest;
 pub mod profile;

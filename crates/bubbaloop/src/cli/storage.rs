@@ -61,6 +61,7 @@ enum StorageAction {
     Rm(RmArgs),
     Profile(ProfileCommand),
     Configure(ConfigureArgs),
+    Topics(TopicsArgs),
 }
 
 /// List recordings.
@@ -153,6 +154,7 @@ impl StorageCommand {
             StorageAction::Rm(a) => run_rm(a).await,
             StorageAction::Profile(c) => run_profile(c),
             StorageAction::Configure(a) => run_configure(a),
+            StorageAction::Topics(a) => run_topics(a).await,
         }
     }
 }
@@ -652,6 +654,57 @@ async fn run_rm(args: RmArgs) -> Result<()> {
             "no local directory"
         };
         bail!("no recording named '{}' found ({scope})", args.name);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// topics
+// ---------------------------------------------------------------------------
+
+/// List live topics across the fleet (via the node manifest queryables).
+#[derive(FromArgs)]
+#[argh(subcommand, name = "topics")]
+pub struct TopicsArgs {
+    /// only show topics from this machine id
+    #[argh(option)]
+    machine: Option<String>,
+    /// only show topics whose key contains this substring (case-insensitive)
+    #[argh(option)]
+    grep: Option<String>,
+    /// zenoh endpoint (default: env BUBBALOOP_ZENOH_ENDPOINT or tcp/127.0.0.1:7447)
+    #[argh(option, short = 'z')]
+    zenoh_endpoint: Option<String>,
+    /// query timeout in seconds (default 2)
+    #[argh(option, default = "2")]
+    timeout_secs: u64,
+}
+
+async fn run_topics(args: TopicsArgs) -> Result<()> {
+    let session = crate::cli::zenoh_session::create_zenoh_session(args.zenoh_endpoint.as_deref())
+        .await
+        .context("connecting to zenoh")?;
+    let machines = storage::discover::discover(
+        &session,
+        std::time::Duration::from_secs(args.timeout_secs),
+        args.grep.as_deref(),
+        args.machine.as_deref(),
+    )
+    .await?;
+
+    if machines.is_empty() {
+        log::info!("No live topics found.");
+        return Ok(());
+    }
+    for m in &machines {
+        log::info!("{}", m.machine_id);
+        for node in &m.nodes {
+            log::info!("  {} ({})", node.instance_name, node.role);
+            for t in &node.topics {
+                let mark = if t.is_live() { "live" } else { "idle" };
+                log::info!("    [{mark}] {}", t.topic);
+            }
+        }
     }
     Ok(())
 }
