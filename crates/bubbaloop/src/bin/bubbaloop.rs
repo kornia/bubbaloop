@@ -21,7 +21,7 @@ use argh::FromArgs;
 use bubbaloop::cli::launch::LaunchCommand;
 use bubbaloop::cli::{
     AgentCommand, DaemonCommand, DataflowCommand, DebugCommand, LoginCommand, LogoutCommand,
-    MarketplaceCommand, NodeCommand, UpCommand,
+    MarketplaceCommand, NodeCommand, StorageCommand, UpCommand,
 };
 
 /// Bubbaloop - AI-native orchestration for Physical AI
@@ -51,6 +51,7 @@ enum Command {
     Debug(DebugCommand),
     Up(UpCommand),
     Dataflow(DataflowCommand),
+    Storage(StorageCommand),
     InitTls(InitTlsArgs),
 }
 
@@ -435,6 +436,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Command::Dataflow(cmd)) => {
             init_logger("warn,zenoh=warn");
+            cmd.run().await?;
+        }
+        Some(Command::Storage(cmd)) => {
+            // Pure-local data-plane verbs — no Zenoh/daemon needed.
+            init_logger("info");
             cmd.run().await?;
         }
         Some(Command::InitTls(args)) => {
