@@ -662,6 +662,69 @@ async fn dispatch_daemon_command(
 /// Run the daemon with the given configuration.
 ///
 /// This is the main entry point called by `bubbaloop daemon`.
+/// Start the background storage sync driver (§3.4.2) if `[storage].auto_upload`
+/// is enabled, returning its task handle (if started).
+///
+/// The driver runs the §3.4.4 upload sequence for every finalized chunk: it is
+/// seeded with a startup scan of anything left un-uploaded ([`scan_pending`]) and
+/// then idles, ready to receive `ChunkFinalized` notifications from the recorder
+/// path (wired in a later slice). We bridge the daemon's `watch` shutdown signal
+/// to the driver's `CancellationToken`, and keep the [`SyncHandle`] alive for the
+/// daemon's lifetime so the channel stays open until shutdown.
+///
+/// [`scan_pending`]: crate::storage::sync_driver::scan_pending
+/// [`SyncHandle`]: crate::storage::sync_driver::SyncHandle
+fn start_storage_sync(
+    mut shutdown_rx: tokio::sync::watch::Receiver<()>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    use crate::storage::{self, sync_driver};
+
+    let cfg = match storage::StorageConfig::load() {
+        Ok(c) => c,
+        Err(e) => {
+            log::info!("Storage sync disabled: no [storage] config ({e})");
+            return None;
+        }
+    };
+    if !cfg.auto_upload {
+        log::info!("Storage sync disabled: [storage].auto_upload = false");
+        return None;
+    }
+    let backend: std::sync::Arc<dyn storage::StorageBackend> = match cfg.build_backend() {
+        Ok(b) => std::sync::Arc::from(b),
+        Err(e) => {
+            log::warn!("Storage sync disabled: cannot build backend: {e}");
+            return None;
+        }
+    };
+    let dead_letter_path = match storage::recordings_dir() {
+        Ok(d) => d.join("dead_letter.json"),
+        Err(e) => {
+            log::warn!("Storage sync disabled: cannot resolve recordings dir: {e}");
+            return None;
+        }
+    };
+
+    let sync_cfg = sync_driver::SyncConfig::with_dead_letter_path(dead_letter_path);
+    let initial = sync_driver::scan_pending();
+    log::info!(
+        "Starting storage sync (backend = {}, {} pending chunk(s) from startup scan)...",
+        cfg.backend,
+        initial.len()
+    );
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let (handle, task) = sync_driver::spawn(backend, sync_cfg, initial, cancel.clone());
+    // Bridge the daemon shutdown signal to the driver's cancel token, holding the
+    // SyncHandle until shutdown so the driver's event channel stays open.
+    tokio::spawn(async move {
+        let _ = shutdown_rx.changed().await;
+        cancel.cancel();
+        drop(handle);
+    });
+    Some(task)
+}
+
 pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     use tokio::sync::watch;
 
@@ -794,6 +857,10 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
         })
     };
 
+    // Start background storage sync (uploads finalized chunks; §3.4.2).
+    // start_storage_sync logs its own outcome (started / disabled) in every branch.
+    let storage_sync_task = start_storage_sync(shutdown_rx.clone());
+
     log::info!("Bubbaloop skill runtime started.");
     log::info!("  MCP server: http://127.0.0.1:{}/mcp", mcp_port);
     log::info!("  Agent runtime: active");
@@ -810,6 +877,9 @@ pub async fn run(zenoh_endpoint: Option<String>) -> Result<(), Box<dyn std::erro
 
     // Wait for all tasks to complete gracefully (they all listen to shutdown_rx)
     let _ = tokio::join!(mcp_task, agent_task, gateway_task);
+    if let Some(task) = storage_sync_task {
+        let _ = task.await;
+    }
 
     log::info!("Bubbaloop daemon stopped.");
 

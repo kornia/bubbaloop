@@ -35,6 +35,9 @@ pub mod skills;
 /// Agent layer: OpenClaw-inspired rewrite (Soul, 3-tier memory, adaptive heartbeat)
 pub mod agent;
 
+/// Storage subsystem: fleet recordings, manifests, profiles, integrity, backends
+pub mod storage;
+
 /// Protobuf schemas for bubbaloop
 pub mod schemas {
     pub mod header {

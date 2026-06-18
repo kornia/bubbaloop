@@ -70,6 +70,9 @@ bubbaloop agent chat   # interactive REPL
 │  │  Node manager | systemd/D-Bus | Marketplace         │  │
 │  └──────────────────────┬─────────────────────────────┘  │
 │  ┌──────────────────────┴─────────────────────────────┐  │
+│  │  Storage (fleet recording: record/sync/replay)      │  │
+│  └──────────────────────┬─────────────────────────────┘  │
+│  ┌──────────────────────┴─────────────────────────────┐  │
 │  │  Zenoh Data Plane (zero-copy, real-time)            │  │
 │  └──────┬───────────┬───────────┬─────────────────────┘  │
 └─────────┼───────────┼───────────┼────────────────────────┘
@@ -282,6 +285,33 @@ Built-in actions: `check_all_health`, `restart`, `capture_frame`, `start_node`, 
 - [ ] Dashboard telemetry visualization
 
 **New deps:** `sysinfo`. **New code:** ~1500 lines. **New tests:** 30.
+
+---
+
+### Phase 4c: Fleet Storage (Recording → Sync → Replay)
+
+**Goal:** Capture fleet-wide Zenoh traffic to self-describing recordings, ship
+them to an S3-compatible backend, and replay them byte-identically. The third
+data-plane pillar alongside the node and agent runtimes.
+
+See [docs/concepts/storage.md](docs/concepts/storage.md) and
+[docs/concepts/storage-internals.md](docs/concepts/storage-internals.md).
+
+**Deliverables:**
+- [x] `storage` subsystem in-tree (`crates/bubbaloop/src/storage/`): `StorageBackend` trait with `local` + S3-compatible (R2/AWS/GCS/MinIO via `aws-sdk-s3`, behind the `s3` feature)
+- [x] Self-describing recordings: `manifest.json` source of truth (no SQLite index), forward-compatible schema with `extra` passthrough
+- [x] Content-addressed object keys (`{machine_id}/{recording}/chunk-{idx}-{sha256}`) — idempotent re-uploads, bucket = sharing unit
+- [x] Streaming SHA-256 per chunk — in filename + manifest + `x-amz-checksum-sha256`, re-verified on upload, verified on download
+- [x] Background sync driver: chunk-finalize-driven bounded FIFO, shared backoff that pauses the queue on failure, disk-persisted dead-letter list
+- [x] Reconcile diff-matrix (local manifest vs local files vs remote objects), `--restore`, never-deletes / idempotent
+- [x] Replay: pure planner + `ReplaySink` trait, paced Zenoh re-publish with `CongestionControl::Block` (rate/loop/trim/filter/remap/log-time)
+- [x] Profiles (`~/.bubbaloop/profiles/*.yaml`): additive topic selection, MCAP/compression knobs, streaming + ring_buffer modes
+- [x] Secrets isolated in `~/.bubbaloop/secrets.toml` (0600, zeroize-on-drop), never in `config.toml` or logs
+- [x] Path-traversal validation on recording/profile names; canonical chunk filenames
+- [x] CLI: `storage configure | topics | profile create/list/show/rm | list | info | upload | download | reconcile | replay | rm`
+- [x] MCP parity: paired `storage_*` tool per CLI verb + MCP-only state-inspection tools (RBAC: read=viewer, day-to-day=operator, config/rm=admin)
+- [ ] `mcap-recorder` marketplace node (`role: sink`, `bubbaloop-nodes-official/sinks/`) — drives recording-start; ring-buffer flush; rosbag2 MCAP defaults + dual timestamps
+- [ ] Dashboard "Recordings" tab — list (local + remote) + start/stop with topic picker + download; browser-recorder deprecation banner
 
 ---
 

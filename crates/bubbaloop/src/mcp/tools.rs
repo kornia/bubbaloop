@@ -399,12 +399,16 @@ impl<P: PlatformOperations> BubbaLoopMcpServer<P> {
         Self {
             platform,
             auth_token,
-            tool_router: Self::tool_router(),
+            // Merge the storage read + write/zenoh/replay tools (§6) into the main router.
+            tool_router: Self::tool_router()
+                + Self::storage_tool_router()
+                + Self::storage_write_tool_router(),
             machine_id,
             mode_ceiling: super::rbac::Tier::Admin,
             enabled_toolsets: std::sync::Arc::new(std::sync::RwLock::new(
                 super::toolsets::default_enabled(),
             )),
+            replay_sessions: super::storage_tools_write::ReplayRegistry::default(),
         }
     }
 
